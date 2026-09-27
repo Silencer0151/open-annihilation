@@ -54,6 +54,20 @@ enum class DeathKind : uint8_t {
     cancelled = 9,     // cancelled nanoframe; no kill statistics
 };
 
+/// How a unit's death comes out: the kill handler settles it on the machine
+/// that simulates the unit, MultiplayerHooks::unit_killed shares it, and
+/// every machine tears the unit down with it (Match::teardown_dead_unit,
+/// Match::apply_kill).
+struct KillOutcome {
+    /// A DeathKind, or the other damage kind the unit's record held (0 for a
+    /// unit whose slot another player's new unit takes).
+    DeathKind kind{};
+    int8_t killed_percent{}; ///< Killed's first argument; above zero a finished unit explodes
+    /// Wreck level: the low nibble of the Killed script's second result, 1
+    /// for a dismissed unit; 0 leaves no wreck.
+    uint8_t wreck_level{};
+};
+
 /// Tells whether the unit is its owner's side commander: the side's
 /// commander name against the type's UnitName, ignoring case.
 ///
@@ -190,7 +204,8 @@ struct ShotEvent {
 };
 
 // What a multiplayer match shares with the other players. A match whose
-// multiplayer tick reaches a branch without its entry stops there.
+// multiplayer tick reaches a branch without its entry stops there, unless the
+// entry says what null does.
 struct MultiplayerHooks {
     void* context{};
     /// Runs the per-tick work of one local player.
@@ -252,6 +267,46 @@ struct MultiplayerHooks {
     /// @param context The hooks' context.
     /// @param shot The shot as the other players launch it.
     void (*shot_fired)(void* context, const ShotEvent& shot){};
+    /// Shares the death of a unit simulated here once the kill handler has
+    /// settled it (the Killed query, and no wreck for an unfinished unit),
+    /// before it clears the unit's orders and tears it down, so the unit's
+    /// record still holds its owner and last attacker. Every death kind is
+    /// shared; a unit simulated elsewhere is not. Null shares nothing.
+    ///
+    /// @param context The hooks' context.
+    /// @param unit Unit slot.
+    /// @param outcome The death kind, Killed percentage and wreck level the
+    ///     unit dies with.
+    void (*unit_killed)(void* context, uint16_t unit, const KillOutcome& outcome){};
+    /// Tells whether a weapon hit on a feature is settled on another
+    /// player's machine, which then applies it instead of this one.
+    ///
+    /// @param context The hooks' context.
+    /// @param weapon_id The hitting weapon's WeaponDef.weapon_id.
+    /// @param cell_x Hit plot column.
+    /// @param cell_z Hit plot row.
+    /// @return True when the hit went to that machine and nothing is applied
+    ///     here; null applies every hit here.
+    bool (*feature_hit_elsewhere)(
+        void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z
+    ){};
+    /// Shares a feature change settled here: a fire that started here, a
+    /// feature weapon damage destroyed, or one a unit finished reclaiming.
+    /// Null shares nothing.
+    ///
+    /// @param context The hooks' context.
+    /// @param change What happened to the feature.
+    /// @param cell_x Feature plot column.
+    /// @param cell_z Feature plot row.
+    /// @param reclaimer Unit slot of the unit that finished reclaiming it, 0
+    ///     for a fire or a destruction.
+    void (*feature_changed)(
+        void* context,
+        sim::feature_runtime::FeatureChange change,
+        int32_t cell_x,
+        int32_t cell_z,
+        uint16_t reclaimer
+    ){};
 };
 
 // Owns the real unit pool, model/VM objects, weapon slots, spatial plots/buckets
@@ -1421,7 +1476,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// the shared and LCG streams, the frames of the feature sequences, the
     /// map listeners (once the match plots carry the changed footprint), the
     /// smoke of vents and fires, play_sound_at, the burn weapon's blast and
-    /// the reclaim credit.
+    /// the reclaim credit; weapon hits on features and feature changes go to
+    /// the multiplayer hooks' feature entries.
     [[nodiscard]] sim::feature_runtime::FeatureHost feature_host() noexcept;
     /// Finishes a unit's reclaim of the feature under a point: the unit is
     /// credited and the feature plays its reclamate sequence.
@@ -1844,15 +1900,6 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param self_destruct Uses selfdestructas instead of explodeas.
     void explode_unit(sim::unit_spawn::Slot& unit, bool self_destruct);
 
-    // The kill record the kill handler receives.
-    struct KillOutcome {
-        DeathKind kind{};
-        int8_t explosion{}; // Killed percentage; above zero a finished unit explodes
-        // Wreck level: the low nibble of the Killed script's second result, 1
-        // for a dismissed unit; 0 leaves no wreck.
-        uint8_t wreck_level{};
-    };
-
     /// Tears a dead unit down: the viewer remembers where its own unit died;
     /// cargo dies with it and is set down; statistics, squad and scenario
     /// events; its footprint, bucket and sight stamp go; its target observers
@@ -1954,6 +2001,53 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param shot The shared shot.
     void apply_shot(const ShotEvent& shot);
 
+    /// Kills a unit as the kill handler does when the unit's own tick finds
+    /// it dying.
+    ///
+    /// The kind and the unit's health settle the Killed percentage and the
+    /// wreck level. A dismissed unit dies at percentage 0 and leaves its
+    /// corpse (wreck level 1). A captured, reclaimed or cancelled unit, or
+    /// one still above 0 health, dies at percentage 0 with no wreck, and its
+    /// Killed script is not run. Any other unit's percentage is
+    /// (-health * 100 / maximum health + previous 30-tick health percentage)
+    /// / 2, each division truncated, clamped to 1..100; its Killed script
+    /// runs with it and returns the percentage and the wreck level it dies
+    /// with. An unfinished unit leaves no wreck whatever the script picks. A
+    /// last attacker whose player's slot is free credits nobody.
+    ///
+    /// Then MultiplayerHooks::unit_killed shares the death of a unit
+    /// simulated here, its orders are cleared, teardown_dead_unit tears it
+    /// down, and, when the match plays the commander rule and the unit is
+    /// its player's commander simulated here, the rule's sweep runs.
+    ///
+    /// A unit already not live is left alone.
+    ///
+    /// @param unit Unit slot; one outside the pool throws.
+    /// @param kind How it died: a DeathKind, or 0 for a unit whose slot
+    ///     another player's new unit takes.
+    void kill_unit(uint16_t unit, uint8_t kind);
+
+    /// Applies the death of a unit another player's machine simulates, as
+    /// that machine settled and shared it: the unit takes the shared last
+    /// attacker and its owner, its orders are cleared, and it is torn down
+    /// with the shared outcome as teardown_dead_unit tears a unit down. When
+    /// the Killed percentage is above zero the unit's Killed script is
+    /// started with it once its cargo has left it, for its flying pieces
+    /// only; the wreck level that script picks is not read.
+    ///
+    /// A unit already not live is left alone.
+    ///
+    /// @param unit Unit slot; one outside the pool throws.
+    /// @param outcome The death kind, Killed percentage and wreck level that
+    ///     machine settled.
+    /// @param attacker Unit slot of the unit that last damaged it there, 0
+    ///     for none.
+    /// @param attacker_owner Player index 0..9 of that unit's owner, 10 for
+    ///     none.
+    void apply_kill(
+        uint16_t unit, const KillOutcome& outcome, uint16_t attacker, uint8_t attacker_owner
+    );
+
     /// Runs one movement tick of a unit simulated elsewhere, once per update
     /// its owner shares.
     ///
@@ -2040,6 +2134,18 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// @param shot The shot as the other players launch it.
     void share_shot(const ShotEvent& shot);
+    /// Tears a dead unit down as the two-argument teardown_dead_unit does; a
+    /// death another player's machine settled also starts the unit's Killed
+    /// script with the outcome's percentage once its cargo has left it, for
+    /// its flying pieces only.
+    ///
+    /// @param slot Dying unit.
+    /// @param outcome The death kind, Killed percentage and wreck level.
+    /// @param settled_elsewhere True for a death another player's machine
+    ///     settled.
+    void teardown_dead_unit(
+        sim::unit_spawn::Slot& slot, const KillOutcome& outcome, bool settled_elsewhere
+    );
 
     /// Gives a unit simulated here that anything but an air base now carries
     /// BeCarried in place of its orders; one resting on an air pad keeps

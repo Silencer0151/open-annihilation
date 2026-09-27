@@ -205,9 +205,11 @@ void notify_footprint(
     );
 }
 
-void feature_changed(const FeatureHost& host, FeatureChange change, int32_t x, int32_t z) noexcept {
+void feature_changed(
+    const FeatureHost& host, FeatureChange change, int32_t x, int32_t z, const Unit* reclaimer
+) noexcept {
     if (host.feature_changed != nullptr)
-        host.feature_changed(host.context, change, x, z);
+        host.feature_changed(host.context, change, x, z, reclaimer);
 }
 
 // Initialises a sprite record's sequence and optional shadow sequence.
@@ -660,7 +662,7 @@ void ignite_feature(
         host.play_sound(host.context, treeburn_sound, &at);
     }
     if (!mirrored)
-        feature_changed(host, FeatureChange::ignited, cell_x, cell_z);
+        feature_changed(host, FeatureChange::ignited, cell_x, cell_z, nullptr);
 }
 
 void spread_fire(
@@ -800,7 +802,7 @@ void damage_feature(
     }
     if (finished) {
         start_feature_sequence(world, host, sequence_x, sequence_z, false);
-        feature_changed(host, FeatureChange::destroyed, cell_x, cell_z);
+        feature_changed(host, FeatureChange::destroyed, cell_x, cell_z, nullptr);
     }
 }
 
@@ -816,7 +818,7 @@ bool reclaim_feature(
     if (host.credit_reclaim != nullptr)
         host.credit_reclaim(host.context, &unit, def->energy, def->metal);
     start_feature_sequence(world, host, cell_x, cell_z, true);
-    feature_changed(host, FeatureChange::reclaimed, cell_x, cell_z);
+    feature_changed(host, FeatureChange::reclaimed, cell_x, cell_z, &unit);
     return true;
 }
 

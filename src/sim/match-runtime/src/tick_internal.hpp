@@ -536,12 +536,15 @@ class TickHost final : public sim::simulation_state::Host,
 
     void regenerate_health(oa::Unit& record) override;
 
-    /// Works out a live unit's Killed percentage and wreck level, hands them
-    /// to the kill handler, then runs the commander rule's sweep when the
-    /// dead commander was simulated here.
+    /// Works out a live unit's Killed percentage and wreck level, drops a
+    /// last attacker whose player's slot is free, shares the death through
+    /// MultiplayerHooks::unit_killed when the unit is simulated here, clears
+    /// its orders and hands them to the kill handler, then runs the
+    /// commander rule's sweep when the dead commander was simulated here.
     ///
     /// @param record Dying unit; one no longer live is skipped.
-    /// @param kind DeathKind value of the death.
+    /// @param kind DeathKind value of the death, or 0 for a unit whose slot
+    ///     another player's new unit takes.
     /// @quirk An unfinished unit leaves no wreck whatever Killed returns.
     void kill_unit(oa::Unit& record, uint8_t kind) override;
 

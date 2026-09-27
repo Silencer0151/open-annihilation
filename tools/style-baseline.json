@@ -77,7 +77,7 @@
    "member-initializer": 2
   },
   "src/sim/feature-runtime": {
-   "member-initializer": 41
+   "member-initializer": 37
   },
   "src/sim/gameplay-input": {
    "member-initializer": 7,

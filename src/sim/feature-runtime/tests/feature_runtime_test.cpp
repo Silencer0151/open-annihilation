@@ -35,8 +35,9 @@ struct Recorder {
     oa_ref32 next_object = 100;
 
     struct Change {
-        FeatureChange change;
-        int32_t cell_x, cell_z;
+        FeatureChange change{};
+        int32_t cell_x{}, cell_z{};
+        const Unit* reclaimer{};
     };
 
     std::vector<Change> changes;
@@ -100,8 +101,12 @@ FeatureHost make_host(Recorder& recorder) {
         recorder->hits_elsewhere.push_back(weapon_id);
         return recorder->settled_elsewhere;
     };
-    host.feature_changed = [](void* context, FeatureChange change, int32_t cell_x, int32_t cell_z) {
-        static_cast<Recorder*>(context)->changes.push_back({change, cell_x, cell_z});
+    host.feature_changed = [](void* context,
+                              FeatureChange change,
+                              int32_t cell_x,
+                              int32_t cell_z,
+                              const Unit* reclaimer) {
+        static_cast<Recorder*>(context)->changes.push_back({change, cell_x, cell_z, reclaimer});
     };
     return host;
 }
@@ -329,7 +334,8 @@ void test_fire() {
     require(burning->spread_countdown == 3, "countdown is half spark time plus a draw");
     require(
         r.sounds == 1 && r.changes.size() == 1 && r.changes[0].change == FeatureChange::ignited &&
-            r.changes[0].cell_x == 8 && r.changes[0].cell_z == 8,
+            r.changes[0].cell_x == 8 && r.changes[0].cell_z == 8 &&
+            r.changes[0].reclaimer == nullptr,
         "treeburn sound and shared ignition"
     );
     for (uint32_t tick = 1; tick <= 3; ++tick) {
@@ -471,8 +477,9 @@ void test_reproduce_and_reclaim() {
     );
     require(
         !r.changes.empty() && r.changes.back().change == FeatureChange::reclaimed &&
-            r.changes.back().cell_x == 3 && r.changes.back().cell_z == 3,
-        "reclaim shared"
+            r.changes.back().cell_x == 3 && r.changes.back().cell_z == 3 &&
+            r.changes.back().reclaimer == &unit,
+        "reclaim shared with the reclaiming unit"
     );
     const auto* record = feature_record(f.world, f.plots[f.at(3, 3)].feature_record);
     require(
@@ -512,7 +519,8 @@ void test_hit_elsewhere() {
     require(f.plots[f.at(5, 5)].feature == 4, "hit settled here destroys wreck");
     require(
         r.changes.size() == 1 && r.changes[0].change == FeatureChange::destroyed &&
-            r.changes[0].cell_x == 5 && r.changes[0].cell_z == 5,
+            r.changes[0].cell_x == 5 && r.changes[0].cell_z == 5 &&
+            r.changes[0].reclaimer == nullptr,
         "destruction shared"
     );
 }

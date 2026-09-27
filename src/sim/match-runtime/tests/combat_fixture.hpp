@@ -34,10 +34,24 @@ inline constexpr uint8_t attack_chase_order = 6;
 inline constexpr uint32_t attack_notice = 2;
 inline constexpr const char* unit_name = "TESTUNIT";
 
+// One EXPLODE a unit's script ran: the unit, the piece and the flags, and
+// whether the unit still hung on a carrier or carried a unit when it ran.
+struct PieceExplosion {
+    uint16_t unit{};
+    uint32_t piece{};
+    int32_t flags{};
+    bool carried{};
+    bool carrying{};
+};
+
 struct Services : sim::match_runtime::OfflineServices {
     uint32_t notices{};
     // Values of the attachment notifications raised (0x10000 on cloaking).
     std::vector<uint32_t> attachment_notices;
+    // Records the EXPLODEs of Options::killed_script; without it one is
+    // unexpected.
+    bool record_explosions{};
+    std::vector<PieceExplosion> explosions;
 #define UNEXPECTED(type, name, args)                                                               \
     type name args override {                                                                      \
         throw std::runtime_error("unexpected " #name);                                             \
@@ -58,7 +72,23 @@ struct Services : sim::match_runtime::OfflineServices {
         attachment_notices.push_back(value);
     }
 
-    UNEXPECTED(void, explode_piece, (sim::unit_spawn::Slot&, uint32_t, int32_t))
+    /// Records an EXPLODE of Options::killed_script; any other throws.
+    ///
+    /// @param slot Unit whose script ran it.
+    /// @param piece Exploding piece.
+    /// @param flags The EXPLODE's flags.
+    void explode_piece(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t flags) override {
+        if (!record_explosions)
+            throw std::runtime_error("unexpected explode_piece");
+        explosions.push_back(
+            {slot.unit_index,
+             piece,
+             flags,
+             slot.record.attach_parent != 0,
+             slot.record.attach_first_child != 0}
+        );
+    }
+
     UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
     UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
 
@@ -125,7 +155,21 @@ struct Options {
     bool dgun{};
     // TDF reloadtime of the turret gun, seconds.
     std::string gun_reload_time = "0.1";
+    // Gives the type a Killed(severity, corpsetype) script with a solar
+    // collector's thresholds: corpsetype 1 up to severity 25, 2 up to 50 and
+    // 3 above. It explodes the root piece once, with the corpsetype as the
+    // flags, and the services record each EXPLODE.
+    bool killed_script{};
 };
+
+/// Returns the corpsetype Options::killed_script picks for a severity, which
+/// is also the flags it explodes the root piece with.
+///
+/// @param severity Killed percentage.
+/// @return 1 up to 25, 2 up to 50, 3 above.
+inline int32_t killed_corpsetype(int32_t severity) {
+    return severity <= 25 ? 1 : severity <= 50 ? 2 : 3;
+}
 
 // A 16x16-cell map (256 world units a side) with one mobile type carrying a
 // 400-unit line-of-sight turret gun.
@@ -222,6 +266,52 @@ struct Fixture {
             script->scripts.push_back({"FireTertiary", 20});
             script->entry_points.insert(script->entry_points.end(), {17, 20});
             script->header.static_variable_count = 3;
+        }
+        if (options.killed_script) {
+            // Local 1 takes the corpsetype for the severity in local 0, then
+            // EXPLODE root with it as the flags.
+            const auto killed = static_cast<uint32_t>(script->code.size());
+            const uint32_t over_25 = killed + 11;
+            const uint32_t over_50 = killed + 22;
+            const uint32_t chosen = killed + 24;
+            constexpr uint32_t root_piece = 0;
+            script->code.insert(
+                script->code.end(),
+                {opcode::push_local,
+                 0,
+                 opcode::push_constant,
+                 25,
+                 opcode::less_equal,
+                 opcode::jump_if_false,
+                 over_25,
+                 opcode::push_constant,
+                 1,
+                 opcode::jump,
+                 chosen,
+                 opcode::push_local,
+                 0,
+                 opcode::push_constant,
+                 50,
+                 opcode::less_equal,
+                 opcode::jump_if_false,
+                 over_50,
+                 opcode::push_constant,
+                 2,
+                 opcode::jump,
+                 chosen,
+                 opcode::push_constant,
+                 3,
+                 opcode::pop_local,
+                 1,
+                 opcode::push_local,
+                 1,
+                 opcode::explode,
+                 root_piece,
+                 opcode::return_}
+            );
+            script->scripts.push_back({"Killed", killed});
+            script->entry_points.push_back(killed);
+            services.record_explosions = true;
         }
         script->piece_names = {"root"};
         types[1].simulation.flags = 0x800000 | OA_UNIT_DEF_FLAG_HAS_WEAPONS;

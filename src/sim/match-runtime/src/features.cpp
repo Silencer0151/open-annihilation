@@ -138,6 +138,32 @@ struct FeatureCalls {
         m.credit_energy(*unit, energy);
         m.credit_metal(*unit, metal);
     }
+
+    // A weapon hit on a feature that another player's machine settles.
+    static bool hit_elsewhere(void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z) {
+        const auto& multiplayer = match(context).multiplayer;
+        return multiplayer.feature_hit_elsewhere != nullptr &&
+               multiplayer.feature_hit_elsewhere(multiplayer.context, weapon_id, cell_x, cell_z);
+    }
+
+    // A feature change settled here, for the other players, with the slot
+    // of the unit that reclaimed it.
+    static void changed(
+        void* context,
+        features::FeatureChange change,
+        int32_t cell_x,
+        int32_t cell_z,
+        const Unit* reclaimer
+    ) {
+        auto& m = match(context);
+        const auto& multiplayer = m.multiplayer;
+        if (multiplayer.feature_changed == nullptr)
+            return;
+        const auto slot = reclaimer != nullptr
+                              ? static_cast<uint16_t>(world_unit_slot(&m.state(), reclaimer))
+                              : 0;
+        multiplayer.feature_changed(multiplayer.context, change, cell_x, cell_z, slot);
+    }
 };
 
 features::FeatureHost Match::feature_host() noexcept {
@@ -152,6 +178,8 @@ features::FeatureHost Match::feature_host() noexcept {
     host.play_sound = FeatureCalls::play_sound;
     host.burn_weapon = FeatureCalls::burn_weapon;
     host.credit_reclaim = FeatureCalls::credit_reclaim;
+    host.feature_hit_elsewhere = FeatureCalls::hit_elsewhere;
+    host.feature_changed = FeatureCalls::changed;
     return host;
 }
 

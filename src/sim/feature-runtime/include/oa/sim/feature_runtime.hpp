@@ -229,7 +229,11 @@ struct FeatureHost {
     /// @param change what happened
     /// @param cell_x feature cell column
     /// @param cell_z feature cell row
-    void (*feature_changed)(void* context, FeatureChange change, int32_t cell_x, int32_t cell_z);
+    /// @param reclaimer the unit that finished reclaiming the feature; null
+    ///        for a fire or a destruction
+    void (*feature_changed)(
+        void* context, FeatureChange change, int32_t cell_x, int32_t cell_z, const Unit* reclaimer
+    ){};
 };
 
 /// Views World.placed_features as placed-feature records.
@@ -458,7 +462,7 @@ void damage_feature(
 /// Finishes a unit's reclaim of the feature under a 16.16 position.
 ///
 /// Credits the feature's energy and metal, starts its reclamate sequence and
-/// reports the change.
+/// reports the change with the reclaiming unit.
 ///
 /// @param[in,out] world world holding the plots and pool
 /// @param host feature host

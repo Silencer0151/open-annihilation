@@ -164,6 +164,23 @@ capturer alert, a chase or re-aim, the under-attack notice) runs through
 `weapon_execution::retaliate`, and kind-2 damage and the Paralyze mission run
 through the `unit_health` paralysis code.
 
+The machine that simulates a unit settles its death: the kill handler works
+out the Killed percentage and the wreck level (`KillOutcome`), drops a last
+attacker whose player's slot has gone free, and, for a unit simulated here,
+shares them through `MultiplayerHooks::unit_killed` before it clears the
+unit's orders and tears it down, so the record still names the unit's owner
+and last attacker. `Match::kill_unit` runs the kill handler on one unit;
+death kind 0 kills a unit whose slot another player's new unit takes, by its
+own health and with no statistics. `Match::apply_kill` applies a death
+another player's machine settled: the unit takes that machine's last
+attacker, its Killed script starts with the shared percentage for its flying
+pieces only, a finished unit explodes when that percentage is above zero, and
+the wreck is left at the shared level; statistics count by the shared kind.
+`feature_host` passes weapon hits on features, and the fires, destructions
+and reclaims settled here (a reclaim with the reclaiming unit), to the
+multiplayer hooks' feature entries; with those entries null every hit is
+applied here and nothing is shared.
+
 `update_projectiles` flies the pool through its flight modes, tests every
 moved shot against the plot under it (intercept burst, occupants, feature,
 ground bounce, ground, water) and compacts the pool; a record still live
@@ -218,5 +235,7 @@ Only the test's external callbacks are recorded fixtures. It also runs 35
 stationary ground ticks (idle mission scheduling, health percentage refresh,
 completion of the Create sleep) and 60 ground-motion ticks (cell changes,
 terrain collision, occupancy removal and insertion, moving sight). The other
-tests cover each order family, combat, projectiles, economy, features,
-transports, outcomes, saved orders, saved features and the trace stream.
+tests cover each order family, combat, the deaths shared with and applied
+from the other players (`match-shared-deaths`), projectiles, economy,
+features, transports, outcomes, saved orders, saved features and the trace
+stream.

@@ -485,6 +485,96 @@ void edge_hits_leave_a_wreck_whole() {
     std::cout << "edge hits leave a wreck whole passed\n";
 }
 
+// feature_host hands weapon hits on features and the feature changes settled
+// here to the match's multiplayer hooks. A hit the hook says another
+// player's machine settles leaves the feature as it was, whether it comes
+// from a blast or straight from the feature code; a hit settled here applies,
+// and its destruction, a finished reclaim (with the reclaiming unit's slot)
+// and a fire started here are reported with their cells. The other cases run
+// with those entries null, which applies every hit here and reports nothing.
+void feature_hits_and_changes_reach_the_multiplayer_hooks() {
+    Fixture f(feature_options());
+    allow_feature_damage(f);
+
+    struct Hit {
+        uint8_t weapon_id{};
+        int32_t cell_x{}, cell_z{};
+    };
+
+    struct Change {
+        features::FeatureChange change{};
+        int32_t cell_x{}, cell_z{};
+        uint16_t reclaimer{};
+    };
+
+    struct Forwarded {
+        bool elsewhere{};
+        std::vector<Hit> hits;
+        std::vector<Change> changes;
+    } forwarded;
+
+    auto& hooks = f.match->multiplayer;
+    hooks.context = &forwarded;
+    hooks.feature_hit_elsewhere = [](void* context, uint8_t weapon_id, int32_t x, int32_t z) {
+        auto& self = *static_cast<Forwarded*>(context);
+        self.hits.push_back({weapon_id, x, z});
+        return self.elsewhere;
+    };
+    hooks.feature_changed =
+        [](
+            void* context, features::FeatureChange change, int32_t x, int32_t z, uint16_t reclaimer
+        ) { static_cast<Forwarded*>(context)->changes.push_back({change, x, z, reclaimer}); };
+    const auto hit_at = [&forwarded](std::size_t index, uint8_t weapon_id, int32_t x, int32_t z) {
+        const auto& hit = forwarded.hits.at(index);
+        return hit.weapon_id == weapon_id && hit.cell_x == x && hit.cell_z == z;
+    };
+    const auto change_at = [&forwarded](
+                               std::size_t index,
+                               features::FeatureChange change,
+                               int32_t x,
+                               int32_t z,
+                               uint16_t reclaimer = 0
+                           ) {
+        const auto& reported = forwarded.changes.at(index);
+        return reported.change == change && reported.cell_x == x && reported.cell_z == z &&
+               reported.reclaimer == reclaimer;
+    };
+    auto& world = f.match->state();
+    arm_gun(f, 32, 30, false);
+    const auto& gun = world.game.weapon_defs[registry_gun];
+    const FixedVec3 at_far_tree{(3 * 16 + 8) << 16, 0, (12 * 16 + 8) << 16};
+
+    forwarded.elsewhere = true;
+    blast_at(f, at_far_tree);
+    features::damage_feature(world, f.match->feature_host(), plot(3, 12), 3, 12, gun);
+    CHECK(forwarded.hits.size() == 2);
+    CHECK(hit_at(0, gun.weapon_id, 3, 12) && hit_at(1, gun.weapon_id, 3, 12));
+    CHECK(world.plots[plot(3, 12)].feature_record == 0 && record_at(f, 3, 12) == nullptr);
+    CHECK(forwarded.changes.empty());
+
+    forwarded.elsewhere = false;
+    blast_at(f, at_far_tree);
+    CHECK(forwarded.hits.size() == 3 && world.plots[plot(3, 12)].feature_record == 30);
+    CHECK(forwarded.changes.empty());
+    features::damage_feature(world, f.match->feature_host(), plot(3, 12), 3, 12, gun);
+    const auto* dying_tree = record_at(f, 3, 12);
+    CHECK(dying_tree && dying_tree->sprite.animation.sequence == dying);
+    CHECK(forwarded.changes.size() == 1);
+    CHECK(change_at(0, features::FeatureChange::destroyed, 3, 12));
+
+    auto& unit = f.spawn(0, 64, 96);
+    CHECK(f.match->reclaim_feature(unit.record, {(4 * 16 + 8) << 16, 0, (4 * 16 + 8) << 16}));
+    CHECK(forwarded.changes.size() == 2);
+    CHECK(change_at(1, features::FeatureChange::reclaimed, 4, 4, unit.unit_index));
+
+    blast(f, 8, 8, 100, true);
+    CHECK(record_at(f, 8, 8) && (record_at(f, 8, 8)->state & features::state_burning) != 0);
+    CHECK(forwarded.hits.size() == 5 && hit_at(4, gun.weapon_id, 8, 8));
+    CHECK(forwarded.changes.size() == 3);
+    CHECK(change_at(2, features::FeatureChange::ignited, 8, 8));
+    std::cout << "feature hits and changes reach the multiplayer hooks passed\n";
+}
+
 } // namespace
 
 int main() {
@@ -497,6 +587,7 @@ int main() {
         water_damage_comes_from_the_header();
         meteor_storm_steps_every_tick();
         edge_hits_leave_a_wreck_whole();
+        feature_hits_and_changes_reach_the_multiplayer_hooks();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

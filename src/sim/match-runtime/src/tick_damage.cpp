@@ -7,6 +7,7 @@
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 #include "oa/formats/tdf.hpp"
 
+#include <array>
 #include <cstdint>
 
 namespace oa::sim::match_runtime {
@@ -403,6 +404,12 @@ void Match::teardown_dead_unit(sim::unit_spawn::Slot& slot) {
 }
 
 void Match::teardown_dead_unit(sim::unit_spawn::Slot& slot, const KillOutcome& outcome) {
+    teardown_dead_unit(slot, outcome, false);
+}
+
+void Match::teardown_dead_unit(
+    sim::unit_spawn::Slot& slot, const KillOutcome& outcome, bool settled_elsewhere
+) {
     auto& unit = *slot.unit;
     if (!(unit.flags & live_unit_flag))
         return;
@@ -444,6 +451,13 @@ void Match::teardown_dead_unit(sim::unit_spawn::Slot& slot, const KillOutcome& o
         if (link_first_child(slot.record) == child)
             break;
     }
+    // A death settled on another player's machine plays the unit's Killed
+    // script for its flying pieces; the wreck level it picks is not read.
+    if (settled_elsewhere && outcome.killed_percent > 0)
+        if (auto* instance = this->instance(slot.unit_index); instance && instance->script()) {
+            const std::array<int32_t, 1> percent{outcome.killed_percent};
+            (void)instance->script()->call("Killed", percent, true);
+        }
     record_death_statistics(slot, death, killer);
     assign_squad(slot, 0xffffffffu);
 
@@ -470,7 +484,7 @@ void Match::teardown_dead_unit(sim::unit_spawn::Slot& slot, const KillOutcome& o
     }
     release_target_observers(*slot.unit);
     const bool finished = std::bit_cast<uint32_t>(slot.record.build_remaining) == 0;
-    if (outcome.explosion > 0 && finished)
+    if (outcome.killed_percent > 0 && finished)
         explode_unit(slot, death == DeathKind::self_destruct);
     if (outcome.wreck_level != 0) {
         spawn_corpse(slot, outcome.wreck_level, death != DeathKind::dismissed);

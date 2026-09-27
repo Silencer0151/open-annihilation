@@ -6,6 +6,10 @@
 #include <cstdint>
 
 namespace oa::sim::match_runtime {
+namespace {
+// The wreck level is the low four bits of the Killed script's second result.
+constexpr int32_t killed_wreck_level_mask = 0xf;
+} // namespace
 
 sim::unit_spawn::Slot& TickHost::HealthHost::slot(const sim::unit_health::Unit& u) {
     return match_.world().slots[u.identity];
@@ -253,15 +257,24 @@ void TickHost::kill_unit(oa::Unit& record, uint8_t kind) {
     // Unfinished units leave no wreck.
     if (std::bit_cast<uint32_t>(s.record.build_remaining) != 0)
         killed_flag = 0;
-    sim::simulation_state::clear_orders(u, true, *this);
+    // A last attacker whose player's slot has gone free credits nobody, here
+    // and on the other players' machines, as in 3.1c.
+    if (const auto* attacker_owner = world_player(&match.state(), s.record.last_attacker_owner);
+        attacker_owner != nullptr && attacker_owner->status == OA_PLAYER_STATUS_FREE)
+        s.record.last_attacker_owner = OA_PLAYER_COUNT;
+    const KillOutcome outcome{
+        static_cast<DeathKind>(kind),
+        static_cast<int8_t>(killed_percent),
+        static_cast<uint8_t>(killed_flag & killed_wreck_level_mask)
+    };
     const bool local = sim::simulation_state::locally_simulated(u);
+    // The machine simulating the unit shares its death before it tears the
+    // unit down, while the record still names its owner and last attacker.
+    if (local && match.multiplayer.unit_killed != nullptr)
+        match.multiplayer.unit_killed(match.multiplayer.context, s.unit_index, outcome);
+    sim::simulation_state::clear_orders(u, true, *this);
     const auto owner = s.record.owner_index;
-    match.teardown_dead_unit(
-        s,
-        {static_cast<DeathKind>(kind),
-         static_cast<int8_t>(killed_percent),
-         static_cast<uint8_t>(killed_flag & 0xf)}
-    );
+    match.teardown_dead_unit(s, outcome);
     // Only the machine simulating the commander runs its player's sweep,
     // after the order panel goes back to its root page.
     if (commander && match.state().game.session_rules != 0 && local) {
@@ -292,6 +305,23 @@ void TickHost::destroy_player_units(uint8_t owner) {
         s.unit->flags |= death_pending_flag;
         kill_unit(s.record, self_destruct);
     }
+}
+
+void Match::kill_unit(uint16_t unit, uint8_t kind) {
+    TickHost(*this).kill_unit(slots_.at(unit).record, kind);
+}
+
+void Match::apply_kill(
+    uint16_t unit, const KillOutcome& outcome, uint16_t attacker, uint8_t attacker_owner
+) {
+    auto& s = slots_.at(unit);
+    if (s.unit == nullptr || !(s.unit->flags & live_unit_flag))
+        return;
+    s.record.last_attacker_id = attacker;
+    s.record.last_attacker_owner = attacker_owner;
+    TickHost host(*this);
+    sim::simulation_state::clear_orders(*s.unit, true, host);
+    teardown_dead_unit(s, outcome, true);
 }
 
 } // namespace oa::sim::match_runtime
