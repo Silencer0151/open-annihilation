@@ -6,18 +6,18 @@
   <a href="https://github.com/open-annihilation/open-annihilation/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/open-annihilation/open-annihilation?style=flat-square&label=release&color=c0392b"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/open-annihilation/open-annihilation/total?style=flat-square&color=2c3e50"></a>
   <a href="LICENSE"><img alt="Licence: GPL v3" src="https://img.shields.io/badge/licence-GPL%20v3-2c3e50?style=flat-square"></a>
-  <img alt="Platforms: macOS, Windows, Linux" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-2c3e50?style=flat-square">
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Platforms: macOS, Windows, Linux" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-2c3e50?style=flat-square"></a>
   <a href="https://discord.gg/GWgWTQKuv"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center"><b>Runs on</b></p>
 
 <p align="center">
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black">
-  <img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white">
-  <img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge">
-  <img alt="iOS: soon" title="iOS: soon" src="https://img.shields.io/badge/iOS-soon-808080?style=for-the-badge&logo=apple&logoColor=c8c8c8&labelColor=5a5a5a">
-  <img alt="Steam Deck: soon" title="Steam Deck: soon" src="https://img.shields.io/badge/Steam%20Deck-soon-808080?style=for-the-badge&logo=steamdeck&logoColor=c8c8c8&labelColor=5a5a5a">
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Linux" src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge"></a>
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="iOS: soon" title="iOS: soon" src="https://img.shields.io/badge/iOS-soon-808080?style=for-the-badge&logo=apple&logoColor=c8c8c8&labelColor=5a5a5a"></a>
+  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Steam Deck: soon" title="Steam Deck: soon" src="https://img.shields.io/badge/Steam%20Deck-soon-808080?style=for-the-badge&logo=steamdeck&logoColor=c8c8c8&labelColor=5a5a5a"></a>
 </p>
 
 <p align="center"><b>Built with</b></p>
