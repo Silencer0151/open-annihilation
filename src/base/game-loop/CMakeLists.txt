@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+cmake_minimum_required(VERSION 3.24)
+project(oa_base_game_loop LANGUAGES CXX)
+include(CTest)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/OaOptions.cmake")
+add_library(oa-base-game-loop src/coordinator.cpp)
+add_library(oa::base::game_loop ALIAS oa-base-game-loop)
+target_include_directories(oa-base-game-loop PUBLIC include)
+target_compile_features(oa-base-game-loop PUBLIC cxx_std_20)
+target_link_libraries(oa-base-game-loop PUBLIC oa-options)
+if(BUILD_TESTING)
+  add_executable(oa-game-loop-test tests/coordinator_test.cpp)
+  target_link_libraries(oa-game-loop-test PRIVATE oa-base-game-loop)
+  add_test(NAME game-loop-coordinator COMMAND oa-game-loop-test)
+  add_executable(oa-game-loop-extended-test tests/extended_test.cpp)
+  target_link_libraries(oa-game-loop-extended-test PRIVATE oa-base-game-loop)
+  add_test(NAME game-loop-extended COMMAND oa-game-loop-extended-test)
+endif()

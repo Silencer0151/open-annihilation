@@ -1,10 +1,14 @@
 # Attributions
 
 Open Annihilation is licensed under the GNU General Public License version 3
-(see `LICENSE`). The release packages also contain the third-party software
-listed below. Each component keeps its own licence, and the notices those
-licences require are reproduced here. Full licence texts are in the
-[`licenses/`](licenses/) folder of this repository.
+only (GPL-3.0-only; see [`LICENSE`](LICENSE)). The release packages also
+contain the third-party software listed below. Each component keeps its own
+licence, and the notices those licences require are reproduced here. Full
+licence texts are in the [`licenses/`](licenses/) folder of this repository.
+A build copies this file, `LICENSE` and the `licenses/` folder beside
+`open-annihilation`, `oa-intro` and `oa-tool`, and on macOS into the game's
+bundle, `open-annihilation.app/Contents/Resources`, so the links below also
+resolve there.
 
 No Total Annihilation or Total Annihilation: Kingdoms game data is included
 in this repository or in the release packages.
@@ -14,13 +18,41 @@ in this repository or in the release packages.
 | Component | Version | Licence | macOS | Windows | Linux |
 |---|---|---|---|---|---|
 | [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
-| [FFmpeg](#ffmpeg) (libavcodec, libavformat, libavutil, libswresample, libswscale) | 9.0.2 | LGPL 2.1 or later | static, inside the app | DLLs beside `oa-game.exe` | shared libraries in `lib/` |
+| [FFmpeg](#ffmpeg) (libavcodec, libavformat, libavutil, libswresample, libswscale) | 9.0.2 | LGPL 2.1 or later | static, inside the app | DLLs beside `open-annihilation.exe` | shared libraries in `lib/` |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
 | [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 14.0.0 | ZPL 2.1, MIT, BSD | | static | |
 | [GCC runtime](#gcc-runtime) | 16.2.0 | GPL 3 with the GCC Runtime Library Exception | | static | |
 
 The operating system's own libraries, such as the C and C++ runtimes and
 the graphics, audio and windowing libraries, are not included.
+
+## Builds from this source
+
+The table above describes the release packages. A build made from this
+repository with CMake links these components as follows:
+
+- When CMake is pointed at the SDL that `tools/bootstrap_sdl.py` installs,
+  as `run.sh` and the README do, SDL 3.4.16 is linked statically. Otherwise
+  the build takes whichever SDL 3.2 or later CMake finds, which may be a
+  shared library.
+- On macOS and Linux, zlib and FFmpeg are the system's: the executables link
+  the libraries CMake finds (Homebrew's FFmpeg on macOS when it is
+  installed), and the build copies none of them beside the executables. The
+  [FFmpeg](#ffmpeg) section below does not describe such a build: the
+  licence and configuration of the FFmpeg it found apply to it. Homebrew's
+  FFmpeg, for example, is built under the GPL version 3 with x264 and x265.
+- The native Windows build that the README describes, with vcpkg's
+  `zlib:x64-windows`, links that zlib as a DLL and copies it beside
+  `oa-tool.exe`. It uses FFmpeg only when CMake finds one; without it, as in
+  continuous integration, `open-annihilation` and `oa-intro` are not built.
+- The Windows cross-build, `tools/build_windows.sh`, builds zlib 1.3.1 and
+  SDL for the target and links them statically. It builds FFmpeg 9.0.2 as
+  separate DLLs with `tools/bootstrap_windows_deps.py`, or takes the FFmpeg
+  that `--ffmpeg PREFIX` names, and copies the DLLs and that FFmpeg's
+  `COPYING.LGPLv2.1` beside `open-annihilation.exe` and `oa-intro.exe`. The
+  [FFmpeg](#ffmpeg) section describes an FFmpeg given with `--ffmpeg` only
+  when it is itself an LGPL build, configured without `--enable-gpl` and
+  `--enable-nonfree`.
 
 ## SDL
 
@@ -92,13 +124,21 @@ components below, and no GPL or non-free component:
 ```
 
 The Windows build adds the cross-compilation, `--enable-w32threads` and
-static runtime options for mingw-w64.
+static runtime options for mingw-w64. The Windows cross-build in this
+repository takes its options from `tools/bootstrap_windows_deps.py`, which
+also passes `--disable-x86asm`.
 
 On Windows and Linux the libraries are separate files, so you can replace
 them with another compatible build of FFmpeg 9.0. On macOS they are linked
 into the application; you can rebuild it against a different FFmpeg from
 the Open Annihilation source code. Open Annihilation's GNU GPL v3 terms give
 you the rights that section 6 of the LGPL v2.1 requires for this.
+
+To build against a modified FFmpeg, set the CMake cache variables
+`OA_FFMPEG_INCLUDE_DIR`, `OA_AVFORMAT_LIBRARY`, `OA_AVCODEC_LIBRARY`,
+`OA_AVUTIL_LIBRARY`, `OA_SWSCALE_LIBRARY` and `OA_SWRESAMPLE_LIBRARY` to its
+headers and libraries when you configure the source. The Windows
+cross-build takes it with `tools/build_windows.sh --ffmpeg PREFIX`.
 
 ## zlib
 
@@ -138,9 +178,10 @@ are in [`licenses/mingw-w64.txt`](licenses/mingw-w64.txt).
 The experimental Windows ARM64 package contains the same components as the
 Windows package (SDL, zlib and the mingw-w64 runtime linked statically, and
 the FFmpeg DLLs), built with the LLVM toolchain instead of GCC. It also links
-LLVM's C++ runtime (libc++, libc++abi, libunwind and compiler-rt) statically.
-These are licensed under the Apache License 2.0 with LLVM Exceptions, which
-place no requirements on programs that embed them in compiled form.
+LLVM's C++ standard library and its support libraries (libc++, libc++abi,
+libunwind and compiler-rt) statically. These are licensed under the Apache
+License 2.0 with LLVM Exceptions, which place no requirements on programs that
+embed them in compiled form.
 
 ## GCC runtime
 

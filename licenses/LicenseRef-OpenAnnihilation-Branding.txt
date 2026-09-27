@@ -1,0 +1,19 @@
+These are the terms of the Open Annihilation branding: the name's icons
+under branding/, which REUSE.toml marks LicenseRef-OpenAnnihilation-Branding,
+and the icons made from them that the builds put in the game. They are the
+terms of the Open Annihilation branding repository, where "this repository"
+means that one, as its LICENSE states them below. The rest of this
+repository is licensed under the GNU General Public License version 3 only
+(LICENSE).
+
+--------------------------------------------------------------------------
+
+Copyright (c) 2026 Steve Gray. All rights reserved.
+
+The images in this repository, including the Open Annihilation name, logos,
+header and icons, are the property of the copyright holder.
+
+No licence or permission to use, copy, modify, distribute or create
+derivative works from them is granted, whether under the licence of the
+Open Annihilation software or otherwise, except with the prior written
+permission of the copyright holder.

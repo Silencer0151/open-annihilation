@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+add_library(oa-platform-preferences src/preferences.cpp)
+add_library(oa::platform::preferences ALIAS oa-platform-preferences)
+target_include_directories(oa-platform-preferences PUBLIC include)
+target_compile_features(oa-platform-preferences PUBLIC cxx_std_20)
+target_link_libraries(oa-platform-preferences PUBLIC oa-options)
+if(APPLE)
+  enable_language(OBJCXX)
+  target_sources(oa-platform-preferences PRIVATE src/apple_location.mm)
+  set_target_properties(oa-platform-preferences PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+  target_link_libraries(oa-platform-preferences PRIVATE "-framework Foundation")
+elseif(WIN32)
+  target_link_libraries(oa-platform-preferences PRIVATE shell32 ole32 uuid)
+endif()
+if(BUILD_TESTING)
+  add_executable(oa-preferences-test tests/preferences_test.cpp)
+  target_link_libraries(oa-preferences-test PRIVATE oa-platform-preferences)
+  add_test(NAME preferences COMMAND oa-preferences-test)
+endif()

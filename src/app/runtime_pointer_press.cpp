@@ -1,0 +1,402 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The pointer event word, the right button as the interface type decides it,
+// radar scrolls, mouse look, and the orders the pointer gives the selection
+// with the queued-order cancel.
+#include "oa/app/runtime.hpp"
+#include "oa/data/mission_types.hpp"
+#include "oa/present/world_renderer/world_camera.hpp"
+#include <SDL3/SDL.h>
+#include <bit>
+#include <cstdint>
+#include <exception>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace oa::app {
+
+namespace input = oa::sim::gameplay_input;
+
+namespace {
+
+oa::FixedVec3 fixed_point(const oa::sim::ground_orders::Point& point) {
+    return {point[0], point[1], point[2]};
+}
+
+} // namespace
+
+void Runtime::record_pointer_event(const SDL_Event& event) {
+    if (!match_)
+        return;
+    auto& game = match_->state().game;
+    uint32_t keys = game.pointer_state[2] & (input::pointer_key_left | input::pointer_key_right);
+    const auto button_key = [](uint8_t button) -> uint32_t {
+        if (button == SDL_BUTTON_LEFT)
+            return input::pointer_key_left;
+        if (button == SDL_BUTTON_RIGHT)
+            return input::pointer_key_right;
+        return 0;
+    };
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+        keys |= button_key(event.button.button);
+    else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP)
+        keys &= ~button_key(event.button.button);
+    const auto mods = SDL_GetModState();
+    if ((mods & SDL_KMOD_SHIFT) != 0)
+        keys |= input::pointer_key_shift;
+    if ((mods & SDL_KMOD_CTRL) != 0)
+        keys |= input::pointer_key_control;
+    const auto source = oa::ui::display_layout::canvas_to_source(
+        match_layout_, static_cast<int>(pointer_x_), static_cast<int>(pointer_y_)
+    );
+    game.pointer_state[0] = static_cast<uint32_t>(source.x);
+    game.pointer_state[1] = static_cast<uint32_t>(source.y);
+    game.pointer_state[2] = keys;
+}
+
+bool Runtime::battlefield_contains(float x, float y) const {
+    return x >= static_cast<float>(match_layout_.left) &&
+           y >= static_cast<float>(match_layout_.top) &&
+           x < static_cast<float>(match_layout_.left + match_layout_.battlefield_width()) &&
+           y < static_cast<float>(match_layout_.top + match_layout_.battlefield_height());
+}
+
+void Runtime::refresh_pointer_area() {
+    if (!match_)
+        return;
+    input::set_pointer_area(
+        match_->state().game,
+        radar_contains(pointer_x_, pointer_y_),
+        battlefield_contains(pointer_x_, pointer_y_)
+    );
+}
+
+void Runtime::center_camera_on_radar_point(float x, float y) {
+    if (radar_map_w_ <= 0 || radar_map_h_ <= 0 || radar_picture_.width <= 0 ||
+        radar_picture_.height <= 0)
+        return;
+    const auto rx = static_cast<int>(x) - radar_picture_.x;
+    const auto ry = static_cast<int>(y) - radar_picture_.y;
+    match_camera_x_ = rx * radar_map_w_ / radar_picture_.width - visible_map_width() / 2;
+    match_camera_z_ = ry * radar_map_h_ / radar_picture_.height - visible_map_height() / 2;
+    zoom_anchored_ = false;
+    if (match_)
+        oa::present::world_renderer::camera_stop_follow(match_->state().game);
+    stop_match_tracking();
+}
+
+void Runtime::drive_mouse_look(bool begin) {
+    namespace wr = oa::present::world_renderer;
+    if (!match_)
+        return;
+    bind_match_view();
+    auto& game = match_->state().game;
+    wr::CursorSink sink{};
+    sink.user = this;
+    sink.screen_width = [](void* user) {
+        return static_cast<int32_t>(
+            static_cast<Runtime*>(user)->match_->state().game.offscreen_width
+        );
+    };
+    sink.screen_height = [](void* user) {
+        return static_cast<int32_t>(
+            static_cast<Runtime*>(user)->match_->state().game.offscreen_height
+        );
+    };
+    sink.set_position = [](void* user, int32_t x, int32_t y) {
+        auto* self = static_cast<Runtime*>(user);
+        const auto canvas = oa::ui::display_layout::source_to_canvas(self->match_layout_, x, y);
+        self->pointer_x_ = self->match_pointer_x_ = static_cast<float>(canvas.x);
+        self->pointer_y_ = self->match_pointer_y_ = static_cast<float>(canvas.y);
+        auto& state = self->match_->state().game;
+        state.pointer_state[0] = static_cast<uint32_t>(x);
+        state.pointer_state[1] = static_cast<uint32_t>(y);
+        float window_x = 0.0F;
+        float window_y = 0.0F;
+        if (self->sdl_.renderer != nullptr && self->sdl_.window != nullptr &&
+            SDL_RenderCoordinatesToWindow(
+                self->sdl_.renderer,
+                static_cast<float>(canvas.x),
+                static_cast<float>(canvas.y),
+                &window_x,
+                &window_y
+            ))
+            SDL_WarpMouseInWindow(self->sdl_.window, window_x, window_y);
+    };
+    if (begin) {
+        stop_match_tracking();
+        wr::mouse_look_begin(game, sink);
+    } else
+        wr::mouse_look_update(game, sink);
+    match_camera_x_ = static_cast<int32_t>(game.camera_x);
+    match_camera_z_ = static_cast<int32_t>(game.camera_y);
+    zoom_anchored_ = false;
+}
+
+bool Runtime::follow_pointer_modes(const SDL_Event& event) {
+    if (!match_)
+        return false;
+    auto& game = match_->state().game;
+    if (game.mouse_look_active != 0) {
+        drive_mouse_look(false);
+        return true;
+    }
+    if ((input::pointer_flags(game) & input::pointer_radar_scroll) == 0)
+        return false;
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+        (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT) &&
+        input::end_radar_scroll(game, event.button.button == SDL_BUTTON_RIGHT))
+        return true;
+    center_camera_on_radar_point(pointer_x_, pointer_y_);
+    return true;
+}
+
+void Runtime::handle_match_right_press(float x, float y) {
+    if (!match_)
+        return;
+    auto& world = match_->state();
+    // The frame's pointer pass: the armed command, the pointer area, the unit
+    // and the ground under the pointer.
+    (void)pick_match_cursor();
+    switch (input::right_press(world.game)) {
+    case input::RightPress::none:
+        return;
+    case input::RightPress::cancel_command:
+        reset_match_command();
+        pending_build_type_ = 0;
+        input::set_pointer_command(world.game, input::OrderCommand::default_order);
+        return;
+    case input::RightPress::mouse_look:
+        drive_mouse_look(true);
+        return;
+    case input::RightPress::clear_selection:
+        // The selection marks drop, then the order panel is rebuilt.
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        return;
+    case input::RightPress::radar_scroll:
+        select_game_cursor(static_cast<uint8_t>(input::OrderCursor::normal));
+        return;
+    case input::RightPress::default_order:
+        break;
+    }
+    // The selection's orders resolve from the default order, the unit under
+    // the pointer (a radar blip over the radar) and the ground under it.
+    const auto target = radar_contains(x, y) ? pick_radar_unit(x, y) : hovered_match_unit_;
+    const auto ground = match_world_point(x, y);
+    if (target == 0 && !ground)
+        return;
+    const auto issued =
+        issue_selection_orders(input::OrderCommand::default_order, target, ground, queueing());
+    if (!issued.empty())
+        status_ = std::string(issued);
+}
+
+void Runtime::issue_pointer_ground_orders(float x, float y, bool queue) {
+    if (!match_)
+        return;
+    const auto ground = match_world_point(x, y);
+    if (!ground)
+        return;
+    hovered_match_unit_ = 0;
+    const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
+    auto& world = match_->state();
+    const auto command = input::pointer_command(world.game);
+    switch (input::click_action(world, command, cursor)) {
+    case input::ClickAction::none:
+    case input::ClickAction::select_unit:
+        return;
+    case input::ClickAction::clear_selection:
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        return;
+    case input::ClickAction::issue_command:
+        break;
+    }
+    const auto issued = issue_selection_orders(command, 0, ground, queue);
+    if (!issued.empty())
+        status_ = std::string(issued);
+    finish_issued_command();
+}
+
+std::string_view Runtime::issue_selection_orders(
+    input::OrderCommand command,
+    uint16_t target,
+    const std::optional<oa::sim::ground_orders::Point>& ground,
+    bool queue
+) {
+    if (!match_)
+        return {};
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    world.game.cursor_unit_id = target;
+    if (ground)
+        input::set_pointer_position(world.game, fixed_point(*ground));
+    const uint16_t bound =
+        input::command_binds_cursor_unit(static_cast<uint8_t>(command)) ? target : uint16_t{0};
+    std::vector<input::SelectionOrder> orders(world.unit_slot_count);
+    const auto count = input::selection_orders(
+        world, command, order_cursor_hooks(), orders.data(), static_cast<uint32_t>(orders.size())
+    );
+    std::optional<oa::sim::ground_orders::Point> target_point;
+    if (bound != 0) {
+        const auto& slot = match_->world().slots[bound];
+        if (slot.unit != nullptr)
+            target_point = oa::sim::ground_orders::Point{
+                std::bit_cast<int32_t>(slot.unit->position[0]),
+                std::bit_cast<int32_t>(slot.unit->position[1]),
+                std::bit_cast<int32_t>(slot.unit->position[2])
+            };
+    }
+    std::string_view issued;
+    for (uint32_t index = 0; index < count; ++index) {
+        const auto source = orders[index].actor->id;
+        const auto order = orders[index].order;
+        if (cancels_queued_order(source, order, bound, ground, queue))
+            continue;
+        try {
+            switch (order) {
+            case input::UnitOrder::help_build:
+            case input::UnitOrder::vtol_help_build:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_help_build(source, bound, queue);
+                issued = "Assist";
+                break;
+            case input::UnitOrder::repair_unit:
+            case input::UnitOrder::vtol_repair_unit:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_repair(source, bound, queue);
+                issued = "Repair";
+                break;
+            case input::UnitOrder::follow_ground:
+            case input::UnitOrder::vtol_follow:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_guard(source, bound, queue);
+                issued = "Guard";
+                break;
+            case input::UnitOrder::reclaim_unit:
+            case input::UnitOrder::vtol_reclaim_unit:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_reclaim(source, bound, queue);
+                issued = "Reclaim";
+                break;
+            case input::UnitOrder::capture:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_capture(source, bound, queue);
+                issued = "Capture";
+                break;
+            case input::UnitOrder::ground_pickup:
+            case input::UnitOrder::vtol_pickup:
+                if (bound == 0)
+                    break;
+                (void)match_->issue_load(source, bound, queue);
+                issued = "Load";
+                break;
+            case input::UnitOrder::attack_chase:
+            case input::UnitOrder::attack_nomove:
+            case input::UnitOrder::attack_kamikaze:
+            case input::UnitOrder::air_strike:
+            case input::UnitOrder::air_to_air:
+            case input::UnitOrder::air_to_ground:
+            case input::UnitOrder::air_to_ground_hover:
+                if (bound != 0) {
+                    (void)match_->issue_attack(source, bound, false, queue);
+                    issued = "Attack";
+                } else if (ground) {
+                    (void)match_->issue_attack_ground(source, *ground, queue);
+                    issued = "Attack ground";
+                }
+                break;
+            case input::UnitOrder::suppress:
+                if (const auto& at = target_point ? target_point : ground) {
+                    (void)match_->issue_attack_ground(source, *at, queue);
+                    issued = "Attack ground";
+                }
+                break;
+            case input::UnitOrder::attack_special:
+                if (const auto& at = ground ? ground : target_point) {
+                    (void)match_->issue_attack_special(source, *at, queue, bound);
+                    issued = "D-Gun";
+                }
+                break;
+            case input::UnitOrder::reclaim:
+            case input::UnitOrder::vtol_reclaim:
+                if (const auto at = ground ? feature_reclaim_point(*ground) : std::nullopt) {
+                    (void)match_->issue_feature_reclaim(source, *at, queue);
+                    issued = "Reclaim";
+                }
+                break;
+            case input::UnitOrder::ground_unload:
+            case input::UnitOrder::vtol_unload:
+                if (ground) {
+                    (void)match_->issue_unload(source, *ground, queue);
+                    issued = "Unload";
+                }
+                break;
+            case input::UnitOrder::move_ground:
+            case input::UnitOrder::vtol_move:
+            case input::UnitOrder::qmove:
+                if (ground && match_->takes_move_order(source)) {
+                    match_->issue_ground_move(source, *ground, queue);
+                    if (issued.empty())
+                        issued = "Move";
+                }
+                break;
+            default:
+                break;
+            }
+        } catch (const std::exception& error) {
+            status_ = std::string("pointer order: ") + error.what();
+            std::cerr << "unsupported operation: " << status_ << '\n';
+            return {};
+        }
+    }
+    return issued;
+}
+
+bool Runtime::cancels_queued_order(
+    uint16_t source,
+    input::UnitOrder order,
+    uint16_t target,
+    const std::optional<oa::sim::ground_orders::Point>& ground,
+    bool queue
+) {
+    if (!queue || !match_)
+        return false;
+    const auto kind = oa::data::mission_types::index_for_name(input::unit_order_name(order));
+    if (kind == oa::data::mission_types::unknown_mission)
+        return false;
+    return match_->cancel_queued_order(source, kind, target, ground ? &*ground : nullptr);
+}
+
+bool Runtime::cancels_queued_command(
+    uint16_t source,
+    input::OrderCommand command,
+    uint16_t target,
+    const std::optional<oa::sim::ground_orders::Point>& ground,
+    bool queue
+) {
+    if (!queue || !match_)
+        return false;
+    const auto& world = match_->state();
+    const auto* actor = oa::world_unit_at(&world, source);
+    if (actor == nullptr)
+        return false;
+    const auto* aimed = target != 0 ? oa::world_unit_at(&world, target) : nullptr;
+    const auto position = ground ? fixed_point(*ground) : oa::FixedVec3{};
+    const auto order = input::unit_order(
+        world, command, *actor, aimed, ground ? &position : nullptr, order_cursor_hooks()
+    );
+    return cancels_queued_order(source, order, target, ground, queue);
+}
+
+} // namespace oa::app

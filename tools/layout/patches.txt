@@ -1,0 +1,702 @@
+# Hand-written edits of the layout pass (tools/layout/layout.py).
+#
+# A hunk is `@@ pre|post <path> [note]`, then `<<<`, the text to find, `===`,
+# its replacement, and `>>>`. pre hunks are matched against today's tree
+# (old paths and names) before the mechanical rewrites; post hunks against
+# the laid-out tree (new paths and names) after them and before the aliases
+# are added. The text to find must occur exactly once; a hunk whose
+# replacement is already there counts as applied. An empty replacement
+# removes the lines found; an empty find appends the replacement to the
+# file.
+#
+# What the pass does by rule needs no hunk here: a source that moves to
+# another module leaves its old CMakeLists.txt, with the targets it leaves
+# empty; the new modules' build files are in tools/layout/files/.
+
+# ---- pre --------------------------------------------------------------------
+
+# The match's ComputerHost adapter moves into the match runtime; it needs
+# only the computer player's public header.
+@@ pre src/ai/src/match_host.cpp
+<<<
+#include "computer_internal.hpp"
+===
+#include "oa/ai/computer_player.hpp"
+>>>
+
+# ---- post: the root CMakeLists.txt --------------------------------------------
+
+# The modules split out of others.
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/base/game-math)
+===
+add_subdirectory(src/base/game-math)
+add_subdirectory(src/base/geometry)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/formats/tnt)
+===
+add_subdirectory(src/formats/tnt)
+add_subdirectory(src/formats/ota)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/formats/tdf)
+===
+add_subdirectory(src/formats/tdf)
+add_subdirectory(src/data/unit-definitions)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/combat-state)
+===
+add_subdirectory(src/sim/ballistics)
+add_subdirectory(src/sim/combat-state)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/script-vm)
+===
+add_subdirectory(src/sim/script-vm)
+add_subdirectory(src/sim/unit-script)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/map-runtime)
+===
+add_subdirectory(src/sim/map-runtime)
+add_subdirectory(src/sim/feature-runtime)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/scenario)
+===
+add_subdirectory(src/sim/scenario)
+add_subdirectory(src/data/campaign)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/trace)
+===
+add_subdirectory(src/sim/trace)
+add_subdirectory(src/sim/state-hash)
+>>>
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/ui)
+===
+add_subdirectory(src/ui)
+add_subdirectory(src/ui/display-layout)
+add_subdirectory(src/ui/screen-registry)
+>>>
+
+# A module's CMakeLists.txt sets its own targets' links.
+@@ post CMakeLists.txt
+<<<
+add_subdirectory(src/sim/weapon-execution)
+target_link_libraries(oa-sim-weapon-execution PUBLIC oa-options)
+===
+add_subdirectory(src/sim/weapon-execution)
+>>>
+
+# The SQSH codec and the HPI archive are built by their own modules.
+@@ post CMakeLists.txt
+<<<
+add_library(oa-formats-hpi src/formats/hpi/assets.cpp)
+target_include_directories(oa-formats-hpi PUBLIC src/formats/hpi/include)
+target_link_libraries(oa-formats-hpi PUBLIC oa-formats-sqsh ZLIB::ZLIB oa-options)
+add_subdirectory(src/formats/hpi)
+===
+add_subdirectory(src/formats/sqsh)
+add_subdirectory(src/formats/hpi)
+>>>
+
+# The app's own headers are src/app/include, which oa-app-headers carries
+# to the app's targets and to an extension.
+@@ post CMakeLists.txt
+<<<
+# oa-game's command line, which the option tests parse without a running app.
+add_library(oa-app-game-options src/app/startup.cpp)
+===
+# The app's headers: its extension table, Runtime and the other headers an
+# extension compiles against.
+add_library(oa-app-headers INTERFACE)
+target_include_directories(oa-app-headers INTERFACE src/app/include)
+# oa-game's command line, which the option tests parse without a running app.
+add_library(oa-app-game-options src/app/startup.cpp)
+target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
+>>>
+@@ post CMakeLists.txt
+<<<
+  target_link_libraries(oa-game-directory-test PRIVATE oa-formats-hpi oa-platform-preferences oa-test-game-data oa-options)
+===
+  target_link_libraries(oa-game-directory-test PRIVATE oa-app-headers oa-formats-hpi oa-platform-preferences
+    oa-test-game-data oa-options)
+>>>
+@@ post CMakeLists.txt
+<<<
+  target_link_libraries(oa-match-model-draws-test PRIVATE oa-present-model oa-sim-feature-runtime oa-options)
+===
+  target_link_libraries(oa-match-model-draws-test PRIVATE oa-app-headers oa-present-model oa-sim-feature-runtime
+    oa-options)
+>>>
+@@ post CMakeLists.txt
+<<<
+target_link_libraries(oa-extensions-default PRIVATE oa-options)
+===
+target_link_libraries(oa-extensions-default PRIVATE oa-app-headers oa-options)
+>>>
+@@ post CMakeLists.txt
+<<<
+  target_link_libraries(oa-game PRIVATE ${oa_game_intro_player} SDL3::SDL3 ${oa_game_libraries})
+===
+  target_link_libraries(oa-game PRIVATE ${oa_game_intro_player} SDL3::SDL3 ${oa_game_libraries}
+    oa-ui-frontend-dialogs)
+>>>
+@@ post CMakeLists.txt
+<<<
+  target_include_directories(oa-extension-sdk INTERFACE src/app)
+===
+  target_link_libraries(oa-extension-sdk INTERFACE oa-app-headers)
+>>>
+
+# The tests of the SQSH codec and of the asset store, each linked to its
+# module by its new name.
+@@ post CMakeLists.txt
+<<<
+  foreach(area IN ITEMS hpi-codec assets)
+    string(REPLACE "-" "_" source ${area})
+    add_executable(oa-${area}-test tests/${source}_test.cpp)
+    target_link_libraries(oa-${area}-test PRIVATE oa-${area})
+    add_test(NAME ${area} COMMAND oa-${area}-test)
+    set_tests_properties(${area} PROPERTIES TIMEOUT 30)
+  endforeach()
+===
+  add_executable(oa-hpi-codec-test tests/hpi_codec_test.cpp)
+  target_link_libraries(oa-hpi-codec-test PRIVATE oa-formats-sqsh)
+  add_test(NAME hpi-codec COMMAND oa-hpi-codec-test)
+  add_executable(oa-assets-test tests/assets_test.cpp)
+  target_link_libraries(oa-assets-test PRIVATE oa-formats-hpi)
+  add_test(NAME assets COMMAND oa-assets-test)
+  set_tests_properties(hpi-codec assets PROPERTIES TIMEOUT 30)
+>>>
+
+# The layout check, registered once every target exists.
+@@ post CMakeLists.txt
+<<<
+===
+
+# Every module keeps to the layout: no include directory or source reaches
+# into another module, every include has a link path, links follow the
+# layer order and names follow the naming rule (tools/check_layout.py,
+# within tools/layout-baseline.json). The check reads the targets as this
+# configuration defines them.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OaLayout.cmake")
+oa_register_layout_check()
+>>>
+
+# ---- post: modules ----------------------------------------------------------
+
+@@ post src/formats/hpi/CMakeLists.txt
+<<<
+target_sources(oa-formats-hpi PRIVATE archive.cpp asset_store.cpp hpi_writer.cpp)
+===
+# HPI archives: the reader, the layered asset store over archives and loose
+# files, and the writer.
+add_library(oa-formats-hpi assets.cpp archive.cpp asset_store.cpp hpi_writer.cpp)
+target_include_directories(oa-formats-hpi PUBLIC include)
+target_link_libraries(oa-formats-hpi PUBLIC oa-formats-sqsh ZLIB::ZLIB oa-options)
+>>>
+
+# A map is its TNT file and its OTA description; the map format's users read
+# the description with it.
+@@ post src/formats/tnt/CMakeLists.txt
+<<<
+target_compile_features(oa-formats-tnt PUBLIC cxx_std_20)
+===
+target_compile_features(oa-formats-tnt PUBLIC cxx_std_20)
+target_link_libraries(oa-formats-tnt PUBLIC oa-formats-ota)
+>>>
+
+@@ post src/sim/ai/CMakeLists.txt
+<<<
+target_link_libraries(oa-sim-match-runtime PUBLIC oa-sim-ai)
+
+===
+>>>
+@@ post src/sim/match-runtime/CMakeLists.txt
+<<<
+src/saved_orders.cpp src/trace.cpp)
+===
+src/saved_orders.cpp src/trace.cpp src/computer_host.cpp)
+>>>
+
+# defs moves one level deeper, into data/, so its standalone include of the
+# shared options climbs one more level.
+@@ post src/data/defs/CMakeLists.txt
+<<<
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/OaOptions.cmake")
+===
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/OaOptions.cmake")
+>>>
+
+# The services lost their geometry (and the comment above it) to base.
+@@ post src/ui/services/CMakeLists.txt
+<<<
+add_library(oa-ui-services src/commands.cpp
+===
+# Engine services: clock and interval timers, typed per-user preferences,
+# token lines and named commands, input queues, the software cursor,
+# outlined labels and the SQSH chunk writer, over base/geometry.
+add_library(oa-ui-services src/commands.cpp
+>>>
+# The chunk writer includes the archive header, which the codec's include
+# directory no longer carries.
+@@ post src/ui/services/CMakeLists.txt
+<<<
+  oa-options PRIVATE oa-base-game-loop oa-formats-sqsh ZLIB::ZLIB)
+===
+  oa-options PRIVATE oa-base-game-loop oa-formats-sqsh oa-formats-hpi ZLIB::ZLIB)
+>>>
+
+# The commander rules read campaign files, which the scenario's include
+# directory no longer carries; condition persistence is built whatever
+# order the build files are read in.
+@@ post src/sim/scenario/CMakeLists.txt
+<<<
+target_link_libraries(oa-sim-scenario PUBLIC oa-core-types oa-sim-simulation-state oa-data-defs)
+===
+target_link_libraries(oa-sim-scenario PUBLIC oa-core-types oa-sim-simulation-state oa-data-defs oa-data-campaign)
+>>>
+@@ post src/sim/scenario/CMakeLists.txt
+<<<
+if(TARGET oa-data-persist)
+ target_sources(oa-sim-scenario PRIVATE src/condition_persist.cpp)
+ target_link_libraries(oa-sim-scenario PUBLIC oa-data-persist)
+endif()
+===
+target_sources(oa-sim-scenario PRIVATE src/condition_persist.cpp)
+target_link_libraries(oa-sim-scenario PUBLIC oa-data-persist)
+>>>
+@@ post src/sim/scenario/CMakeLists.txt
+<<<
+if(BUILD_TESTING AND TARGET oa-data-persist)
+===
+if(BUILD_TESTING)
+>>>
+
+@@ post src/ui/CMakeLists.txt
+<<<
+set(oa_ui_packages hud frontend frontend/campaign console)
+===
+set(oa_ui_packages hud frontend campaign console)
+>>>
+
+@@ post src/ui/frontend-dialogs/CMakeLists.txt
+<<<
+if(TARGET oa-game)
+  target_link_libraries(oa-game PRIVATE oa-ui-frontend-dialogs)
+endif()
+
+===
+>>>
+
+# The polygon code reads the unit sine table of base/game-math.
+@@ post src/present/CMakeLists.txt
+<<<
+target_link_libraries(oa-present PUBLIC oa-core-types PRIVATE oa-options)
+===
+target_link_libraries(oa-present PUBLIC oa-core-types PRIVATE oa-options oa-base-game-math)
+>>>
+
+@@ post tests/extension/CMakeLists.txt
+<<<
+  target_include_directories(oa-extension-layout-mismatch PRIVATE "${open_annihilation_SOURCE_DIR}/src/app")
+===
+  target_link_libraries(oa-extension-layout-mismatch PRIVATE oa-app-headers)
+>>>
+
+# ---- post: the extension boundary --------------------------------------------
+
+# The table's header, the namespaces of the types it names and the match
+# type change their names, which an extension built against more than one
+# engine tells apart by the version; the recorder extension follows it, and
+# every other extension follows it in the hunks passed for its project.
+@@ post src/app/include/oa/app/extension.hpp
+<<<
+/// table uses. A change to wording alone keeps it.
+#define OA_EXTENSION_API_VERSION 1
+===
+/// table uses. A change to wording alone keeps it. Version 2 is the first
+/// with the layered layout's names: this header is oa/app/extension.hpp and
+/// the types the table names are in their modules' namespaces.
+#define OA_EXTENSION_API_VERSION 2
+>>>
+@@ post tests/extension/recorder.cpp
+<<<
+constexpr uint32_t kExtensionApiVersionRecorded = 1;
+===
+constexpr uint32_t kExtensionApiVersionRecorded = 2;
+>>>
+
+# The hook check reads the table's header from its new home.
+@@ post tests/extension/check_hooks.py
+<<<
+EXTENSION_HEADER = Path(__file__).resolve().parents[2] / "src" / "app" / "extension.hpp"
+===
+EXTENSION_HEADER = Path(__file__).resolve().parents[2] / "src" / "app" / "include" / "oa" / "app" / "extension.hpp"
+>>>
+
+# ---- post: tools and build files ------------------------------------------------
+
+@@ post tools/check_runtime_surface.py
+<<<
+DEFAULT_RUNTIME = TOOLS.parent / "src" / "app" / "runtime.hpp"
+===
+DEFAULT_RUNTIME = TOOLS.parent / "src" / "app" / "include" / "oa" / "app" / "runtime.hpp"
+>>>
+
+# The alignment checks of a sanitizer build stay off for the code that moved
+# out of the directories that list them.
+@@ post cmake/sanitizer-ignorelist.txt
+<<<
+src:*/src/sim/scenario/*
+===
+src:*/src/sim/scenario/*
+src:*/src/data/campaign/*
+>>>
+@@ post cmake/sanitizer-ignorelist.txt
+<<<
+src:*/src/sim/script-vm/*
+===
+src:*/src/sim/script-vm/*
+src:*/src/sim/unit-script/*
+>>>
+
+# ---- post: documentation ----------------------------------------------------
+
+# The README's layout table names the groups of the new layout in layer
+# order, and states the rule the layout check holds them to.
+@@ post README.md
+<<<
+| `src/core` | Canonical game records shared by every system (C11-compatible headers) |
+| `src/formats` | Game data formats |
+| `src/sim`, `src/sim`, `src/sim`, `src/sim`, `src/sim/scenario`, `src/sim/ai` | Simulation |
+| `src/present`, `src/ui`, `src/ui`, `src/audio`, `src/media` | Presentation, interface and sound |
+| `src/app` | The `oa-game` application |
+| `src/platform` | SDL platform layer |
+| `tools` | Bootstrap, launcher and check scripts |
+===
+| `src/core` | Canonical game records shared by every system (C11-compatible headers) |
+| `src/base` | Fixed-point arithmetic, geometry and frame timing that every layer above uses |
+| `src/platform` | SDL platform layer |
+| `src/formats` | Game data formats |
+| `src/data` | Game data read through the formats: definitions, campaigns, savegames |
+| `src/sim` | Simulation |
+| `src/present`, `src/audio`, `src/media` | Presentation and sound |
+| `src/ui` | Interface |
+| `src/app` | The `oa-game` application |
+| `tools` | Bootstrap, launcher and check scripts, `oa-tool` and the `oa-platform` probe |
+
+A module uses modules of its own group and of the groups above it in this
+table, except that the platform layer and the formats do not use each other
+and the simulation does not use the platform layer. The `engine-layout`
+test (`tools/check_layout.py`) holds the tree to this order.
+>>>
+
+# The unit sine table now lives in base/game-math.
+@@ post src/sim/unit-movement/README.md
+<<<
+in `src/trig_table.inc` (512 little-endian int16 entries). Lookup uses the
+===
+in `src/base/game-math/include/oa/base/game_math/trig_table.inc` (512
+little-endian int16 entries), which the presenter's polygon code also reads. Lookup uses the
+>>>
+
+# ---- post: the style check ----------------------------------------------------
+
+# The style check keeps the same rules for the same code: the unit
+# definitions read from TDF text keep the format directories' leave to give
+# record offsets in comments, and the tiers it holds to its strictest rules
+# are named by group (base/geometry and sim/sprite-animation, which join them,
+# break none of those rules; data/campaign, split from the scenario, stays).
+@@ post tools/check_style.py
+<<<
+# Where an offset comment describes a file format: the game data decoders and
+# the saved-game code.
+FORMAT_DIRECTORIES = ("src/formats/", "src/data/persist/")
+===
+# Where an offset comment describes a file format: the game data decoders
+# (the formats and the unit definitions read from TDF text) and the
+# saved-game code.
+FORMAT_DIRECTORIES = ("src/formats/", "src/data/unit-definitions/", "src/data/persist/")
+>>>
+@@ post tools/check_style.py
+<<<
+# The directories of the core, base and simulation tiers, as they lie today,
+# where per-tick state has no virtual dispatch, exceptions or heap-allocating
+# containers: the core records, the fixed-point arithmetic, and the modules
+# that hold or advance match state.
+TIER_DIRECTORIES = (
+    "src/core/", "src/base/game-math/", "src/game/", "src/sim/", "src/locomotion/", "src/sim/ai/", "src/scripting/",
+    "src/sim/ballistics/", "src/sim/map-runtime/", "src/sim/model-runtime/", "src/sim/spatial-state/",
+    "src/sim/visibility-state/", "src/sim/world-environment/", "src/sim/scenario/", "src/sim/session/",
+)
+===
+# The directories of the core, base and simulation tiers, where per-tick
+# state has no virtual dispatch, exceptions or heap-allocating containers:
+# the core records, base's arithmetic, geometry and timing, the simulation's
+# modules, and the campaign files the scenario reads.
+TIER_DIRECTORIES = ("src/core/", "src/base/", "src/sim/", "src/data/campaign/")
+>>>
+
+# The style test's made-up trees (a keep row) follow the directories the
+# rules name.
+@@ post tools/check_style_test.py
+<<<
+    files = {"src/game/m/src/a.cpp": source, "src/core/src/a.cpp": source, "src/persist/src/a.cpp": source}
+===
+    files = {"src/game/m/src/a.cpp": source, "src/core/src/a.cpp": source, "src/data/persist/src/a.cpp": source}
+>>>
+@@ post tools/check_style_test.py
+<<<
+    files = {"src/game/m/src/a.cpp": source, "src/game/m/tests/a_test.cpp": source, "src/present/a.cpp": source}
+    expect_findings(scratch, "tiers", files, {
+        ("src/game/m/src/a.cpp", 1, "tier-virtual", "virtual"),
+        ("src/game/m/src/a.cpp", 2, "tier-throw", "throw"),
+        ("src/game/m/src/a.cpp", 3, "tier-heap-container", "std::vector"),
+===
+    files = {"src/sim/m/src/a.cpp": source, "src/sim/m/tests/a_test.cpp": source, "src/present/a.cpp": source}
+    expect_findings(scratch, "tiers", files, {
+        ("src/sim/m/src/a.cpp", 1, "tier-virtual", "virtual"),
+        ("src/sim/m/src/a.cpp", 2, "tier-throw", "throw"),
+        ("src/sim/m/src/a.cpp", 3, "tier-heap-container", "std::vector"),
+>>>
+
+# Each module split in two takes its share of the style baseline's counts,
+# so that neither half has room to grow; oa-tool and the platform probe take
+# theirs to tools/.
+@@ post tools/style-baseline.json
+<<<
+  "src/runtime": {
+   "qualified-fixed-width": 21
+  },
+===
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/app": {
+   "flags-raw-mask": 8,
+   "member-initializer": 54,
+   "offset-comment": 65,
+   "qualified-fixed-width": 1470,
+   "unknown-read": 1
+  },
+===
+  "src/app": {
+   "flags-raw-mask": 8,
+   "member-initializer": 4,
+   "offset-comment": 65,
+   "qualified-fixed-width": 1446,
+   "unknown-read": 1
+  },
+  "src/ui/screen-registry": {
+   "member-initializer": 50,
+   "qualified-fixed-width": 24
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/data/persist": {
+   "doc-block": 9,
+   "member-initializer": 69,
+   "qualified-fixed-width": 841
+  },
+===
+  "src/data/persist": {
+   "doc-block": 9,
+   "member-initializer": 69,
+   "qualified-fixed-width": 839
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/formats/hpi": {
+   "member-initializer": 20,
+   "qualified-fixed-width": 55
+  },
+===
+  "src/formats/hpi": {
+   "member-initializer": 20,
+   "qualified-fixed-width": 2
+  },
+  "src/formats/sqsh": {
+   "qualified-fixed-width": 53
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/formats/tdf": {
+   "member-initializer": 24,
+   "qualified-fixed-width": 208
+  },
+===
+  "src/formats/tdf": {
+   "member-initializer": 24,
+   "qualified-fixed-width": 88
+  },
+  "src/data/unit-definitions": {
+   "qualified-fixed-width": 120
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/formats/tnt": {
+   "member-initializer": 2,
+   "qualified-fixed-width": 183
+  },
+===
+  "src/formats/tnt": {
+   "member-initializer": 2,
+   "qualified-fixed-width": 163
+  },
+  "src/formats/ota": {
+   "qualified-fixed-width": 20
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/sim/map-runtime": {
+   "member-initializer": 47,
+   "offset-comment": 25,
+   "qualified-fixed-width": 151,
+   "tier-heap-container": 33,
+   "tier-virtual": 3,
+   "unknown-read": 28
+  },
+===
+  "src/sim/map-runtime": {
+   "member-initializer": 6,
+   "offset-comment": 18,
+   "qualified-fixed-width": 151,
+   "tier-heap-container": 33,
+   "tier-virtual": 3,
+   "unknown-read": 13
+  },
+  "src/sim/feature-runtime": {
+   "member-initializer": 41,
+   "offset-comment": 7,
+   "unknown-read": 15
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/sim/scenario": {
+   "flags-raw-mask": 2,
+   "member-initializer": 92,
+   "offset-comment": 68,
+   "qualified-fixed-width": 242,
+   "tier-heap-container": 6,
+   "tier-throw": 22,
+   "tier-virtual": 5
+  },
+===
+  "src/sim/scenario": {
+   "flags-raw-mask": 2,
+   "offset-comment": 3,
+   "qualified-fixed-width": 53,
+   "tier-heap-container": 4,
+   "tier-throw": 22,
+   "tier-virtual": 5
+  },
+  "src/data/campaign": {
+   "member-initializer": 92,
+   "offset-comment": 65,
+   "qualified-fixed-width": 191,
+   "tier-heap-container": 2
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/sim/script-vm": {
+   "doc-block": 27,
+   "flags-raw-mask": 1,
+   "member-initializer": 3,
+   "tier-heap-container": 9,
+   "tier-throw": 3,
+   "tier-virtual": 22
+  },
+===
+  "src/sim/script-vm": {
+   "tier-heap-container": 8,
+   "tier-throw": 3,
+   "tier-virtual": 22
+  },
+  "src/sim/unit-script": {
+   "doc-block": 27,
+   "flags-raw-mask": 1,
+   "member-initializer": 3,
+   "tier-heap-container": 1
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/sim/trace": {
+   "offset-comment": 4,
+   "tier-heap-container": 1
+  },
+===
+  "src/sim/trace": {
+   "offset-comment": 2
+  },
+  "src/sim/state-hash": {
+   "offset-comment": 2,
+   "tier-heap-container": 1
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src/ui/services": {
+   "member-initializer": 79,
+   "offset-comment": 41,
+   "qualified-fixed-width": 450,
+   "unknown-read": 2
+  },
+===
+  "src/ui/services": {
+   "member-initializer": 75,
+   "offset-comment": 38,
+   "qualified-fixed-width": 352,
+   "unknown-read": 2
+  },
+  "src/base/geometry": {
+   "member-initializer": 4,
+   "offset-comment": 3,
+   "qualified-fixed-width": 98
+  },
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "src": {
+   "qualified-fixed-width": 4
+  },
+===
+>>>
+@@ post tools/style-baseline.json
+<<<
+  "tests": {
+   "qualified-fixed-width": 108
+  }
+===
+  "tests": {
+   "qualified-fixed-width": 108
+  },
+  "tools/oa-tool": {
+   "qualified-fixed-width": 4
+  },
+  "tools/platform-probe": {
+   "qualified-fixed-width": 21
+  }
+>>>

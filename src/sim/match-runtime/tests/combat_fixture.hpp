@@ -1,0 +1,368 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// A two-player match on a small flat map with one armed mobile type, shared
+// by the damage-path and commander-rule tests.
+#pragma once
+
+#include "oa/sim/match_runtime.hpp"
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#define CHECK(x)                                                                                   \
+    do {                                                                                           \
+        if (!(x))                                                                                  \
+            throw std::runtime_error(std::string(#x) + " at line " + std::to_string(__LINE__));    \
+    } while (false)
+
+namespace combat_fixture {
+
+using namespace oa;
+
+inline constexpr uint8_t weapon_hit = 1;
+inline constexpr uint8_t paralyzer_hit = 2;
+inline constexpr uint8_t paralyze_order = 27;
+inline constexpr uint8_t attack_chase_order = 6;
+inline constexpr uint32_t attack_notice = 2;
+inline constexpr const char* unit_name = "TESTUNIT";
+
+struct Services : sim::match_runtime::OfflineServices {
+    uint32_t notices{};
+    // Values of the attachment notifications raised (0x10000 on cloaking).
+    std::vector<uint32_t> attachment_notices;
+#define UNEXPECTED(type, name, args)                                                               \
+    type name args override {                                                                      \
+        throw std::runtime_error("unexpected " #name);                                             \
+    }
+
+    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
+
+    void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
+        if (category == attack_notice)
+            ++notices;
+    }
+
+    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
+
+    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
+
+    void attachment_notification(sim::unit_spawn::Slot&, uint32_t value) override {
+        attachment_notices.push_back(value);
+    }
+
+    UNEXPECTED(void, explode_piece, (sim::unit_spawn::Slot&, uint32_t, int32_t))
+    UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
+    UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
+
+    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
+
+    void notify_object_footprint_removed(oa::sim::spatial_state::Unit&, uint32_t) override {}
+
+    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
+
+#undef UNEXPECTED
+};
+
+struct Scenario : sim::scenario::DefinitionHost {
+    int32_t lava_world{};
+    int32_t water_does_damage{};
+    int32_t water_damage{};
+    std::optional<std::string> unit_type_killed;
+
+    int32_t integer(std::string_view key, int32_t fallback) override {
+        if (key == "waterdoesdamage")
+            return water_does_damage;
+        if (key == "waterdamage")
+            return water_damage;
+        return key == "lavaworld" ? lava_world : fallback;
+    }
+
+    std::optional<std::string> text(std::string_view key) override {
+        return key == "UnitTypeKilled" ? unit_type_killed : std::nullopt;
+    }
+};
+
+struct Options {
+    bool defeat_allowed{};
+    bool multiplayer{};
+    int32_t lava_world{};
+    // Plot height of the cells from this column east, over sea level 30; the
+    // rest of the map stays at height 0.
+    std::optional<uint32_t> high_ground_from;
+    // Edge of the square sight mask in 32-unit sight cells, centred on the
+    // unit; 1 covers only the unit's own cell.
+    uint32_t sight_cells = 1;
+    // Explosion art by (archive, entry); none leaves the blasts without sprites.
+    std::function<const formats::gaf::Sequence*(std::string_view, std::string_view)>
+        effect_sequence;
+    // The FeatureDef table, the loader's resolved plot words by plot index,
+    // and the frames of the table's sequences.
+    std::vector<FeatureDef> features;
+    std::vector<std::pair<std::size_t, uint16_t>> feature_words;
+    std::function<bool(oa_ref32, uint16_t, sim::feature_runtime::FeatureSequenceFrame&)>
+        feature_sequence_frame;
+    // The mission schema's feature placements, over the same table.
+    std::vector<sim::feature_runtime::FeaturePlacement> mission_features;
+    // A savegame resumes: the loader's features and the placements are left
+    // for its Features section.
+    bool resuming_saved_game{};
+    // GlobalHeader waterdoesdamage / waterdamage.
+    int32_t water_does_damage{};
+    int32_t water_damage{};
+    // GlobalHeader DefeatCondition_UnitTypeKilled text ("NAME,COUNT").
+    std::optional<std::string> unit_type_killed;
+    // Arms the type's third slot with a 120-unit commandfire turret gun of
+    // 400 energy a shot (registry index 2); AimTertiary accepts at once and
+    // FireTertiary counts shots in static 2.
+    bool dgun{};
+    // TDF reloadtime of the turret gun, seconds.
+    std::string gun_reload_time = "0.1";
+};
+
+// A 16x16-cell map (256 world units a side) with one mobile type carrying a
+// 400-unit line-of-sight turret gun.
+struct Fixture {
+    formats::tnt::Map map;
+    std::vector<sim::visibility_state::TerrainCell> terrain_values =
+        std::vector<sim::visibility_state::TerrainCell>(256);
+    std::array<sim::visibility_state::SightMask, 1> masks{};
+    std::vector<sim::visibility_state::AltitudeCell> altitude_cells =
+        std::vector<sim::visibility_state::AltitudeCell>(64);
+    std::vector<sim::visibility_state::AltitudeSightPattern> altitude_patterns =
+        std::vector<sim::visibility_state::AltitudeSightPattern>(6);
+    std::shared_ptr<formats::objects3d::Model> model =
+        std::make_shared<formats::objects3d::Model>();
+    std::shared_ptr<formats::cob::CobProgram> script = std::make_shared<formats::cob::CobProgram>();
+    std::array<sim::unit_spawn::LoadedType, 2> loaded;
+    std::array<sim::unit_spawn::Type, 2> types;
+    data::unit_definitions::UnitDefinition def;
+    data::unit_definitions::UnitTargetCategoryMasks target_masks;
+    data::unit_definitions::RuntimeDefinitionMetadata metadata;
+    std::vector<sim::spatial_state::Plot> collision_plots =
+        std::vector<sim::spatial_state::Plot>(256);
+    std::array<sim::match_runtime::RuntimeTypeFields, 2> fields{};
+    std::array<uint8_t, 1> yard{4};
+    sim::combat_state::WeaponRegistry weapons;
+    std::vector<FeatureDef> features;
+    std::vector<sim::feature_runtime::FeaturePlacement> mission_features;
+    Services services;
+    Scenario scenario;
+    std::unique_ptr<sim::match_runtime::Match> match;
+
+    explicit Fixture(const Options& options = {}) {
+        map.attribute_width = map.attribute_height = 16;
+        map.attributes.resize(256);
+        if (options.high_ground_from) {
+            constexpr uint8_t high = 60;
+            map.sea_level = 30;
+            for (uint32_t cell = 0; cell < 256; ++cell) {
+                if (cell % 16 < *options.high_ground_from)
+                    continue;
+                map.attributes[cell].height = high;
+                collision_plots[cell].low_height = collision_plots[cell].high_height = high;
+            }
+        }
+        masks[0].width = masks[0].height = static_cast<uint16_t>(options.sight_cells);
+        masks[0].offset_x = masks[0].offset_z = static_cast<int16_t>(options.sight_cells / 2);
+        masks[0].pixels.assign(std::size_t{options.sight_cells} * options.sight_cells, 1);
+        model->objects.resize(1);
+        model->objects[0].name = "root";
+        // Model top (UnitDef.model_height). The level shot leaves the root at the
+        // shooter's height, and the projectile contact hits a ground occupant only below
+        // its top, so a flat model lets every shot fly through its target.
+        model->objects[0].vertices = {{0, 0, 0}, {0, 20 << 16, 0}};
+        using namespace sim::script_vm;
+        // AimPrimary accepts at once; FirePrimary counts shots in static 1.
+        script->code = {
+            opcode::return_,
+            opcode::push_constant,
+            1,
+            opcode::pop_static,
+            0,
+            opcode::push_constant,
+            1,
+            opcode::return_,
+            opcode::push_static,
+            1,
+            opcode::push_constant,
+            1,
+            opcode::add,
+            opcode::pop_static,
+            1,
+            opcode::return_,
+            opcode::return_,
+        };
+        script->scripts = {{"Create", 0}, {"AimPrimary", 1}, {"FirePrimary", 8}, {"RockUnit", 16}};
+        script->entry_points = {0, 1, 8, 16};
+        script->header.static_variable_count = 2;
+        if (options.dgun) {
+            script->code.insert(
+                script->code.end(),
+                {opcode::push_constant,
+                 1,
+                 opcode::return_,
+                 opcode::push_static,
+                 2,
+                 opcode::push_constant,
+                 1,
+                 opcode::add,
+                 opcode::pop_static,
+                 2,
+                 opcode::return_}
+            );
+            script->scripts.push_back({"AimTertiary", 17});
+            script->scripts.push_back({"FireTertiary", 20});
+            script->entry_points.insert(script->entry_points.end(), {17, 20});
+            script->header.static_variable_count = 3;
+        }
+        script->piece_names = {"root"};
+        types[1].simulation.flags = 0x800000 | OA_UNIT_DEF_FLAG_HAS_WEAPONS;
+        types[1].simulation.maximum_health = 1000;
+        types[1].footprint_x = types[1].footprint_z = 1;
+        types[1].bm_code = 1;
+        types[1].model = reinterpret_cast<uintptr_t>(model.get());
+        types[1].cob = reinterpret_cast<uintptr_t>(script.get());
+        loaded[1].model = model;
+        loaded[1].script = script;
+        loaded[1].type = types[1];
+        loaded[1].unit_name = unit_name;
+        def.sight_distance = 160;
+        def.weapon1 = "TESTGUN";
+        def.can_move = def.can_attack = def.can_guard = def.can_patrol = true;
+        def.acceleration_fixed = 65536;
+        def.brake_rate_fixed = 65536;
+        def.max_velocity_fixed = 2 * 65536;
+        def.turn_rate = 1024;
+        def.energy_storage = 1000.0F;
+        def.metal_storage = 1000.0F;
+        fields[1].definition = &def;
+        fields[1].yard_mask = yard;
+        fields[1].runtime_metadata = &metadata;
+        fields[1].target_masks = &target_masks;
+        fields[1].movement_class = 0;
+        weapons.install_tdf_section(1, "TESTGUN", options.gun_reload_time);
+        weapons.install_target_fields(1, "400", "1", "0", "0", "0", "0", "10", "100", "", "1");
+        if (options.dgun) {
+            def.weapon3 = "TESTDGUN";
+            def.can_dgun = true;
+            weapons.install_tdf_section(2, "TESTDGUN", "1.2");
+            weapons.install_target_fields(
+                2,
+                "120",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+                "10",
+                "200",
+                "",
+                "1",
+                "",
+                "400",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "1"
+            );
+        }
+        scenario.lava_world = options.lava_world;
+        scenario.water_does_damage = options.water_does_damage;
+        scenario.water_damage = options.water_damage;
+        scenario.unit_type_killed = options.unit_type_killed;
+        sim::match_runtime::OfflineInputs input{
+            map,
+            loaded,
+            types,
+            fields,
+            weapons,
+            terrain_values,
+            masks,
+            8,
+            8,
+            4,
+            2,
+            0,
+            30,
+            1,
+            &scenario,
+            {},
+            collision_plots,
+            sim::visibility_state::AltitudeSightData{8, 8, altitude_cells, altitude_patterns}
+        };
+        input.effect_sequence = options.effect_sequence;
+        features = options.features;
+        for (const auto& [plot, word] : options.feature_words)
+            collision_plots[plot].feature_word = word;
+        input.feature_defs = features;
+        input.feature_sequence_frame = options.feature_sequence_frame;
+        mission_features = options.mission_features;
+        input.mission_features = mission_features;
+        input.resuming_saved_game = options.resuming_saved_game;
+        match = std::make_unique<sim::match_runtime::Match>(input, services);
+        match->configure_strategic_environment({0, 0.5F, 0});
+        for (uint8_t player = 0; player < 2; ++player) {
+            match->simulation().players[player].present = true;
+            match->simulation().players[player].status = 1;
+        }
+        for (uint8_t player = 0; player < 2; ++player) {
+            std::array<uint8_t, 10> allies{};
+            allies[player] = 1;
+            match->configure_player_alliances(player, allies);
+            if (player == 0)
+                match->configure_outcomes(
+                    0, allies, options.defeat_allowed, false, options.multiplayer
+                );
+        }
+    }
+
+    // A finished unit that fires at will and may chase.
+    sim::unit_spawn::Slot& spawn(uint8_t player, uint32_t x, uint32_t z) {
+        auto* slot = match->create({player, 1, {x << 16, 32u << 16, z << 16}, true, 1, 0});
+        CHECK(slot && slot->unit);
+        slot->unit->flags =
+            (slot->unit->flags & ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK)) |
+            (1u << OA_UNIT_FLAG_MOVE_ORDER_SHIFT) | (2u << OA_UNIT_FLAG_FIRE_ORDER_SHIFT);
+        return *slot;
+    }
+
+    void run(uint32_t ticks) {
+        for (uint32_t i = 0; i < ticks; ++i) {
+            ++match->simulation().tick;
+            match->tick();
+        }
+    }
+
+    // FirePrimary calls so far.
+    int32_t shots_from(const sim::unit_spawn::Slot& slot) {
+        auto* instance = match->instance(slot.unit_index);
+        CHECK(instance && instance->script());
+        return instance->script()->vm().static_value(1).value_or(-1);
+    }
+};
+
+inline bool head_is(const sim::unit_spawn::Slot& slot, uint8_t kind) {
+    return slot.unit->primary != nullptr && slot.unit->primary->kind == kind;
+}
+
+// A weapon death credited to the killer's owner, as the kill handler counts it.
+inline void kill(Fixture& f, sim::unit_spawn::Slot& victim, sim::unit_spawn::Slot& killer) {
+    victim.unit->record.damage_kind = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
+    victim.record.last_attacker_id = killer.unit_index;
+    victim.record.last_attacker_owner = killer.record.owner_index;
+    f.match->teardown_dead_unit(victim);
+}
+
+} // namespace combat_fixture

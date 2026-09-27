@@ -1,0 +1,241 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "tick_internal.hpp"
+
+#include <cstdint>
+
+namespace oa::sim::match_runtime {
+
+sim::unit_health::UnitType
+TickHost::ConstructionAdapter::health_type(sim::unit_spawn::Slot& s) const {
+    const auto& definition = *host.match.fields(s).definition;
+    return {
+        definition.damage_modifier_fixed,
+        static_cast<float>(definition.build_cost_energy),
+        definition.build_time,
+        s.unit->type->maximum_health,
+        static_cast<float>(definition.build_cost_metal)
+    };
+}
+
+void TickHost::ConstructionAdapter::refresh_selected() {
+    if (source.record.owner_index == host.match.world_.viewpoint_player &&
+        (source.unit->flags & 0x10))
+        host.match.selection_.frame_flags |= 0x10;
+}
+
+bool TickHost::ConstructionAdapter::site_clear() {
+    const auto fx = footprint_x();
+    const auto fz = footprint_z();
+    const auto cell_x = static_cast<int32_t>(arithmetic_shift20(
+        std::bit_cast<uint32_t>(record.extra.destination[0]) -
+        static_cast<uint32_t>(fx) * 0x80000u + 0x80000u
+    ));
+    const auto cell_z = static_cast<int32_t>(arithmetic_shift20(
+        std::bit_cast<uint32_t>(record.extra.destination[2]) -
+        static_cast<uint32_t>(fz) * 0x80000u + 0x80000u
+    ));
+    // BuildingBuild tests the product's site with the factory's occupancy
+    // layer (Unit.flags & OA_UNIT_FLAG_OCCUPANCY_MASK); MobileBuild tests the
+    // building's site with layer 1.
+    // Factory products are mobiles (ARMPW bm_code=1); the building-site test
+    // would reject the pad because the lab's yard map sets plot.flags bit 2
+    // on every cell.
+    const auto occupancy = record.order.kind == building_build_kind
+                               ? static_cast<uint8_t>(source.unit->flags & 3u)
+                               : uint8_t{1};
+    return host.match.site_clear_for(
+        static_cast<uint16_t>(record.construction.type_index), cell_x, cell_z, 0, occupancy
+    );
+}
+
+void TickHost::ConstructionAdapter::snap_build_height() {
+    const auto index = static_cast<uint16_t>(record.construction.type_index);
+    if (index >= host.match.world_.types.size())
+        throw std::out_of_range("construction type is not loaded");
+    if (host.match.world_.types[index].bm_code != 0)
+        return;
+    const auto fx = footprint_x();
+    const auto fz = footprint_z();
+    auto& site = record.extra.destination;
+    snap_build_position(site, fx, fz);
+    const auto cell = [](int32_t world, int16_t footprint) {
+        return static_cast<int32_t>(arithmetic_shift20(
+            std::bit_cast<uint32_t>(world) - static_cast<uint32_t>(footprint) * 0x80000u + 0x80000u
+        ));
+    };
+    const auto yard = host.match.input_.fields[index].yard_mask;
+    if (fx < 0 || fz < 0 ||
+        yard.size() < static_cast<std::size_t>(fx) * static_cast<std::size_t>(fz))
+        throw std::invalid_argument("building yard map does not cover its footprint");
+    const auto height = sim::spatial_state::footprint_build_height(
+        fx,
+        fz,
+        yard,
+        host.match.state().unit_defs[index].water_line,
+        cell(site[0], fx),
+        cell(site[2], fz),
+        host.match.spatial_
+    );
+    site[1] = static_cast<int32_t>(static_cast<uint32_t>(height) << 16);
+}
+
+sim::simulation_state::Unit* TickHost::ConstructionAdapter::spawn_nanoframe() {
+    sim::unit_spawn::Request request;
+    request.player = source.record.owner_index;
+    request.type = static_cast<uint16_t>(record.construction.type_index);
+    request.position = {
+        std::bit_cast<uint32_t>(record.extra.destination[0]),
+        std::bit_cast<uint32_t>(record.extra.destination[1]),
+        std::bit_cast<uint32_t>(record.extra.destination[2])
+    };
+    request.finished = false;
+    request.state = sim::unit_spawn::ground_occupancy_state;
+    auto* created = host.match.create(request);
+    if (!created)
+        return nullptr;
+    created->unit->flags |= 0x10000020u;
+    record.construction.target = created->unit;
+    return created->unit;
+}
+
+void TickHost::ConstructionAdapter::issue_get_built(sim::simulation_state::Unit& nanoframe) {
+    (void)host.match.insert_ground_order(
+        host.slot(nanoframe).unit_index, get_built_kind, std::nullopt, 0, source.unit_index
+    );
+}
+
+void TickHost::ConstructionAdapter::start_building(int16_t heading) {
+    auto* instance = host.match.instance(source.unit_index);
+    bool started = false;
+    if (instance && instance->script()) {
+        const std::array<int32_t, 4> args{heading, 0, 0, 0};
+        started = instance->script()->call("StartBuilding", args, false);
+    }
+    if (!started)
+        source.record.build_flags = static_cast<uint8_t>(source.record.build_flags | 1u);
+    record.order.flags |= 0x40;
+}
+
+bool TickHost::ConstructionAdapter::build_progress(
+    sim::simulation_state::Unit& nanoframe, float rate
+) {
+    auto& s = host.slot(nanoframe);
+    auto type = health_type(s);
+    sim::unit_health::Unit builder_proj{
+        source.unit_index,
+        source.record.state_flags,
+        source.record.veteran_level,
+        source.unit->health,
+        &type
+    };
+    sim::unit_health::Unit target_proj{
+        s.unit_index,
+        s.record.state_flags,
+        s.record.veteran_level,
+        nanoframe.health,
+        &type,
+        s.record.build_remaining,
+        nanoframe.events,
+        nanoframe.flags
+    };
+    HealthHost health(host.match, source.unit_index);
+    const auto result =
+        sim::unit_health::apply_build_progress(builder_proj, target_proj, rate, health);
+    health.store();
+    nanoframe.health = target_proj.health;
+    nanoframe.flags = target_proj.flags;
+    nanoframe.events = target_proj.events;
+    s.record.build_remaining = target_proj.build_remaining;
+    return result.performed;
+}
+
+bool TickHost::ConstructionAdapter::construct(sim::simulation_state::Unit& nanoframe, float rate) {
+    const bool performed = build_progress(nanoframe, rate);
+    if (performed)
+        host.match.spray_nano(source, nanoframe, Match::NanoSpray::build);
+    return performed;
+}
+
+void TickHost::ConstructionAdapter::link_built(sim::simulation_state::Unit& nanoframe) {
+    auto& s = host.slot(nanoframe);
+    if (!(source.record.flags & OA_UNIT_FLAG_LIVE) || !(s.record.flags & OA_UNIT_FLAG_LIVE))
+        return;
+    auto type = health_type(s);
+    sim::unit_health::Unit builder_proj{
+        source.unit_index,
+        source.record.state_flags,
+        source.record.veteran_level,
+        source.unit->health,
+        &type
+    };
+    sim::unit_health::Unit target_proj{
+        s.unit_index,
+        s.record.state_flags,
+        s.record.veteran_level,
+        nanoframe.health,
+        &type,
+        s.record.build_remaining,
+        nanoframe.events,
+        nanoframe.flags
+    };
+    HealthHost health(host.match, source.unit_index);
+    health.complete_construction(builder_proj, target_proj);
+}
+
+float TickHost::ConstructionAdapter::build_decay_rate(int32_t ticks) const {
+    return sim::unit_health::build_decay_rate(health_type(source), ticks);
+}
+
+int16_t TickHost::ConstructionAdapter::footprint_x() const {
+    const auto index = static_cast<uint16_t>(record.construction.type_index);
+    if (index >= host.match.world_.types.size())
+        throw std::out_of_range("construction type is not loaded");
+    return host.match.world_.types[index].footprint_x;
+}
+
+int16_t TickHost::ConstructionAdapter::footprint_z() const {
+    const auto index = static_cast<uint16_t>(record.construction.type_index);
+    if (index >= host.match.world_.types.size())
+        throw std::out_of_range("construction type is not loaded");
+    return host.match.world_.types[index].footprint_z;
+}
+
+bool TickHost::ConstructionAdapter::query_build_pad(sim::ground_orders::Point& pad) {
+    pad = {
+        signed_word(source.unit->position[0]),
+        signed_word(source.unit->position[1]),
+        signed_word(source.unit->position[2])
+    };
+    auto* instance = host.match.instance(source.unit_index);
+    if (!instance || !instance->script())
+        return true;
+    std::array<int32_t, 4> args{-1, 0, 0, 0};
+    if (!instance->script()->query("QueryBuildInfo", args) || args[0] < 0)
+        return true;
+    record.construction.pad_piece = static_cast<int8_t>(args[0]);
+    const auto world = host.match.piece_world_position(source, static_cast<uint32_t>(args[0]));
+    pad = {signed_word(world[0]), signed_word(world[1]), signed_word(world[2])};
+    return true;
+}
+
+void TickHost::ConstructionAdapter::attach_child(
+    sim::simulation_state::Unit& child, int8_t piece, uint8_t mode
+) {
+    host.match.set_carry_link(host.slot(child).unit_index, source.unit_index, piece, mode);
+}
+
+void TickHost::ConstructionAdapter::set_activation_mask(uint8_t mask, bool enabled) {
+    host.match.set_activation(source, mask, enabled);
+    // BuildingBuild waits on INBUILDSTANCE (build_flags bit 0). Activate cob
+    // (RequestState → Go → OpenYard) sets it; units with no Activate
+    // script still need the bit so BuildingBuild can leave phase 1.
+    if (mask == 1 && enabled && (source.record.build_flags & 1) == 0) {
+        auto* instance = host.match.instance(source.unit_index);
+        if (!instance || !instance->script())
+            source.record.build_flags = static_cast<uint8_t>(source.record.build_flags | 1u);
+    }
+}
+
+} // namespace oa::sim::match_runtime

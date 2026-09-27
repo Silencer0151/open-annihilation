@@ -1,0 +1,145 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/sim/detection.hpp"
+
+namespace oa::sim::detection {
+namespace {
+
+constexpr uint32_t fixed_shift = 16;
+
+int32_t wrap_add(int32_t a, int32_t b) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(a) + static_cast<uint32_t>(b));
+}
+
+int32_t wrap_sub(int32_t a, int32_t b) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(a) - static_cast<uint32_t>(b));
+}
+
+int32_t square_high(int32_t delta) noexcept {
+    const auto product = static_cast<int64_t>(delta) * static_cast<int64_t>(delta);
+    return static_cast<int32_t>(static_cast<uint64_t>(product) >> 32);
+}
+
+int32_t sea_fixed(const World& world) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(world.game.sea_level) << fixed_shift);
+}
+
+bool unit_active(const Unit& unit) noexcept {
+    return (unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & OA_UNIT_FLAG_DEATH_PENDING) == 0;
+}
+
+// An unordered (NaN) fraction also counts as zero.
+bool finished(const Unit& unit) noexcept {
+    return !(unit.build_remaining < 0.0F) && !(unit.build_remaining > 0.0F);
+}
+
+// Owner index through Unit.owner, as the rebuild reads it.
+bool owner_index(const World& world, const Unit& unit, uint8_t& index) noexcept {
+    const auto* owner = world_unit_owner(&world, &unit);
+    if (owner == nullptr)
+        return false;
+    index = owner->index;
+    return true;
+}
+
+bool allied(const Player& player, uint8_t other) noexcept {
+    return other < sizeof player.alliance && player.alliance[other] != 0;
+}
+
+} // namespace
+
+int32_t squared_distance_high(const FixedVec3& a, const FixedVec3& b) noexcept {
+    return wrap_add(square_high(wrap_sub(a.z, b.z)), square_high(wrap_sub(a.x, b.x)));
+}
+
+bool shares_radar(World& world, const Player& viewer, const Player& owner) noexcept {
+    if (viewer.index >= sizeof owner.alliance || owner.alliance[viewer.index] == 0)
+        return false;
+    const auto* info = world_player_info(&world, &owner);
+    return info != nullptr && (info->role & share_radar_role) != 0;
+}
+
+void stamp_contact(const ScanRecord& scan, Unit& unit, const World& world) noexcept {
+    if (unit.type_index == 0 || unit.owner_index == world.game.viewpoint_player)
+        return;
+    const auto* def = world_unit_def_of(&world, &unit);
+    if (def == nullptr || (def->flags & OA_UNIT_DEF_FLAG_STEALTH) != 0)
+        return;
+    const auto distance = squared_distance_high(unit.position, scan.position);
+    const auto sea = sea_fixed(world);
+    if (unit.position.y <= sea && distance < scan.sonar_range_squared)
+        unit.flags |= sonar_contact;
+    if (sea <= wrap_add(def->model_height, unit.position.y) && distance < scan.radar_range_squared)
+        unit.flags |= radar_contact;
+}
+
+void jam_radar(Unit& unit) noexcept {
+    unit.flags = (unit.flags & ~radar_contact) | jammed;
+}
+
+void jam_sonar(Unit& unit) noexcept {
+    unit.flags = (unit.flags & ~sonar_contact) | jammed;
+}
+
+bool sightings_due(const Sightings& sightings, uint32_t tick) noexcept {
+    return sightings.refreshed_tick + sighting_period <= tick;
+}
+
+void clear_sightings(Sightings& sightings) noexcept {
+    sightings.seen_count = 0;
+    sightings.radar_count = 0;
+    sightings.radar_fallback = 0;
+}
+
+bool finished_unit(const Unit& unit) noexcept {
+    return unit_active(unit) && finished(unit);
+}
+
+bool sighting_candidate(const World& world, const Player& player, const Unit& unit) noexcept {
+    uint8_t owner = 0;
+    return unit_active(unit) && owner_index(world, unit, owner) && !allied(player, owner);
+}
+
+bool file_sighting(
+    Sightings& sightings, const World& world, const Player& player, const Unit& unit, bool seen
+) noexcept {
+    uint8_t owner = 0;
+    if (!unit_active(unit) || !owner_index(world, unit, owner))
+        return false;
+    const auto slot = static_cast<uint16_t>(world_unit_slot(&world, &unit));
+    if (!allied(player, owner)) {
+        if (seen && (unit.flags & unsighted) == 0 && sightings.seen_count < sightings.capacity)
+            sightings.seen[sightings.seen_count++] = slot;
+        if ((unit.flags & radar_contact) != 0 && sightings.radar_count < sightings.capacity)
+            sightings.radar[sightings.radar_count++] = slot;
+        return false;
+    }
+    if (owner != player.index || !finished_unit(unit))
+        return false;
+    const auto* def = world_unit_def_of(&world, &unit);
+    if (def != nullptr && (def->flags & OA_UNIT_DEF_FLAG_TARGETING_UPGRADE) != 0 &&
+        (unit.state_flags & OA_UNIT_STATE_ACTIVE) != 0)
+        sightings.radar_fallback = 1;
+    return true;
+}
+
+bool sighted_within(
+    const Sightings& sightings, const World& world, const FixedVec3& position, int16_t distance
+) noexcept {
+    const auto reach = static_cast<int32_t>(distance) * static_cast<int32_t>(distance);
+    for (uint32_t i = 0; i < sightings.seen_count; ++i) {
+        const auto* unit = world_unit_at(&world, sightings.seen[i]);
+        if (unit != nullptr && squared_distance_high(position, unit->position) <= reach &&
+            unit_active(*unit))
+            return true;
+    }
+    return false;
+}
+
+void expose_cloaker(Unit& unit, uint32_t tick) noexcept {
+    unit.decloak_until_tick = tick + decloak_hold_ticks;
+    unit.flags |= cloak_locked;
+}
+
+} // namespace oa::sim::detection

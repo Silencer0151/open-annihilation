@@ -1,0 +1,567 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Frontend dispatcher, preferences, map list and main-menu host services.
+#include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
+#include "oa/data/campaign/campaign_assets.hpp"
+#include "oa/ui/frontend_dialogs.hpp"
+#include "oa/data/campaign/map_catalog.hpp"
+#include "oa/platform/preferences.hpp"
+#include <SDL3/SDL.h>
+#include <algorithm>
+#include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+namespace oa::app {
+
+[[nodiscard]] std::size_t Runtime::map_visible_rows() {
+    const auto* list = widget("MAPNAMES");
+    if (list == nullptr)
+        return 1;
+    auto item_height =
+        static_cast<std::size_t>(oa::formats::fnt::line_height(resources_.font)) + 1U;
+    if (const auto* fields = std::get_if<oa::ui::gui_layout::ListBoxFields>(&list->fields);
+        fields != nullptr && fields->item_height > 0)
+        item_height = static_cast<std::size_t>(fields->item_height);
+    return std::max<std::size_t>(1, static_cast<std::size_t>(list->common.height) / item_height);
+}
+
+[[nodiscard]] std::size_t Runtime::map_first_visible() {
+    const auto selected = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
+    const auto rows = map_visible_rows();
+    return selected >= rows ? selected - rows + 1U : 0U;
+}
+
+void Runtime::preview_map_index(std::size_t index) {
+    if (index >= bound_map_names_.size())
+        return;
+    modal_map_index_ = static_cast<int16_t>(index);
+    map_modal::preview_selection(map_modal_, *this);
+    rebuild_surface();
+}
+
+void Runtime::select_map_row_at(float canvas_y) {
+    const auto* list = widget("MAPNAMES");
+    if (list == nullptr)
+        return;
+    const auto modal_offset_y =
+        (kCanvasHeight - static_cast<int>(resources_.layout.gadgets.front().common.height)) / 2;
+    auto item_height =
+        static_cast<std::size_t>(oa::formats::fnt::line_height(resources_.font)) + 1U;
+    if (const auto* fields = std::get_if<oa::ui::gui_layout::ListBoxFields>(&list->fields);
+        fields != nullptr && fields->item_height > 0)
+        item_height = static_cast<std::size_t>(fields->item_height);
+    const auto local_y = static_cast<int32_t>(canvas_y) - modal_offset_y - list->common.y - 2;
+    if (local_y < 0)
+        return;
+    preview_map_index(map_first_visible() + static_cast<std::size_t>(local_y) / item_height);
+}
+
+void Runtime::close_map_modal() {
+    if (!map_modal_.active)
+        return;
+    map_modal::handle_event(
+        map_modal_,
+        skirmish_settings_,
+        entry::Event{{kFrontendMenuHandle}, menu::destroy_event},
+        *this
+    );
+    skirmish::setup(state_, skirmish_settings_, preferences_, skirmish_ui_, *this);
+}
+
+void Runtime::step(frontend::Step step_id, frontend::State&) {
+    if (const auto* handler = step_find(&screens_, step_id)) {
+        auto context = screen_context();
+        handler->run(&context, handler->state);
+        return;
+    }
+    status_ = "dispatcher reached unimplemented service " +
+              std::to_string(static_cast<uint32_t>(step_id));
+}
+
+uint32_t Runtime::query(frontend::Query, frontend::State&) {
+    return 0;
+}
+
+void Runtime::play_movie(frontend::State&, std::string_view filename) {
+    play_movie_resource(filename);
+}
+
+void Runtime::set_cursor_visible(frontend::State&, int32_t visible) {
+    oa::present::set_cursor_overlay_visible(visible);
+}
+
+void Runtime::select_map_list(frontend::State&, int32_t selector_value) {
+    init::select_map_list(map_list_state_, selector_value, *this);
+}
+
+void Runtime::open_new_game_panel(frontend::State&, int32_t value) {
+    new_game_selection_ = value;
+    if (state_.signal == frontend::signal_id::any_mission ||
+        state_.pending_signal == frontend::signal_id::any_mission)
+        load(Screen::any_mission);
+    else
+        load(Screen::new_campaign);
+}
+
+void Runtime::set_app_mode(frontend::State&, int32_t mode) {
+    frontend_mode_ = mode;
+    frontend_game().mode = mode;
+}
+
+oa::Game& Runtime::frontend_game() {
+    if (extension_.frontend_game != nullptr)
+        return *extension_.frontend_game(extension_.context);
+    return *frontend_game_;
+}
+
+void Runtime::set_cursor(frontend::State&, int32_t index) {
+    select_cursor_animation(static_cast<uint32_t>(index));
+}
+
+void Runtime::shut_down(frontend::State&) {
+    quit_application(nullptr);
+}
+
+std::string Runtime::preference_key(std::string_view section, std::string_view key) {
+    return std::string(section) + '|' + std::string(key);
+}
+
+void Runtime::load_preference_file() {
+    preference_path_ = preference_file(options_.preferences_file);
+    if (std::filesystem::exists(preference_path_)) {
+        preference_values_ = oa::platform::preferences::load(preference_path_);
+        return;
+    }
+    // Explicit profiles start with defaults, never import installation or
+    // personal settings. This keeps isolated regression runs reproducible.
+    if (options_.preferences_file)
+        return;
+    // Read-only migration of the early prototype's installation-local
+    // settings. Future reads/writes use the platform location exclusively.
+    const auto legacy = options_.game_dir / "open-annihilation.ini";
+    if (!std::filesystem::is_regular_file(legacy))
+        return;
+    constexpr uintmax_t maximum_legacy_bytes = 1024U * 1024U;
+    const auto size = std::filesystem::file_size(legacy);
+    if (size > maximum_legacy_bytes)
+        throw std::runtime_error("legacy preferences exceed size limit");
+    std::ifstream input(legacy, std::ios::binary);
+    if (!input)
+        throw std::runtime_error("cannot read legacy preferences");
+    std::string data(static_cast<std::size_t>(size), '\0');
+    if (!data.empty() && !input.read(data.data(), static_cast<std::streamsize>(data.size())))
+        throw std::runtime_error("cannot finish reading legacy preferences");
+    if (input.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error("legacy preferences grew beyond size limit");
+    if (input.bad())
+        throw std::runtime_error("cannot finish reading legacy preferences");
+    std::size_t at = 0;
+    while (at < data.size()) {
+        const auto end = data.find('\n', at);
+        auto line = std::string_view(data).substr(
+            at, end == std::string::npos ? data.size() - at : end - at
+        );
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        const auto equals = line.find('=');
+        if (equals != std::string_view::npos && equals != 0)
+            preference_values_[std::string(line.substr(0, equals))] =
+                std::string(line.substr(equals + 1));
+        if (end == std::string::npos)
+            break;
+        at = end + 1;
+    }
+    oa::platform::preferences::save(preference_path_, preference_values_);
+}
+
+void Runtime::flush_preferences() {
+    if (!preferences_dirty_)
+        return;
+    oa::platform::preferences::save(preference_path_, preference_values_);
+    preferences_dirty_ = false;
+}
+
+std::optional<uint32_t> Runtime::read_number(std::string_view section, std::string_view key) {
+    const auto found = preference_values_.find(preference_key(section, key));
+    if (found == preference_values_.end())
+        return std::nullopt;
+    uint32_t value = 0;
+    const auto parsed =
+        std::from_chars(found->second.data(), found->second.data() + found->second.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != found->second.data() + found->second.size())
+        return std::nullopt;
+    return value;
+}
+
+void Runtime::write_number(std::string_view section, std::string_view key, uint32_t value) {
+    preference_values_[preference_key(section, key)] = std::to_string(value);
+    preferences_dirty_ = true;
+}
+
+std::optional<std::string>
+Runtime::read_string(std::string_view section, std::string_view key, std::size_t capacity) {
+    const auto found = preference_values_.find(preference_key(section, key));
+    if (found == preference_values_.end() || found->second.size() >= capacity)
+        return std::nullopt;
+    return found->second;
+}
+
+void Runtime::write_string(std::string_view section, std::string_view key, std::string_view value) {
+    preference_values_[preference_key(section, key)] = value;
+    preferences_dirty_ = true;
+}
+
+void Runtime::audio_mode(init::AudioMode mode) {
+    if (mode != init::AudioMode::unchanged)
+        sound_spatial_ = mode == init::AudioMode::spatial ? 1 : 0;
+}
+
+void Runtime::mixing_buffers(uint32_t value) {
+    mixing_buffers_ = value;
+}
+
+void Runtime::wave_volume(uint32_t value) {
+    wave_volume_ = value;
+    audio_player_.set_volume(wave_volume_, preferences_.fx_volume);
+}
+
+void Runtime::cd_volume(uint32_t value) {
+    cd_volume_ = value;
+}
+
+uint32_t Runtime::nickname_override_enabled() {
+    return 0;
+}
+
+std::string Runtime::nickname_override() {
+    return {};
+}
+
+std::string Runtime::game_name_override() {
+    FrontendEntry entry{};
+    if (extension_.frontend_entry != nullptr)
+        extension_.frontend_entry(extension_.context, entry);
+    return entry.game_name != nullptr ? entry.game_name : "";
+}
+
+std::optional<std::string> Runtime::user_name() {
+    for (const char* variable : {"USER", "USERNAME"})
+        if (const auto* name = std::getenv(variable); name != nullptr && *name != '\0')
+            return std::string(name);
+    return std::nullopt;
+}
+
+std::string Runtime::application_directory() {
+    return options_.game_dir.string();
+}
+
+void Runtime::select_map_list(int32_t selector_value) {
+    init::select_map_list(map_list_state_, selector_value, *this);
+}
+
+void Runtime::select_map_index(int32_t mode) {
+    if (map_list_mode_ != 0 && mode == 0) {
+        eligible_map_names_.clear();
+        first_map_name_.clear();
+    }
+    if (eligible_map_names_.empty())
+        discover_first_map();
+    map_list_mode_ = mode;
+    if (first_map_name_.empty())
+        return;
+    if (select_map(first_map_name_) == 0)
+        throw std::runtime_error("first eligible skirmish map cannot be selected");
+}
+
+std::string Runtime::selected_map_name() {
+    return first_map_name_;
+}
+
+uint32_t Runtime::mixing_buffer_count() {
+    return mixing_buffers_;
+}
+
+uint32_t Runtime::wave_out_volume() {
+    return wave_volume_;
+}
+
+uint32_t Runtime::cd_audio_volume() {
+    return cd_volume_;
+}
+
+uint8_t Runtime::launched_by_service() {
+    return extension_.launched_by_service != nullptr &&
+                   extension_.launched_by_service(extension_.context)
+               ? 1
+               : 0;
+}
+
+int32_t Runtime::selector(init::MapListHandle handle) {
+    const auto found = map_list_objects_.find(handle.value);
+    return found == map_list_objects_.end() ? -1 : found->second;
+}
+
+void Runtime::destroy(init::MapListHandle) {
+}
+
+void Runtime::release(init::MapListHandle handle) {
+    map_list_objects_.erase(handle.value);
+}
+
+init::MapListHandle Runtime::allocate() {
+    return {++next_map_list_handle_};
+}
+
+init::MapListHandle Runtime::construct(init::MapListHandle handle, int32_t selector_value) {
+    map_list_objects_[handle.value] = selector_value;
+    return handle;
+}
+
+void Runtime::discover_first_map() {
+    const auto files = oa::data::campaign::campaign_asset_files(assets_);
+    const oa::data::campaign::MapScanHost host{
+        this, [](void* runtime, uint32_t animation) {
+            static_cast<Runtime*>(runtime)->select_cursor_animation(animation);
+        }
+    };
+    oa::data::campaign::MapList list{};
+    char* names = nullptr;
+    const auto count =
+        oa::data::campaign::map_build_multiplayer_list(list, files, host, &names, false, false);
+    const char* name = names;
+    for (int32_t index = 0; name != nullptr && index < count;
+         ++index, name += std::strlen(name) + 1)
+        eligible_map_names_.emplace_back(name);
+    std::free(names);
+    oa::data::campaign::map_clear_list_cache(list, nullptr);
+    if (!eligible_map_names_.empty())
+        first_map_name_ = eligible_map_names_.front();
+}
+
+void Runtime::save_preferences() {
+    init::save_preferences(state_, skirmish_settings_, preferences_, *this);
+    flush_preferences();
+}
+
+// MAINMENU callback boundary.
+menu::Environment& Runtime::environment() {
+    return environment_;
+}
+
+void Runtime::release_sparks() {
+    menu_sparks_ = {};
+}
+
+uint32_t Runtime::button_result(menu::MenuHandle, menu::Button button) {
+    return oa::ui::gui_input::button_result(input_menu(), menu::resource_name(button));
+}
+
+void Runtime::play_sound(menu::Sound sound, uint32_t) {
+    play_menu_sound(sound);
+}
+
+void Runtime::select_cursor_animation(uint32_t index) {
+    select_game_cursor(static_cast<uint8_t>(index));
+}
+
+void Runtime::prepare_multiplayer() {
+    status_ = "Multiplayer preparation is not implemented here.";
+}
+
+std::string Runtime::resolve_resource(menu::ResourceRequest request) {
+    return std::string(request.directory) + '/' + std::string(request.name) + '.' +
+           std::string(request.extension);
+}
+
+menu::DocumentHandle Runtime::construct_document() {
+    return {++next_document_};
+}
+
+uint32_t Runtime::load_document(menu::DocumentHandle handle, std::string_view path) {
+    if (handle.value == 0 || handle.value != next_document_)
+        return 0;
+    try {
+        const auto document = assets_.read(path);
+        return document.bytes.empty() ? 0U : 1U;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+void Runtime::destroy_document(menu::DocumentHandle) noexcept {
+}
+
+void Runtime::reset_after_multiplayer_selection() {
+    selected_ = -1;
+}
+
+uint8_t Runtime::application_flags() {
+    return state_.video_context_flags;
+}
+
+namespace {
+
+// The game discs' archives, which the game's own installation holds.
+constexpr const char* campaign_disc_archive = "totala2.hpi";
+constexpr const char* game_disc_archive = "totala1.hpi";
+
+} // namespace
+
+bool Runtime::holds_disc_archive() const {
+    return fs::is_regular_file(options_.game_dir / campaign_disc_archive) ||
+           fs::is_regular_file(options_.game_dir / game_disc_archive);
+}
+
+uint32_t Runtime::find_disc(menu::Disc disc) {
+    if (!holds_disc_archive())
+        return 1;
+    const auto archive = disc == menu::Disc::campaign ? campaign_disc_archive : game_disc_archive;
+    return fs::is_regular_file(options_.game_dir / archive) ? 1U : 0U;
+}
+
+int16_t Runtime::shift_key_state() {
+    const auto* keys = SDL_GetKeyboardState(nullptr);
+    return keys != nullptr && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT])
+               ? static_cast<int16_t>(-1)
+               : 0;
+}
+
+void Runtime::drain_input() {
+    SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+}
+
+void Runtime::check_frontend_integrity() {
+    // The engine keeps no image checksum to test.
+}
+
+void Runtime::show_message(menu::MessageTarget, menu::Message message) {
+    show_frontend_message(
+        menu::message_text(message),
+        entry::localized_message_width,
+        entry::message_show_ok,
+        entry::message_fit_width
+    );
+}
+
+void Runtime::default_event(menu::MenuHandle) {
+    selected_ = -1;
+}
+
+// SINGLE.GUI callback boundary.
+void Runtime::play_sound(entry::Sound sound, uint32_t) {
+    play_named_sound(sound);
+}
+
+void Runtime::refresh_disc_archives() {
+}
+
+std::string Runtime::translate(entry::Message message) {
+    return std::string(entry::message_text(message));
+}
+
+void Runtime::show_frontend_message(
+    std::string_view text, int32_t width, int32_t show_ok, int32_t fit_width
+) {
+    auto context = screen_context();
+    if (!oa::ui::frontend_dialogs::open_message_box(&context, text, width, show_ok, fit_width))
+        show_unsupported(text);
+}
+
+void Runtime::open_help() {
+    auto context = screen_context();
+    if (!oa::ui::frontend_dialogs::open_help(&context))
+        status_ = "HELP.GUI is unavailable";
+}
+
+void Runtime::show_cd_check() {
+    auto context = screen_context();
+    if (!oa::ui::frontend_dialogs::open_cd_check(&context))
+        status_ = "CDCHECK.GUI is unavailable";
+}
+
+void Runtime::clear_event_selection(entry::MenuHandle) {
+    selected_ = -1;
+}
+
+void Runtime::clear_frontend_selection() {
+    selected_ = -1;
+}
+
+uint32_t Runtime::button_result(entry::MenuHandle, entry::Button button) {
+    return oa::ui::gui_input::button_result(input_menu(), entry::resource_name(button));
+}
+
+int32_t Runtime::load_named_background(const char* name, bool redraw, bool apply, bool defer) {
+    const auto files = oa::data::campaign::campaign_asset_files(assets_);
+    oa::ui::frontend::ResourceHost host{};
+    host.context = this;
+    host.load_bitmap = [](void* context, const char* path, uint8_t* palette) -> oa_ref32 {
+        auto& runtime = *static_cast<Runtime*>(context);
+        std::unique_ptr<Image> image;
+        try {
+            image = std::make_unique<Image>(oa::decode_pcx(runtime.assets_.read(path).bytes));
+        } catch (const std::exception&) {
+            return 0;
+        }
+        if (image->palette)
+            std::memcpy(palette, image->palette->data(), oa::ui::frontend::kResourcePaletteBytes);
+        auto& bitmaps = runtime.named_backgrounds_.bitmaps;
+        auto free = std::find(bitmaps.begin(), bitmaps.end(), nullptr);
+        if (free == bitmaps.end())
+            free = bitmaps.insert(bitmaps.end(), nullptr);
+        *free = std::move(image);
+        return static_cast<oa_ref32>(free - bitmaps.begin() + 1);
+    };
+    host.free_bitmap = [](void* context, oa_ref32 bitmap) {
+        auto& bitmaps = static_cast<Runtime*>(context)->named_backgrounds_.bitmaps;
+        if (bitmap != 0 && bitmap <= bitmaps.size())
+            bitmaps[bitmap - 1].reset();
+    };
+    host.fatal = [](void*, const char* path) {
+        throw std::runtime_error(std::string("Unable to load ") + path);
+    };
+    host.panel_open = [](void* context) {
+        return !static_cast<Runtime*>(context)->resources_.layout.gadgets.empty();
+    };
+    host.set_backdrop = [](void* context, oa_ref32 bitmap) {
+        auto& runtime = *static_cast<Runtime*>(context);
+        const auto& bitmaps = runtime.named_backgrounds_.bitmaps;
+        runtime.resources_.background =
+            bitmap != 0 && bitmap <= bitmaps.size() && bitmaps[bitmap - 1] ? *bitmaps[bitmap - 1]
+                                                                           : Image{};
+    };
+    host.apply_palette = [](void* context, const uint8_t* palette) {
+        PaletteBytes entries{};
+        std::memcpy(entries.data(), palette, entries.size());
+        static_cast<Runtime*>(context)->resources_.background.palette = entries;
+    };
+    host.files = &files;
+    return oa::ui::frontend::load_resource_palette(
+        &named_backgrounds_.cache, &frontend_game(), host, name, redraw, apply, defer
+    );
+}
+
+void Runtime::open_load_game() {
+    options_parent_ = screen_ == Screen::match ? Screen::match : Screen::single_player;
+    load(Screen::load_game);
+}
+
+void Runtime::open_options() {
+    if (screen_ != Screen::match)
+        options_parent_ = screen_;
+    enter_options_panel();
+}
+
+} // namespace oa::app

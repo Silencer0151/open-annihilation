@@ -1,0 +1,734 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Match chrome, side HUD, resource readout, fog and minimap.
+#include "oa/app/runtime.hpp"
+#include "oa/ui/hud/status_panel.hpp"
+#include "oa/present/world_renderer/world_fog.hpp"
+#include "oa/present/world_renderer/world_camera.hpp"
+#include "oa/present/surface.hpp"
+#include "oa/ui/hud/health_bar.hpp"
+#include "oa/ui/hud/order_panel.hpp"
+#include "oa/ui/hud/resource_bar.hpp"
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <limits>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace oa::app {
+
+int Runtime::builder_gui_page_count() const {
+    if (!match_ || selected_match_unit_ == 0)
+        return 0;
+    const auto& world = match_->state();
+    const auto* unit = oa::world_unit_at(&world, selected_match_unit_);
+    if (unit == nullptr || unit->type_index == 0 || unit->type_index >= world.unit_def_count)
+        return 0;
+    // UnitDef.gui_page_count holds the first missing page index (from the
+    // unit definitions), raised to the highest download MENU; pages are
+    // 1..count-1.
+    const auto counted = world.unit_defs[unit->type_index].gui_page_count;
+    return counted > 1 ? static_cast<int>(counted) - 1 : (counted == 1 ? 1 : 0);
+}
+
+bool Runtime::is_build_page_nav(std::string_view name) const {
+    const auto action = match_hud_action(name);
+    return action == "PREV" || action == "NEXT" || action == "PREVIOUS";
+}
+
+void Runtime::show_match_build_page(int page) {
+    namespace hud = oa::ui::hud;
+    auto* unit = match_ && selected_match_unit_ != 0
+                     ? oa::world_unit_at(&match_->state(), selected_match_unit_)
+                     : nullptr;
+    const auto table = unit != nullptr ? order_panel_table() : hud::UnitTable{};
+    const auto* def = unit != nullptr ? hud::unit_def(table, *unit) : nullptr;
+    if (def == nullptr) {
+        status_ = "Select a builder to open the build menu";
+        return;
+    }
+    if (unit->build_remaining != 0.0F) {
+        show_match_orders_page();
+        return;
+    }
+    // The build pages cycle as the game's page flags do; a type with one
+    // page behaves as if it had a second, missing one.
+    const auto page_count = static_cast<uint8_t>(std::max(2, builder_gui_page_count() + 1));
+    const auto current = static_cast<uint32_t>(std::clamp(match_build_page_, 0, 7));
+    auto flags = hud::kUnitFlagBuildMenu | (current << hud::kUnitBuildPageShift);
+    if (page == match_build_page_ + 1)
+        flags = hud::build_menu_forward(flags, page_count, false);
+    else if (page == match_build_page_ - 1)
+        flags = hud::build_menu_back(flags, page_count, false);
+    else
+        flags = hud::build_menu_select(flags, page_count, static_cast<uint32_t>(std::max(page, 0)));
+    page = std::max(1, static_cast<int>(hud::build_page(flags)));
+    char name[64];
+    hud::format_build_page_name(name, sizeof name, *def, static_cast<uint32_t>(page));
+    auto& game = match_->state().game;
+    auto state = hud::order_panel_load(game);
+    summarize_order_panel(state);
+    state.unit_id = 0;
+    const auto previous_page = match_build_page_;
+    match_build_page_ = page;
+    const auto prefix = match_side_name_prefix();
+    hud::load_build_page(
+        state, *unit, *def, name, page, prefix.c_str(), order_panel_controls(), order_panel_loader()
+    );
+    if (state.unit_id == unit->id) {
+        hud::order_panel_store(game, state);
+        status_ = "Build page " + std::to_string(page);
+        render_match_surface();
+    } else {
+        match_build_page_ = previous_page;
+        show_unsupported("Build GUI " + std::string(name) + " is not available.");
+    }
+}
+
+void Runtime::show_match_page_by_key(int page) {
+    if (!match_ || selected_match_unit_ == 0)
+        return;
+    const auto& world = match_->state();
+    const auto* unit = oa::world_unit_at(&world, selected_match_unit_);
+    if (unit == nullptr || unit->type_index == 0 || unit->type_index >= world.unit_def_count ||
+        page >= static_cast<int>(world.unit_defs[unit->type_index].gui_page_count))
+        return;
+    if (page == 0)
+        show_match_orders_page();
+    else
+        show_match_build_page(page);
+    play_match_interface_sound("nextbuildmenu");
+}
+
+void Runtime::load_match_chrome() {
+    match_chrome_ = {};
+    match_hud_.reset();
+    const auto prefix = match_side_prefix();
+    try {
+        match_chrome_ = oa::decode_pcx(assets_.read("bitmaps/" + prefix + "guisidetile.pcx").bytes);
+    } catch (const std::exception& error) {
+        std::cerr << "match chrome tile unavailable: " << error.what() << '\n';
+    }
+    show_match_orders_page();
+}
+
+void Runtime::scale_blit(
+    renderer::Surface& destination,
+    const renderer::Surface& source,
+    int dx,
+    int dy,
+    int dw,
+    int dh,
+    int sx,
+    int sy,
+    int sw,
+    int sh
+) {
+    if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0)
+        return;
+    if (dw == sw && dh == sh) {
+        blit_rect(destination, source, dx, dy, sx, sy, dw, dh);
+        return;
+    }
+    const int dest_w = static_cast<int>(destination.width);
+    const int dest_h = static_cast<int>(destination.height);
+    const int src_w = static_cast<int>(source.width);
+    const int src_h = static_cast<int>(source.height);
+    const int y0 = std::max(0, dy);
+    const int y1 = std::min(dest_h, dy + dh);
+    const int x0 = std::max(0, dx);
+    const int x1 = std::min(dest_w, dx + dw);
+    if (y0 >= y1 || x0 >= x1)
+        return;
+    const int x_count = x1 - x0;
+    scale_src_x_.resize(static_cast<std::size_t>(x_count));
+    for (int i = 0; i < x_count; ++i) {
+        const int src_x = sx + (x0 - dx + i) * sw / dw;
+        scale_src_x_[static_cast<std::size_t>(i)] = (src_x < 0 || src_x >= src_w) ? -1 : src_x;
+    }
+    for (int dest_y = y0; dest_y < y1; ++dest_y) {
+        const int src_y = sy + (dest_y - dy) * sh / dh;
+        if (src_y < 0 || src_y >= src_h)
+            continue;
+        auto* dest_row =
+            destination.rgb.data() +
+            (static_cast<std::size_t>(dest_y) * destination.width + static_cast<std::size_t>(x0)) *
+                3U;
+        const auto* src_row =
+            source.rgb.data() + (static_cast<std::size_t>(src_y) * source.width) * 3U;
+        for (int i = 0; i < x_count; ++i) {
+            const int src_x = scale_src_x_[static_cast<std::size_t>(i)];
+            if (src_x >= 0) {
+                const auto si = static_cast<std::size_t>(src_x) * 3U;
+                dest_row[0] = src_row[si];
+                dest_row[1] = src_row[si + 1];
+                dest_row[2] = src_row[si + 2];
+            }
+            dest_row += 3;
+        }
+    }
+}
+
+void Runtime::blit_rect(
+    renderer::Surface& destination,
+    const renderer::Surface& source,
+    int destination_x,
+    int destination_y,
+    int source_x,
+    int source_y,
+    int width,
+    int height
+) {
+    const int dest_w = static_cast<int>(destination.width);
+    const int dest_h = static_cast<int>(destination.height);
+    const int src_w = static_cast<int>(source.width);
+    const int src_h = static_cast<int>(source.height);
+    int x_off = 0, y_off = 0;
+    if (destination_x < 0) {
+        x_off = -destination_x;
+        destination_x = 0;
+    }
+    if (destination_y < 0) {
+        y_off = -destination_y;
+        destination_y = 0;
+    }
+    source_x += x_off;
+    source_y += y_off;
+    width -= x_off;
+    height -= y_off;
+    if (source_x < 0) {
+        destination_x -= source_x;
+        width += source_x;
+        source_x = 0;
+    }
+    if (source_y < 0) {
+        destination_y -= source_y;
+        height += source_y;
+        source_y = 0;
+    }
+    width = std::min(width, dest_w - destination_x);
+    width = std::min(width, src_w - source_x);
+    height = std::min(height, dest_h - destination_y);
+    height = std::min(height, src_h - source_y);
+    if (width <= 0 || height <= 0)
+        return;
+    const auto bytes = static_cast<std::size_t>(width) * 3U;
+    for (int y = 0; y < height; ++y) {
+        auto* dest_row = destination.rgb.data() +
+                         (static_cast<std::size_t>(destination_y + y) * destination.width +
+                          static_cast<std::size_t>(destination_x)) *
+                             3U;
+        const auto* src_row =
+            source.rgb.data() + (static_cast<std::size_t>(source_y + y) * source.width +
+                                 static_cast<std::size_t>(source_x)) *
+                                    3U;
+        std::memcpy(dest_row, src_row, bytes);
+    }
+}
+
+void Runtime::draw_match_label(
+    int x, int y, std::string_view text, uint8_t palette_index, int scale
+) {
+    const oa::formats::fnt::Font* font = match_label_font();
+    if (font == nullptr)
+        return;
+    const auto& palette = match_hud_ && match_hud_->background.palette
+                              ? *match_hud_->background.palette
+                              : match_palette_;
+    const auto pal = static_cast<std::size_t>(palette_index) * 4U;
+    if (pal + 2 >= palette.size())
+        return;
+    paint_text(*font, x, y, text, {palette[pal], palette[pal + 1], palette[pal + 2]}, scale);
+}
+
+void Runtime::paint_text(
+    const oa::formats::fnt::Font& font,
+    int x,
+    int y,
+    std::string_view text,
+    std::array<uint8_t, 3> color,
+    int scale
+) {
+    if (text.empty() || scale < 1)
+        return;
+    auto& dest = paint_target();
+    const auto text_w = static_cast<int>(oa::formats::fnt::measure_text(font, text)) + 4;
+    const auto text_h = static_cast<int>(oa::formats::fnt::line_height(font)) + 4;
+    if (text_w <= 0 || text_h <= 0)
+        return;
+    thread_local std::vector<uint8_t> indices;
+    thread_local std::vector<uint8_t> coverage;
+    const auto pixel_count = static_cast<std::size_t>(text_w) * static_cast<std::size_t>(text_h);
+    indices.assign(pixel_count, 0);
+    coverage.assign(pixel_count, 0);
+    const oa::formats::fnt::IndexedSurface target{
+        static_cast<uint32_t>(text_w),
+        static_cast<uint32_t>(text_h),
+        static_cast<std::size_t>(text_w),
+        indices,
+        coverage
+    };
+    (void)oa::formats::fnt::raster_text(target, font, text, 0, 2);
+    for (int row = 0; row < text_h * scale; ++row) {
+        const int py = y + row - 2 * scale;
+        if (py < 0 || py >= static_cast<int>(dest.height))
+            continue;
+        auto* out = dest.rgb.data() + (static_cast<std::size_t>(py) * dest.width) * 3U;
+        const auto* cover = coverage.data() + static_cast<std::size_t>(row / scale) * text_w;
+        for (int column = 0; column < text_w * scale; ++column) {
+            if (cover[column / scale] == 0)
+                continue;
+            const int px = x + column;
+            if (px < 0 || px >= static_cast<int>(dest.width))
+                continue;
+            auto* pixel = out + static_cast<std::size_t>(px) * 3U;
+            pixel[0] = color[0];
+            pixel[1] = color[1];
+            pixel[2] = color[2];
+        }
+    }
+}
+
+int Runtime::tdf_int(
+    const oa::data::unit_definitions::TdfSection& section, std::string_view key, int fallback
+) {
+    const auto* value = section.find(key);
+    if (value == nullptr || value->empty())
+        return fallback;
+    int parsed = fallback;
+    const auto result = std::from_chars(value->data(), value->data() + value->size(), parsed);
+    return result.ec == std::errc{} ? parsed : fallback;
+}
+
+void Runtime::load_side_hud() {
+    side_hud_ = {};
+    try {
+        const auto data = assets_.read("gamedata/sidedata.tdf").bytes;
+        const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+        oa::ui::hud::SideLayout layout;
+        if (!oa::ui::hud::parse_side_layout(text, match_side_prefix() == "cor" ? 1 : 0, layout))
+            return;
+        const auto rect = [](const oa::ui::hud::Rect& r) {
+            return HudRect{r.x, r.y, r.width, r.height};
+        };
+        side_hud_.metal_color = layout.metal_color;
+        side_hud_.energy_color = layout.energy_color;
+        side_hud_.metal_bar = rect(layout.metal_bar);
+        side_hud_.energy_bar = rect(layout.energy_bar);
+        side_hud_.metal_num_x = layout.metal_num_x;
+        side_hud_.metal_num_y = layout.metal_num_y;
+        side_hud_.metal_max_x = layout.metal_max_x;
+        side_hud_.metal_max_y = layout.metal_max_y;
+        side_hud_.metal_zero_x = layout.metal_zero_x;
+        side_hud_.metal_zero_y = layout.metal_zero_y;
+        side_hud_.metal_produced_x = layout.metal_produced_x;
+        side_hud_.metal_produced_y = layout.metal_produced_y;
+        side_hud_.metal_consumed_x = layout.metal_consumed_x;
+        side_hud_.metal_consumed_y = layout.metal_consumed_y;
+        side_hud_.energy_num_x = layout.energy_num_x;
+        side_hud_.energy_num_y = layout.energy_num_y;
+        side_hud_.energy_max_x = layout.energy_max_x;
+        side_hud_.energy_max_y = layout.energy_max_y;
+        side_hud_.energy_zero_x = layout.energy_zero_x;
+        side_hud_.energy_zero_y = layout.energy_zero_y;
+        side_hud_.energy_produced_x = layout.energy_produced_x;
+        side_hud_.energy_produced_y = layout.energy_produced_y;
+        side_hud_.energy_consumed_x = layout.energy_consumed_x;
+        side_hud_.energy_consumed_y = layout.energy_consumed_y;
+        side_hud_.unit_name = rect(layout.unit_name);
+        side_hud_.damage_bar = rect(layout.damage_bar);
+        side_hud_.unit_metal_make = rect(layout.unit_metal_make);
+        side_hud_.unit_metal_use = rect(layout.unit_metal_use);
+        side_hud_.unit_energy_make = rect(layout.unit_energy_make);
+        side_hud_.unit_energy_use = rect(layout.unit_energy_use);
+    } catch (const std::exception& error) {
+        std::cerr << "sidedata HUD unavailable: " << error.what() << '\n';
+    }
+}
+
+void Runtime::paint_on(PaintLayer layer) {
+    if (layer == PaintLayer::hud) {
+        overlay_target_ = &match_hud_cpu_;
+        hud_source_space_ = true;
+        paint_origin_ = {};
+        return;
+    }
+    overlay_target_ = &match_world_cpu_;
+    hud_source_space_ = false;
+    paint_origin_ = {match_layout_.left, match_layout_.top};
+}
+
+renderer::Surface& Runtime::paint_target() {
+    return overlay_target_ ? *overlay_target_ : surface_;
+}
+
+oa::ui::display_layout::Point Runtime::canvas_paint(int x, int y) const {
+    return {x - paint_origin_.x, y - paint_origin_.y};
+}
+
+int Runtime::hud_text_scale() const {
+    return std::max(1, static_cast<int>(std::lround(match_layout_.scale)));
+}
+
+const oa::formats::fnt::Font* Runtime::match_label_font() const {
+    return match_small_font_ ? &*match_small_font_ : (match_hud_ ? &match_hud_->font : nullptr);
+}
+
+void Runtime::fill_hud_rect(int x, int y, int width, int height, uint8_t palette_index) {
+    const auto pal = static_cast<std::size_t>(palette_index) * 4U;
+    if (pal + 2 >= match_palette_.size() || width <= 0 || height <= 0)
+        return;
+    const std::array<uint8_t, 3> color{
+        match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]
+    };
+    auto& dest = paint_target();
+    for (int row = 0; row < height; ++row)
+        for (int column = 0; column < width; ++column) {
+            const int px = x + column, py = y + row;
+            if (px < 0 || py < 0 || px >= static_cast<int>(dest.width) ||
+                py >= static_cast<int>(dest.height))
+                continue;
+            const auto di =
+                (static_cast<std::size_t>(py) * dest.width + static_cast<std::size_t>(px)) * 3U;
+            dest.rgb[di] = color[0];
+            dest.rgb[di + 1] = color[1];
+            dest.rgb[di + 2] = color[2];
+        }
+}
+
+oa::ui::display_layout::Point Runtime::hud_canvas(int x, int y) const {
+    if (hud_source_space_)
+        return {x, y};
+    const auto canvas = oa::ui::display_layout::source_to_canvas(match_layout_, x, y);
+    return canvas_paint(canvas.x, canvas.y);
+}
+
+void Runtime::draw_hud_label(int x, int y, std::string_view text, uint8_t palette_index) {
+    const auto point = hud_canvas(x, y);
+    draw_match_label(point.x, point.y, text, palette_index);
+}
+
+void Runtime::draw_match_label_right(int x, int y, std::string_view text, uint8_t palette_index) {
+    const oa::formats::fnt::Font* font = match_label_font();
+    if (font == nullptr)
+        return;
+    const auto width = static_cast<int>(oa::formats::fnt::measure_text(*font, text));
+    const auto point = hud_canvas(x, y);
+    draw_match_label(point.x - width, point.y, text, palette_index);
+}
+
+void Runtime::draw_hud_label_centered(int x, int y, std::string_view text, uint8_t palette_index) {
+    const oa::formats::fnt::Font* font = match_label_font();
+    if (font == nullptr)
+        return;
+    const auto width = static_cast<int>(oa::formats::fnt::measure_text(*font, text));
+    draw_hud_label(x - width / 2, y, text, palette_index);
+}
+
+void Runtime::fill_source_rect(int x, int y, int width, int height, uint8_t palette_index) {
+    if (hud_source_space_) {
+        fill_hud_rect(x, y, std::max(1, width), std::max(1, height), palette_index);
+        return;
+    }
+    const auto rect = oa::ui::display_layout::source_rect_to_canvas(
+        match_layout_, x, y, std::max(0, width), std::max(0, height)
+    );
+    const auto origin = canvas_paint(rect.x, rect.y);
+    fill_hud_rect(
+        origin.x, origin.y, std::max(1, rect.width), std::max(1, rect.height), palette_index
+    );
+}
+
+void Runtime::draw_sidedata_bar(
+    const HudRect& bar, float shown, float capacity, float threshold, float store, uint8_t color
+) {
+    if (bar.width <= 0 || bar.height <= 0)
+        return;
+    const auto columns = oa::ui::hud::trough_columns(
+        shown, capacity, threshold, store, bar.x, bar.x + bar.width - 1
+    );
+    if (columns.fill)
+        fill_source_rect(bar.x, bar.y, columns.fill_right - bar.x + 1, bar.height, color);
+    if (columns.marker)
+        fill_source_rect(
+            columns.marker_left,
+            bar.y,
+            3,
+            bar.height,
+            oa::ui::hud::readout_color(match_->state().game, oa::ui::hud::kReadoutConsumedColor)
+        );
+}
+
+void Runtime::draw_resource_readout() {
+    const auto viewer = match_view_player();
+    if (viewer >= OA_PLAYER_COUNT)
+        return;
+    auto& game = match_->state().game;
+    auto& player = game.players[viewer];
+    auto& readout = game.resource_readout;
+    oa::ui::hud::update_resource_readout(readout, player, game.tick);
+    // PANELTOP already contains the METAL/ENERGY chrome; SIDEDATA.TDF names the
+    // fill troughs, stored/capacity numbers, and produced/consumed readouts.
+    const auto text_color = oa::ui::hud::readout_color(game, oa::ui::hud::kReadoutTextColor);
+    const auto whole = [](float value) { return std::to_string(static_cast<int>(value)); };
+    const auto label = [this](int x, int y, const oa::ui::hud::RateText& rate) {
+        draw_hud_label(x, y, rate.text, rate.color);
+    };
+    draw_sidedata_bar(
+        side_hud_.energy_bar,
+        readout.energy,
+        player.energy_storage,
+        player.energy_share_threshold,
+        player.energy,
+        side_hud_.energy_color
+    );
+    draw_hud_label(
+        side_hud_.energy_num_x, side_hud_.energy_num_y, whole(readout.energy), text_color
+    );
+    draw_hud_label(side_hud_.energy_zero_x, side_hud_.energy_zero_y, "0", text_color);
+    draw_match_label_right(
+        side_hud_.energy_max_x, side_hud_.energy_max_y, whole(player.energy_storage), text_color
+    );
+    label(
+        side_hud_.energy_produced_x,
+        side_hud_.energy_produced_y,
+        oa::ui::hud::format_energy_rate(game, readout.energy_produced, true)
+    );
+    label(
+        side_hud_.energy_consumed_x,
+        side_hud_.energy_consumed_y,
+        oa::ui::hud::format_energy_rate(game, readout.energy_requested, false)
+    );
+    draw_sidedata_bar(
+        side_hud_.metal_bar,
+        readout.metal,
+        player.metal_storage,
+        player.metal_share_threshold,
+        player.metal,
+        side_hud_.metal_color
+    );
+    draw_hud_label(side_hud_.metal_num_x, side_hud_.metal_num_y, whole(readout.metal), text_color);
+    draw_hud_label(side_hud_.metal_zero_x, side_hud_.metal_zero_y, "0", text_color);
+    draw_match_label_right(
+        side_hud_.metal_max_x, side_hud_.metal_max_y, whole(player.metal_storage), text_color
+    );
+    label(
+        side_hud_.metal_produced_x,
+        side_hud_.metal_produced_y,
+        oa::ui::hud::format_metal_rate(game, readout.metal_produced, true)
+    );
+    label(
+        side_hud_.metal_consumed_x,
+        side_hud_.metal_consumed_y,
+        oa::ui::hud::format_metal_rate(game, readout.metal_requested, false)
+    );
+}
+
+void Runtime::draw_unit_rates(const oa::Unit& unit) {
+    const auto rate = [this](const HudRect& at, float amount, bool metal, bool produced) {
+        const auto text =
+            oa::ui::hud::format_unit_rate(match_->state().game, amount, metal, produced);
+        draw_hud_label(at.x, at.y, text.text, text.color);
+    };
+    rate(side_hud_.unit_energy_make, unit.economy.energy.last_produced, false, true);
+    rate(side_hud_.unit_energy_use, unit.economy.energy.last_requested, false, false);
+    rate(side_hud_.unit_metal_make, unit.economy.metal.last_produced, true, true);
+    rate(side_hud_.unit_metal_use, unit.economy.metal.last_requested, true, false);
+}
+
+void Runtime::draw_unit_damage_bar(const oa::Unit& unit) {
+    const auto& world = match_->state();
+    const auto* def = oa::world_unit_def_of(&world, &unit);
+    const auto& bar = side_hud_.damage_bar;
+    if (def == nullptr || bar.width <= 0 || bar.height <= 0 ||
+        !oa::ui::hud::panel_shows_damage(world, unit, *def))
+        return;
+    oa::present::world_renderer::overlay_meter_bar(
+        source_overlay_raster(),
+        nullptr,
+        unit.health,
+        static_cast<int32_t>(def->max_damage),
+        {bar.x, bar.y, bar.x + bar.width - 1, bar.y + bar.height - 1},
+        world.game.ui_colors,
+        0
+    );
+}
+
+oa::present::world_renderer::OverlayRaster Runtime::source_overlay_raster() {
+    oa::present::world_renderer::OverlayRaster raster;
+    raster.user = this;
+    raster.rect_outline = [](void* user, oa::Surface*, const oa::Rect32& r, uint8_t color) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (r.x2 < r.x1 || r.y2 < r.y1)
+            return;
+        const int width = r.x2 - r.x1 + 1;
+        const int height = r.y2 - r.y1 + 1;
+        self.fill_source_rect(r.x1, r.y1, width, 1, color);
+        self.fill_source_rect(r.x1, r.y2, width, 1, color);
+        self.fill_source_rect(r.x1, r.y1, 1, height, color);
+        self.fill_source_rect(r.x2, r.y1, 1, height, color);
+    };
+    raster.fill_rect = [](void* user, oa::Surface*, const oa::Rect32& r, uint8_t color) {
+        if (r.x2 < r.x1 || r.y2 < r.y1)
+            return;
+        static_cast<Runtime*>(user)->fill_source_rect(
+            r.x1, r.y1, r.x2 - r.x1 + 1, r.y2 - r.y1 + 1, color
+        );
+    };
+    raster.text = [](void* user, oa::Surface*, const char* text, int32_t x, int32_t y) {
+        auto& self = *static_cast<Runtime*>(user);
+        self.draw_hud_label(x, y, text, self.ui_colors_[kUiColorText]);
+    };
+    return raster;
+}
+
+void Runtime::absorb_radar_exploration() {
+    if (!match_ || !match_mapping_on())
+        return;
+    try {
+        const auto& sight = match_->sight();
+        const auto cells = static_cast<std::size_t>(std::max(0, sight.width)) *
+                           static_cast<std::size_t>(std::max(0, sight.height));
+        if (cells == 0)
+            return;
+        if (radar_explored_.size() != cells)
+            radar_explored_.assign(cells, 0);
+        const auto bit = static_cast<uint16_t>(1u << (match_view_player() & 0x1fu));
+        std::span<const uint8_t> coverage;
+        try {
+            coverage = match_->player_coverage(static_cast<uint8_t>(match_view_player()));
+        } catch (const std::exception&) {
+        }
+        for (std::size_t i = 0; i < cells; ++i) {
+            if (radar_explored_[i] != 0)
+                continue;
+            const bool mapped = i < sight.player_bits.size() && (sight.player_bits[i] & bit) != 0;
+            const bool live = i < coverage.size() && coverage[i] != 0;
+            if (mapped || live)
+                radar_explored_[i] = 1;
+        }
+    } catch (const std::exception&) {
+    }
+}
+
+void Runtime::blit_match_minimap() {
+    auto& radar = radar_state_;
+    if (!match_ || radar.built_for != &match_->state() || radar.well == nullptr)
+        return;
+    auto& game = match_->state().game;
+    const int pic_w = game.radar_width;
+    const int pic_h = game.radar_height;
+    if (pic_w <= 0 || pic_h <= 0)
+        return;
+    run_radar_ticks();
+    oa::present::world_renderer::radar_draw(game, radar.surfaces, *radar.well);
+    const int off_x = game.radar_offset_x;
+    const int off_y = game.radar_offset_y;
+    renderer::Surface mini;
+    mini.width = static_cast<uint32_t>(pic_w);
+    mini.height = static_cast<uint32_t>(pic_h);
+    mini.rgb.assign(static_cast<std::size_t>(pic_w) * static_cast<std::size_t>(pic_h) * 3U, 0);
+    const auto* well = radar.well;
+    for (int y = 0; y < pic_h; ++y) {
+        const uint8_t* row = well->pixels + (off_y + y) * well->pitch + off_x;
+        for (int x = 0; x < pic_w; ++x) {
+            const auto pal = static_cast<std::size_t>(row[x]) * 4U;
+            const auto di = (static_cast<std::size_t>(y) * static_cast<std::size_t>(pic_w) +
+                             static_cast<std::size_t>(x)) *
+                            3U;
+            mini.rgb[di] = match_palette_[pal];
+            mini.rgb[di + 1] = match_palette_[pal + 1];
+            mini.rgb[di + 2] = match_palette_[pal + 2];
+        }
+    }
+    const auto origin = hud_canvas(off_x, off_y);
+    const auto extent = hud_canvas(off_x + pic_w, off_y + pic_h);
+    const int dest_w = std::max(1, extent.x - origin.x);
+    const int dest_h = std::max(1, extent.y - origin.y);
+    scale_blit(paint_target(), mini, origin.x, origin.y, dest_w, dest_h, 0, 0, pic_w, pic_h);
+    // Radar clicks arrive in canvas pixels, wherever the picture is painted.
+    const auto hit =
+        oa::ui::display_layout::source_rect_to_canvas(match_layout_, off_x, off_y, pic_w, pic_h);
+    radar_picture_ = {hit.x, hit.y, hit.width, hit.height};
+    radar_map_w_ = game.map_pixel_width;
+    radar_map_h_ = game.map_pixel_height;
+}
+
+void Runtime::draw_status_panel() {
+    constexpr int kViewLeft = oa::ui::display_layout::kSourceLeft;
+    constexpr int kViewBottom = oa::ui::display_layout::kSourceBottomBarY - 1;
+    namespace hud = oa::ui::hud;
+    if (!match_)
+        return;
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    const bool held = keys != nullptr && keys[SDL_SCANCODE_SPACE] && !chat_composing_;
+    auto& game = match_->state().game;
+    hud::status_panel_step(
+        game, status_panel_next_step_ms_, static_cast<uint32_t>(SDL_GetTicks()), held
+    );
+    if (game.status_panel_offset == 0)
+        return;
+    if (!status_lightbar_loaded_) {
+        status_lightbar_loaded_ = true;
+        try {
+            oa::formats::gaf::Archive archive;
+            append_gaf_file(archive, "anims/commongui.gaf");
+            const auto* sequence = gaf_sequence(archive, "LIGHTBAR");
+            const auto index = static_cast<std::size_t>(hud::kStatusPanelLightbarFrame);
+            if (sequence != nullptr && sequence->frames.size() > index) {
+                auto rendered = oa::formats::gaf::render_normal(sequence->frames[index]);
+                if (rendered.ok()) {
+                    // The status panel reset zeros the frame origin.
+                    rendered.frame->origin_x = 0;
+                    rendered.frame->origin_y = 0;
+                    status_lightbar_ = std::move(*rendered.frame);
+                }
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "status strip LIGHTBAR unavailable: " << error.what() << '\n';
+        }
+    }
+    const int top = kViewBottom + game.status_panel_offset;
+    if (status_lightbar_) {
+        const auto& frame = *status_lightbar_;
+        for (std::size_t row = 0; row < frame.height; ++row) {
+            const int y = top + static_cast<int>(row);
+            if (y > kViewBottom)
+                break;
+            for (std::size_t column = 0; column < frame.width; ++column) {
+                const auto at = row * frame.width + column;
+                if (at < frame.coverage.size() && frame.coverage[at] != 0)
+                    fill_source_rect(
+                        kViewLeft + static_cast<int>(column), y, 1, 1, frame.pixels[at]
+                    );
+            }
+        }
+    }
+    const oa::formats::fnt::Font* font =
+        match_small_font_ ? &*match_small_font_ : (match_hud_ ? &match_hud_->font : nullptr);
+    const int text_y = top + hud::kStatusPanelTextDrop;
+    if (font == nullptr ||
+        text_y + static_cast<int>(oa::formats::fnt::line_height(*font)) > kViewBottom + 1)
+        return;
+    const auto translate = [](void* context, const char* text) -> const char* {
+        auto& runtime = *static_cast<Runtime*>(context);
+        runtime.status_label_ = runtime.translate_ui(text);
+        return runtime.status_label_.c_str();
+    };
+    hud::StatusPanelText text{};
+    hud::format_status_panel(game, translate, this, text);
+    draw_hud_label(kViewLeft + hud::kStatusPanelTimeX, text_y, text.time, hud::kPaletteWhite);
+    draw_hud_label(kViewLeft + hud::kStatusPanelUnitsX, text_y, text.units, hud::kPaletteWhite);
+    draw_hud_label(kViewLeft + hud::kStatusPanelSpeedX, text_y, text.speed, hud::kPaletteWhite);
+}
+
+} // namespace oa::app

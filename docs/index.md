@@ -1,0 +1,119 @@
+# Documentation
+
+Every document in the repository, by what you want to do.
+
+## Start here
+
+- [README.md](../README.md): what Open Annihilation is, how to download and
+  run a release, and the documents that govern the project.
+- [CONTRIBUTING.md](../CONTRIBUTING.md): the developer guide: what the engine
+  does today, what it needs, how to build, test and run it from source, the
+  layout of the tree, the checks and what to do when one fails, and how a
+  change gets in (the contributor licence agreement, pull requests and
+  review).
+- [conventions.md](conventions.md): the rules every change follows, each with
+  its reason, examples and the directories it covers.
+- [testing.md](testing.md): running the tests and checks, and writing a new
+  test: the kinds of test, the installed game (`OA_GAME_DIR`), pinned values
+  and malformed input.
+
+## Project
+
+- [LICENSE](../LICENSE): the GNU General Public License version 3.
+- [ATTRIBUTIONS.md](../ATTRIBUTIONS.md) and [licenses/](../licenses): the
+  third-party components and their licences.
+- [CLA.md](../CLA.md): the contributor licence agreement.
+- [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md): how everyone taking part
+  behaves.
+- [SECURITY.md](../SECURITY.md): reporting a security problem privately.
+- [CONTRIBUTORS.md](../CONTRIBUTORS.md): the people behind the project.
+- [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
+  rules it points to are in [conventions.md](conventions.md).
+
+## Reference
+
+- [formats.md](formats.md): the HPI archive (its encryption and SQSH
+  compression) and PCX image formats as the asset reader implements them,
+  and which archive's copy of a file wins.
+- [capture.md](capture.md): capturing the game as an MP4 video with
+  `--capture-video` (it needs the `ffmpeg` program), and the scripted run
+  `--showcase` plays for showcase videos.
+- [platform.md](platform.md): `oa-platform`, the SDL3 presentation and audio
+  smoke tool.
+- [resolution-proofs/](resolution-proofs): diagrams of the match screen's
+  layout (radar, orders panel, resource bars and battlefield) at nine window
+  sizes from 640x480 to 7680x4320, with their bounds in `bounds.txt`. They
+  are drawn by `tools/resolution_proofs.py`, which mirrors the layout rules
+  of the match display layout; run it again after changing those rules.
+
+## Modules
+
+Each module's README says what it is for, its entry points, the state it
+reads and writes, and its quirks and limits.
+
+Core and arithmetic:
+
+- [src/core](../src/core/README.md): the canonical game records every system
+  shares.
+- [src/base/game-math](../src/base/game-math/README.md): integer and floating-point
+  helpers whose results match 3.1c bit for bit.
+
+Game data formats:
+
+- [3DO models](../src/formats/objects3d/README.md),
+  [COB unit scripts](../src/formats/cob/README.md),
+  [fonts](../src/formats/fnt/README.md),
+  [GAF sprites](../src/formats/gaf/README.md),
+  [unit-order names](../src/data/mission-types/README.md),
+  [Smacker intro movies](../src/formats/smacker/README.md),
+  [TDF and unit definitions](../src/formats/tdf/README.md),
+  [TNT maps](../src/formats/tnt/README.md).
+
+Simulation:
+
+- [combat state](../src/sim/combat-state/README.md),
+  [game loop](../src/base/game-loop/README.md),
+  [match runtime](../src/sim/match-runtime/README.md),
+  [simulation state](../src/sim/simulation-state/README.md),
+  [unit activation](../src/sim/unit-activation/README.md),
+  [unit effects](../src/sim/unit-effects/README.md),
+  [unit health](../src/sim/unit-health/README.md),
+  [unit spawn](../src/sim/unit-spawn/README.md),
+  [weapon execution](../src/sim/weapon-execution/README.md).
+- [ground orders](../src/sim/ground-orders/README.md),
+  [unit movement](../src/sim/unit-movement/README.md).
+- [scenario state and victory conditions](../src/sim/scenario/README.md).
+- [unit-script save state](../src/sim/script-state/README.md),
+  [unit-script virtual machine](../src/sim/script-vm/README.md).
+- [map runtime](../src/sim/map-runtime/README.md),
+  [3DO model runtime](../src/sim/model-runtime/README.md),
+  [spatial registration](../src/sim/spatial-state/README.md),
+  [visibility](../src/sim/visibility-state/README.md),
+  [wind and environment](../src/sim/world-environment/README.md).
+
+Presentation, interface and sound:
+
+- [terrain renderer](../src/present/world-renderer/README.md),
+  [sprite animation](../src/sim/sprite-animation/README.md).
+- [game audio](../src/audio/README.md).
+- [frontend renderer](../src/ui/frontend-renderer/README.md),
+  [frontend state](../src/ui/frontend-state/README.md),
+  [GUI input](../src/ui/gui-input/README.md),
+  [GUI layout](../src/ui/gui-layout/README.md).
+
+Platform and application:
+
+- [user preferences](../src/platform/preferences/README.md).
+- [src/app](../src/app/README.md): the game application, `open-annihilation`,
+  adding a screen or overlay, and the extension table.
+
+Modules without a README are described by the comments at the top of their
+public headers.
+
+## Not written yet
+
+An architecture overview (layers, module map, the frame and tick flow), a
+glossary of game and project terms, a building guide covering every option
+and platform, a reference for the game data an installation must hold, and a
+page of known gaps. Until they exist, [CONTRIBUTING.md](../CONTRIBUTING.md)
+and the module READMEs are the best guide.

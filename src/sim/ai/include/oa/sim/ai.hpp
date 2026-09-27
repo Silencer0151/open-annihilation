@@ -1,0 +1,437 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Computer player: the per-player controller that sorts units into squads,
+// runs one task per squad (factory production, construction, strike groups,
+// rallies, air raids) and chooses builds from the AI profile weights/limits.
+#pragma once
+
+#include "oa/core/world.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <string_view>
+
+namespace oa::sim::ai {
+
+inline constexpr uint32_t squad_count = 10;
+inline constexpr uint32_t build_list_capacity = 30; // types one builder's list holds
+inline constexpr uint32_t type_categories_bytes = 256;
+inline constexpr uint32_t sort_interval_ticks = 30;
+inline constexpr int32_t unlimited = -1;
+
+/// Unit.squad values the computer player sorts its units into.
+enum class Squad : uint32_t {
+    none = 0,
+    structures = 1,       // unarmed buildings: factories, economy
+    land_strike = 2,      // gathered land attack group
+    land_army = 3,        // armed land units waiting to join the strike
+    builders = 4,         // mobile builders
+    armed_structures = 5, // defences; no task
+    naval_strike = 6,
+    navy = 7,
+    aircraft = 8,
+    siege = 9, /* ? never assigned by the sort */
+};
+
+enum class TaskKind : uint8_t {
+    none,
+    structures,
+    strike,
+    rally,
+    construction,
+    idle,
+    air_raid,
+    siege, // only its timer is reachable
+};
+
+/// The type fields the computer player reads, gathered from the unit
+/// definitions and the side build lists.
+struct ComputerType {
+    char unit_name[32]{};
+    char side[32]{};
+    char categories[type_categories_bytes]{}; // space-separated FBI categories
+    char ai_directives[64]{};                 // FBI ai_weight: script lines
+    uint32_t flags{};                         // OA_UNIT_DEF_FLAG_*
+    uint32_t abilities{};                     // OA_UNIT_DEF_ABILITY_*
+    int8_t bm_code{};
+    int8_t makes_metal{};
+    int16_t min_water_depth{};
+    int16_t footprint_x{};
+    int16_t footprint_z{};
+    float extracts_metal{};
+    uint8_t has_build_list{}; // builders always own a (possibly empty) list
+    uint8_t build_count{};
+    uint16_t build_ids[build_list_capacity]{};
+};
+
+/// One squad task of a controller; ComputerPlayer.tasks holds one per squad.
+struct ComputerTask {
+    TaskKind kind{};
+    Squad squad{};
+    uint32_t next_tick{};   // Game.tick the task runs next
+    int32_t min_size{};     // strike: size that may attack
+    int32_t launch_size{};  // strike: size that always attacks
+    int32_t merge_radius{}; // strike: squared world-unit radius per member
+    Squad source_squad{};   // strike: squad it recruits from; rally: its strike squad
+    int32_t attacking{};    // strike: nonzero while the squad attacks
+};
+
+/// Cell of a metal-bearing feature.
+struct MetalSpot {
+    int16_t cell_x{};
+    int16_t cell_z{};
+};
+
+/// Randomised building-placement grid of a computer player's knowledge.
+struct PlacementGrid {
+    int16_t step_x{};
+    int16_t step_z{};
+    int16_t phase_x{};
+    int16_t phase_z{};
+    int32_t margin{};
+};
+
+/// Per-player knowledge: profile weights and limits, own counts, base position
+/// and build placement state, each table indexed by unit type.
+/// The match keeps the knowledge's sightings half in sim::detection::Sightings
+/// and rebuilds both halves in one walk.
+struct ComputerKnowledge {
+    int16_t* owned_counts{};   // finished own units per type
+    int8_t* base_weights{};    // the type's weight in the base-position average
+    uint8_t* weight_percent{}; // 0..100
+    uint32_t* weight_locked{}; // nonzero once a weight line named the type itself
+    int32_t* limits{};         // unlimited = -1
+    uint32_t* limit_locked{};  // nonzero once a limit line named the type itself
+    int32_t builder_count{};   // finished units with a build list
+    oa::FixedVec3 base_position{};
+    int32_t placement_radius{};
+    PlacementGrid land_grid{};
+    PlacementGrid water_grid{};
+    MetalSpot* metal_spots{};
+    uint32_t metal_spot_count{};
+};
+
+/// A player's controller (Player.controller). Every player but a mirrored one
+/// has a controller, whose weapon-sweep cursor the match holds; only computer
+/// players get one here.
+struct ComputerPlayer {
+    uint8_t present{};
+    uint8_t player{};
+    int32_t sort_countdown{};          // ticks to the next squad sort
+    uint32_t commander_build_tick{};   // set 30..329 ticks ahead when a capturer is hit
+    ComputerTask tasks[squad_count]{}; // indexed by squad
+    ComputerKnowledge knowledge{};
+};
+
+/// Everything the computer players need that is not in oa::World.
+struct ComputerPlayers {
+    ComputerType* types{}; // type_count entries; index 0 reserved
+    uint32_t type_count{};
+    ComputerPlayer players[OA_PLAYER_COUNT]{};
+    uint8_t initialized{};
+    uint8_t downloadables_restricted{}; // options state 1 skips downloadable types
+    bool plan_matches{}; // the last plan line named the difficulty; kept between passes
+    char* profile_text{};
+    uint32_t profile_length{};
+    char* build_list_text{}; // gamedata/sidedata.tdf
+    uint32_t build_list_length{};
+};
+
+/// Function-pointer boundary to the match runtime. Order calls return false
+/// when the runtime rejects the order.
+struct ComputerHost {
+    void* context{};
+    oa::World* world{};
+    int32_t difficulty{};  // OA_DIFFICULTY_*
+    int32_t map_cells_x{}; // Game.map_width; world width is cells << 4
+    int32_t map_cells_z{};
+    uint32_t (*random)(void* context, uint32_t bound){};
+    uint32_t (*squad_size)(void* context, uint8_t player, Squad squad){};
+    uint16_t (*squad_member)(void* context, uint8_t player, Squad squad, uint32_t i){};
+    void (*set_squad)(void* context, uint16_t unit, Squad squad){};
+    bool (*allied)(void* context, uint8_t player, uint8_t other){};
+    /// Head of the unit's primary order queue: false when empty.
+    bool (*primary_order)(
+        void* context, uint16_t unit, uint8_t* preserve_flags, uint8_t* queue_flags
+    ){};
+    bool (*unit_visible)(void* context, uint8_t player, uint16_t unit){};
+    /// Strength triple (strengths[type][0..2]) from the strategic refresh, or
+    /// null when the player has none yet.
+    const uint8_t* (*strengths)(void* context, uint8_t player, uint16_t type){};
+    bool (*site_clear)(void* context, uint16_t type, int32_t cell_x, int32_t cell_z){};
+    bool (*building_site)(void* context, uint16_t type, int32_t cell_x, int32_t cell_z){};
+    uint8_t (*cell_metal)(void* context, int32_t cell_x, int32_t cell_z){};
+    /// Cell holds an indestructible metal-bearing feature.
+    bool (*metal_feature)(void* context, int32_t cell_x, int32_t cell_z){};
+    int32_t surface_metal{}; // scenario SurfaceMetal
+    bool (*order_move)(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue){};
+    bool (*order_patrol)(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue){};
+    bool (*order_attack)(void* context, uint16_t unit, uint16_t target){};
+    bool (*order_build)(void* context, uint16_t unit, uint16_t type, const oa::FixedVec3* at){};
+    bool (*order_factory)(void* context, uint16_t factory, uint16_t type, int32_t count){};
+    void (*set_active)(void* context, uint16_t unit, bool on){};
+};
+
+/// Stores the AI profile text and the side build lists applied at the next initialisation.
+///
+/// @param[in,out] state computer players; marked uninitialised
+/// @param profile ai/<profile>.txt text
+/// @param build_lists gamedata/sidedata.tdf text
+/// @return false for a null state or when a copy cannot be allocated
+bool computer_players_configure(
+    ComputerPlayers* state, std::string_view profile, std::string_view build_lists
+) noexcept;
+/// Allocates a zeroed type table.
+///
+/// @param[in,out] state computer players; any earlier table is freed
+/// @param type_count entries, including the reserved index 0
+/// @return false for a null state or when out of memory
+bool computer_players_reserve_types(ComputerPlayers* state, uint32_t type_count) noexcept;
+/// Frees every table and text the computer players own and clears the state.
+///
+/// @param[in,out] state computer players; null does nothing
+void computer_players_release(ComputerPlayers* state) noexcept;
+
+/// Creates the computer players' controllers as the game starts.
+///
+/// Loads the side build lists, creates a controller and knowledge record for every
+/// computer player, applies the profile and each downloadable type's own directives,
+/// and scans the metal spots for every player with a controller.
+///
+/// @param[in,out] state computer players; types must be loaded
+/// @param host world, map, difficulty and random stream
+/// @return false for a null state, world or type table
+bool computer_players_initialize(ComputerPlayers* state, const ComputerHost& host) noexcept;
+
+/// Reloads the AI profile (ReloadAIProfiles).
+///
+/// Resets every computer player's weight and limit tables, then applies the profile and
+/// the downloadable types' directives again from the plan flag the last pass left.
+/// Controllers, build grids and metal spots are kept. Before the first initialisation
+/// only the profile is stored.
+///
+/// @param[in,out] state computer players
+/// @param host world and difficulty
+/// @param profile new ai/<profile>.txt text
+/// @return false for a null state or world, or when the copy cannot be allocated
+bool computer_players_reload_profile(
+    ComputerPlayers* state, const ComputerHost& host, std::string_view profile
+) noexcept;
+
+/// Tests whether a player gets a controller (Player.controller) as it starts.
+///
+/// @param player player record
+/// @return true for every player with a status except a mirrored one
+[[nodiscard]] inline bool player_has_controller(const oa::Player& player) noexcept {
+    return player.status != OA_PLAYER_STATUS_FREE &&
+           (player.in_use == 0 || player.status != OA_PLAYER_STATUS_MIRRORED);
+}
+
+/// Runs a computer player's order tick: the squad sort every 30 ticks, then every due task.
+///
+/// @param[in,out] state computer players
+/// @param host squads, orders, placement queries, random stream and world
+/// @param player player index; nothing for a player without a computer controller
+void computer_player_tick_orders(
+    ComputerPlayers* state, const ComputerHost& host, uint8_t player
+) noexcept;
+
+/// Weighted position sums of the own units counted in one knowledge rebuild.
+struct KnowledgeTally {
+    float sum_x{};
+    float sum_y{};
+    float sum_z{};
+    float weights{};
+};
+
+/// Returns a computer player's knowledge.
+///
+/// @param state computer players
+/// @param player player index
+/// @return the knowledge, or null for any other player
+[[nodiscard]] ComputerKnowledge*
+computer_player_knowledge(ComputerPlayers* state, uint8_t player) noexcept;
+/// Starts a knowledge rebuild: no own units counted, none of them build-capable.
+///
+/// @param state computer players, for the type count
+/// @param[in,out] knowledge record being rebuilt
+void computer_knowledge_clear(const ComputerPlayers* state, ComputerKnowledge& knowledge) noexcept;
+/// Counts one finished own unit the rebuild's walk reports.
+///
+/// Adds its type to the owned counts, counts it as a builder when it has a build list,
+/// and adds its position weighted by its type's base weight.
+///
+/// @param state computer players and their type table
+/// @param[in,out] knowledge record being rebuilt
+/// @param unit finished own unit
+/// @param[in,out] tally weighted position sums
+void computer_knowledge_count(
+    const ComputerPlayers* state,
+    ComputerKnowledge& knowledge,
+    const oa::Unit& unit,
+    KnowledgeTally& tally
+) noexcept;
+/// Ends a knowledge rebuild: the weighted mean position becomes the base position.
+///
+/// @param[in,out] knowledge record being rebuilt
+/// @param tally weighted position sums; zero weight keeps the sums unscaled
+void computer_knowledge_settle(ComputerKnowledge& knowledge, const KnowledgeTally& tally) noexcept;
+
+/// Applies an AI profile ("plan", "weight", "limit" lines) to every controller.
+///
+/// The three directives behave as the console's ai_plan, ai_weight and ai_limit; the
+/// plan flag starts unmatched.
+///
+/// @param[in,out] state computer players
+/// @param host world and difficulty
+/// @param text profile text
+void computer_profile_apply(
+    ComputerPlayers* state, const ComputerHost& host, std::string_view text
+) noexcept;
+
+/// Applies a "weight <unit or category> <percent>" line to one player.
+///
+/// Scales the weight of every unlocked matching type; a unit name matches exactly and
+/// locks that type.
+///
+/// @param[in,out] state computer players
+/// @param player player index; nothing without a controller
+/// @param token unit name or FBI category ("all" matches every type)
+/// @param percent factor applied to the weight percentage, clamped to 0..100
+void computer_apply_weight(
+    ComputerPlayers* state, uint8_t player, const char* token, float percent
+) noexcept;
+/// Applies a "limit <unit or category> <count>" line to one player.
+///
+/// Sets the limit of every unlocked matching type; a unit name matches exactly and
+/// locks that type.
+///
+/// @param[in,out] state computer players
+/// @param player player index; nothing without a controller
+/// @param token unit name or FBI category ("all" matches every type)
+/// @param limit most units of the type; -1 is unlimited
+void computer_apply_limit(
+    ComputerPlayers* state, uint8_t player, const char* token, int32_t limit
+) noexcept;
+
+/// Returns a type's build priority for a player.
+///
+/// Needs at least 50 energy and 25 metal, the type within its limit, and a strength
+/// triple. The economy, attack and priority strengths are shared by the player's metal
+/// need, energy need and the rest, then scaled by the type's weight percentage.
+///
+/// @param state computer players and their type table
+/// @param host world and strength triples
+/// @param player player index
+/// @param type unit type index
+/// @return the score; 0 rejects the type
+[[nodiscard]] int32_t computer_build_score(
+    const ComputerPlayers* state, const ComputerHost& host, uint8_t player, uint16_t type
+) noexcept;
+/// Picks a type from a builder's list at random, weighted by build score.
+///
+/// @param state computer players and their type table
+/// @param host world, strengths and random stream
+/// @param player player index
+/// @param builder builder's unit slot
+/// @return the type, or 0 when nothing qualifies or the pick belongs to another side
+[[nodiscard]] uint16_t computer_pick_build(
+    const ComputerPlayers* state, const ComputerHost& host, uint8_t player, uint16_t builder
+) noexcept;
+
+/// Map-context paths the weight report prints; null prints as "(null)".
+struct ComputerReportPaths {
+    const char* terrain{}; // path slot 1, Maps/<map>.TNT
+    const char* profile{}; // path slot 7, ai/<profile>.txt
+};
+
+/// Writes the "PrintWeights" report of one player.
+///
+/// Game time, name, controller, terrain, profile and difficulty, then one row per unit
+/// type with its limit, strength triple, weight percentage and names. The rows
+/// need the player's controller; without one only the header is written.
+///
+/// @param state computer players and their type table
+/// @param host world and strength triples
+/// @param player player index
+/// @param paths terrain and profile paths; null prints as "(null)"
+/// @param out stream written to
+void computer_write_report(
+    const ComputerPlayers* state,
+    const ComputerHost& host,
+    uint8_t player,
+    const ComputerReportPaths& paths,
+    std::FILE* out
+) noexcept;
+
+/// Returns the squad a freshly sorted unit joins.
+///
+/// @param unit unit being sorted
+/// @param type its computer-player fields
+/// @return armed structures or structures for buildings, then builders, aircraft, navy,
+///         or the land army for an armed unit; none otherwise
+[[nodiscard]] Squad computer_sort_squad(const oa::Unit& unit, const ComputerType& type) noexcept;
+
+} // namespace oa::sim::ai
+
+namespace oa::sim::match_runtime {
+class Match;
+}
+
+namespace oa::sim::ai {
+/// Returns the computer-player state owned by a match, creating it on first use.
+///
+/// @param match match that owns the state
+/// @return the state
+ComputerPlayers* match_computer_players(sim::match_runtime::Match& match);
+/// Configures a match's computer players as the session starts (computer_players_configure).
+///
+/// @param match match that owns the state
+/// @param profile ai/<profile>.txt text
+/// @param build_lists gamedata/sidedata.tdf text
+/// @param campaign_session true in a campaign, where computer players never build a
+///        downloadable type
+/// @return false when the texts cannot be stored
+bool configure_match_computer_players(
+    sim::match_runtime::Match& match,
+    std::string_view profile,
+    std::string_view build_lists,
+    bool campaign_session
+);
+/// Reloads a match's AI profile (computer_players_reload_profile).
+///
+/// @param match match that owns the state
+/// @param profile new ai/<profile>.txt text
+/// @return false when the profile cannot be stored
+bool reload_match_computer_profiles(sim::match_runtime::Match& match, std::string_view profile);
+/// Loads the types and initialises a match's computer players before their first tick.
+///
+/// The game does it as the game starts.
+///
+/// @param match match that owns the state
+void prepare_match_computer_players(sim::match_runtime::Match& match);
+/// Runs computer_player_tick_orders for one player of a match.
+///
+/// @param match match that owns the state
+/// @param player player index
+void tick_match_computer_orders(sim::match_runtime::Match& match, uint8_t player);
+/// Writes a match player's weight report (computer_write_report).
+///
+/// @param match match that owns the state
+/// @param player player index
+/// @param paths terrain and profile paths
+/// @param out stream written to
+void write_match_computer_report(
+    sim::match_runtime::Match& match,
+    uint8_t player,
+    const ComputerReportPaths& paths,
+    std::FILE* out
+);
+/// Stores the tick until which a hit capturing unit of the player takes no build task.
+///
+/// @param match match that owns the state
+/// @param player player index; nothing when the match has no controller for it
+/// @param tick game tick the hold ends
+void hold_capturer_builds(sim::match_runtime::Match& match, uint8_t player, uint32_t tick);
+} // namespace oa::sim::ai

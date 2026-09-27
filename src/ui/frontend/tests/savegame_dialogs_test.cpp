@@ -1,0 +1,367 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/data/persist/hapibank.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "test_support.hpp"
+
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <string>
+
+namespace oa::ui::frontend::test {
+namespace {
+
+// A fixture save directory: file name -> summary fields.
+struct Summary {
+    std::map<std::string, int32_t> ints;
+    std::map<std::string, std::string> strings;
+};
+
+struct Fixture {
+    std::vector<std::string> files; // listing order
+    std::map<std::string, Summary> saves;
+    std::vector<std::string> removed;
+    std::vector<std::string> sounds;
+    std::vector<std::string> messages;
+    std::map<std::string, std::vector<uint8_t>> written;
+};
+
+std::string base_name(const char* path) {
+    const std::string text(path);
+    const auto slash = text.rfind('\\');
+    return slash == std::string::npos ? text : text.substr(slash + 1);
+}
+
+SaveDialogContext make_context(Fixture& fixture) {
+    SaveDialogContext context;
+    context.files.context = &fixture;
+    context.files.find = [](void* c,
+                            const char* pattern,
+                            void (*visit)(void*, const data::campaign::FindRecord&),
+                            void* user) {
+        const std::string text(pattern);
+        const auto extension = text.substr(text.rfind('.') + 1);
+        for (const auto& name : static_cast<Fixture*>(c)->files) {
+            const auto dot = name.rfind('.');
+            if (dot != std::string::npos && name.substr(dot + 1) == extension)
+                visit(user, {0, 0, 0, name.c_str()});
+        }
+    };
+    context.files.remove = [](void* c, const char* path) {
+        auto& fixture = *static_cast<Fixture*>(c);
+        const auto name = base_name(path);
+        fixture.removed.push_back(path);
+        std::erase(fixture.files, name);
+        return true;
+    };
+    context.reader.context = &fixture;
+    context.reader.open = [](void* c, const char* path) -> void* {
+        auto& saves = static_cast<Fixture*>(c)->saves;
+        const auto found = saves.find(base_name(path));
+        return found == saves.end() ? nullptr : &found->second;
+    };
+    context.reader.get_int = [](void*, void* bank, const char* field, int32_t fallback) {
+        const auto& ints = static_cast<Summary*>(bank)->ints;
+        const auto found = ints.find(field);
+        return found == ints.end() ? fallback : found->second;
+    };
+    context.reader.get_string =
+        [](void*, void* bank, const char* field, char* out, std::size_t capacity) {
+            const auto& strings = static_cast<Summary*>(bank)->strings;
+            const auto found = strings.find(field);
+            if (found == strings.end())
+                return false;
+            std::snprintf(out, capacity, "%s", found->second.c_str());
+            return true;
+        };
+    context.reader.has_field = [](void*, void* bank, const char* field) {
+        return static_cast<Summary*>(bank)->ints.count(field) != 0;
+    };
+    context.reader.close = [](void*, void*) {};
+    context.host.context = &fixture;
+    context.host.play_sound = [](void* c, const char* name) {
+        static_cast<Fixture*>(c)->sounds.emplace_back(name);
+    };
+    context.host.show_message = [](void* c, const char* text, int32_t) {
+        static_cast<Fixture*>(c)->messages.emplace_back(text);
+    };
+    return context;
+}
+
+Fixture saves_fixture() {
+    Fixture fixture;
+    fixture.files = {"first.SAV", "broken.SAV", "second.SAV", "notes.TXT"};
+    Summary campaign;
+    campaign.strings = {
+        {"Description", "Core mission 3"}, {"Campaign", "Core"}, {"Mission", "Core3"}
+    };
+    campaign.ints = {
+        {"Players", 2}, {"Gametype", 1}, {"Game Time", 30 * 3725}, {"Side", 1}, {"Difficulty", 2}
+    };
+    Summary skirmish;
+    skirmish.strings = {
+        {"Description", "Skirmish on Coast"},
+        {"Map", "Coast To Coast"},
+        {"Mission", "Coast To Coast"}
+    };
+    skirmish.ints = {
+        {"Players", 4},
+        {"Gametype", 2},
+        {"Game Time", 30 * 61},
+        {"Side", 0},
+        {"Difficulty", 0},
+        {"CommanderDeath", 0}
+    };
+    Summary broken; // no Description: dropped from the list
+    broken.ints = {{"Gametype", 2}};
+    fixture.saves = {{"first.SAV", campaign}, {"second.SAV", skirmish}, {"broken.SAV", broken}};
+    return fixture;
+}
+
+bool loadgame_panel(Panel& panel) {
+    const auto layout = load_gui("loadgame.gui");
+    if (!layout)
+        return false;
+    panel_load_layout(panel, *layout);
+    return true;
+}
+
+OA_TEST(save_list_keeps_described_files) {
+    auto fixture = saves_fixture();
+    auto context = make_context(fixture);
+    OA_CHECK(savegame_build_list(context) == 2);
+    OA_CHECK(std::string(context.list.entries[0].file.data()) == "first.SAV");
+    OA_CHECK(std::string(context.list.entries[1].file.data()) == "second.SAV");
+    OA_CHECK(std::string(context.list.entries[1].description.data()) == "Skirmish on Coast");
+    char path[64];
+    savegame_entry_path(context, 1, path, sizeof path);
+    OA_CHECK(std::string(path) == "SAVEGAME\\second.SAV");
+}
+
+OA_TEST(time_format_uses_thirty_ticks) {
+    char text[16];
+    savegame_format_time(30 * 3725, text, sizeof text);
+    OA_CHECK(std::string(text) == "01:02:05");
+    savegame_format_time(0, text, sizeof text);
+    OA_CHECK(std::string(text) == "00:00:00");
+}
+
+OA_GAME_DATA_TEST(load_dialog_preview_and_load) {
+    Panel panel;
+    if (!loadgame_panel(panel))
+        return;
+    auto fixture = saves_fixture();
+    auto context = make_context(fixture);
+    const std::string_view sides[] = {"ARM", "CORE"};
+    context.side_names = sides;
+    OA_CHECK(savegame_enter_load(panel, context));
+    OA_CHECK(context.hold_game);
+    OA_CHECK(panel_control(panel, "DELETE")->active == 0);
+    OA_CHECK(panel_control(panel, "GAMENAME")->active == 0);
+    OA_CHECK(text_of(panel, "GAMENAME") == "Core mission 3");
+    OA_CHECK(text_of(panel, "GAMETYPE") == "Single");
+    OA_CHECK(text_of(panel, "MISSION") == "Core3");
+    OA_CHECK(text_of(panel, "TIME") == "01:02:05");
+    OA_CHECK(text_of(panel, "SIDE") == "CORE");
+    OA_CHECK(text_of(panel, "DIFF") == "Hard");
+
+    panel_control(panel, "GAMES")->list_selection = 1;
+    savegame_on_games_selected(panel, context);
+    OA_CHECK(text_of(panel, "GAMETYPE") == "Skirmish (4 players)");
+    OA_CHECK(text_of(panel, "MISSION") == "Coast To Coast");
+    OA_CHECK(text_of(panel, "TIME") == "00:01:01");
+
+    select(panel, "LOAD");
+    const auto result = savegame_on_load_click(panel, context);
+    OA_CHECK(result.action == SaveDialogAction::load);
+    OA_CHECK(result.game_type == 2);
+    OA_CHECK(std::string(result.path.data()) == "SAVEGAME\\second.SAV");
+    OA_CHECK(fixture.sounds.back() == "SMLBUTTON");
+
+    // A game type other than campaign or skirmish is rejected.
+    fixture.saves["second.SAV"].ints["Gametype"] = 3;
+    select(panel, "LOAD");
+    OA_CHECK(savegame_on_load_click(panel, context).action == SaveDialogAction::invalid);
+    OA_CHECK(fixture.messages.back() == "Invalid savegame file");
+    select(panel, "CANCEL");
+    OA_CHECK(savegame_on_load_click(panel, context).action == SaveDialogAction::cancelled);
+}
+
+OA_GAME_DATA_TEST(load_dialog_without_saves_reports) {
+    Panel panel;
+    if (!loadgame_panel(panel))
+        return;
+    Fixture fixture;
+    auto context = make_context(fixture);
+    OA_CHECK(!savegame_enter_load(panel, context));
+    OA_CHECK(fixture.messages.back() == "There are no saved games to choose from");
+}
+
+OA_GAME_DATA_TEST(save_dialog_delete_and_write) {
+    Panel panel;
+    if (!loadgame_panel(panel))
+        return;
+    auto fixture = saves_fixture();
+    auto context = make_context(fixture);
+    savegame_enter_save(panel, context);
+    OA_CHECK(panel_find(panel, "TITLE") == -1); // LOADGAME.GUI has no TITLE label
+    OA_CHECK(panel_control(panel, "DELETE")->active == 1);
+    OA_CHECK((panel_control(panel, "GAMENAME")->attributes & 2U) != 0);
+
+    select(panel, "DELETE");
+    OA_CHECK(savegame_on_save_click(panel, context).action == SaveDialogAction::refreshed);
+    OA_CHECK(fixture.removed.size() == 1 && fixture.removed[0] == "SAVEGAME\\first.SAV");
+    OA_CHECK(context.list.entries.size() == 1);
+    OA_CHECK(text_of(panel, "GAMENAME") == "Skirmish on Coast");
+
+    panel_set_text(panel, "GAMENAME", "My Battle");
+    select(panel, "LOAD");
+    const auto result = savegame_on_save_click(panel, context);
+    OA_CHECK(result.action == SaveDialogAction::save);
+    OA_CHECK(std::string(result.path.data()) == "SAVEGAME\\My Battle.SAV");
+}
+
+OA_TEST(load_summary_fields) {
+    auto fixture = saves_fixture();
+    auto context = make_context(fixture);
+    LoadSummary summary;
+    auto* bank = context.reader.open(context.reader.context, "SAVEGAME\\second.SAV");
+    OA_CHECK(savegame_read_load_summary(context.reader, bank, summary));
+    OA_CHECK(summary.game_type == 2 && summary.players == 4);
+    OA_CHECK(summary.commander_death == 0 && summary.location == 1);
+    OA_CHECK(std::string(summary.mission.data()) == "Coast To Coast");
+    bank = context.reader.open(context.reader.context, "SAVEGAME\\broken.SAV");
+    OA_CHECK(!savegame_read_load_summary(context.reader, bank, summary));
+}
+
+OA_TEST(restrict_list_round_trip) {
+    const int32_t ids[] = {0, 101, 202, 303, 404};
+    RestrictRow rows[] = {{1, 5}, {2, -1}, {4, 100}, {0, 7}, {3, 0}};
+    const auto bytes = restrict_list_encode(ids, rows);
+    OA_CHECK(bytes.size() == 4 + 4 * 8);
+    OA_CHECK(bytes[0] == 4 && bytes[1] == 0);
+    RestrictRow loaded[] = {{1, 0}, {2, 0}, {4, 0}, {0, 0}, {3, 9}};
+    restrict_list_apply(bytes, ids, loaded);
+    OA_CHECK(loaded[0].limit == 5 && loaded[1].limit == -1 && loaded[2].limit == 100);
+    OA_CHECK(loaded[3].limit == 0); // unit 0 is never stored
+    OA_CHECK(loaded[4].limit == 0);
+    // Truncated input stops at the last complete pair.
+    RestrictRow partial[] = {{1, 0}, {2, 0}};
+    restrict_list_apply(std::span(bytes).first(4 + 8 + 4), ids, partial);
+    OA_CHECK(partial[0].limit == 5 && partial[1].limit == 0);
+}
+
+OA_TEST(restrict_limit_labels) {
+    char text[16];
+    OA_CHECK(restrict_limit_label(100, text, sizeof text) == 100);
+    OA_CHECK(std::string(text) == "100");
+    OA_CHECK(restrict_limit_label(101, text, sizeof text) == kRestrictNoLimit);
+    OA_CHECK(std::string(text) == "No Limit");
+}
+
+OA_GAME_DATA_TEST(restrict_list_dialogs) {
+    Fixture fixture;
+    fixture.files = {"tanks.LST", "air.LST", "first.SAV"};
+    auto context = make_context(fixture);
+    Panel save;
+    const auto layout = load_gui("savelist.gui");
+    if (!layout)
+        return;
+    panel_load_layout(save, *layout);
+    restrict_enter_save(save, context);
+    OA_CHECK(context.list.entries.size() == 2);
+    OA_CHECK(text_of(save, "GAMENAME") == "tanks");
+    panel_set_text(save, "GAMENAME", "navy");
+    select(save, "GAMENAME");
+    const auto result = restrict_on_save_click(save, context);
+    OA_CHECK(result.action == SaveDialogAction::save);
+    OA_CHECK(std::string(result.path.data()) == "SAVEGAME\\navy.LST");
+
+    Panel load;
+    const auto list = load_gui("loadlist.gui");
+    if (!list)
+        return;
+    panel_load_layout(load, *list);
+    OA_CHECK(restrict_enter_load(load, context));
+    panel_control(load, "GAMES")->list_selection = 1;
+    restrict_on_games_selected(load, context);
+    OA_CHECK(text_of(load, "GAMENAME") == "air");
+    select(load, "LOAD");
+    const auto loaded = restrict_on_load_click(load, context);
+    OA_CHECK(loaded.action == SaveDialogAction::load);
+    OA_CHECK(std::string(loaded.path.data()) == "SAVEGAME\\air.LST");
+}
+
+} // namespace
+} // namespace oa::ui::frontend::test
+
+namespace oa::ui::frontend::test {
+namespace {
+
+// Writes a real HAPIBANK summary with src/data/persist and a file that is not a
+// bank under a fresh SAVEGAME folder.
+std::filesystem::path write_real_saves(const char* folder) {
+    const auto root = std::filesystem::temp_directory_path() / folder;
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "SAVEGAME");
+    data::persist::Bank bank{};
+    data::persist::bank_init(&bank);
+    data::persist::bank_reset(&bank);
+    data::persist::bank_open_account(&bank, "Summary");
+    data::persist::bank_set_text(&bank, "Description", "Arm outpost");
+    data::persist::bank_set_int(&bank, "Gametype", 2);
+    data::persist::bank_set_int(&bank, "Players", 3);
+    data::persist::bank_set_int(&bank, "Game Time", 30 * 90);
+    data::persist::bank_set_text(&bank, "Map", "Lava Run");
+    const auto sink = data::persist::stdio_file_sink();
+    const auto path = (root / "SAVEGAME" / "outpost.SAV").string();
+    OA_CHECK(
+        data::persist::bank_write_file(
+            &bank, path.c_str(), data::persist::savegame_description, true, false, &sink
+        )
+    );
+    data::persist::bank_destroy(&bank);
+    std::ofstream(root / "SAVEGAME" / "junk.SAV") << "not a bank";
+    return root;
+}
+
+// The real summary read back through the host directory listing and the
+// persist-backed reader.
+OA_TEST(persist_reader_lists_real_saves) {
+    const auto root = write_real_saves("oa-ui-frontend-options-saves");
+    SaveDialogContext context;
+    context.files = savegame_host_files(&root);
+    context.reader = savegame_persist_reader(&root);
+    OA_CHECK(savegame_build_list(context) == 1);
+    if (context.list.entries.size() == 1)
+        OA_CHECK(std::string(context.list.entries[0].description.data()) == "Arm outpost");
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+}
+
+// The installed LOADGAME.GUI entered over that listing shows the save.
+OA_GAME_DATA_TEST(load_panel_shows_real_saves) {
+    const auto root = write_real_saves("oa-ui-frontend-options-saves-data");
+    SaveDialogContext context;
+    context.files = savegame_host_files(&root);
+    context.reader = savegame_persist_reader(&root);
+    OA_CHECK(savegame_build_list(context) == 1);
+    Panel panel;
+    if (auto layout = load_gui("loadgame.gui")) {
+        panel_load_layout(panel, *layout);
+        OA_CHECK(savegame_enter_load(panel, context));
+        OA_CHECK(text_of(panel, "GAMETYPE") == "Skirmish (3 players)");
+        OA_CHECK(text_of(panel, "MISSION") == "Lava Run");
+        OA_CHECK(text_of(panel, "TIME") == "00:01:30");
+    }
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+}
+
+} // namespace
+} // namespace oa::ui::frontend::test

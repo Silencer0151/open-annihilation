@@ -1,0 +1,297 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "tick_internal.hpp"
+
+#include <cstdint>
+
+namespace oa::sim::match_runtime {
+
+sim::unit_spawn::Slot& TickHost::HealthHost::slot(const sim::unit_health::Unit& u) {
+    return match_.world().slots[u.identity];
+}
+
+void TickHost::HealthHost::store() {
+    economy_.energy.requested = debit_.requested;
+    economy_.energy.accepted = debit_.accepted;
+    economy_.energy.gate = debit_.gate;
+    economy_.metal.requested = metal_.requested;
+    economy_.metal.accepted = metal_.accepted;
+    economy_.metal.gate = metal_.gate;
+}
+
+sim::unit_health::EconomyDebit& TickHost::HealthHost::energy_debit(sim::unit_health::Unit&) {
+    return debit_;
+}
+
+sim::unit_health::EconomyDebit& TickHost::HealthHost::metal_debit(sim::unit_health::Unit&) {
+    return metal_;
+}
+
+void TickHost::HealthHost::refund_metal(sim::unit_health::Unit& target, float amount) {
+    match_.credit_metal(slot(target).record, amount);
+}
+
+void TickHost::HealthHost::complete_construction(
+    sim::unit_health::Unit&, sim::unit_health::Unit& target
+) {
+    auto& s = slot(target);
+    s.record.build_remaining = 0.0F;
+    s.unit->flags |= sim::unit_health::construction_dirty_flag;
+    const auto& definition = *match_.fields(s).definition;
+    if (definition.activate_when_built)
+        match_.set_activation(s, 1, true);
+    match_.notify_finished(s);
+    s.unit->events = static_cast<uint16_t>(s.unit->events | sim::unit_health::construction_event);
+    // Mobile (not bm_code==0) nanoframes detach from the pad and get no
+    // order here; their GetBuilt takes them off it.
+    if (!(s.unit->flags & building_unit_flag) && s.record.attach_parent)
+        match_.set_carry_link(s.unit_index, 0, -1, 1);
+}
+
+bool TickHost::HealthHost::target_is_live(const sim::unit_health::Unit& u) {
+    const auto flags = slot(u).unit->flags;
+    return (flags & 0x10000000u) && !(flags & 0x4000u);
+}
+
+void TickHost::HealthHost::apply_health_event(
+    sim::unit_health::Unit& target,
+    const sim::unit_health::Unit* source,
+    const sim::unit_health::HealthEvent& event
+) {
+    match_.apply_damage_event(
+        this->slot(target),
+        source ? &this->slot(*source) : nullptr,
+        event.amount,
+        event.kind,
+        event.direction
+    );
+}
+
+bool TickHost::HealthHost::target_owner_present(const sim::unit_health::Unit& u) {
+    return slot(u).unit->owner && slot(u).unit->owner->present;
+}
+
+uint8_t TickHost::HealthHost::target_owner_status(const sim::unit_health::Unit& u) {
+    return slot(u).unit->owner ? slot(u).unit->owner->status : 0;
+}
+
+sim::unit_health::RouteIdentity
+TickHost::HealthHost::source_owner_route(const sim::unit_health::Unit& u) {
+    const auto& multiplayer = match_.multiplayer;
+    if (multiplayer.health_route)
+        return multiplayer.health_route(multiplayer.context, u.identity);
+    unsupported("health event route without a multiplayer handler");
+}
+
+sim::unit_health::RouteIdentity TickHost::HealthHost::fallback_route() {
+    const auto& multiplayer = match_.multiplayer;
+    if (multiplayer.health_route)
+        return multiplayer.health_route(multiplayer.context, 0);
+    unsupported("health event fallback route without a multiplayer handler");
+}
+
+void TickHost::HealthHost::share_health_event(
+    sim::unit_health::RouteIdentity route, const sim::unit_health::HealthEvent& event
+) {
+    const auto& multiplayer = match_.multiplayer;
+    if (multiplayer.health_shared) {
+        multiplayer.health_shared(multiplayer.context, route, event);
+        return;
+    }
+    unsupported("health event shared without a multiplayer handler");
+}
+
+bool TickHost::nano_repair(
+    sim::unit_spawn::Slot& repairer_slot, sim::simulation_state::Unit& patient
+) {
+    auto& patient_slot = slot(patient);
+    const auto* definition = match.fields(repairer_slot).definition;
+    const auto* patient_definition = match.fields(patient_slot).definition;
+    if (!definition || !patient_definition || !patient.type || !repairer_slot.unit ||
+        !repairer_slot.unit->type)
+        throw std::logic_error("natural repair is missing a definition");
+    auto make_type = [](const auto& fields, const sim::simulation_state::Unit& unit) {
+        return sim::unit_health::UnitType{
+            fields.damage_modifier_fixed,
+            static_cast<float>(fields.build_cost_energy),
+            fields.build_time,
+            unit.type->maximum_health,
+            static_cast<float>(fields.build_cost_metal)
+        };
+    };
+    auto healer_type = make_type(*definition, *repairer_slot.unit);
+    auto patient_type = make_type(*patient_definition, patient);
+    sim::unit_health::Unit repairer{
+        repairer_slot.unit_index,
+        repairer_slot.record.state_flags,
+        repairer_slot.record.veteran_level,
+        repairer_slot.unit->health,
+        &healer_type
+    };
+    sim::unit_health::Unit projected{
+        patient_slot.unit_index,
+        patient_slot.record.state_flags,
+        patient_slot.record.veteran_level,
+        patient.health,
+        &patient_type
+    };
+    HealthHost health(match, patient_slot.unit_index);
+    // Every repair order passes the repairer's worker time per tick.
+    const auto rate = static_cast<float>(
+        static_cast<uint32_t>(static_cast<uint16_t>(definition->worker_time)) / 30u
+    );
+    const auto repair = sim::unit_health::recover_health(repairer, projected, rate, health);
+    health.store();
+    patient.health = projected.health;
+    if (repair.performed)
+        match.spray_nano(repairer_slot, patient, Match::NanoSpray::repair);
+    return repair.performed;
+}
+
+void TickHost::scaled_damage(
+    sim::unit_spawn::Slot* source, sim::unit_spawn::Slot& target, int32_t amount, uint32_t kind
+) {
+    auto& u = *target.unit;
+    const auto& definition = *match.fields(target).definition;
+    sim::unit_health::UnitType type{
+        definition.damage_modifier_fixed,
+        static_cast<float>(definition.build_cost_energy),
+        definition.build_time,
+        u.type->maximum_health,
+        static_cast<float>(definition.build_cost_metal)
+    };
+    sim::unit_health::Unit projected{
+        target.unit_index, target.record.state_flags, target.record.veteran_level, u.health, &type
+    };
+    sim::unit_health::Unit attacker{};
+    if (source)
+        attacker = {
+            source->unit_index,
+            source->record.state_flags,
+            source->record.veteran_level,
+            source->unit->health,
+            nullptr
+        };
+    HealthHost host(match, target.unit_index);
+    sim::unit_health::submit_damage(source ? &attacker : nullptr, projected, amount, kind, host, 0);
+    host.store();
+    if (kind == healing_kind)
+        u.health = projected.health;
+}
+
+void TickHost::apply_scaled_damage(oa::Unit& record, int32_t amount, uint32_t kind) {
+    scaled_damage(nullptr, slot(unit_view(record)), amount, kind);
+}
+
+void TickHost::regenerate_health(oa::Unit& record) {
+    auto& u = unit_view(record);
+    auto& s = slot(u);
+    const auto& definition = *match.fields(s).definition;
+    sim::unit_health::UnitType type{
+        definition.damage_modifier_fixed,
+        static_cast<float>(definition.build_cost_energy),
+        definition.build_time,
+        u.type->maximum_health,
+        static_cast<float>(definition.build_cost_metal)
+    };
+    sim::unit_health::Unit projected{
+        s.unit_index, s.record.state_flags, s.record.veteran_level, u.health, &type
+    };
+    HealthHost host(match, s.unit_index);
+    const auto rate = static_cast<float>(
+        (static_cast<uint32_t>(static_cast<uint16_t>(match_unit_def(match, s.record).heal_time)) *
+         8u) /
+        30u
+    );
+    (void)sim::unit_health::recover_health(projected, projected, rate, host);
+    host.store();
+    u.health = projected.health;
+}
+
+void TickHost::kill_unit(oa::Unit& record, uint8_t kind) {
+    auto& u = unit_view(record);
+    auto& s = slot(u);
+    if (!(u.flags & live_unit_flag))
+        return;
+    const bool commander = side_commander(match.state(), s.record);
+    if (commander)
+        match.world_.players.at(s.record.owner_index).resource_flags &= 0xfe;
+    int32_t killed_percent = 0;
+    int32_t killed_flag = 0;
+    if (kind == static_cast<uint8_t>(DeathKind::dismissed)) {
+        killed_percent = 0;
+        killed_flag = 1;
+    } else if (
+        kind == static_cast<uint8_t>(DeathKind::captured) ||
+        kind == static_cast<uint8_t>(DeathKind::reclaim) ||
+        kind == static_cast<uint8_t>(DeathKind::cancelled) || u.health > 0
+    ) {
+        killed_percent = 0;
+        killed_flag = 0;
+    } else {
+        const auto maximum = u.type->maximum_health;
+        if (!maximum)
+            throw std::domain_error("Killed health divisor is zero");
+        killed_percent =
+            static_cast<int32_t>(
+                (static_cast<int32_t>(u.health) * -100) / static_cast<int32_t>(maximum) +
+                static_cast<int32_t>(u.previous_health_percent)
+            ) /
+            2;
+        if (killed_percent < 1)
+            killed_percent = 1;
+        if (killed_percent > 100)
+            killed_percent = 100;
+        if (auto* instance = match.instance(s.unit_index); instance && instance->script()) {
+            std::array<int32_t, 4> args{killed_percent, killed_flag, 0, 0};
+            instance->script()->query("Killed", args);
+            killed_percent = args[0];
+            killed_flag = args[1];
+        }
+    }
+    // Unfinished units leave no wreck.
+    if (std::bit_cast<uint32_t>(s.record.build_remaining) != 0)
+        killed_flag = 0;
+    sim::simulation_state::clear_orders(u, true, *this);
+    const bool local = sim::simulation_state::locally_simulated(u);
+    const auto owner = s.record.owner_index;
+    match.teardown_dead_unit(
+        s,
+        {static_cast<DeathKind>(kind),
+         static_cast<int8_t>(killed_percent),
+         static_cast<uint8_t>(killed_flag & 0xf)}
+    );
+    // Only the machine simulating the commander runs its player's sweep,
+    // after the order panel goes back to its root page.
+    if (commander && match.state().game.session_rules != 0 && local) {
+        if (match.order_panel.close != nullptr)
+            match.order_panel.close(match.order_panel.context);
+        destroy_player_units(owner);
+    }
+}
+
+void TickHost::destroy_player_units(uint8_t owner) {
+    auto& world = match.state();
+    const auto& player = match_player(match, owner);
+    if (player.unit_count == 0)
+        return;
+    uint32_t count = 0;
+    auto* first = oa::world_player_units(&world, &player, &count);
+    for (uint32_t i = 0; i < count; ++i) {
+        auto& s = match.slots_.at(oa::world_unit_slot(&world, first + i));
+        if (!s.unit || !(s.unit->flags & live_unit_flag) || (s.unit->flags & death_pending_flag))
+            continue;
+        const auto self_destruct = static_cast<uint8_t>(DeathKind::self_destruct);
+        if (sim::simulation_state::locally_simulated(*s.unit)) {
+            scaled_damage(&s, s, self_destruct_damage, self_destruct);
+            continue;
+        }
+        // A unit simulated elsewhere blows up and dies here at once.
+        match.explode_unit(s, true);
+        s.unit->flags |= death_pending_flag;
+        kill_unit(s.record, self_destruct);
+    }
+}
+
+} // namespace oa::sim::match_runtime

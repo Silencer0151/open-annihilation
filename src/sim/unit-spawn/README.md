@@ -1,0 +1,84 @@
+# Unit creation and commander placement
+
+`oa-sim-unit-spawn` covers unit pool selection, numeric initialization, the order in
+which models and COB scripts are attached, and single-player commander
+placement. It works on the canonical `oa::World` (`src/core`) plus native
+`Tables`: runtime `Type`s (indexed like `World.unit_defs`, copied in with
+`load_unit_def`), per-slot `SlotAssets` and per-player `PlayerSetupState`. It
+does not create a substitute RTS engine or pretend unresolved model, script or
+terrain callbacks have run.
+
+`legacy_views.hpp` keeps the removed `Slot`, `PlayerRange`, `World` and
+simulation-state `Unit`/`Player`/`World` names as zero-state reference views over
+the World for code that has not migrated; `LegacyWorld` builds one for tests.
+
+Entry points:
+
+* `start_position`: start-marker lookup; kind 1 and matching index, first match
+  wins, signed integer x/z converted to 16.16, y zero.
+* `spawn_player_commander`: player setup, start storage floor, commander lookup,
+  spawn and local camera positioning.
+* `create`: slot choice, `initialize_numeric`, `attach_model_script`, weapons,
+  extraction rate, the movement object and the creation notifications.
+* `attached_child_count`: count of the children on the unit's
+  `attach_first_child`/`attach_next` chain whose `attach_parent` is the
+  queried unit.
+* `average_plot_height`: signed high words of a 16.16 position are divided by 16
+  toward zero to select a plot. The result is the arithmetic mean of that plot's
+  low and high height bytes, or -1 when the cell has no plot. Y is unread.
+* `player_pay_energy`/`player_pay_metal`/`player_pay_resources`: debits of the
+  `Player.energy` and `Player.metal` stores; for both, each store must cover
+  its cost before either is debited, and the unit's requested words are
+  written by the caller.
+
+Populate world type index zero as reserved. Load runtime types from FBI fields,
+then supply enabled/limit state and cache-owned model and COB handles. Player
+ranges select slices of the global slot array; slot zero is permitted by the
+range, but requested-slot zero means search. Assign each bound unit's owner
+before creating it. Retain type, unit and slot storage addresses while using
+callbacks. Constructor callbacks receive real state, and all unresolved work is
+mandatory through `Host`.
+
+For a scripted model the attachment order is VM allocation/init, COB load,
+model+COB instance creation, bind, script `Create`, and a reset of the model
+instance's cached image word (`cached_image_word`).
+A nonscripted model gets a plain instance and owner linkage. The component
+stores handles but does not claim the model-instance or script-VM work is
+implemented by those interface calls.
+
+Commander placement is one part of starting a skirmish, which also covers
+player synchronization, scenario loading, side loading, team and start
+randomization, mission unit placement and interface setup; only the individual
+player creation is here. Map marker parsing and side commander-name resolution
+remain integration inputs.
+
+`offline_pool_size(limit)` and `init_unit_pool(world, limit)` lay out the
+single-player unit pool before `spawn_player_commander`: reserve slot 0, allocate
+ten equal owner ranges, initialize indices and type-zero linkage, and set each
+player's first/last unit references. Tables must have exactly the returned size.
+Multiplayer ordering and the auxiliary hot-unit and radar caches stay outside
+this helper.
+
+## Parsed asset adapter
+
+Target `oa-sim-unit-spawn-runtime`, header `oa/sim/unit_spawn/spawn_runtime.hpp`, connects parsed FBI
+fields to the spawn type. `load_runtime_type` loads the actual 3DO and optional
+COB, stores shared ownership of both parsed assets, and puts their stable native
+addresses in the model/COB handles. Preserve the returned `LoadedType` while
+using its copied `Type` in the world. These handles are parsed assets, not
+fabricated model instances or running VMs; constructor Hosts still perform that
+work.
+
+The caller supplies availability, per-player limit, resolved default-mission
+index and movement-class footprint. `resolve_movement_footprint` searches
+CLASS0..31 in the game's order and falls back to FBI dimensions when a named
+class is absent. GUI pages are counted from the nonempty GUI files present, as
+3.1c counts them; the count overwrites the FBI `makesmetal` byte that
+`UnitDef.gui_page_count` first holds.
+
+The required `AssetReader` returns null only for an absent resource; decoding,
+archive corruption and I/O failures must propagate. The adapter keeps model names
+apart from unit script names and uses the game's base paths. Mod-prefix
+resolution is the reader's responsibility. `find_type_index` looks names up
+case-insensitively, as the game does, without requiring caller storage to be
+sorted.

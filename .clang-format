@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The engine's style: 4-space indents, K&R braces, one statement per line.
+# tools/format_sources.py formats and checks the tree with the clang-format
+# release that tools/format/requirements.txt pins. The first section holds
+# the options of every language; the sections after it name the languages
+# formatted, C and C++ (Cpp) and Objective-C++ (ObjC), with what differs.
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+# Leave keeps const and volatile where they are written, and Never keeps
+# using-declarations in the order written: any other setting moves tokens,
+# which is more than a layout change.
+QualifierAlignment: Leave
+SortUsingDeclarations: Never
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+BinPackArguments: false
+BinPackParameters: false
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpaceBeforeCpp11BracedList: false
+SpacesInAngles: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+# Include order stays as written until the include fixes let sorting on.
+SortIncludes: false
+IncludeBlocks: Preserve
+ReflowComments: false
+InsertNewlineAtEOF: true
+ContinuationIndentWidth: 4
+AlignAfterOpenBracket: BlockIndent
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+SeparateDefinitionBlocks: Always
+EmptyLineBeforeAccessModifier: Always
+EmptyLineAfterAccessModifier: Always
+---
+Language: Cpp
+---
+# Objective-C++ (.mm): blocks and message sends indent like the C++ around
+# them.
+Language: ObjC
+ObjCBlockIndentWidth: 4
+ObjCSpaceAfterProperty: true
+ObjCSpaceBeforeProtocolList: true
+...

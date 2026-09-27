@@ -1,0 +1,111 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The WAV player's one stream on SDL's dummy device, which plays in real
+// time: it waits out its delay, plays once, stops at once, and a new stream
+// takes the place of the one playing.
+#include "audio_test_support.hpp"
+#include "oa/audio/sdl_audio.hpp"
+#include "oa/formats/hpi.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+using oa::audio::game_audio::SdlWavPlayer;
+using audio_test::require;
+
+namespace {
+
+constexpr uint32_t kRate = 22050;
+constexpr uint32_t kHeaderBytes = 8; // a RIFF chunk's tag and size
+
+// Writes a 16-bit mono square wave of `milliseconds`.
+void write_tone(const std::filesystem::path& path, uint32_t milliseconds) {
+    std::vector<uint8_t> samples;
+    for (uint32_t i = 0; i < kRate * milliseconds / 1000; ++i)
+        audio_test::put16(samples, static_cast<uint16_t>((i % 50) < 25 ? 3000 : -3000));
+    auto riff = audio_test::make_riff(kRate, 16, 1, samples);
+    const auto riff_size = static_cast<uint32_t>(riff.size()) - kHeaderBytes;
+    for (uint32_t byte = 0; byte < 4; ++byte)
+        riff[4 + byte] = static_cast<uint8_t>(riff_size >> (8 * byte));
+    std::ofstream(path, std::ios::binary)
+        .write(
+            reinterpret_cast<const char*>(riff.data()), static_cast<std::streamsize>(riff.size())
+        );
+}
+
+// Waits until `done` holds or `timeout_ms` passes.
+template <typename Done>
+bool wait_for(Done done, uint64_t timeout_ms) {
+    const uint64_t start = SDL_GetTicks();
+    while (SDL_GetTicks() - start < timeout_ms) {
+        if (done())
+            return true;
+        SDL_Delay(5);
+    }
+    return done();
+}
+
+} // namespace
+
+int main() {
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+    require(SDL_Init(SDL_INIT_AUDIO), "SDL audio init");
+    const auto root = std::filesystem::temp_directory_path() / "oa-sdl-player-test";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "sounds");
+    write_tone(root / "sounds" / "long.wav", 5000);
+    write_tone(root / "sounds" / "short.wav", 100);
+    {
+        const oa::AssetStore assets(root);
+        SdlWavPlayer player(assets);
+        std::string error;
+        require(!player.stream_busy(), "no stream plays before one starts");
+
+        require(player.play_stream("sounds/long.wav", 0, error), "a stream starts");
+        require(player.stream_busy(), "a started stream plays");
+        player.stop_stream();
+        require(!player.stream_busy(), "a stopped stream is silent at once");
+
+        require(player.play_stream("sounds/short.wav", 0, error), "a short stream starts");
+        require(
+            wait_for([&] { return !player.stream_busy(); }, 3000), "a stream plays once and ends"
+        );
+
+        require(player.play_stream("sounds/short.wav", 1000, error), "a delayed stream starts");
+        SDL_Delay(500);
+        require(player.stream_busy(), "a stream waiting out its delay is busy");
+        player.stop_stream();
+        require(!player.stream_busy(), "a stream stopped during its delay never plays");
+
+        // The long sound is replaced: the short one plays out in its place.
+        require(player.play_stream("sounds/long.wav", 0, error), "the long stream starts");
+        require(player.play_stream("sounds/short.wav", 0, error), "the short stream replaces it");
+        require(
+            wait_for([&] { return !player.stream_busy(); }, 3000),
+            "a new stream takes the place of the one playing"
+        );
+
+        // The stream is not the looping sound.
+        require(player.play_stream("sounds/long.wav", 0, error), "the stream starts again");
+        player.stop_loop();
+        require(player.stream_busy(), "stopping the looping sound leaves the stream playing");
+        player.collect_finished();
+        require(player.stream_busy(), "a playing stream is not collected");
+        player.stop_stream();
+
+        require(
+            !player.play_stream("sounds/missing.wav", 0, error) && !error.empty(),
+            "a missing sound starts no stream and says why"
+        );
+        require(!player.stream_busy(), "a failed stream is not busy");
+    }
+    std::filesystem::remove_all(root);
+    SDL_Quit();
+    return 0;
+}

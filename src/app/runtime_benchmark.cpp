@@ -1,0 +1,567 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Bounded frame-time benchmark and headless runs over live skirmish and
+// campaign matches.
+#include "oa/app/runtime.hpp"
+#include <SDL3/SDL.h>
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace oa::app {
+namespace {
+
+using BenchClock = std::chrono::steady_clock;
+
+[[nodiscard]] int64_t elapsed_ns(BenchClock::time_point since) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(BenchClock::now() - since).count();
+}
+
+[[nodiscard]] double average_ms(int64_t total_ns, std::size_t frames) {
+    return frames == 0 ? 0.0 : static_cast<double>(total_ns) / 1.0e6 / static_cast<double>(frames);
+}
+
+constexpr int32_t kScrollStep = 6;
+// Ticks of a mission between the orders --give-orders gives a headless
+// campaign run.
+constexpr std::size_t kMissionOrderPeriod = 300;
+// Ticks of a mission between the unit counts a headless campaign run prints.
+constexpr std::size_t kCampaignCensusPeriod = 300;
+
+} // namespace
+
+void Runtime::step_match_simulation() {
+    ++match_timing_.tick;
+    match_->simulation().tick = match_timing_.tick;
+    match_->tick();
+}
+
+void Runtime::benchmark_scene(std::string_view label, std::size_t frames, bool scroll) {
+    if (screen_ != Screen::match || !match_ || !selected_tnt_)
+        throw std::runtime_error("benchmark scene requires an active match");
+    phase_times_ = {};
+    int32_t direction = kScrollStep;
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    int64_t total = 0;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        const auto frame_start = BenchClock::now();
+        SDL_Event event{};
+        while (SDL_PollEvent(&event)) {
+        }
+        if (scroll) {
+            const auto limit = std::max(0, map_width - visible_map_width());
+            if (match_camera_x_ + direction > limit || match_camera_x_ + direction < 0)
+                direction = -direction;
+            match_camera_x_ = std::clamp(match_camera_x_ + direction, 0, limit);
+        }
+        if (!match_tick_blocked_ && !match_finished_) {
+            const auto sim_start = BenchClock::now();
+            try {
+                step_match_simulation();
+            } catch (const std::exception& error) {
+                match_tick_blocked_ = true;
+                std::fprintf(stderr, "benchmark tick stopped: %s\n", error.what());
+            }
+            phase_times_.simulation += elapsed_ns(sim_start);
+        }
+        render();
+        total += elapsed_ns(frame_start);
+    }
+    const auto frame_ms = average_ms(total, frames);
+    const auto upload_present = phase_times_.upload + phase_times_.present;
+    std::printf(
+        "benchmark %-18.*s %zu frames @ %dx%d: %.2f ms/frame (%.1f fps) | sim %.2f | "
+        "world %.2f (fog %.2f) | hud %.2f | upload %.2f | present %.2f\n",
+        static_cast<int>(label.size()),
+        label.data(),
+        frames,
+        match_layout_.width,
+        match_layout_.height,
+        frame_ms,
+        frame_ms > 0.0 ? 1000.0 / frame_ms : 0.0,
+        average_ms(phase_times_.simulation, frames),
+        average_ms(phase_times_.compose - phase_times_.hud, frames),
+        average_ms(phase_times_.fog, frames),
+        average_ms(phase_times_.hud, frames),
+        average_ms(phase_times_.upload, frames),
+        average_ms(upload_present - phase_times_.upload, frames)
+    );
+    std::fflush(stdout);
+    if (!options_.snapshot.empty()) {
+        std::string tag(label);
+        std::replace(tag.begin(), tag.end(), ' ', '-');
+        auto base = options_.snapshot;
+        base.replace_extension();
+        renderer::Surface frame;
+        compose_match_frame(frame);
+        write_ppm(base.string() + "-" + tag + ".ppm", frame);
+    }
+}
+
+void Runtime::start_benchmark_skirmish() {
+    exercise_click(menu::resource_name(menu::Button::single_player));
+    exercise_click(entry::resource_name(entry::Button::skirmish));
+    state_.player_count = 2;
+    if (map_player_capacity() < 2)
+        throw std::runtime_error("benchmark map lacks two start positions");
+    exercise_click(skirmish::resource_name(skirmish::Button::start));
+    if (screen_ != Screen::match || !match_)
+        throw std::runtime_error("benchmark Start did not enter a match");
+}
+
+void Runtime::spawn_combat_armies(std::size_t per_side) {
+    const sim::unit_spawn::Slot* commander = nullptr;
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit != nullptr && slot.record.type_index != 0 &&
+            slot.record.owner_index == match_local_player_) {
+            commander = &slot;
+            break;
+        }
+    if (commander == nullptr)
+        throw std::runtime_error("combat benchmark needs the local commander");
+    const std::array<std::string_view, 2> names{"ARMPW", "CORAK"};
+    const auto map_w = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_h = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    const auto centre_x =
+        std::clamp(static_cast<int32_t>(commander->unit->position[0] >> 16), 200, map_w - 200);
+    const auto centre_z =
+        std::clamp(static_cast<int32_t>(commander->unit->position[2] >> 16), 200, map_h - 200);
+    for (uint8_t side = 0; side < 2; ++side) {
+        const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, names[side]);
+        if (type == 0)
+            throw std::runtime_error("combat benchmark lacks " + std::string(names[side]));
+        const uint8_t player = side == 0 ? match_local_player_
+                                         : static_cast<uint8_t>(match_local_player_ == 0 ? 1 : 0);
+        for (std::size_t index = 0; index < per_side; ++index) {
+            const auto x = centre_x + (side == 0 ? -90 : 90) +
+                           static_cast<int32_t>(index / 8) * (side == 0 ? -24 : 24);
+            const auto z = centre_z - 96 + static_cast<int32_t>(index % 8) * 24;
+            oa::sim::unit_spawn::Request request;
+            request.player = player;
+            request.type = type;
+            request.finished = true;
+            request.state = kGroundOccupancyState;
+            request.position = {
+                static_cast<uint32_t>(x) << 16,
+                static_cast<uint32_t>(match_->map_height(
+                    static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16
+                )) << 16,
+                static_cast<uint32_t>(z) << 16
+            };
+            (void)match_->create(request);
+        }
+    }
+    match_camera_x_ = centre_x - visible_map_width() / 2;
+    match_camera_z_ = centre_z - visible_map_height() / 2;
+}
+
+void Runtime::run_headless_match(std::size_t ticks) {
+    start_benchmark_skirmish();
+    match_layout_ =
+        oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+    match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
+    match_zoom_target_ = match_zoom_;
+    if (options_.combat_units != 0)
+        spawn_combat_armies(options_.combat_units);
+    if (options_.reclaim_check)
+        begin_reclaim_check();
+    if (options_.camera) {
+        match_camera_x_ = options_.camera->first;
+        match_camera_z_ = options_.camera->second;
+    }
+    int64_t window_ns = 0;
+    int64_t worst_ns = 0;
+    for (std::size_t tick = 1; tick <= ticks; ++tick) {
+        const auto start = BenchClock::now();
+        try {
+            step_match_simulation();
+        } catch (const std::exception& error) {
+            report_match_tick_error(error.what());
+        }
+        if (options_.reclaim_check)
+            tick_reclaim_check();
+        rebuild_surface();
+        const auto spent = elapsed_ns(start);
+        window_ns += spent;
+        worst_ns = std::max(worst_ns, spent);
+        if (tick % 30 == 0 || tick == ticks) {
+            std::size_t live = 0;
+            for (const auto& slot : match_->world().slots)
+                live += slot.unit != nullptr && slot.record.type_index != 0 ? 1 : 0;
+            const auto& effects = match_->effects();
+            std::size_t fragments = 0;
+            for (int32_t record = 0; record < effects.explosion_count; ++record)
+                if (effects.explosions[record].fragment != oa::sim::effect_particles::no_fragment)
+                    ++fragments;
+            std::printf(
+                "tick %5zu: %.2f ms avg %.2f ms max | units %zu projectiles %zu wrecks %zu "
+                "explosions %zu fragments %zu particles %zu\n",
+                tick,
+                static_cast<double>(window_ns) / 1.0e6 / 30.0,
+                static_cast<double>(worst_ns) / 1.0e6,
+                live,
+                match_->projectiles().size(),
+                match_->wrecks().size(),
+                static_cast<std::size_t>(effects.explosion_count),
+                fragments,
+                match_->particle_count()
+            );
+            std::fflush(stdout);
+            window_ns = 0;
+            worst_ns = 0;
+        }
+    }
+    if (options_.reclaim_check)
+        finish_reclaim_check();
+    if (!options_.snapshot.empty())
+        write_ppm(options_.snapshot, surface_);
+    print_memory_status();
+}
+
+namespace {
+
+[[nodiscard]] const char* outcome_name(sim::scenario::Outcome outcome) {
+    switch (outcome) {
+    case sim::scenario::Outcome::victory:
+        return "victory";
+    case sim::scenario::Outcome::defeat:
+        return "defeat";
+    case sim::scenario::Outcome::respawn:
+        return "respawn";
+    default:
+        return "ongoing";
+    }
+}
+
+struct TickErrorTally {
+    std::string message;
+    std::size_t first_tick = 0;
+    std::size_t count = 0;
+};
+
+} // namespace
+
+void Runtime::write_stage_snapshot(std::string_view stage) {
+    if (options_.snapshot.empty())
+        return;
+    auto path = options_.snapshot;
+    path.replace_extension();
+    rebuild_surface();
+    write_ppm(path.string() + "-" + std::string(stage) + ".ppm", surface_);
+}
+
+std::string Runtime::start_headless_campaign_mission() {
+    // Game data without the any-mission screen starts its missions from the
+    // new-campaign screen, whose lists the check fills the same way.
+    load(offers_any_mission() ? Screen::any_mission : Screen::new_campaign);
+    bool found = false;
+    for (uint8_t side = 0; side < 2 && !found; ++side) {
+        preferences_.side = side;
+        discover_campaigns();
+        for (std::size_t index = 0; index < campaign_labels_.size(); ++index)
+            if (tdf_names_equal(campaign_labels_[index], options_.campaign)) {
+                selected_campaign_index_ = index;
+                found = true;
+                break;
+            }
+    }
+    if (!found)
+        throw std::runtime_error("no campaign is named '" + options_.campaign + "'");
+    load_campaign_missions(selected_campaign_index_);
+    const auto mission = *options_.campaign_mission;
+    if (mission >= campaign_mission_files_.size())
+        throw std::runtime_error(
+            options_.campaign + " has " + std::to_string(campaign_mission_files_.size()) +
+            " missions"
+        );
+    selected_mission_index_ = mission;
+    show_mission_briefing();
+    if (screen_ != Screen::briefing)
+        throw std::runtime_error("campaign briefing did not open: " + status_);
+    write_stage_snapshot("briefing-" + std::to_string(mission));
+    start_campaign_mission();
+    if (screen_ != Screen::match || !match_ || !campaign_mission_)
+        throw std::runtime_error("campaign Start did not enter the mission: " + status_);
+    const auto mission_file = campaign_mission_files_[mission];
+    std::printf(
+        "campaign start: %s mission %zu (%s) side %u difficulty %u\n",
+        options_.campaign.c_str(),
+        mission,
+        mission_file.c_str(),
+        static_cast<unsigned>(preferences_.side),
+        static_cast<unsigned>(preferences_.difficulty)
+    );
+    const auto& session = match_->state();
+    const auto schema_features =
+        std::count_if(mission_features_.begin(), mission_features_.end(), [](const auto& entry) {
+            return entry.name[0] != '\0';
+        });
+    std::printf(
+        "campaign session: unit limit %u, commander rule %d, visibility %u, surface metal %d, "
+        "unit types %u, schema features %td, storms %u\n",
+        static_cast<unsigned>(session.game.units_per_player),
+        static_cast<int>(session.game.session_rules),
+        static_cast<unsigned>(session.game.visibility_flags),
+        static_cast<int>(configured_map_metal_),
+        static_cast<unsigned>(session.unit_def_count - 1U),
+        schema_features,
+        meteor_enabled() ? 1U : 0U
+    );
+    return mission_file;
+}
+
+std::string Runtime::advance_headless_campaign(std::size_t run_tick) {
+    const auto finished = selected_mission_index_;
+    const bool won = match_->outcome() == sim::scenario::Outcome::victory;
+    present_match_outcome();
+    write_stage_snapshot("outcome-" + std::to_string(finished));
+    finish_match_outcome();
+    if (screen_ != Screen::campaign_end)
+        throw std::runtime_error("the finished mission did not open the end screen: " + status_);
+    if (!step_end_screen_to_panel().panel) {
+        if (screen_ == Screen::campaign_end)
+            throw std::runtime_error("the end screen did not reach its panel");
+        std::printf(
+            "campaign end: the end screen of %s left for frontend state %u\n",
+            bound_mission_name().c_str(),
+            static_cast<unsigned>(state_.state)
+        );
+        std::fflush(stdout);
+        return {};
+    }
+    write_stage_snapshot("end-" + std::to_string(finished));
+    const auto* start = widget("Start");
+    if (!won) {
+        // A lost mission's Start plays it again; the run ends here.
+        std::printf(
+            "campaign end: %s was lost; Start %s mission %zu again\n",
+            bound_mission_name().c_str(),
+            start != nullptr && start->common.active != 0 ? "offers" : "does not offer",
+            selected_mission_index_
+        );
+        std::fflush(stdout);
+        return {};
+    }
+    if (start == nullptr || start->common.active == 0) {
+        std::printf("campaign end: no mission follows %s\n", bound_mission_name().c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    exercise_click("Start");
+    if (screen_ != Screen::briefing)
+        throw std::runtime_error(
+            "the end screen's Start did not open the next briefing: " + status_
+        );
+    write_stage_snapshot("briefing-" + std::to_string(selected_mission_index_));
+    exercise_click("Start");
+    if (screen_ != Screen::match || !match_ || !campaign_mission_)
+        throw std::runtime_error("the next briefing's Start did not enter the mission: " + status_);
+    const auto mission_file = campaign_mission_files_.at(selected_mission_index_);
+    std::printf(
+        "campaign advance: run tick %zu: mission %zu (%s), %s\n",
+        run_tick,
+        selected_mission_index_,
+        mission_file.c_str(),
+        bound_mission_name().c_str()
+    );
+    std::fflush(stdout);
+    return mission_file;
+}
+
+int Runtime::run_headless_campaign(std::size_t ticks) {
+    auto mission = *options_.campaign_mission;
+    auto mission_file = start_headless_campaign_mission();
+    std::vector<TickErrorTally> errors;
+    std::size_t failed_ticks = 0;
+    std::size_t ran = 0;
+    // The run's tick at which the mission being played started (or last
+    // started over); the mission's own ticks count from it.
+    std::size_t mission_start = 0;
+    std::size_t outcome_tick = 0;
+    auto decided = sim::scenario::Outcome::ongoing;
+
+    struct UnitCensus {
+        std::size_t live = 0;
+        std::size_t owned[2]{};
+    };
+
+    const auto census = [&] {
+        UnitCensus counted;
+        for (const auto& slot : match_->world().slots) {
+            if (slot.unit == nullptr || slot.record.type_index == 0)
+                continue;
+            ++counted.live;
+            if (slot.record.owner_index < 2)
+                ++counted.owned[slot.record.owner_index];
+        }
+        return counted;
+    };
+    const auto report_units = [&](std::size_t tick) {
+        const auto counted = census();
+        std::printf(
+            "campaign tick %5zu: units %zu (player %zu, computer %zu) projectiles %zu\n",
+            tick,
+            counted.live,
+            counted.owned[0],
+            counted.owned[1],
+            match_->projectiles().size()
+        );
+        std::fflush(stdout);
+    };
+    // The units the mission being played started with.
+    auto start_units = census();
+    const auto hud_has = [this](std::string_view name) {
+        return match_hud_ && std::any_of(
+                                 match_hud_->layout.gadgets.begin(),
+                                 match_hud_->layout.gadgets.end(),
+                                 [name](const auto& gadget) { return gadget.common.name == name; }
+                             );
+    };
+    // --restart-at: the chat line refuses cheats in the campaign; then pause,
+    // EXIT, EXITMENU's RESTART, then RESTART.GUI's RESTART at the stored
+    // difficulty must start the mission over, with cheats still refused.
+    const auto restart_mission = [&](std::size_t tick) {
+        check_console_campaign_cheats();
+        show_match_pause_menu();
+        activate_pause_gadget("EXIT");
+        if (!hud_has("MAINMENU"))
+            throw std::runtime_error("campaign restart: EXIT did not open EXITMENU.GUI");
+        activate_pause_gadget("RESTART");
+        if (!hud_has("MISSIONNAME"))
+            throw std::runtime_error("campaign restart: RESTART did not open RESTART.GUI");
+        const auto difficulty = preferences_.difficulty;
+        activate_pause_gadget("RESTART");
+        if (screen_ != Screen::match || !match_ || !campaign_mission_ ||
+            match_->state().game.tick != 0 || preferences_.difficulty != difficulty)
+            throw std::runtime_error("campaign restart did not start the mission over: " + status_);
+        if (session_cheats_allowed_)
+            throw std::runtime_error("campaign restart allowed cheats");
+        const auto again = census();
+        if (again.live != start_units.live || again.owned[0] != start_units.owned[0] ||
+            again.owned[1] != start_units.owned[1])
+            throw std::runtime_error(
+                "campaign restart created " + std::to_string(again.live) +
+                " units; the start created " + std::to_string(start_units.live)
+            );
+        std::printf(
+            "campaign restart: at tick %zu the mission started over with %zu units (player %zu, "
+            "computer %zu)\n",
+            tick,
+            again.live,
+            again.owned[0],
+            again.owned[1]
+        );
+        std::fflush(stdout);
+    };
+    report_units(0);
+    if (options_.give_orders)
+        give_mission_orders();
+    for (std::size_t tick = 1; tick <= ticks; ++tick) {
+        if (options_.campaign_restart_tick == tick) {
+            restart_mission(tick);
+            mission_start = tick - 1;
+        }
+        try {
+            step_match_simulation();
+        } catch (const std::exception& error) {
+            ++failed_ticks;
+            report_match_tick_error(error.what());
+            const std::string message(error.what());
+            auto entry = std::find_if(errors.begin(), errors.end(), [&](const auto& tally) {
+                return tally.message == message;
+            });
+            if (entry == errors.end())
+                entry = errors.insert(errors.end(), {message, tick, 0});
+            ++entry->count;
+        }
+        ran = tick;
+        const auto mission_tick = tick - mission_start;
+        if (options_.give_orders && mission_tick % kMissionOrderPeriod == 0)
+            give_mission_orders();
+        if (mission_tick % kCampaignCensusPeriod == 0) {
+            rebuild_surface();
+            report_units(mission_tick);
+        }
+        const auto outcome = match_->outcome();
+        if (outcome_tick == 0 && (outcome == sim::scenario::Outcome::victory ||
+                                  outcome == sim::scenario::Outcome::defeat)) {
+            outcome_tick = mission_tick;
+            decided = outcome;
+            std::printf("campaign outcome: %s at tick %zu\n", outcome_name(outcome), mission_tick);
+            if (options_.campaign_past_outcome)
+                continue;
+            // --give-orders goes on through the end screen, and after a
+            // victory into the next mission, as a player pressing Start would.
+            if (!options_.give_orders)
+                break;
+            auto next = advance_headless_campaign(tick);
+            if (next.empty())
+                break;
+            mission = selected_mission_index_;
+            mission_file = std::move(next);
+            mission_start = tick;
+            outcome_tick = 0;
+            decided = sim::scenario::Outcome::ongoing;
+            start_units = census();
+            report_units(0);
+            give_mission_orders();
+        }
+    }
+    if (!options_.snapshot.empty()) {
+        if (match_) {
+            renderer::Surface frame;
+            compose_match_frame(frame);
+            write_ppm(options_.snapshot, frame);
+        } else {
+            rebuild_surface();
+            write_ppm(options_.snapshot, surface_);
+        }
+    }
+    for (const auto& tally : errors)
+        std::printf(
+            "campaign error: first tick %zu, %zu ticks: %s\n",
+            tally.first_tick,
+            tally.count,
+            tally.message.c_str()
+        );
+    std::printf(
+        "campaign result: %s mission %zu (%s): %zu ticks, %zu failed ticks, %zu distinct errors, "
+        "outcome %s at tick %zu\n",
+        options_.campaign.c_str(),
+        mission,
+        mission_file.c_str(),
+        ran,
+        failed_ticks,
+        errors.size(),
+        outcome_name(decided),
+        outcome_tick
+    );
+    std::fflush(stdout);
+    return failed_ticks == 0 ? 0 : 1;
+}
+
+void Runtime::run_benchmark(std::size_t frames) {
+    start_benchmark_skirmish();
+    benchmark_scene("skirmish static", frames, false);
+    benchmark_scene("skirmish scrolling", frames, true);
+    leave_match();
+    preferences_.side = 0;
+    preferences_.difficulty = 0;
+    show_mission_briefing();
+    start_campaign_mission();
+    if (screen_ != Screen::match || !match_)
+        throw std::runtime_error("benchmark campaign Start did not enter the mission");
+    benchmark_scene("campaign static", frames, false);
+    benchmark_scene("campaign scrolling", frames, true);
+    print_memory_status();
+}
+
+} // namespace oa::app

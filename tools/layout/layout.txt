@@ -1,0 +1,626 @@
+# The one-time layout pass: where every module, file, header, target and
+# namespace of today's tree goes. tools/layout/layout.py reads this table;
+# --check validates it against the tree, --apply performs it.
+#
+# One row per line: KIND OLD NEW SCOPE NOTE...; columns are separated by
+# spaces, SCOPE is "-" when a row has none, and NOTE is the rest of the line
+# (the reason for a judgement call). Blank lines and lines starting with #
+# are ignored.
+#
+#   module     an old module directory and its new home. Its files follow
+#              it; the headers under its include/ take their include rows.
+#   file       one file moved on its own: out of a module that is split, or
+#              renamed. It overrides the module row.
+#   include    an old include path and its new one. A header of a module
+#              moves to <new module>/include/<new include path>.
+#   root       an old include root that is not a module's include/ (its
+#              headers are named by file rows).
+#   owner      the target that owns an old include directory (or a module
+#              directory), for turning an include directory another module
+#              reached into a link to it. It may name a target the pass
+#              creates.
+#   target     a library target and its new name; NEW - keeps it. Every
+#              module library listed here gets ALIAS
+#              oa::<group>::<module>[_part].
+#   namespace  an old namespace and its new one; NEW = OLD keeps it. A
+#              namespace nested in a renamed one follows it unless it has a
+#              row of its own.
+#   split      the names that the headers under SCOPE (old paths, comma
+#              separated) declare in namespace OLD move to NEW, and so do
+#              the declarations of OLD in files under SCOPE; the rest of
+#              OLD follows its namespace row. Code that used a moved name
+#              unqualified is given the new qualified name.
+#   identifier an identifier renamed everywhere (code, comments, baselines);
+#              SCOPE is the namespace or type that declares it.
+#   docpath    an old directory that Markdown prose names, and the
+#              directory it names after the pass (group directories that
+#              are gone).
+#   allow      a known dependency against the layer order (new target
+#              names), written to tools/layout-baseline.json, which may
+#              only shrink.
+#   keep       an engine file (or directory) whose text the pass leaves as
+#              it is, such as a test whose fixtures are made-up paths; its
+#              post hunks still apply.
+#
+# By rule, and needing no row: a CMakeLists.txt loses the blocks that let
+# its module build on its own and the sources that move to another module,
+# with the targets they leave empty (the new modules' build files are in
+# tools/layout/files/); files renamed within a module keep their names in
+# its CMakeLists.txt; a module's project() takes the module's name
+# (oa_<group>_<module>); hand-written edits are in tools/layout/patches.txt.
+# A project that holds a rename record (a renames.tsv) keeps that
+# directory as it is.
+#
+# Layer order (tools/check_layout.py): core, base, platform and formats,
+# data, sim, present/audio/media, ui, app. A module's group is the first
+# directory under src/.
+
+# ---- core ------------------------------------------------------------------
+module src/core src/core - canonical C11 records; unchanged
+
+# ---- base ------------------------------------------------------------------
+module src/fixedpoint src/base/game-math - fixed-point arithmetic and the unit sine table
+module src/game/game-loop src/base/game-loop - frame and tick timing; the timers and the match hash read it, it reads nothing
+file src/engine/services/src/geometry.cpp src/base/geometry/src/geometry.cpp - rectangles, fixed-point trigonometry and rotation; effects and the model renderer use only this part of the services
+file src/engine/services/src/trig_table.inc src/base/geometry/src/trig_table.inc - the geometry's 640-entry table
+file src/engine/services/include/oa/services/geometry.hpp src/base/geometry/include/oa/base/geometry.hpp -
+file src/locomotion/unit-movement/src/trig_table.inc src/base/game-math/include/oa/base/game_math/trig_table.inc - the 512-entry unit sine table; the movement code and the polygon filler share it through base
+
+# ---- platform ----------------------------------------------------------------
+module src/platform src/platform - group-level module; unchanged
+module src/runtime/preferences src/platform/preferences - per-user preference files in the operating system's locations
+
+# ---- formats -----------------------------------------------------------------
+module src/formats/3do src/formats/objects3d - the 3DO model format, named so that the module name does not start with a digit
+module src/formats/cob src/formats/cob -
+module src/formats/font src/formats/fnt - the font format by its file extension
+module src/formats/gaf src/formats/gaf -
+module src/formats/hpi src/formats/hpi - HPI archives; the layered asset store stays here until assets.hpp is split (its target home is data/vfs)
+file src/formats/hpi/hpi_codec.cpp src/formats/sqsh/src/sqsh.cpp - the SQSH chunk codec: LZ77, zlib framing, chunk scrambling and checksums
+file src/formats/hpi/lz77_encoder.cpp src/formats/sqsh/src/lz77_encoder.cpp -
+file src/formats/hpi/include/oa/hpi_codec.hpp src/formats/sqsh/include/oa/formats/sqsh.hpp -
+module src/formats/png src/formats/png -
+module src/formats/smk src/formats/smacker - the movie format by its full name
+module src/formats/tdf src/formats/tdf - the TDF text parser; the unit definitions built on it move to data
+module src/formats/tnt src/formats/tnt - the TNT map; the OTA schema beside it moves to formats/ota
+file src/formats/tnt/src/ota.cpp src/formats/ota/src/ota.cpp - the OTA map schema, a format of its own
+file src/formats/tnt/include/oa/ota.hpp src/formats/ota/include/oa/formats/ota.hpp -
+
+# ---- data --------------------------------------------------------------------
+module src/formats/ota src/data/mission-types - the registry of unit order (mission) kinds, which is game knowledge rather than a file format; defs and persist read it
+file src/formats/ota/src/missions.cpp src/data/mission-types/src/mission_types.cpp -
+file src/formats/tdf/src/unit_definitions.cpp src/data/unit-definitions/src/unit_definitions.cpp - reads unit definitions from TDF text into records, from files as well as bytes
+file src/formats/tdf/include/oa/unit_definitions.hpp src/data/unit-definitions/include/oa/data/unit_definitions.hpp -
+file src/formats/tdf/tests/unit_definitions_test.cpp src/data/unit-definitions/tests/unit_definitions_test.cpp -
+file src/formats/tdf/tests/installed_units_test.cpp src/data/unit-definitions/tests/installed_units_test.cpp -
+module src/defs src/data/defs -
+module src/persist src/data/persist -
+file src/persist/include/oa/persist/condition_persist.hpp src/sim/scenario/include/oa/sim/scenario/condition_persist.hpp - declares the scenario's savegame accounts, which the scenario module implements
+file src/missions/src/campaign_file.cpp src/data/campaign/src/campaign_file.cpp - campaign and map files; the scenario conditions stay in sim
+file src/missions/src/map_catalog.cpp src/data/campaign/src/map_catalog.cpp -
+file src/missions/src/directory_list.cpp src/data/campaign/src/directory_list.cpp -
+file src/missions/src/campaign_assets.cpp src/data/campaign/src/campaign_assets.cpp -
+file src/missions/tests/campaign_file_test.cpp src/data/campaign/tests/campaign_file_test.cpp -
+file src/missions/tests/map_catalog_test.cpp src/data/campaign/tests/map_catalog_test.cpp -
+file src/missions/include/oa/campaign_file.hpp src/data/campaign/include/oa/data/campaign/campaign_file.hpp -
+file src/missions/include/oa/map_catalog.hpp src/data/campaign/include/oa/data/campaign/map_catalog.hpp -
+file src/missions/include/oa/directory_list.hpp src/data/campaign/include/oa/data/campaign/directory_list.hpp -
+file src/missions/include/oa/campaign_assets.hpp src/data/campaign/include/oa/data/campaign/campaign_assets.hpp -
+
+# ---- sim ---------------------------------------------------------------------
+module src/missions src/sim/scenario - scenario conditions, outcome and commander rules
+module src/session src/sim/session - the running game's session records
+module src/ai src/sim/ai -
+file src/ai/src/match_host.cpp src/sim/match-runtime/src/computer_host.cpp - the match's ComputerHost adapter, compiled into the match runtime
+module src/ballistics src/sim/ballistics - a module of its own instead of sources compiled into combat-state
+module src/game/combat-state src/sim/combat-state -
+module src/game/effect-particles src/sim/effect-particles - simulated particles and explosions the match steps
+module src/game/gameplay-input src/sim/gameplay-input - turns player input into orders; the match links it
+module src/game/match-runtime src/sim/match-runtime -
+file src/game/match-runtime/src/offline.cpp src/sim/match-runtime/src/match.cpp - defines Match
+module src/game/simulation-state src/sim/simulation-state -
+module src/game/unit-activation src/sim/unit-activation -
+module src/game/unit-effects src/sim/unit-effects -
+module src/game/unit-health src/sim/unit-health -
+module src/game/unit-spawn src/sim/unit-spawn -
+module src/game/weapon-execution src/sim/weapon-execution -
+module src/locomotion/air src/sim/air -
+module src/locomotion/ground-orders src/sim/ground-orders -
+module src/locomotion/unit-movement src/sim/unit-movement -
+module src/scripting/script-state src/sim/script-state -
+module src/scripting/script-vm src/sim/script-vm -
+file src/scripting/script-vm/src/unit_script.cpp src/sim/unit-script/src/unit_script.cpp - unit-script calls over the canonical World, on top of the script VM
+file src/scripting/script-vm/src/unit_value.cpp src/sim/unit-script/src/unit_value.cpp -
+file src/scripting/script-vm/tests/unit_script_test.cpp src/sim/unit-script/tests/unit_script_test.cpp -
+file src/scripting/script-vm/tests/unit_script_fixture.hpp src/sim/unit-script/tests/unit_script_fixture.hpp -
+file src/scripting/script-vm/include/oa/unit_script.hpp src/sim/unit-script/include/oa/sim/unit_script.hpp -
+module src/sim/detection src/sim/detection -
+module src/sim/messages src/sim/messages -
+module src/sim/mission-units src/sim/mission-units -
+module src/sim/profile src/sim/profile -
+module src/sim/selection src/sim/selection -
+module src/sim/speed src/sim/speed -
+module src/sim/trace src/sim/trace -
+file src/sim/trace/src/state_hash.cpp src/sim/state-hash/src/state_hash.cpp - the match-state digest, a module of its own beside the trace
+file src/sim/trace/state-hash/include/oa/sim/state_hash.hpp src/sim/state-hash/include/oa/sim/state_hash.hpp -
+module src/world/map-runtime src/sim/map-runtime -
+file src/world/map-runtime/src/feature_runtime.cpp src/sim/feature-runtime/src/feature_runtime.cpp - the feature records at run time, apart from the map's feature definitions
+file src/world/map-runtime/include/oa/feature_runtime.hpp src/sim/feature-runtime/include/oa/sim/feature_runtime.hpp -
+file src/world/map-runtime/tests/feature_runtime_test.cpp src/sim/feature-runtime/tests/feature_runtime_test.cpp -
+module src/world/model-runtime src/sim/model-runtime -
+module src/world/spatial-state src/sim/spatial-state -
+module src/world/sprite-animation src/sim/sprite-animation - simulated effects step it, so it sits below the renderer and the gui
+module src/world/visibility-state src/sim/visibility-state -
+module src/world/world-environment src/sim/world-environment -
+
+# ---- present, audio, media ---------------------------------------------------
+module src/present src/present - group-level module; unchanged
+module src/present/model src/present/model -
+module src/world/world-renderer src/present/world-renderer -
+module src/audio src/audio - group-level module
+module src/media src/media - group-level module
+
+# ---- ui ----------------------------------------------------------------------
+module src/engine/services src/ui/services - its timers, commands, input queues, software cursor and labels draw through the presenter; the geometry moves to base
+module src/gui/frontend-dialogs src/ui/frontend-dialogs -
+module src/gui/frontend-renderer src/ui/frontend-renderer -
+module src/gui/frontend-state src/ui/frontend-state - the frontend's screen state machine
+module src/gui/gadget-render src/ui/gadget-render -
+module src/gui/gui-input src/ui/gui-input -
+module src/gui/gui-layout src/ui/gui-layout -
+file src/gui/include/oa/display_layout.hpp src/ui/display-layout/include/oa/ui/display_layout.hpp - a header-only module with a target of its own
+module src/ui src/ui - the ui group's CMakeLists.txt
+module src/ui/console src/ui/console -
+module src/ui/hud src/ui/hud -
+module src/ui/frontend src/ui/frontend -
+module src/ui/frontend/campaign src/ui/campaign - a module of its own beside the frontend
+file src/app/screen_registry.hpp src/ui/screen-registry/include/oa/ui/screen_registry.hpp - the screen registry the ui modules fill; a module of its own so they need not link the app
+file src/app/screens.inc src/ui/screen-registry/include/oa/ui/screen_registry/screens.inc - the list of screens the registry header expands
+file src/app/screen_registry.cpp src/ui/screen-registry/src/screen_registry.cpp -
+file src/app/screen_registry_test.cpp src/ui/screen-registry/tests/screen_registry_test.cpp -
+
+# ---- app ---------------------------------------------------------------------
+module src/app src/app - group-level module: oa-game and its extension boundary
+module src/runtime/command-line src/app/command-line - oa-game's command line
+root src/app - - the app's headers are included by bare name today
+file src/app/app.hpp src/app/include/oa/app/app.hpp - the boundary headers extensions compile against
+file src/app/asset_files.hpp src/app/include/oa/app/asset_files.hpp -
+file src/app/extension.hpp src/app/include/oa/app/extension.hpp -
+file src/app/game_directory.hpp src/app/include/oa/app/game_directory.hpp -
+file src/app/match_console.hpp src/app/include/oa/app/match_console.hpp -
+file src/app/offline_services.hpp src/app/include/oa/app/offline_services.hpp -
+file src/app/runtime.hpp src/app/include/oa/app/runtime.hpp -
+file src/app/match_model_draws.hpp src/app/include/oa/app/match_model_draws.hpp - runtime.hpp includes it, so it goes where runtime.hpp goes
+
+# ---- tools -------------------------------------------------------------------
+# The module tools (the inspectors of formats/gaf, hpi and tnt and of
+# ui/gui-layout; oa-render-terrain, -unit and -main-menu) stay in their
+# modules' tools/ directories: each is built against its own module's
+# targets and moves with it. Moving them to tools/ is a change of its own.
+file src/main.cpp tools/oa-tool/main.cpp - oa-tool is a tool, not engine code
+file src/runtime/platform_probe.cpp tools/platform-probe/platform_probe.cpp - oa-platform, the platform probe
+
+# ---- targets -----------------------------------------------------------------
+target oa-core-types - - group-level module
+target oa-game-math oa-base-game-math -
+target oa-game-loop oa-base-game-loop -
+target oa-engine-geometry oa-base-geometry -
+target oa-platform-shims - - group-level module
+target oa-preferences oa-platform-preferences -
+target oa-model-format oa-formats-objects3d -
+target oa-script-format oa-formats-cob -
+target oa-font-format oa-formats-fnt -
+target oa-sprite-format oa-formats-gaf -
+target oa-assets oa-formats-hpi -
+target oa-hpi-codec oa-formats-sqsh -
+target oa-png-format oa-formats-png -
+target oa-intro-media oa-formats-smacker -
+target oa-tdf oa-formats-tdf -
+target oa-map-format oa-formats-tnt -
+target oa-mission-types oa-data-mission-types -
+target oa-unit-definitions oa-data-unit-definitions -
+target oa-defs oa-data-defs -
+target oa-defs-assets oa-data-defs-assets -
+target oa-persist oa-data-persist -
+target oa-campaign-file oa-data-campaign -
+target oa-campaign-assets oa-data-campaign-assets -
+target oa-scenario-state oa-sim-scenario -
+target oa-session oa-sim-session -
+target oa-ai oa-sim-ai -
+target oa-combat-state oa-sim-combat-state -
+target oa-effect-particles oa-sim-effect-particles -
+target oa-gameplay-input oa-sim-gameplay-input -
+target oa-match-runtime oa-sim-match-runtime -
+target oa-match-mission-units oa-sim-match-runtime-mission-units -
+target oa-simulation-state oa-sim-simulation-state -
+target oa-unit-activation oa-sim-unit-activation -
+target oa-unit-effects oa-sim-unit-effects -
+target oa-unit-health oa-sim-unit-health -
+target oa-unit-spawn oa-sim-unit-spawn -
+target oa-unit-runtime oa-sim-unit-spawn-runtime -
+target oa-weapon-execution oa-sim-weapon-execution -
+target oa-air oa-sim-air -
+target oa-ground-orders oa-sim-ground-orders -
+target oa-unit-movement oa-sim-unit-movement -
+target oa-script-state oa-sim-script-state -
+target oa-script-vm oa-sim-script-vm -
+target oa-unit-script oa-sim-unit-script -
+target oa-sim-detection - -
+target oa-sim-messages - -
+target oa-sim-mission-units - -
+target oa-sim-profile - -
+target oa-sim-selection - -
+target oa-sim-speed - -
+target oa-sim-trace - -
+target oa-sim-state-hash - -
+target oa-map-runtime oa-sim-map-runtime -
+target oa-feature-runtime oa-sim-feature-runtime -
+target oa-model-runtime oa-sim-model-runtime -
+target oa-spatial-state oa-sim-spatial-state -
+target oa-sprite-animation oa-sim-sprite-animation -
+target oa-visibility-state oa-sim-visibility-state -
+target oa-world-environment oa-sim-world-environment -
+target oa-present - - group-level module
+target oa-model-render oa-present-model -
+target oa-world-renderer oa-present-world-renderer -
+target oa-game-audio oa-audio - group-level module
+target oa-game-audio-sdl oa-audio-sdl -
+target oa-intro-player oa-media-intro-player -
+target oa-intro-player-null oa-media-intro-player-null -
+target oa-movie-surface oa-media-movie-surface -
+target oa-engine-services oa-ui-services -
+target oa-frontend-dialogs oa-ui-frontend-dialogs -
+target oa-frontend-renderer oa-ui-frontend-renderer -
+target oa-frontend-state oa-ui-frontend-state -
+target oa-gadget-render oa-ui-gadget-render -
+target oa-gui-input oa-ui-gui-input -
+target oa-gui-layout oa-ui-gui-layout -
+target oa-screen-registry oa-ui-screen-registry -
+target oa-ui-console - -
+target oa-ui-hud - -
+target oa-ui-frontend-options oa-ui-frontend -
+target oa-ui-campaign - -
+target oa-command-line oa-app-command-line -
+target oa-game-options oa-app-game-options -
+target oa-app-headers - - new: the app's headers, src/app/include
+target oa-extensions-default - - the default extension library, named by OA_EXTENSIONS_TARGET and the extension boundary's documentation
+target oa-extension-sdk - - the extension SDK, exported as oa::extension-sdk
+target oa-options - - global compile options
+target oa-formats-ota - - new: the OTA schema split from formats/tnt
+target oa-sim-ballistics - - new: the ballistics compiled into combat-state until now
+target oa-ui-display-layout - - new: the header-only display layout
+target oa-test-game-data - - the game-data test helper
+
+# Include directories other modules reached into, and the target that owns
+# each; the reach becomes a link to it.
+owner src/game/simulation-state/include oa-simulation-state -
+owner src/game/unit-spawn/include oa-unit-spawn -
+owner src/world/spatial-state/include oa-spatial-state -
+owner src/formats/tdf/include oa-unit-definitions - what reaches here reads unit definitions, which build on the TDF parser
+owner src/fixedpoint/include oa-game-math -
+owner src/formats/tnt/include oa-map-format -
+owner src/formats/3do/include oa-model-format -
+owner src/core/include oa-core-types -
+owner src/game/combat-state/include oa-combat-state -
+owner src/gui/gui-layout/include oa-gui-layout -
+owner src/ai/include oa-ai -
+owner src/media/include oa-intro-player-null - the movie player that is always built
+owner src/ballistics oa-sim-ballistics - the new ballistics module
+owner src/gui/include oa-ui-display-layout - the new display-layout module
+
+# ---- namespaces ----------------------------------------------------------------
+namespace oa oa - declarations directly in oa stay there: the canonical records' C++ names, the campaign forward declarations, and the whole public API of formats/hpi (HpiArchive, ArchiveEntry, AssetStore, write_hpi, decode_pcx, remap_palette, match_wildcard and the rest), a known exception to the naming rule until assets.hpp is split
+namespace oa::app oa::app -
+namespace oa::platform oa::platform -
+namespace oa::present oa::present -
+namespace oa::audio oa::audio -
+namespace oa::sim oa::sim - the sim modules already follow the rule
+namespace oa::test oa::test - the game-data test helper
+namespace oa::ui::hud oa::ui::hud -
+namespace oa::ui::console oa::ui::console -
+namespace oa::ui::campaign oa::ui::campaign -
+namespace oa::ui oa::ui::frontend - the frontend screens' namespace; the other ui modules have their own
+namespace oa::game_math oa::base::game_math -
+namespace oa::game_loop oa::base::game_loop -
+namespace oa::preferences oa::platform::preferences -
+namespace oa::model_format oa::formats::objects3d -
+namespace oa::script_format oa::formats::cob -
+namespace oa::font oa::formats::fnt -
+namespace oa::gaf oa::formats::gaf -
+namespace oa::hpi oa::formats::hpi - the archive's on-disk records
+namespace oa::hpi_codec oa::formats::sqsh -
+namespace oa::png oa::formats::png -
+namespace oa::tdf oa::formats::tdf -
+namespace oa::tnt oa::formats::tnt -
+namespace oa::ota oa::formats::ota -
+namespace oa::unit_definitions oa::data::unit_definitions -
+namespace oa::defs oa::data::defs -
+namespace oa::persist oa::data::persist -
+namespace oa::missions oa::data::campaign - campaign and map files; the order-kind registry splits off below
+namespace oa::scenario oa::sim::scenario -
+namespace oa::session oa::sim::session -
+namespace oa::ai oa::sim::ai -
+namespace oa::combat_state oa::sim::combat_state -
+namespace oa::effect_particles oa::sim::effect_particles -
+namespace oa::gameplay_input oa::sim::gameplay_input -
+namespace oa::match_runtime oa::sim::match_runtime -
+namespace oa::simulation_state oa::sim::simulation_state -
+namespace oa::unit_activation oa::sim::unit_activation -
+namespace oa::unit_effects oa::sim::unit_effects -
+namespace oa::unit_health oa::sim::unit_health -
+namespace oa::unit_spawn oa::sim::unit_spawn -
+namespace oa::legacy oa::sim::unit_spawn::legacy - the unit-spawn module's views of legacy records
+namespace oa::weapon_execution oa::sim::weapon_execution -
+namespace oa::air oa::sim::air -
+namespace oa::ground_orders oa::sim::ground_orders -
+namespace oa::unit_movement oa::sim::unit_movement -
+namespace oa::script_state oa::sim::script_state -
+namespace oa::script_vm oa::sim::script_vm -
+namespace oa::unit_script oa::sim::unit_script -
+namespace oa::map_runtime oa::sim::map_runtime -
+namespace oa::feature_runtime oa::sim::feature_runtime -
+namespace oa::model_runtime oa::sim::model_runtime -
+namespace oa::spatial_state oa::sim::spatial_state -
+namespace oa::sprite_animation oa::sim::sprite_animation -
+namespace oa::visibility_state oa::sim::visibility_state -
+namespace oa::world_environment oa::sim::world_environment -
+namespace oa::model_render oa::present::model -
+namespace oa::world_renderer oa::present::world_renderer -
+namespace oa::game_audio oa::audio::game_audio - the game's sound front end inside the audio module
+namespace oa::intro_media oa::media - the intro player; the Smacker decoder splits off below
+namespace oa::movie oa::media::movie -
+namespace oa::services oa::ui::services -
+namespace oa::frontend_dialogs oa::ui::frontend_dialogs -
+namespace oa::frontend_renderer oa::ui::frontend_renderer -
+namespace oa::frontend_state oa::ui::frontend_state -
+namespace oa::gadget_render oa::ui::gadget_render -
+namespace oa::gui_input oa::ui::gui_input -
+namespace oa::gui_layout oa::ui::gui_layout -
+namespace oa::display_layout oa::ui::display_layout -
+namespace oa::command_line oa::app::command_line -
+split oa::missions oa::data::mission_types src/formats/ota the order-kind registry
+split oa::combat_state oa::sim::ballistics src/ballistics the ballistics solver
+split oa::services oa::base::geometry src/engine/services/include/oa/services/geometry.hpp,src/engine/services/src/geometry.cpp the geometry
+split oa::intro_media oa::formats::smacker src/formats/smk the Smacker decoder
+
+# ---- identifiers ---------------------------------------------------------------
+identifier OfflineMatch Match oa::match_runtime the engine has one kind of match
+identifier offline_match_ match_ oa::app::Runtime the match Runtime holds
+
+# ---- Markdown prose that names group directories which are gone -------------
+docpath src/game src/sim -
+docpath src/world src/sim -
+docpath src/locomotion src/sim -
+docpath src/scripting src/sim -
+docpath src/gui src/ui -
+docpath src/engine src/ui/services -
+docpath src/runtime src/platform/preferences -
+
+# ---- known dependencies against the layer order ------------------------------
+allow oa-data-persist oa-sim-world-environment - the savegame writes the weather and sea records through the environment module
+allow oa-present-model oa-ui-hud - the model renderer places sprites with the HUD's sprite placement
+
+# ---- include paths ---------------------------------------------------------------
+# The facade of the match is the match-runtime module's main header.
+include oa/match_offline.hpp oa/sim/match_runtime.hpp - the match facade: Match and its inputs
+# Derived by the naming rule (--propose); unchanged ones are listed so that
+# every header has a row.
+include oa/ai/computer_player.hpp oa/sim/ai.hpp -
+include oa/audio/cd_music.hpp oa/audio/cd_music.hpp - unchanged
+include oa/audio/mixer.hpp oa/audio/mixer.hpp - unchanged
+include oa/audio/music_disc.hpp oa/audio/music_disc.hpp - unchanged
+include oa/audio/music_mood.hpp oa/audio/music_mood.hpp - unchanged
+include oa/audio/music_session.hpp oa/audio/music_session.hpp - unchanged
+include oa/audio/sdl_music.hpp oa/audio/sdl_music.hpp - unchanged
+include oa/audio/sound_system.hpp oa/audio/sound_system.hpp - unchanged
+include oa/audio/spatial_gain.hpp oa/audio/spatial_gain.hpp - unchanged
+include oa/audio/wave_chunks.hpp oa/audio/wave_chunks.hpp - unchanged
+include oa/game_audio.hpp oa/audio/game_audio.hpp -
+include oa/sdl_audio.hpp oa/audio/sdl_audio.hpp -
+include oa/unit_announcements.hpp oa/audio/unit_announcements.hpp -
+include oa/ballistic.hpp oa/sim/ballistics.hpp -
+include oa/core/cob.h oa/core/cob.h - unchanged
+include oa/core/feature_def.h oa/core/feature_def.h - unchanged
+include oa/core/game_state.h oa/core/game_state.h - unchanged
+include oa/core/map_plot.h oa/core/map_plot.h - unchanged
+include oa/core/move_class.h oa/core/move_class.h - unchanged
+include oa/core/player.h oa/core/player.h - unchanged
+include oa/core/player_setup.h oa/core/player_setup.h - unchanged
+include oa/core/projectile.h oa/core/projectile.h - unchanged
+include oa/core/side.h oa/core/side.h - unchanged
+include oa/core/types.h oa/core/types.h - unchanged
+include oa/core/unit.h oa/core/unit.h - unchanged
+include oa/core/unit_def.h oa/core/unit_def.h - unchanged
+include oa/core/weapon_def.h oa/core/weapon_def.h - unchanged
+include oa/core/world.h oa/core/world.h - unchanged
+include oa/defs/asset_files.hpp oa/data/defs/asset_files.hpp -
+include oa/defs/categories.hpp oa/data/defs/categories.hpp -
+include oa/defs/files.hpp oa/data/defs/files.hpp -
+include oa/defs/gamedata_tables.hpp oa/data/defs/gamedata_tables.hpp -
+include oa/defs/locale.hpp oa/data/defs/locale.hpp -
+include oa/defs/move_classes.hpp oa/data/defs/move_classes.hpp -
+include oa/defs/palette.hpp oa/data/defs/palette.hpp -
+include oa/defs/sides.hpp oa/data/defs/sides.hpp -
+include oa/defs/sound_categories.hpp oa/data/defs/sound_categories.hpp -
+include oa/defs/unit_catalog.hpp oa/data/defs/unit_catalog.hpp -
+include oa/defs/unit_def_loader.hpp oa/data/defs/unit_def_loader.hpp -
+include oa/defs/unit_header.hpp oa/data/defs/unit_header.hpp -
+include oa/defs/unit_records.hpp oa/data/defs/unit_records.hpp -
+include oa/defs/version.hpp oa/data/defs/version.hpp -
+include oa/defs/weapons.hpp oa/data/defs/weapons.hpp -
+include oa/services/commands.hpp oa/ui/services/commands.hpp -
+include oa/services/cursor.hpp oa/ui/services/cursor.hpp -
+include oa/services/input.hpp oa/ui/services/input.hpp -
+include oa/services/label.hpp oa/ui/services/label.hpp -
+include oa/services/prefs.hpp oa/ui/services/prefs.hpp -
+include oa/services/sqsh_writer.hpp oa/ui/services/sqsh_writer.hpp - stays with the services, whose tests cover it, for now; its home is formats/sqsh, beside the codec, once it and the savegame's SQSH code are merged
+include oa/services/timers.hpp oa/ui/services/timers.hpp -
+include oa/game_math.hpp oa/base/game_math.hpp -
+include oa/three_do.hpp oa/formats/objects3d.hpp -
+include oa/cob.hpp oa/formats/cob.hpp -
+include oa/font.hpp oa/formats/fnt.hpp -
+include oa/gaf.hpp oa/formats/gaf.hpp -
+include oa/assets.hpp oa/formats/hpi.hpp -
+include oa/missions.hpp oa/data/mission_types.hpp -
+include oa/png.hpp oa/formats/png.hpp -
+include oa/smacker.hpp oa/formats/smacker.hpp -
+include oa/tdf/tdf.hpp oa/formats/tdf.hpp -
+include oa/tnt.hpp oa/formats/tnt.hpp -
+include oa/combat_state.hpp oa/sim/combat_state.hpp -
+include oa/effect_particles.hpp oa/sim/effect_particles.hpp -
+include oa/coordinator.hpp oa/base/game_loop.hpp -
+include oa/input.hpp oa/sim/gameplay_input/input.hpp -
+include oa/order_cursor.hpp oa/sim/gameplay_input/order_cursor.hpp -
+include oa/attack_orders.hpp oa/sim/match_runtime/attack_orders.hpp -
+include oa/command.hpp oa/sim/match_runtime/command.hpp -
+include oa/construction_orders.hpp oa/sim/match_runtime/construction_orders.hpp -
+include oa/match_trace.hpp oa/sim/match_runtime/match_trace.hpp -
+include oa/mission_unit_binding.hpp oa/sim/match_runtime/mission_unit_binding.hpp -
+include oa/script.hpp oa/sim/match_runtime/script.hpp -
+include oa/spawn_bridge.hpp oa/sim/match_runtime/spawn_bridge.hpp -
+include oa/unit.hpp oa/sim/match_runtime/unit.hpp -
+include oa/simulation.hpp oa/sim/simulation_state.hpp -
+include oa/unit_activation.hpp oa/sim/unit_activation.hpp -
+include oa/effects.hpp oa/sim/unit_effects/effects.hpp -
+include oa/effects_offline.hpp oa/sim/unit_effects/effects_offline.hpp -
+include oa/paralysis.hpp oa/sim/unit_health/paralysis.hpp -
+include oa/unit_health.hpp oa/sim/unit_health.hpp -
+include oa/legacy_views.hpp oa/sim/unit_spawn/legacy_views.hpp -
+include oa/spawn.hpp oa/sim/unit_spawn/spawn.hpp -
+include oa/spawn_runtime.hpp oa/sim/unit_spawn/spawn_runtime.hpp -
+include oa/interceptor.hpp oa/sim/weapon_execution/interceptor.hpp -
+include oa/projectile_contact.hpp oa/sim/weapon_execution/projectile_contact.hpp -
+include oa/projectile_pool.hpp oa/sim/weapon_execution/projectile_pool.hpp -
+include oa/retaliation.hpp oa/sim/weapon_execution/retaliation.hpp -
+include oa/weapon_execution.hpp oa/sim/weapon_execution.hpp -
+include oa/weapon_launch.hpp oa/sim/weapon_execution/weapon_launch.hpp -
+include oa/frontend_dialogs.hpp oa/ui/frontend_dialogs.hpp -
+include oa/frontend_renderer.hpp oa/ui/frontend_renderer.hpp -
+include oa/gadget_draw.hpp oa/ui/frontend_renderer/gadget_draw.hpp -
+include oa/app_modes.hpp oa/ui/frontend_state/app_modes.hpp -
+include oa/dispatcher.hpp oa/ui/frontend_state/dispatcher.hpp -
+include oa/game_entry.hpp oa/ui/frontend_state/game_entry.hpp -
+include oa/initialization.hpp oa/ui/frontend_state/initialization.hpp -
+include oa/main_menu.hpp oa/ui/frontend_state/main_menu.hpp -
+include oa/map_selection.hpp oa/ui/frontend_state/map_selection.hpp -
+include oa/skirmish_ui.hpp oa/ui/frontend_state/skirmish_ui.hpp -
+include oa/gadget_render.hpp oa/ui/gadget_render.hpp -
+include oa/gadget_panel.hpp oa/ui/gui_input/gadget_panel.hpp -
+include oa/gui_input.hpp oa/ui/gui_input.hpp -
+include oa/gui_gadget.hpp oa/ui/gui_layout/gui_gadget.hpp -
+include oa/gui_layout.hpp oa/ui/gui_layout.hpp -
+include oa/air/attack.hpp oa/sim/air/attack.hpp -
+include oa/air/driver.hpp oa/sim/air/driver.hpp -
+include oa/air/flight.hpp oa/sim/air/flight.hpp -
+include oa/air/goal.hpp oa/sim/air/goal.hpp -
+include oa/air/host.hpp oa/sim/air/host.hpp -
+include oa/air/orders.hpp oa/sim/air/orders.hpp -
+include oa/goals.hpp oa/sim/ground_orders/goals.hpp -
+include oa/ground_runtime.hpp oa/sim/ground_orders/ground_runtime.hpp -
+include oa/movement_map.hpp oa/sim/ground_orders/movement_map.hpp -
+include oa/navigator.hpp oa/sim/ground_orders/navigator.hpp -
+include oa/orders.hpp oa/sim/ground_orders/orders.hpp -
+include oa/search_heap.hpp oa/sim/ground_orders/search_heap.hpp -
+include oa/search_trace.hpp oa/sim/ground_orders/search_trace.hpp -
+include oa/search_worker.hpp oa/sim/ground_orders/search_worker.hpp -
+include oa/movement.hpp oa/sim/unit_movement/movement.hpp -
+include oa/terrain.hpp oa/sim/unit_movement/terrain.hpp -
+include oa/intro_player.hpp oa/media/intro_player.hpp -
+include oa/movie_surface.hpp oa/media/movie_surface.hpp -
+include oa/commander_rules.hpp oa/sim/scenario/commander_rules.hpp -
+include oa/conditions.hpp oa/sim/scenario/conditions.hpp -
+include oa/outcome.hpp oa/sim/scenario/outcome.hpp -
+include oa/state.hpp oa/sim/scenario/state.hpp -
+include oa/persist/hapibank.hpp oa/data/persist/hapibank.hpp -
+include oa/persist/save_orders.hpp oa/data/persist/save_orders.hpp -
+include oa/persist/save_sections.hpp oa/data/persist/save_sections.hpp -
+include oa/persist/squash.hpp oa/data/persist/squash.hpp - the savegame bank's SQSH code stays in persist for now; its home is formats/sqsh once it and the HPI codec are merged
+include oa/platform/allocator.hpp oa/platform/allocator.hpp - unchanged
+include oa/platform/app_loop.hpp oa/platform/app_loop.hpp - unchanged
+include oa/platform/crash.hpp oa/platform/crash.hpp - unchanged
+include oa/platform/files.hpp oa/platform/files.hpp - unchanged
+include oa/platform/lock.hpp oa/platform/lock.hpp - unchanged
+include oa/platform/memory_status.hpp oa/platform/memory_status.hpp - unchanged
+include oa/platform/perf.hpp oa/platform/perf.hpp - unchanged
+include oa/platform/system.hpp oa/platform/system.hpp - unchanged
+include oa/present/blit.hpp oa/present/blit.hpp - unchanged
+include oa/present/display.hpp oa/present/display.hpp - unchanged
+include oa/present/gaf_sprites.hpp oa/present/gaf_sprites.hpp - unchanged
+include oa/present/palette_tables.hpp oa/present/palette_tables.hpp - unchanged
+include oa/present/pcx.hpp oa/present/pcx.hpp - unchanged
+include oa/present/polygon.hpp oa/present/polygon.hpp - unchanged
+include oa/present/raster.hpp oa/present/raster.hpp - unchanged
+include oa/present/rle.hpp oa/present/rle.hpp - unchanged
+include oa/present/span_sample.hpp oa/present/span_sample.hpp - unchanged
+include oa/present/surface.h oa/present/surface.h - unchanged
+include oa/present/surface.hpp oa/present/surface.hpp - unchanged
+include oa/model_render/mesh_raster.hpp oa/present/model/mesh_raster.hpp -
+include oa/model_render/model_draw.hpp oa/present/model/model_draw.hpp -
+include oa/model_render/model_library.hpp oa/present/model/model_library.hpp -
+include oa/model_render/rgb_bridge.hpp oa/present/model/rgb_bridge.hpp -
+include oa/command_line.hpp oa/app/command_line.hpp -
+include oa/preferences.hpp oa/platform/preferences.hpp -
+include oa/script_state.hpp oa/sim/script_state.hpp -
+include oa/script_vm.hpp oa/sim/script_vm.hpp -
+include oa/session/game_session.hpp oa/sim/session.hpp -
+include oa/sim/detection.hpp oa/sim/detection.hpp - unchanged
+include oa/sim/messages.hpp oa/sim/messages.hpp - unchanged
+include oa/sim/mission_units.hpp oa/sim/mission_units.hpp - unchanged
+include oa/sim/profile.hpp oa/sim/profile.hpp - unchanged
+include oa/sim/selection.hpp oa/sim/selection.hpp - unchanged
+include oa/sim/speed.hpp oa/sim/speed.hpp - unchanged
+include oa/sim/trace.hpp oa/sim/trace.hpp - unchanged
+include oa/ui/console/console.hpp oa/ui/console/console.hpp - unchanged
+include oa/ui/console/game_fields.hpp oa/ui/console/game_fields.hpp - unchanged
+include oa/ui/console/hotkeys.hpp oa/ui/console/hotkeys.hpp - unchanged
+include oa/ui/console/unit_tags.hpp oa/ui/console/unit_tags.hpp - unchanged
+include oa/ui/end_mission.hpp oa/ui/frontend/end_mission.hpp -
+include oa/ui/ingame_menu.hpp oa/ui/frontend/ingame_menu.hpp -
+include oa/ui/main_menu.hpp oa/ui/frontend/main_menu.hpp -
+include oa/ui/options.hpp oa/ui/frontend/options.hpp -
+include oa/ui/resource_palette.hpp oa/ui/frontend/resource_palette.hpp -
+include oa/ui/savegame_dialogs.hpp oa/ui/frontend/savegame_dialogs.hpp -
+include oa/ui/campaign/briefing_text.hpp oa/ui/campaign/briefing_text.hpp - unchanged
+include oa/ui/campaign/campaign.hpp oa/ui/campaign/campaign.hpp - unchanged
+include oa/ui/campaign/endgame.hpp oa/ui/campaign/endgame.hpp - unchanged
+include oa/ui/campaign/frontend_host.hpp oa/ui/campaign/frontend_host.hpp - unchanged
+include oa/ui/campaign/screens.hpp oa/ui/campaign/screens.hpp - unchanged
+include oa/ui/campaign/single_player.hpp oa/ui/campaign/single_player.hpp - unchanged
+include oa/ui/hud/boundary.hpp oa/ui/hud/boundary.hpp - unchanged
+include oa/ui/hud/camera_scroll.hpp oa/ui/hud/camera_scroll.hpp - unchanged
+include oa/ui/hud/chat_panel.hpp oa/ui/hud/chat_panel.hpp - unchanged
+include oa/ui/hud/command_buttons.hpp oa/ui/hud/command_buttons.hpp - unchanged
+include oa/ui/hud/game_fields.hpp oa/ui/hud/game_fields.hpp - unchanged
+include oa/ui/hud/health_bar.hpp oa/ui/hud/health_bar.hpp - unchanged
+include oa/ui/hud/ingame_menu.hpp oa/ui/hud/ingame_menu.hpp - unchanged
+include oa/ui/hud/kill_board.hpp oa/ui/hud/kill_board.hpp - unchanged
+include oa/ui/hud/order_overlays.hpp oa/ui/hud/order_overlays.hpp - unchanged
+include oa/ui/hud/order_panel.hpp oa/ui/hud/order_panel.hpp - unchanged
+include oa/ui/hud/player_records.hpp oa/ui/hud/player_records.hpp - unchanged
+include oa/ui/hud/resource_bar.hpp oa/ui/hud/resource_bar.hpp - unchanged
+include oa/ui/hud/share_panel.hpp oa/ui/hud/share_panel.hpp - unchanged
+include oa/ui/hud/sprite_placement.hpp oa/ui/hud/sprite_placement.hpp - unchanged
+include oa/ui/hud/status_panel.hpp oa/ui/hud/status_panel.hpp - unchanged
+include oa/ui/hud/unit_info.hpp oa/ui/hud/unit_info.hpp - unchanged
+include oa/ui/hud/unit_labels.hpp oa/ui/hud/unit_labels.hpp - unchanged
+include oa/feature_defs.hpp oa/sim/map_runtime/feature_defs.hpp -
+include oa/map_runtime.hpp oa/sim/map_runtime.hpp -
+include oa/instance.hpp oa/sim/model_runtime/instance.hpp -
+include oa/model_host.hpp oa/sim/model_runtime/model_host.hpp -
+include oa/cell_classifier.hpp oa/sim/spatial_state/cell_classifier.hpp -
+include oa/spatial.hpp oa/sim/spatial_state/spatial.hpp -
+include oa/sprite_animation.hpp oa/sim/sprite_animation.hpp -
+include oa/visibility.hpp oa/sim/visibility_state.hpp -
+include oa/meteor.hpp oa/sim/world_environment/meteor.hpp -
+include oa/wind.hpp oa/sim/world_environment/wind.hpp -
+include oa/unit_renderer.hpp oa/present/world_renderer/unit_renderer.hpp -
+include oa/world_camera.hpp oa/present/world_renderer/world_camera.hpp -
+include oa/world_display_modes.hpp oa/present/world_renderer/world_display_modes.hpp -
+include oa/world_fog.hpp oa/present/world_renderer/world_fog.hpp -
+include oa/world_overlays.hpp oa/present/world_renderer/world_overlays.hpp -
+include oa/world_radar.hpp oa/present/world_renderer/world_radar.hpp -
+include oa/world_renderer.hpp oa/present/world_renderer.hpp -
+include oa/world_terrain_view.hpp oa/present/world_renderer/world_terrain_view.hpp -
+
+# ---- files the pass leaves as they are ------------------------------------------
+keep tools/check_style_test.py - its fixtures are made-up paths, not files of the tree

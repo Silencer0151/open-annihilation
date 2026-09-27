@@ -1,0 +1,436 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/present/model/model_draw.hpp"
+#include "oa/present/display.hpp"
+#include "oa/present/surface.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+#define CHECK(x)                                                                                   \
+    do {                                                                                           \
+        if (!(x)) {                                                                                \
+            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #x);             \
+            ++failures;                                                                            \
+        }                                                                                          \
+    } while (false)
+
+using namespace oa::present::model;
+using oa::Sprite;
+using oa::formats::objects3d::FixedVector3;
+
+constexpr int32_t unit_fixed = 0x10000;
+constexpr uint8_t ink = 0x55;
+constexpr uint8_t ground = 200;
+
+// A flat 16x16 square at height 0 with one coloured primitive, wound so
+// that it faces the camera (the fill routines skip back faces).
+std::shared_ptr<oa::formats::objects3d::Model> square_model() {
+    auto model = std::make_shared<oa::formats::objects3d::Model>();
+    oa::formats::objects3d::Object object;
+    const int32_t h = 8 * unit_fixed;
+    object.vertices = {{-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h}};
+    oa::formats::objects3d::Primitive primitive;
+    primitive.vertex_indices = {0, 3, 2, 1};
+    primitive.color_index = ink;
+    primitive.is_colored = 1;
+    object.primitives.push_back(primitive);
+    model->objects.push_back(object);
+    return model;
+}
+
+oa::Palette gray_palette() {
+    oa::Palette palette{};
+    for (int i = 0; i < OA_PALETTE_COLORS; ++i)
+        palette.entries[i] = {
+            static_cast<uint8_t>(i), static_cast<uint8_t>(i), static_cast<uint8_t>(i), 0
+        };
+    return palette;
+}
+
+struct Scene {
+    oa::World* world = oa::world_create();
+    std::shared_ptr<const oa::formats::objects3d::Model> model = square_model();
+    oa::sim::model_runtime::Instance instance = oa::sim::model_runtime::make_instance(model);
+    ModelLibrary library;
+    ModelState state;
+    ModelRenderer renderer;
+    ModelDisplay display;
+    oa::present::SurfaceBuffer screen = oa::present::create_surface(200, 200);
+    oa::Unit* unit{};
+
+    Scene() {
+        const oa::WorldCapacity capacity{4, 2, 0};
+        oa::world_alloc_tables(world, &capacity);
+        unit = &world->units[1];
+        unit->def = oa::oa_ref_from_index(1);
+        unit->position = {100 * unit_fixed, 0, 100 * unit_fixed};
+        renderer.world = world;
+        renderer.origin_x = 0;
+        renderer.origin_y = 0;
+        init_composite_buffer(renderer);
+        build_model_display(display, gray_palette());
+        oa::present::bind_display(&display.context);
+        for (auto& p : screen.pixels)
+            p = ground;
+    }
+
+    ~Scene() {
+        oa::present::bind_display(nullptr);
+        oa::world_destroy(world);
+    }
+
+    ModelRef ref() {
+        return {
+            &instance,
+            &prepare_model(library, model),
+            &state,
+            unit,
+            oa::world_unit_def_of(world, unit)
+        };
+    }
+
+    uint8_t pixel(int x, int y) const {
+        return screen.pixels[static_cast<std::size_t>(y * 200 + x)];
+    }
+};
+
+void test_bounds() {
+    Scene scene;
+    const ImageFrame frame = measure_model_bounds(scene.instance, nullptr);
+    CHECK(frame.width == 20);
+    CHECK(frame.height == 20);
+    CHECK(frame.origin_x == 10);
+    CHECK(frame.origin_y == 10);
+    ModelBounds bounds{};
+    expand_model_bounds(bounds, scene.instance, 3 * unit_fixed, 0, 0);
+    CHECK(bounds.left == -7);
+    CHECK(bounds.right == 13);
+    CHECK(bounds.top == -10);
+    CHECK(bounds.bottom == 10);
+    // A lifted model rises on screen by half its height.
+    const FixedVector3 lift{0, 8 * unit_fixed, 0};
+    const ImageFrame lifted = measure_model_bounds(scene.instance, &lift);
+    CHECK(lifted.origin_y == 14);
+    const ImageFrame shadow = measure_shadow_bounds(scene.instance);
+    CHECK(shadow.width == 20);
+    CHECK(shadow.origin_x == 10);
+}
+
+// Plain finished units get a depth-less image; z-buffered or unfinished
+// units get a depth plane, with diggers lifted by their bias.
+void test_image_planes() {
+    Scene scene;
+    CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_cached_pieces));
+    const Sprite& image = scene.state.image.sprite;
+    CHECK(image.aux == nullptr);
+    CHECK(image.key == image_key);
+    CHECK(image.width == 20 && image.origin_x == 10);
+    const auto* pixels = static_cast<const uint8_t*>(image.data);
+    CHECK(pixels[10 * 20 + 10] == ink);
+    CHECK(pixels[0] == image_key);
+    CHECK(pixels[1 * 20 + 1] == image_key);
+    scene.unit->flags2 |= OA_UNIT_FLAG2_Z_BUFFER;
+    CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_cached_pieces));
+    CHECK(scene.state.image.sprite.aux != nullptr);
+    CHECK(
+        static_cast<const uint8_t*>(scene.state.image.sprite.aux)[10 * 20 + 10] == model_depth_base
+    );
+    scene.world->unit_defs[1].flags = OA_UNIT_DEF_FLAG_DIGGER;
+    CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_cached_pieces));
+    CHECK(
+        static_cast<const uint8_t*>(scene.state.image.sprite.aux)[10 * 20 + 10] ==
+        model_depth_base + digger_depth_bias
+    );
+    // Only moving pieces: nothing is drawn for a fully cached model.
+    CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_moving_pieces));
+    CHECK(static_cast<const uint8_t*>(scene.state.image.sprite.data)[10 * 20 + 10] == image_key);
+}
+
+void test_linked_draw() {
+    Scene scene;
+    draw_linked_model(scene.renderer, &scene.screen.surface, scene.ref(), true);
+    CHECK(scene.state.cache.has_image);
+    CHECK(scene.state.cache.draws == 1);
+    CHECK(scene.pixel(100, 100) == ink);
+    CHECK(scene.pixel(92, 92) == ink);
+    CHECK(scene.pixel(89, 100) == ground);
+    CHECK(scene.pixel(100, 109) == ground);
+    // The second draw reuses the cached image.
+    const void* cached = scene.state.image.sprite.data;
+    draw_linked_model(scene.renderer, &scene.screen.surface, scene.ref(), true);
+    CHECK(scene.state.image.sprite.data == cached);
+    CHECK(scene.state.cache.draws == 2);
+}
+
+// An aircraft's silhouette falls on the ground below it, five pixels right.
+void test_vehicle_shadow_at_altitude() {
+    Scene scene;
+    scene.renderer.graphics_flags = graphics_shadows | graphics_vehicle_shadows;
+    scene.unit->position.y = 40 * unit_fixed;
+    draw_linked_model(scene.renderer, &scene.screen.surface, scene.ref(), true);
+    CHECK(scene.pixel(100, 80) == ink);
+    const uint8_t shaded = scene.pixel(106, 104);
+    CHECK(shaded < ground);
+    CHECK(shaded > 0);
+    CHECK(scene.pixel(100, 115) == ground);
+    // No-shadow types and disabled vehicle shadows cast nothing.
+    Scene plain;
+    plain.renderer.graphics_flags = graphics_shadows;
+    plain.unit->position.y = 40 * unit_fixed;
+    draw_linked_model(plain.renderer, &plain.screen.surface, plain.ref(), true);
+    CHECK(plain.pixel(106, 104) == ground);
+}
+
+// A building's silhouette is cached as a row-RLE sprite less its own footprint.
+void test_building_shadow() {
+    Scene scene;
+    scene.renderer.graphics_flags = graphics_shadows;
+    scene.unit->flags |= OA_UNIT_FLAG_BUILDING;
+    scene.unit->type_index = 1;
+    draw_linked_model(scene.renderer, &scene.screen.surface, scene.ref(), false);
+    CHECK(scene.state.shadow.sprite.encoding == OA_SPRITE_ROW_RLE);
+    CHECK(scene.state.shadow.sprite.width == 20);
+    CHECK(scene.pixel(100, 100) == ink);
+    CHECK(scene.pixel(111, 100) < ground);
+    CHECK(scene.pixel(119, 100) == ground);
+}
+
+void test_remap_depth_bands() {
+    uint8_t pixels[6] = {9, 9, 9, 9, 9, image_key};
+    uint8_t depth[6] = {1, 5, 6, 9, 10, 7};
+    Sprite sprite{};
+    sprite.width = 6;
+    sprite.height = 1;
+    sprite.key = image_key;
+    sprite.data = pixels;
+    sprite.aux = depth;
+    remap_depth_bands(sprite, 10, remap_clear, 0x30, 0x40);
+    CHECK(pixels[0] == 0x30);
+    CHECK(pixels[1] == 0x30);
+    CHECK(pixels[2] == 0x40);
+    CHECK(pixels[3] == 0x40);
+    CHECK(pixels[4] == image_key);
+    CHECK(pixels[5] == image_key);
+    uint8_t low[2] = {9, 9};
+    uint8_t low_depth[2] = {0, 3};
+    sprite.width = 2;
+    sprite.data = low;
+    sprite.aux = low_depth;
+    remap_depth_bands(sprite, 2, remap_keep, remap_keep, 0x21);
+    CHECK(low[0] == 0x21);
+    CHECK(low[1] == 9);
+}
+
+void test_build_effect() {
+    Scene scene;
+    scene.unit->flags2 |= OA_UNIT_FLAG2_Z_BUFFER;
+    CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_all_pieces));
+    Sprite& image = scene.state.image.sprite;
+    CHECK(!apply_build_effect(scene.renderer, image, scene.ref()));
+    scene.unit->build_remaining = 0.5F;
+    CHECK(apply_build_effect(scene.renderer, image, scene.ref()));
+    const auto* pixels = static_cast<const uint8_t*>(image.data);
+    int nano = 0;
+    for (int i = 0; i < 400; ++i)
+        nano += pixels[i] >= 0xa0 && pixels[i] <= 0xaf ? 1 : 0;
+    CHECK(nano > 0);
+}
+
+void test_shift_threshold() {
+    Scene scene;
+    const ModelRef model = scene.ref();
+    scene.state.transforms_dirty = false;
+    scene.state.cache.draws = 5;
+    set_model_shift(model, {0, 7, 0});
+    CHECK(!scene.state.transforms_dirty);
+    CHECK(scene.state.shift.xz == 0);
+    set_model_shift(model, {0, 8, 0});
+    CHECK(scene.state.transforms_dirty);
+    CHECK(scene.state.shift.xz == 8);
+    CHECK(scene.state.cache.draws == 0);
+    scene.state.transforms_dirty = false;
+    set_model_shift(model, {0, 8, -8});
+    CHECK(scene.state.transforms_dirty);
+}
+
+void test_piece_changes() {
+    Scene scene;
+    const ModelRef model = scene.ref();
+    note_piece_changes(model);
+    scene.state.cache.draws = 3;
+    scene.instance.pieces()[0].rotation.xz = 100;
+    note_piece_changes(model);
+    CHECK(scene.state.cache.draws == 0);
+    CHECK(prepare_model_image(scene.renderer, model, false, pass_cached_pieces));
+    scene.instance.pieces()[0].flags &= static_cast<uint16_t>(~0x2u);
+    note_piece_changes(model);
+    CHECK(scene.state.image.sprite.data == nullptr);
+}
+
+void test_sparse_depth() {
+    uint8_t source_depth[16];
+    for (int i = 0; i < 16; ++i)
+        source_depth[i] = static_cast<uint8_t>(i);
+    Sprite source{};
+    source.width = 4;
+    source.height = 4;
+    source.aux = source_depth;
+    uint8_t target_depth[4] = {};
+    Sprite target{};
+    target.width = 2;
+    target.height = 2;
+    target.aux = target_depth;
+    copy_sparse_depth(source, target);
+    CHECK(target_depth[0] == 0);
+    CHECK(target_depth[1] == 2);
+    CHECK(target_depth[2] == 8);
+    CHECK(target_depth[3] == 10);
+}
+
+void test_projectile_and_debris() {
+    Scene scene;
+    const PreparedModel& prepared = prepare_model(scene.library, scene.model);
+    const oa::formats::objects3d::Object& object = scene.model->objects[0];
+    draw_projectile_model(
+        scene.renderer,
+        &scene.screen.surface,
+        {50 * unit_fixed, 0, 60 * unit_fixed},
+        object,
+        prepared.objects[0],
+        {}
+    );
+    CHECK(scene.pixel(50, 60) == ink);
+    CHECK(scene.pixel(50, 70) == ground);
+    std::vector<FixedVector3> points;
+    const oa::Rect32 view{0, 0, 199, 199};
+    draw_rotated_debris(
+        scene.renderer,
+        &scene.screen.surface,
+        view,
+        object,
+        prepared.objects[0],
+        {},
+        {150 * unit_fixed, 0, 150 * unit_fixed},
+        0,
+        points
+    );
+    CHECK(scene.pixel(150, 150) == ink);
+    const oa::Rect32 elsewhere{0, 0, 20, 20};
+    draw_rotated_debris(
+        scene.renderer,
+        &scene.screen.surface,
+        elsewhere,
+        object,
+        prepared.objects[0],
+        {},
+        {30 * unit_fixed, 0, 150 * unit_fixed},
+        0,
+        points
+    );
+    CHECK(scene.pixel(30, 150) == ground);
+}
+
+// A fragment slab facing the camera: a 16x16 quad one unit up (points 0..3,
+// loaded axes) over its reversed copy one unit down.
+oa::sim::effect_particles::ShatterFragment slab_fragment() {
+    oa::sim::effect_particles::ShatterFragment fragment{};
+    const int32_t h = 8 * unit_fixed;
+    const oa::FixedVec3 top[]{
+        {h, unit_fixed, h}, {h, unit_fixed, -h}, {-h, unit_fixed, -h}, {-h, unit_fixed, h}
+    };
+    for (uint32_t i = 0; i < 4; ++i) {
+        fragment.points[i] = top[i];
+        fragment.points[7 - i] = {top[i].x, -unit_fixed, top[i].z};
+    }
+    fragment.live = true;
+    return fragment;
+}
+
+void test_shatter_fragment() {
+    Scene scene;
+    auto fragment = slab_fragment();
+    fragment.look.flags = primitive_colored;
+    fragment.look.color = ink;
+    draw_shatter_fragment(
+        scene.renderer,
+        &scene.screen.surface,
+        {50 * unit_fixed, 0, 60 * unit_fixed},
+        fragment,
+        PreparedPrimitive{},
+        {}
+    );
+    CHECK(scene.pixel(50, 60) == ink);
+    CHECK(scene.pixel(50, 75) == ground);
+    // A team texture: ten solid frames; the fragment shows the owner's.
+    constexpr int side = 16;
+    std::vector<uint8_t> pixels(static_cast<std::size_t>(10 * side * side + 4096), 0);
+    TextureSequence texture;
+    for (int frame = 0; frame < 10; ++frame) {
+        Sprite sprite{};
+        sprite.width = side;
+        sprite.height = side;
+        sprite.encoding = OA_SPRITE_RAW;
+        sprite.data = pixels.data() + frame * side * side;
+        std::fill_n(
+            pixels.data() + frame * side * side, side * side, static_cast<uint8_t>(100 + frame)
+        );
+        texture.frames.push_back(sprite);
+    }
+    PreparedPrimitive team{};
+    team.flags = primitive_animated | primitive_team;
+    team.texture = &texture;
+    fragment.look.flags = primitive_team;
+    fragment.look.team_color = 3;
+    draw_shatter_fragment(
+        scene.renderer,
+        &scene.screen.surface,
+        {120 * unit_fixed, 0, 60 * unit_fixed},
+        fragment,
+        team,
+        {}
+    );
+    CHECK(scene.pixel(120, 60) == 103);
+    // Turned half a turn about the vertical axis the top still faces up.
+    fragment.look.team_color = 5;
+    draw_shatter_fragment(
+        scene.renderer,
+        &scene.screen.surface,
+        {120 * unit_fixed, 0, 140 * unit_fixed},
+        fragment,
+        team,
+        {0, static_cast<int16_t>(0x8000), 0}
+    );
+    CHECK(scene.pixel(120, 140) == 105);
+}
+
+} // namespace
+
+int main() {
+    test_bounds();
+    test_image_planes();
+    test_linked_draw();
+    test_vehicle_shadow_at_altitude();
+    test_building_shadow();
+    test_remap_depth_bands();
+    test_build_effect();
+    test_shift_threshold();
+    test_piece_changes();
+    test_sparse_depth();
+    test_projectile_and_debris();
+    test_shatter_fragment();
+    if (failures != 0) {
+        std::fprintf(stderr, "%d failure(s)\n", failures);
+        return EXIT_FAILURE;
+    }
+    std::puts("model draw tests passed");
+    return EXIT_SUCCESS;
+}

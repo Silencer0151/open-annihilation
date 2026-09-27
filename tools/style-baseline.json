@@ -1,0 +1,236 @@
+{
+ "counts": {
+  "src/app": {
+   "member-initializer": 4
+  },
+  "src/audio": {
+   "doc-block": 15,
+   "member-initializer": 3
+  },
+  "src/base/game-loop": {
+   "doc-block": 14,
+   "member-initializer": 7,
+   "tier-throw": 8,
+   "tier-virtual": 15
+  },
+  "src/base/geometry": {
+   "member-initializer": 4
+  },
+  "src/data/campaign": {
+   "member-initializer": 92,
+   "tier-heap-container": 2
+  },
+  "src/data/defs": {
+   "doc-block": 5,
+   "member-initializer": 100
+  },
+  "src/data/persist": {
+   "doc-block": 9,
+   "member-initializer": 69
+  },
+  "src/formats/cob": {
+   "member-initializer": 11
+  },
+  "src/formats/hpi": {
+   "member-initializer": 20
+  },
+  "src/formats/objects3d": {
+   "member-initializer": 24
+  },
+  "src/formats/png": {
+   "doc-block": 7
+  },
+  "src/formats/tdf": {
+   "member-initializer": 24
+  },
+  "src/formats/tnt": {
+   "member-initializer": 2
+  },
+  "src/media": {
+   "doc-block": 4
+  },
+  "src/platform": {
+   "member-initializer": 9
+  },
+  "src/present": {
+   "member-initializer": 23
+  },
+  "src/present/model": {
+   "member-initializer": 1
+  },
+  "src/present/world-renderer": {
+   "flags-raw-mask": 1,
+   "member-initializer": 12
+  },
+  "src/sim/ai": {
+   "member-initializer": 6
+  },
+  "src/sim/air": {
+   "doc-block": 20
+  },
+  "src/sim/combat-state": {
+   "tier-heap-container": 29,
+   "tier-throw": 6,
+   "tier-virtual": 16
+  },
+  "src/sim/effect-particles": {
+   "member-initializer": 2
+  },
+  "src/sim/feature-runtime": {
+   "member-initializer": 41
+  },
+  "src/sim/gameplay-input": {
+   "member-initializer": 7,
+   "tier-heap-container": 3,
+   "tier-throw": 3
+  },
+  "src/sim/ground-orders": {
+   "flags-raw-mask": 1,
+   "tier-heap-container": 17,
+   "tier-throw": 35,
+   "tier-virtual": 10
+  },
+  "src/sim/map-runtime": {
+   "member-initializer": 6,
+   "tier-heap-container": 33,
+   "tier-virtual": 3
+  },
+  "src/sim/match-runtime": {
+   "doc-block": 167,
+   "flags-raw-mask": 86,
+   "member-initializer": 4,
+   "tier-heap-container": 65,
+   "tier-throw": 125,
+   "tier-virtual": 42
+  },
+  "src/sim/mission-units": {
+   "member-initializer": 12
+  },
+  "src/sim/model-runtime": {
+   "doc-block": 1,
+   "tier-heap-container": 5,
+   "tier-throw": 14
+  },
+  "src/sim/scenario": {
+   "tier-heap-container": 4,
+   "tier-throw": 22,
+   "tier-virtual": 5
+  },
+  "src/sim/script-state": {
+   "tier-heap-container": 8,
+   "tier-throw": 1
+  },
+  "src/sim/script-vm": {
+   "tier-heap-container": 8,
+   "tier-throw": 3,
+   "tier-virtual": 22
+  },
+  "src/sim/selection": {
+   "flags-raw-mask": 3
+  },
+  "src/sim/session": {
+   "flags-raw-mask": 4,
+   "member-initializer": 17
+  },
+  "src/sim/simulation-state": {
+   "doc-block": 22,
+   "tier-throw": 6,
+   "tier-virtual": 19
+  },
+  "src/sim/spatial-state": {
+   "tier-heap-container": 2,
+   "tier-virtual": 4
+  },
+  "src/sim/state-hash": {
+   "tier-heap-container": 1
+  },
+  "src/sim/unit-activation": {
+   "tier-virtual": 7
+  },
+  "src/sim/unit-effects": {
+   "flags-raw-mask": 4,
+   "member-initializer": 2,
+   "tier-heap-container": 2,
+   "tier-throw": 10,
+   "tier-virtual": 13
+  },
+  "src/sim/unit-health": {
+   "flags-raw-mask": 2,
+   "tier-throw": 3,
+   "tier-virtual": 12
+  },
+  "src/sim/unit-movement": {
+   "member-initializer": 1,
+   "tier-throw": 6,
+   "tier-virtual": 5
+  },
+  "src/sim/unit-script": {
+   "doc-block": 27,
+   "flags-raw-mask": 1,
+   "member-initializer": 3,
+   "tier-heap-container": 1
+  },
+  "src/sim/unit-spawn": {
+   "doc-block": 28,
+   "flags-raw-mask": 14,
+   "member-initializer": 1,
+   "tier-heap-container": 15,
+   "tier-throw": 34,
+   "tier-virtual": 30
+  },
+  "src/sim/visibility-state": {
+   "tier-heap-container": 9,
+   "tier-throw": 6,
+   "tier-virtual": 2
+  },
+  "src/sim/weapon-execution": {
+   "tier-throw": 1,
+   "tier-virtual": 12
+  },
+  "src/sim/world-environment": {
+   "member-initializer": 11,
+   "tier-throw": 2,
+   "tier-virtual": 3
+  },
+  "src/ui/campaign": {
+   "member-initializer": 80
+  },
+  "src/ui/console": {
+   "flags-raw-mask": 1,
+   "member-initializer": 93
+  },
+  "src/ui/frontend": {
+   "member-initializer": 11
+  },
+  "src/ui/frontend-dialogs": {
+   "doc-block": 23,
+   "member-initializer": 9
+  },
+  "src/ui/frontend-state": {
+   "member-initializer": 1
+  },
+  "src/ui/gadget-render": {
+   "doc-block": 20
+  },
+  "src/ui/gui-input": {
+   "doc-block": 24,
+   "flags-raw-mask": 2,
+   "member-initializer": 2
+  },
+  "src/ui/gui-layout": {
+   "member-initializer": 1
+  },
+  "src/ui/hud": {
+   "doc-block": 12,
+   "flags-raw-mask": 18,
+   "member-initializer": 157
+  },
+  "src/ui/screen-registry": {
+   "member-initializer": 50
+  },
+  "src/ui/services": {
+   "member-initializer": 75
+  }
+ },
+ "version": 1
+}

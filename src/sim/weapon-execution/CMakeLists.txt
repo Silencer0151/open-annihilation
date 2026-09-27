@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+add_library(oa-sim-weapon-execution src/weapon_execution.cpp src/weapon_launch.cpp
+    src/interceptor.cpp src/projectile_contact.cpp src/projectile_pool.cpp src/retaliation.cpp)
+add_library(oa::sim::weapon_execution ALIAS oa-sim-weapon-execution)
+target_include_directories(oa-sim-weapon-execution PUBLIC include)
+target_link_libraries(oa-sim-weapon-execution PUBLIC oa-sim-combat-state)
+target_compile_features(oa-sim-weapon-execution PUBLIC cxx_std_20)
+target_link_libraries(oa-sim-weapon-execution PUBLIC oa-core-types oa-base-game-math oa-sim-unit-movement oa-sim-combat-state
+  oa-options)
+if(BUILD_TESTING)
+  add_executable(oa-weapon-execution-test tests/weapon_execution_test.cpp)
+  target_link_libraries(oa-weapon-execution-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-execution COMMAND oa-weapon-execution-test)
+  add_executable(oa-weapon-launch-test tests/weapon_launch_test.cpp)
+  target_link_libraries(oa-weapon-launch-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-launch COMMAND oa-weapon-launch-test)
+  add_executable(oa-interceptor-test tests/interceptor_test.cpp)
+  target_link_libraries(oa-interceptor-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-interceptor COMMAND oa-interceptor-test)
+  add_executable(oa-projectile-contact-test tests/projectile_contact_test.cpp)
+  target_link_libraries(oa-projectile-contact-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-projectile-contact COMMAND oa-projectile-contact-test)
+  add_executable(oa-projectile-pool-test tests/projectile_pool_test.cpp)
+  target_link_libraries(oa-projectile-pool-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-projectile-pool COMMAND oa-projectile-pool-test)
+  add_executable(oa-retaliation-test tests/retaliation_test.cpp)
+  target_link_libraries(oa-retaliation-test PRIVATE oa-sim-weapon-execution)
+  add_test(NAME weapon-retaliation COMMAND oa-retaliation-test)
+endif()

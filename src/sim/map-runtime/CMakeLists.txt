@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+cmake_minimum_required(VERSION 3.24)
+project(oa_sim_map_runtime LANGUAGES CXX)
+include(CTest)
+add_library(oa-sim-map-runtime src/map_runtime.cpp src/feature_defs.cpp)
+add_library(oa::sim::map_runtime ALIAS oa-sim-map-runtime)
+target_include_directories(oa-sim-map-runtime PUBLIC include)
+target_compile_features(oa-sim-map-runtime PUBLIC cxx_std_20)
+target_link_libraries(oa-sim-map-runtime PUBLIC oa-formats-tnt oa-formats-gaf oa-data-unit-definitions oa-sim-visibility-state oa-core-types)
+target_link_libraries(oa-sim-map-runtime PRIVATE oa-formats-tdf)
+if(TARGET oa-options)
+ target_link_libraries(oa-sim-map-runtime PUBLIC oa-options)
+endif()
+if(BUILD_TESTING)
+ add_executable(oa-map-runtime-test tests/map_runtime_test.cpp)
+ target_link_libraries(oa-map-runtime-test PRIVATE oa-sim-map-runtime)
+ add_test(NAME map-runtime COMMAND oa-map-runtime-test)
+ add_executable(oa-feature-defs-test tests/feature_defs_test.cpp)
+ target_link_libraries(oa-feature-defs-test PRIVATE oa-sim-map-runtime)
+ add_test(NAME feature-defs COMMAND oa-feature-defs-test)
+endif()

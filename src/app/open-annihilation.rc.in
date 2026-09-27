@@ -1,0 +1,37 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The Windows resources of open-annihilation.exe: its icon, which Explorer,
+// the taskbar and the game's windows show, and its version information,
+// which names it Open Annihilation. CMake fills in the icon's path and the
+// project's version.
+#include <winver.h>
+
+1 ICON "@OA_WINDOWS_ICON@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @open_annihilation_VERSION_MAJOR@, @open_annihilation_VERSION_MINOR@, @open_annihilation_VERSION_PATCH@, 0
+PRODUCTVERSION @open_annihilation_VERSION_MAJOR@, @open_annihilation_VERSION_MINOR@, @open_annihilation_VERSION_PATCH@, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // US English, Unicode.
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Open Annihilation"
+            VALUE "FileVersion", "@open_annihilation_VERSION@"
+            VALUE "InternalName", "open-annihilation"
+            VALUE "ProductName", "Open Annihilation"
+            VALUE "ProductVersion", "@open_annihilation_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

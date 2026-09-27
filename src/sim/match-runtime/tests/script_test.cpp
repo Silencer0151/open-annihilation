@@ -1,0 +1,165 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/sim/match_runtime/script.hpp"
+#include <bit>
+#include <cstdint>
+#include <iostream>
+#include <stdexcept>
+using namespace oa::sim::match_runtime;
+#define CHECK(x)                                                                                   \
+    do {                                                                                           \
+        if (!(x))                                                                                  \
+            throw std::runtime_error(#x);                                                          \
+    } while (false)
+
+struct UnusedVmHost : oa::sim::script_vm::Host {
+#define RET(type, name, args)                                                                      \
+    type name args override {                                                                      \
+        throw std::runtime_error("unexpected fixture host call");                                  \
+    }
+    RET(int32_t, piece_position, (uint32_t, uint32_t) const)
+    RET(int32_t, piece_angle, (uint32_t, uint32_t) const)
+    RET(uint32_t, piece_visible, (uint32_t) const)
+    RET(uint32_t, piece_cached, (uint32_t) const)
+    RET(uint32_t, piece_shaded, (uint32_t) const)
+    RET(void, set_piece_position, (uint32_t, uint32_t, int32_t))
+    RET(void, set_piece_angle, (uint32_t, uint32_t, uint32_t))
+    RET(void, set_piece_visible, (uint32_t, uint32_t))
+    RET(void, set_piece_cached, (uint32_t, uint32_t))
+    RET(void, set_piece_shaded, (uint32_t, uint32_t))
+    RET(void, emit_sfx, (uint32_t, int32_t))
+    RET(void, explode, (uint32_t, int32_t))
+    RET(int32_t, get_unit_value, (int32_t, int32_t, int32_t, int32_t, int32_t))
+    RET(void, set_unit_value, (int32_t, int32_t))
+    RET(void, attach_unit, (int32_t, int32_t, int32_t))
+    RET(void, drop_unit, (int32_t))
+    RET(void, ignored_piece_op, (uint32_t, uint32_t, uint32_t))
+    RET(void, dont_shadow, (uint32_t))
+    RET(uint32_t, is_carrying_unit, (uint32_t))
+    RET(uint32_t, carrier_unit_id, ())
+    RET(uint32_t, random_bounded, (uint32_t))
+#undef RET
+};
+
+struct Values : UnitValueHost {
+    std::array<uint32_t, 3> piece_world_position(oa::sim::unit_spawn::Slot&, uint32_t) override {
+        return {0x120000, 0x40000, 0xfffe0000};
+    }
+
+    uint16_t direction_to(uint32_t, uint32_t) override { return 10; }
+
+    uint32_t distance(uint32_t, uint32_t) override { return 20; }
+
+    int32_t sample_terrain_height(uint32_t x, uint32_t z) override {
+        CHECK(x == 0x130000 && z == 0xfffe0000);
+        return 42;
+    }
+
+    void set_activation(oa::sim::unit_spawn::Slot& slot, uint8_t mask, bool active) override {
+        CHECK(mask == 1 && active);
+        slot.record.state_flags |= mask;
+    }
+
+    void set_yard_open(oa::sim::unit_spawn::Slot&, int32_t) override {
+        throw std::runtime_error("unexpected fixture yard call");
+    }
+};
+
+int main() {
+    SharedRandom random(0);
+    const auto initial = random.state();
+    CHECK(initial == 0x66e29573u);
+    CHECK(SharedRandom(0x66e29572u).state() == 1u && SharedRandom(1u).state() == 0x66e29573u);
+    CHECK(!random.bounded(0) && random.state() == initial);
+    CHECK(!random.bounded(0xffffffff) && random.state() == initial);
+    random.restore(1);
+    CHECK(random.bounded(100000) == 16807 && random.state() == 16807);
+    auto cob = std::make_shared<oa::formats::cob::CobProgram>();
+    cob->code = {
+        oa::sim::script_vm::opcode::push_constant, 42, oa::sim::script_vm::opcode::return_
+    };
+    cob->entry_points = {0};
+    cob->scripts = {{"Create", 0}};
+    cob->header.script_count = 1;
+    UnusedVmHost vmhost;
+    ScriptInstance script(cob, vmhost, 30);
+    int32_t returned = -1;
+    CHECK(script.call("Create", {}, true, [&](int32_t n) { returned = n; }));
+    CHECK(returned == 42 && script.vm().active_count() == 0);
+    returned = -1;
+    CHECK(!script.call("create", {}, true, [&](int32_t n) { returned = n; }));
+    CHECK(returned == 0);
+    // Query writes locals back, rather than treating RETURN as the result. It
+    // executes only its new context; an already-active deferred call stays idle.
+    auto queries = std::make_shared<oa::formats::cob::CobProgram>();
+    using namespace oa::sim::script_vm;
+    queries->code = {
+        opcode::push_constant,
+        99,
+        opcode::pop_static,
+        0,
+        opcode::return_,
+        opcode::push_constant,
+        17,
+        opcode::pop_local,
+        0,
+        opcode::push_constant,
+        800,
+        opcode::return_
+    };
+    queries->entry_points = {0, 5};
+    queries->scripts = {{"Deferred", 0}, {"QueryPrimary", 5}};
+    queries->header.static_variable_count = 1;
+    ScriptInstance query_script(queries, vmhost, 30);
+    CHECK(query_script.call("Deferred", {}, false));
+    std::array<int32_t, 4> query_args{0, 2, 3, 4};
+    CHECK(query_script.query("QueryPrimary", query_args));
+    CHECK(query_args[0] == 17 && query_args[1] == 2 && query_args[2] == 3 && query_args[3] == 4);
+    CHECK(query_script.vm().static_value(0) == 0 && query_script.vm().active_count() == 1);
+    CHECK(!query_script.query("queryprimary", query_args) && query_args[0] == 17);
+    query_script.tick(0);
+    CHECK(query_script.vm().static_value(0) == 99);
+    auto parameter_cob = std::make_shared<oa::formats::cob::CobProgram>();
+    parameter_cob->code = {opcode::push_local, 3, opcode::pop_static, 0, opcode::return_};
+    parameter_cob->entry_points = {0};
+    parameter_cob->scripts = {{"ReadFourth", 0}};
+    parameter_cob->header.static_variable_count = 1;
+    ScriptInstance parameter_script(parameter_cob, vmhost, 30);
+    const std::array<int32_t, 4> four{1, 2, 3, 77};
+    CHECK(parameter_script.call("ReadFourth", four, true));
+    CHECK(parameter_script.vm().static_value(0) == 77);
+    CHECK(parameter_script.call_no_arguments("ReadFourth", true));
+    CHECK(parameter_script.vm().static_value(0) == 77);
+    const std::array<int32_t, 1> one{5};
+    CHECK(parameter_script.call("ReadFourth", one, true));
+    CHECK(parameter_script.vm().static_value(0) == 0);
+    bool failed_callback = false;
+    CHECK(!parameter_script.call_no_arguments("Missing", true, [&](int32_t) {
+        failed_callback = true;
+    }));
+    CHECK(!failed_callback);
+    oa::sim::unit_spawn::LegacyWorld world(2);
+    world.types()[1].simulation.maximum_health = 100;
+    world.load_types();
+    auto& unit = world.unit(0);
+    unit.type = &world.types()[1].simulation;
+    unit.health = 25;
+    auto slots = world.views().slots();
+    auto& state = world.state();
+    Values values;
+    CHECK(get_unit_value(state, slots[0], slots, 4, 0, 0, values) == 25);
+    slots[0].record.build_remaining = 1.0f;
+    CHECK(get_unit_value(state, slots[0], slots, 17, 0, 0, values) == 100);
+    slots[0].record.build_remaining = 0.5f;
+    CHECK(get_unit_value(state, slots[0], slots, 17, 0, 0, values) == 50);
+    CHECK(get_unit_value(state, slots[0], slots, 7, 0, 0, values) == 0x11fffe);
+    CHECK(get_unit_value(state, slots[0], slots, 16, 0x12fffe, 0, values) == 42 * 65536);
+    set_unit_value(slots[0], 6, 3, values);
+    CHECK(slots[0].record.build_flags == 2 && unit.events == 4);
+    set_unit_value(slots[0], 1, 3, values);
+    CHECK(slots[0].record.state_flags == 1);
+    set_unit_value(slots[0], 99, 3, values);
+    CHECK(unit.events == 4);
+    std::cout << "match runtime tests passed\n";
+}

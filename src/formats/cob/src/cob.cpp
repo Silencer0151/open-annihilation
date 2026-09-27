@@ -1,0 +1,234 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/formats/cob.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <limits>
+#include <utility>
+
+namespace oa::formats::cob {
+namespace {
+
+constexpr std::size_t kHeaderBytes = header_bytes;
+
+struct DiskHeader {
+    uint32_t version_signature;
+    uint32_t script_count;
+    uint32_t piece_count;
+    uint32_t code_word_count;
+    uint32_t static_variable_count;
+    uint32_t sound_count;
+    uint32_t script_entry_offset;
+    uint32_t script_name_offset_table;
+    uint32_t piece_name_offset_table;
+    uint32_t code_offset;
+    uint32_t name_pool_offset;
+};
+
+static_assert(sizeof(DiskHeader) == header_bytes);
+
+ParseResult failure(const char* message) noexcept {
+    return ParseResult{std::nullopt, message};
+}
+
+bool add_overflow(std::size_t left, std::size_t right, std::size_t& result) noexcept {
+    if (right > std::numeric_limits<std::size_t>::max() - left) {
+        return true;
+    }
+    result = left + right;
+    return false;
+}
+
+uint32_t read_u32(std::span<const uint8_t> bytes, std::size_t offset) noexcept {
+    return static_cast<uint32_t>(bytes[offset]) |
+           (static_cast<uint32_t>(bytes[offset + 1U]) << 8U) |
+           (static_cast<uint32_t>(bytes[offset + 2U]) << 16U) |
+           (static_cast<uint32_t>(bytes[offset + 3U]) << 24U);
+}
+
+/// Decodes the eleven header words; the caller has checked that they fit.
+DiskHeader read_disk_header(std::span<const uint8_t> bytes) noexcept {
+    DiskHeader header{};
+    header.version_signature = read_u32(bytes, 0);
+    header.script_count = read_u32(bytes, 4);
+    header.piece_count = read_u32(bytes, 8);
+    header.code_word_count = read_u32(bytes, 12);
+    header.static_variable_count = read_u32(bytes, 16);
+    header.sound_count = read_u32(bytes, 20);
+    header.script_entry_offset = read_u32(bytes, 24);
+    header.script_name_offset_table = read_u32(bytes, 28);
+    header.piece_name_offset_table = read_u32(bytes, 32);
+    header.code_offset = read_u32(bytes, 36);
+    header.name_pool_offset = read_u32(bytes, 40);
+    return header;
+}
+
+bool table_end(uint32_t offset, uint32_t count, std::size_t& end) noexcept {
+    std::size_t bytes = 0;
+    if (static_cast<std::size_t>(count) >
+        std::numeric_limits<std::size_t>::max() / sizeof(uint32_t)) {
+        return false;
+    }
+    bytes = static_cast<std::size_t>(count) * sizeof(uint32_t);
+    return !add_overflow(static_cast<std::size_t>(offset), bytes, end);
+}
+
+bool read_name(
+    std::span<const uint8_t> bytes,
+    uint32_t offset,
+    uint32_t pool_offset,
+    const ParseLimits& limits,
+    std::string& output
+) {
+    if (offset < pool_offset || offset >= bytes.size()) {
+        return false;
+    }
+    const std::size_t remaining = bytes.size() - static_cast<std::size_t>(offset);
+    const std::size_t limit = std::min(remaining, limits.max_name_bytes);
+    std::size_t length = 0;
+    while (length < limit && bytes[static_cast<std::size_t>(offset) + length] != 0U)
+        ++length;
+    if (length == limit) {
+        return false;
+    }
+    output.assign(reinterpret_cast<const char*>(bytes.data() + offset), length);
+    return true;
+}
+
+} // namespace
+
+ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits) {
+    if (bytes.size() < kHeaderBytes) {
+        return failure("COB is smaller than its 44-byte header");
+    }
+    if (bytes.size() > limits.max_file_bytes) {
+        return failure("COB exceeds configured file bound");
+    }
+
+    const DiskHeader disk = read_disk_header(bytes);
+    const CobHeader header{
+        disk.version_signature,
+        disk.script_count,
+        disk.piece_count,
+        disk.code_word_count,
+        disk.static_variable_count,
+        disk.sound_count,
+        disk.script_entry_offset,
+        disk.script_name_offset_table,
+        disk.piece_name_offset_table,
+        disk.code_offset,
+        disk.name_pool_offset
+    };
+    if (header.version_signature != version_ta) {
+        return failure("unsupported COB VersionSignature (TA requires 4; Kingdoms v6 is rejected)");
+    }
+    if (header.sound_count != 0U) {
+        return failure("unsupported non-zero TA COB sound count");
+    }
+    if (header.script_count > limits.max_scripts || header.piece_count > limits.max_pieces ||
+        header.code_word_count > limits.max_code_words ||
+        header.static_variable_count > limits.max_static_variables) {
+        return failure("COB count exceeds configured bounds");
+    }
+    if (header.code_offset < kHeaderBytes || header.script_entry_offset < header.code_offset ||
+        header.script_name_offset_table < header.script_entry_offset ||
+        header.piece_name_offset_table < header.script_name_offset_table ||
+        header.name_pool_offset < header.piece_name_offset_table) {
+        return failure("COB sections are not in increasing order");
+    }
+    std::size_t code_end = 0;
+    if (!table_end(header.code_offset, header.code_word_count, code_end) ||
+        code_end != header.script_entry_offset || code_end > bytes.size()) {
+        return failure("COB code section bounds disagree with entry table");
+    }
+    std::size_t script_table_end = 0;
+    std::size_t script_name_end = 0;
+    std::size_t piece_name_end = 0;
+    if (!table_end(header.script_entry_offset, header.script_count, script_table_end) ||
+        !table_end(header.script_name_offset_table, header.script_count, script_name_end) ||
+        !table_end(header.piece_name_offset_table, header.piece_count, piece_name_end) ||
+        script_table_end > bytes.size() || script_name_end > bytes.size() ||
+        piece_name_end > bytes.size() || script_table_end > header.script_name_offset_table ||
+        script_name_end > header.piece_name_offset_table ||
+        piece_name_end > header.name_pool_offset) {
+        return failure("COB name or entry table bounds are invalid");
+    }
+
+    CobProgram result;
+    result.header = header;
+    result.code.reserve(header.code_word_count);
+    for (uint32_t i = 0; i < header.code_word_count; ++i) {
+        result.code.push_back(read_u32(
+            bytes,
+            static_cast<std::size_t>(header.code_offset) +
+                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        ));
+    }
+    result.entry_points.reserve(header.script_count);
+    result.scripts.reserve(header.script_count);
+    for (uint32_t i = 0; i < header.script_count; ++i) {
+        const auto entry = read_u32(
+            bytes,
+            static_cast<std::size_t>(header.script_entry_offset) +
+                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        );
+        if (entry >= header.code_word_count) {
+            return failure("COB script entry points outside code section");
+        }
+        const auto name_offset = read_u32(
+            bytes,
+            static_cast<std::size_t>(header.script_name_offset_table) +
+                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        );
+        Script script;
+        if (!read_name(bytes, name_offset, header.name_pool_offset, limits, script.name)) {
+            return failure("COB script name is outside bounded name pool");
+        }
+        script.entry_word = entry;
+        result.entry_points.push_back(entry);
+        result.scripts.push_back(std::move(script));
+    }
+    result.piece_names.reserve(header.piece_count);
+    for (uint32_t i = 0; i < header.piece_count; ++i) {
+        const auto name_offset = read_u32(
+            bytes,
+            static_cast<std::size_t>(header.piece_name_offset_table) +
+                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        );
+        std::string name;
+        if (!read_name(bytes, name_offset, header.name_pool_offset, limits, name)) {
+            return failure("COB piece name is outside bounded name pool");
+        }
+        result.piece_names.push_back(std::move(name));
+    }
+    return ParseResult{std::move(result), {}};
+}
+
+ParseResult load_cob_file(const char* path, const ParseLimits& limits) {
+    if (path == nullptr || *path == '\0') {
+        return failure("COB path is empty");
+    }
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) {
+        return failure("cannot open COB file");
+    }
+    const std::streamoff end = input.tellg();
+    if (end < 0 || static_cast<uintmax_t>(end) > limits.max_file_bytes) {
+        return failure("COB file size is invalid or exceeds configured bound");
+    }
+    std::vector<uint8_t> bytes(static_cast<std::size_t>(end));
+    input.seekg(0, std::ios::beg);
+    if (!bytes.empty() &&
+        !input.read(
+            reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
+        )) {
+        return failure("cannot read COB file");
+    }
+    return parse_cob(bytes, limits);
+}
+
+} // namespace oa::formats::cob

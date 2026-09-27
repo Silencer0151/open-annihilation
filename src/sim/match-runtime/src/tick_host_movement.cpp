@@ -1,0 +1,375 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "tick_internal.hpp"
+
+#include "oa/sim/air/flight.hpp"
+#include "oa/sim/air/host.hpp"
+
+#include <cstdint>
+
+namespace oa::sim::match_runtime {
+
+sim::air::AirHost TickHost::air_host() {
+    sim::air::AirHost host{};
+    host.context = &match;
+    host.world = &match.state();
+    host.bucket_height = [](void* context, const oa::Unit* unit) -> uint8_t {
+        const auto& m = *static_cast<Match*>(context);
+        if (unit->id >= m.spatial_units_.size())
+            return m.spatial_.outside_bucket.area_high_height;
+        return sim::spatial_state::unit_bucket(m.spatial_, m.spatial_units_[unit->id])
+            .area_high_height;
+    };
+    // The off-map bucket as of the unit's last cell change, from its whole
+    // footprint rather than its current position.
+    host.outside_map = [](void* context, const oa::Unit* unit) {
+        const auto& m = *static_cast<Match*>(context);
+        if (unit->id >= m.spatial_units_.size())
+            return false;
+        const auto& projected = m.spatial_units_[unit->id];
+        return projected.bucket_linked && !projected.bucket;
+    };
+    host.terrain_height = [](void* context, oa::oa_fixed x, oa::oa_fixed z) {
+        return static_cast<Match*>(context)->sample_terrain_height(
+            static_cast<uint32_t>(x), static_cast<uint32_t>(z)
+        );
+    };
+    return host;
+}
+
+void TickHost::movement_tick(oa::Unit& record) {
+    auto& u = unit_view(record);
+    auto& s = slot(u);
+    if (!match.ground_runtime(s.unit_index))
+        return;
+    auto& g = ground(u);
+    g.project_slot();
+    auto flags = weapon_flags(s);
+    const auto parent_index = link_parent(s.record);
+    auto& driver = match.air_drivers_.at(s.unit_index);
+    const auto host = air_host();
+    // Aircraft follow their air driver unless a mission still steers them
+    // through a ground navigator goal.
+    const bool air_driven =
+        driver.unit != nullptr && (driver.goal != nullptr || g.navigation.goal == nullptr);
+    if (driver.unit != nullptr && !air_driven) {
+        driver.position = s.record.position;
+        driver.velocity = {};
+        driver.heading = s.record.heading;
+    }
+    // The driver's per-tick slot and the steering step run for carried units
+    // too; the carried branch below then overrides their position, attitude,
+    // velocity and speed but keeps the turn rate and filtered vector.
+    if (driver.unit != nullptr)
+        sim::air::air_driver_update(&driver, host, g.movement.flags & 3);
+    if (air_driven) {
+        if (const oa::UnitDef* def = oa::world_unit_def_of(&match.state(), &s.record)) {
+            int16_t bank = 0;
+            sim::air::air_flight_step(
+                g.geometry,
+                g.movement,
+                g.previous_vector,
+                sim::air::air_driver_steering_target(&driver),
+                *def,
+                match.state().game.gravity != 0 ? match.state().game.gravity
+                                                : sim::ground_orders::default_gravity,
+                host.outside_map(host.context, &s.record),
+                &bank
+            );
+            if ((g.movement.flags & 3) == sim::air::layer_air) {
+                s.record.bank = bank;
+                s.record.pitch = g.geometry.pitch;
+            }
+        }
+    } else if (g.mirrored_driver) {
+        // The mirrored navigator's per-tick slot does nothing; the
+        // shared route head alone steers.
+        sim::ground_orders::steer_ground(
+            g.geometry,
+            g.movement,
+            g.mirrored_navigation,
+            g.acceleration,
+            g.deceleration,
+            match.simulation_.sea_level
+        );
+    } else {
+        sim::ground_orders::tick_navigation(view(s, g, flags), match.simulation_.tick, *this);
+        constexpr uint32_t can_fly = 0x800u;
+        if (u.type && (u.type->flags & can_fly) != 0) {
+            const bool airborne =
+                (g.navigation.flags & sim::ground_orders::route_present_flag) != 0;
+            if (airborne && (g.movement.flags & 3) != sim::air::layer_air)
+                match.set_movement_layer(s, g, sim::air::layer_air);
+            int16_t cruise = 80;
+            if (const auto* definition = match.fields(s).definition;
+                definition != nullptr && definition->cruise_altitude > 0)
+                cruise = definition->cruise_altitude;
+            const auto ground =
+                match.sample_terrain_height(s.unit->position[0], s.unit->position[2]);
+            const auto fly_y = ground + (airborne ? cruise : 0);
+            const auto target_y =
+                static_cast<sim::unit_movement::Fixed>(static_cast<uint32_t>(fly_y) << 16);
+            int16_t roll = 0;
+            // The navigator's next waypoint stands in for the air driver's
+            // point while a mission steers through a ground goal.
+            sim::air::AirSteeringTarget target{};
+            target.position = {g.geometry.position[0], target_y, g.geometry.position[2]};
+            target.heading = g.geometry.heading;
+            if (airborne && g.navigation.count > 0) {
+                const auto points = sim::ground_orders::steering_points(g.navigation);
+                target.position.x = points[1][0];
+                target.position.z = points[1][2];
+                target.heading = base::game_math::direction(
+                    g.geometry.position[0] - target.position.x,
+                    g.geometry.position[2] - target.position.z
+                );
+            }
+            if (const oa::UnitDef* def = oa::world_unit_def_of(&match.state(), &s.record)) {
+                sim::air::air_flight_step(
+                    g.geometry,
+                    g.movement,
+                    g.previous_vector,
+                    target,
+                    *def,
+                    match.state().game.gravity != 0 ? match.state().game.gravity
+                                                    : sim::ground_orders::default_gravity,
+                    false,
+                    &roll
+                );
+            }
+            if ((g.movement.flags & 3) == sim::air::layer_air) {
+                s.record.bank = static_cast<int16_t>(roll);
+                s.record.pitch = g.geometry.pitch;
+            }
+            // Land when the route is gone and the unit is down at ground height.
+            if (!airborne && (g.movement.flags & 3) == sim::air::layer_air) {
+                const auto height = static_cast<int32_t>(g.geometry.position[1] >> 16);
+                if (height <= ground + 2) {
+                    match.set_movement_layer(s, g, sim::air::layer_ground);
+                    g.geometry.position[1] =
+                        static_cast<sim::unit_movement::Fixed>(static_cast<uint32_t>(ground) << 16);
+                }
+            }
+        } else
+            sim::ground_orders::steer_ground(
+                g.geometry,
+                g.movement,
+                g.navigation,
+                g.acceleration,
+                g.deceleration,
+                match.simulation_.sea_level
+            );
+    }
+    if (parent_index) {
+        auto& parent = match.slots_.at(parent_index);
+        const auto piece = std::bit_cast<int8_t>(s.record.attach_piece);
+        auto world = parent.unit ? parent.unit->position : u.position;
+        if (piece >= 0)
+            world = match.piece_world_position(parent, static_cast<uint32_t>(piece));
+        std::array<sim::unit_movement::Fixed, 3> next{
+            signed_word(world[0]), signed_word(world[1]), signed_word(world[2])
+        };
+        if (u.type && (u.type->flags & floater_type_flag) != 0) {
+            const auto water = static_cast<sim::unit_movement::Fixed>(
+                (static_cast<uint32_t>(u.type->waterline_offset) * 0xffffu +
+                 match.simulation_.sea_level)
+                << 16
+            );
+            if (!(water < next[1]))
+                next[1] = water;
+        }
+        // The carried unit's cell, bucket and sight follow the piece; an
+        // attached unit stays out of the bucket chains.
+        match.place_unit(s, next[0], next[1], next[2], g.movement.flags & 3);
+        g.project_slot();
+        if (piece >= 0) {
+            if (auto* inst = match.instance(parent.unit_index)) {
+                const auto index = static_cast<uint32_t>(piece);
+                if (index < inst->model().pieces().size()) {
+                    const auto attitude = inst->piece_attitude(index);
+                    s.record.bank = attitude.xy;
+                    s.yaw = static_cast<uint16_t>(attitude.xz);
+                    s.record.pitch = attitude.yz;
+                }
+            }
+        } else {
+            s.record.bank = parent.record.bank;
+            s.yaw = parent.yaw;
+            s.record.pitch = parent.record.pitch;
+        }
+        g.geometry.heading = s.yaw;
+        g.geometry.pitch = s.record.pitch;
+        if (auto* parent_ground = match.ground_runtime(parent.unit_index)) {
+            g.movement.velocity = parent_ground->movement.velocity;
+            g.movement.speed = parent_ground->movement.speed;
+        } else {
+            g.movement.velocity = {};
+            g.movement.speed = 0;
+        }
+        g.geometry.flags &= ~sim::unit_movement::position_dirty;
+    } else {
+        sim::unit_movement::integrate_unattached(
+            g.geometry,
+            g.movement,
+            match.simulation_.tick,
+            sim::simulation_state::locally_simulated(u),
+            *this
+        );
+    }
+    g.write_slot();
+    write_flags(s, flags);
+    signal_move_rate(s, g.movement);
+    auto& runtime = match.runtime_state(s.unit_index);
+    auto occupancy = runtime.sfx_occupancy;
+    const auto height = static_cast<int32_t>(signed_half(u.position[1] >> 16));
+    const auto sea = static_cast<int32_t>(match.simulation_.sea_level);
+    if ((u.flags & 3) == 1 || (u.flags & 3) == 2) {
+        if (sea < height)
+            occupancy = 4;
+        else {
+            if (-5 < height - sea)
+                occupancy = 1;
+            if (static_cast<int32_t>(u.type->waterline_offset) + height == sea)
+                occupancy = 2;
+            const auto top = static_cast<uint32_t>(match_unit_def(match, s.record).model_height);
+            if (static_cast<int32_t>(signed_half(top >> 16)) + height < sea)
+                occupancy = 3;
+        }
+    } else
+        occupancy = 0;
+    if (occupancy != runtime.sfx_occupancy) {
+        auto* object = match.instance(s.unit_index);
+        if (object && object->script())
+            object->script()->call("setSFXoccupy", std::span(&occupancy, 1), true);
+        runtime.sfx_occupancy = occupancy;
+    }
+}
+
+void TickHost::signal_move_rate(
+    sim::unit_spawn::Slot& s, const sim::unit_movement::Movement& movement
+) {
+    const auto rate = movement_rate(movement, s.record, match_unit_def(match, s.record));
+    auto& unit_flags = s.record.flags;
+    if (rate == ((unit_flags & moving_rate_mask) >> moving_rate_shift))
+        return;
+    if (rate == 0)
+        script(s, "StopMoving");
+    else if ((unit_flags & moving_rate_mask) == 0)
+        script(s, "StartMoving");
+    if (rate == 1)
+        script(s, "MoveRate1");
+    else if (rate == 2)
+        script(s, "MoveRate2");
+    else if (rate == 3)
+        script(s, "MoveRate3");
+    unit_flags = (unit_flags & ~moving_rate_mask) | (rate << moving_rate_shift);
+}
+
+bool TickHost::can_occupy(
+    const sim::unit_movement::Unit& u, std::array<int16_t, 2> cell, uint8_t mode
+) {
+    auto& s = movement_slot(u);
+    if (!match.fields(s).runtime_metadata || match.input_.collision_plots.empty())
+        throw std::logic_error("moving collision requires resolved type and terrain metadata");
+    match.prepare_spatial_state();
+    auto& projected = match.project_spatial(s);
+    const auto result =
+        sim::spatial_state::can_occupy(projected, s.unit_index, cell, mode, match.spatial_);
+    if (!result)
+        return false;
+    return *result;
+}
+
+void TickHost::remove_occupancy(sim::unit_movement::Unit& u) {
+    auto& s = movement_slot(u);
+    ground(*s.unit).write_slot();
+    match.prepare_spatial_state();
+    auto& projected = match.project_spatial(s);
+    match.spatial_.tick = match.simulation_.tick;
+    const auto result =
+        sim::spatial_state::remove_occupancy(projected, match.spatial_, match.map_listeners_);
+    match.synchronize_spatial_state();
+    ground(*s.unit).project_slot();
+    if (result != sim::spatial_state::Error::none)
+        throw std::runtime_error("moving occupancy removal rejected spatial state");
+}
+
+void TickHost::insert_occupancy(sim::unit_movement::Unit& u) {
+    auto& s = movement_slot(u);
+    ground(*s.unit).write_slot();
+    match.register_occupancy(s);
+    ground(*s.unit).project_slot();
+}
+
+void TickHost::update_spatial_membership(sim::unit_movement::Unit& u) {
+    auto& s = movement_slot(u);
+    ground(*s.unit).write_slot();
+    match.update_moving_sight(s);
+    ground(*s.unit).project_slot();
+}
+
+void Match::step_mirrored_movement(uint16_t unit) {
+    auto& s = slots_.at(unit);
+    if (!s.unit || !ground_runtime(unit))
+        return;
+    TickHost host(*this);
+    host.movement_tick(s.record);
+}
+
+void Match::refresh_mirrored_height(uint16_t unit) {
+    auto& s = slots_.at(unit);
+    if (!s.unit || !ground_runtime(unit))
+        return;
+    TickHost host(*this);
+    sim::simulation_state::update_height(state(), s.record, host);
+}
+
+void Match::set_mirrored_air_goal(uint16_t unit, const sim::air::AirGoal* goal) {
+    auto& driver = air_drivers_.at(unit);
+    if (driver.unit == nullptr || driver.local)
+        return;
+    auto& owned = mirrored_air_goals_.at(unit);
+    owned = goal != nullptr ? *goal : sim::air::AirGoal{};
+    driver.goal = goal != nullptr ? &owned : nullptr;
+}
+
+void Match::set_movement_layer(uint16_t unit, uint8_t layer) {
+    auto& s = slots_.at(unit);
+    auto* g = ground_runtime(unit);
+    if (!s.unit || !g)
+        return;
+    g->project_slot();
+    set_movement_layer(s, *g, layer);
+}
+
+void Match::set_movement_layer(
+    sim::unit_spawn::Slot& s, sim::ground_orders::GroundRuntime& g, uint8_t layer
+) {
+    if ((g.movement.flags & sim::unit_movement::occupancy_mask) == layer)
+        return;
+    if (layer == sim::air::layer_ground) {
+        g.movement.velocity = {0, 0, 0};
+        g.movement.speed = 0;
+        const oa::UnitDef* def = oa::world_unit_def_of(&state(), &s.record);
+        int16_t bank = 0;
+        sim::air::air_attitude(
+            g.geometry,
+            g.previous_vector,
+            {0, 0, 0},
+            def != nullptr ? def->bank_scale : 0,
+            def != nullptr ? def->pitch_scale : 0,
+            state().game.gravity != 0 ? state().game.gravity : sim::ground_orders::default_gravity,
+            &bank
+        );
+        s.record.bank = bank;
+        s.record.pitch = g.geometry.pitch;
+        set_activation(s, sim::unit_activation::active_mask, false);
+    } else
+        set_activation(s, sim::unit_activation::active_mask, true);
+    g.movement.flags = static_cast<uint8_t>(
+        ((g.movement.flags ^ layer) & sim::unit_movement::occupancy_mask) ^ g.movement.flags
+    );
+}
+
+} // namespace oa::sim::match_runtime

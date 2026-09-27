@@ -29,3 +29,45 @@ with these configure options besides the installation --prefix:
 
 They are separate shared libraries and can be replaced by another compatible
 FFmpeg build of the same major versions.
+
+Builds from the Open Annihilation source
+
+The Windows cross-build (tools/build_windows.sh) builds FFmpeg 9.0.2 from
+the same archive with tools/bootstrap_windows_deps.py, which runs configure
+with these options besides the installation --prefix:
+
+  --enable-cross-compile
+  --arch=x86_64
+  --target-os=mingw32
+  --cross-prefix=x86_64-w64-mingw32-
+  --enable-shared
+  --disable-static
+  --disable-programs
+  --disable-doc
+  --disable-debug
+  --disable-autodetect
+  --enable-w32threads
+  --disable-network
+  --disable-avdevice
+  --disable-avfilter
+  --disable-x86asm
+  --disable-everything
+  --enable-protocol=file
+  --enable-demuxer=smacker,mp3,ogg,wav,flac
+  --enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8
+  --enable-parser=mpegaudio,vorbis,flac
+  --extra-ldflags=-static-libgcc
+  --extra-libs=-Wl,-Bstatic,-lwinpthread,-Bdynamic
+
+The script copies the resulting DLLs and COPYING.LGPLv2.1 beside
+open-annihilation.exe and oa-intro.exe.
+
+On macOS and Linux a build from source links the FFmpeg that CMake finds on
+the system. To build against a modified FFmpeg on any platform, set these
+CMake cache variables to its headers and libraries when configuring the
+source: OA_FFMPEG_INCLUDE_DIR, OA_AVFORMAT_LIBRARY, OA_AVCODEC_LIBRARY,
+OA_AVUTIL_LIBRARY, OA_SWSCALE_LIBRARY and OA_SWRESAMPLE_LIBRARY. For the
+Windows cross-build, tools/build_windows.sh --ffmpeg PREFIX takes an FFmpeg
+built for mingw-w64 (include/, lib/ with the import libraries, bin/ with the
+DLLs, and that build's COPYING.LGPLv2.1) and copies its DLLs and licence
+beside the executables.

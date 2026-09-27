@@ -1,0 +1,214 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The sound object's 3D switch and the novelty voice: the clips the match
+// plays at a point, wave files played by path, and the "Sound3D" and "Sing"
+// console commands.
+#include "oa/app/runtime.hpp"
+
+#include "oa/sim/match_runtime.hpp"
+#include "oa/platform/preferences.hpp"
+
+#include <algorithm>
+#include <charconv>
+#include <cstdint>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace oa::app {
+
+namespace {
+
+using PointSound = oa::sim::match_runtime::Match::PointSound;
+
+constexpr uint32_t announcement_window_ticks = 30;
+constexpr uint32_t novelty_honk_windows = 8; // honk on one window in eight
+
+} // namespace
+
+void Runtime::play_point_sound(const char* name, const PointSound& sound) {
+    if (options_.mute || options_.launch.playback_suppressed != 0 || preferences_.fx_volume == 0 ||
+        (preferences_.sound_flags & init::preference_flags::sound_mode) == 0)
+        return;
+    const oa::audio::VoicePosition position{sound.x, sound.y, sound.z};
+    const auto spatial = oa::audio::voice_spatial(
+        sound_spatial_, sound.min_distance, sound.max_distance, sound.placed ? &position : nullptr
+    );
+    std::string error;
+    if (!audio_player_.play_placed(
+            oa::audio::game_audio::sound_resource(name), sound.volume, spatial, error
+        ))
+        std::cerr << "sound unavailable: " << error << '\n';
+}
+
+void Runtime::play_wave_file(std::string_view path) {
+    if (options_.mute)
+        return;
+    const oa::audio::game_audio::PlaybackState state{
+        preferences_.fx_volume != 0,
+        static_cast<uint8_t>(preferences_.sound_flags & init::preference_flags::sound_mode),
+        options_.launch.playback_suppressed != 0,
+        options_.launch.system_sound != 0,
+        oa::audio::game_audio::PlaybackRoute::primary
+    };
+    if (oa::audio::game_audio::wave_file_route(path, state) ==
+        oa::audio::game_audio::WaveRoute::none)
+        return;
+    std::string resource(path);
+    std::replace(resource.begin(), resource.end(), '\\', '/');
+    std::string error;
+    if (!audio_player_.play_resource(resource, error))
+        std::cerr << "sound unavailable: " << error << '\n';
+}
+
+void Runtime::toggle_novelty_voice() {
+    novelty_voice_ = novelty_voice_ == 0 ? 1 : 0;
+    offline_services_.announcement_gates().novelty_voice = novelty_voice_ != 0;
+}
+
+void Runtime::check_console_sound_commands(const std::function<void(const char*)>& enter_line) {
+    oa::Game& game = match_->state().game;
+    const auto require = [](bool ok, const char* what) {
+        if (!ok)
+            throw std::runtime_error(std::string("console sound check: ") + what);
+    };
+    const auto saved = [&](const char* key) -> int64_t {
+        const auto values = oa::platform::preferences::load(preference_path_);
+        const auto found = values.find(preference_key(init::general_section, key));
+        int64_t value = -1;
+        if (found != values.end())
+            (void)std::from_chars(
+                found->second.data(), found->second.data() + found->second.size(), value
+            );
+        return value;
+    };
+    const oa::sim::unit_spawn::Slot* commander = nullptr;
+    for (const auto& slot : match_->world().slots)
+        if (commander == nullptr && slot.unit != nullptr && slot.record.type_index != 0 &&
+            slot.record.owner_index == match_local_player_)
+            commander = &slot;
+    require(commander != nullptr, "no local unit");
+
+    const auto mode =
+        static_cast<int64_t>(preferences_.sound_flags & init::preference_flags::sound_mode);
+    require(sound_spatial_ == (mode == 2 ? 1 : 0), "the 3D switch does not follow Sound Mode");
+    const auto scroll = game.scroll_speed;
+    game.scroll_speed = scroll == 7 ? 8 : 7;
+    const auto unsaved = game.scroll_speed;
+    enter_line("+sound3d");
+    require(sound_spatial_ == 1, "+sound3d did not turn 3D sound on");
+    require(saved("scrollspeed") == unsaved, "+sound3d did not save the options");
+    require(saved("Sound Mode") == mode, "+sound3d changed the saved Sound Mode");
+
+    struct Heard {
+        const Runtime* runtime{};
+        std::vector<PointSound> sounds;
+    } heard{this, {}};
+
+    const auto kept_hook = match_->point_sound;
+    match_->point_sound = {
+        &heard,
+        [](void* context) { return static_cast<Heard*>(context)->runtime->sound_spatial_ != 0; },
+        [](void* context, const char*, const PointSound& sound) {
+            static_cast<Heard*>(context)->sounds.push_back(sound);
+        }
+    };
+    const FixedVec3 at = commander->record.position;
+    const int32_t px = at.x >> 16;
+    const int32_t py = at.y >> 16;
+    const int32_t pz = at.z >> 16;
+    constexpr int32_t cell = 16;
+    constexpr int32_t margin = 3 * cell;
+    game.camera_x = static_cast<uint32_t>(px - margin);
+    game.camera_y = static_cast<uint32_t>(pz - margin);
+    match_->play_sound_at("xplomed2", at);
+    require(heard.sounds.size() == 1, "the commander's point was not heard");
+    const auto& placed = heard.sounds.back();
+    require(
+        placed.placed && placed.volume == -585 && placed.y == 0,
+        "a clip was not placed with 3D sound on"
+    );
+    require(
+        placed.x == margin - game.view_cells_width / 2 * cell &&
+            placed.z == (py >> 1) - pz + game.view_cells_height / 2 * cell + pz - margin,
+        "a clip was not placed from the middle of the view"
+    );
+    require(
+        placed.min_distance ==
+                static_cast<float>((game.view_cells_width + game.view_cells_height) / 2 * cell) &&
+            placed.max_distance == static_cast<float>((game.map_width + game.map_height) * cell),
+        "a placed clip has the wrong distance range"
+    );
+
+    game.scroll_speed = scroll;
+    enter_line("+sound3d");
+    require(sound_spatial_ == 0, "+sound3d did not turn 3D sound off");
+    require(
+        saved("scrollspeed") == scroll && saved("Sound Mode") == mode,
+        "+sound3d did not save the options"
+    );
+    match_->play_sound_at("xplomed2", at);
+    game.camera_x = static_cast<uint32_t>(px + 1);
+    match_->play_sound_at("xplomed2", at);
+    require(heard.sounds.size() == 3, "the commander's point was not heard with 3D sound off");
+    require(
+        !heard.sounds[1].placed && heard.sounds[1].volume == -585,
+        "an on-screen clip was not unplaced at the near volume"
+    );
+    require(
+        !heard.sounds[2].placed && heard.sounds[2].volume == -1585,
+        "an off-screen clip was not unplaced at the far volume"
+    );
+    match_->point_sound = kept_hook;
+    bind_match_view();
+
+    auto& gates = offline_services_.announcement_gates();
+    require(novelty_voice_ == 0 && !gates.novelty_voice, "the novelty voice started on");
+    const auto kept_gates = gates;
+    gates.play_audio = true;
+    gates.unit_speech_mode = true;
+    gates.unit_sound_volume = 10;
+    auto& slot = match_->world().slots[commander->unit_index];
+    // Selects the commander each tick until speech plays: a record presented
+    // within 30 ticks of the last speech is shown without audio.
+    const auto spoken = [&]() -> std::string {
+        for (uint32_t step = 0; step <= 2 * announcement_window_ticks; ++step) {
+            offline_services_.command_sound(
+                slot, static_cast<uint32_t>(oa::audio::game_audio::UnitAnnouncementCategory::select)
+            );
+            for (auto& event : offline_services_.pump_announcements())
+                if (event.sound_resource)
+                    return *event.sound_resource;
+            ++match_timing_.tick;
+            match_->simulation().tick = match_timing_.tick;
+            match_->tick();
+        }
+        return {};
+    };
+    enter_line("+sing");
+    require(novelty_voice_ == 1 && gates.novelty_voice, "+sing did not turn the novelty voice on");
+    const auto novelty = spoken();
+    const auto tick = match_->simulation().tick;
+    const bool honk_window = tick / announcement_window_ticks % novelty_honk_windows == 0;
+    require(
+        novelty == (honk_window ? "sounds/honk.wav" : "sounds/sing.wav"),
+        "unit speech did not play honk or sing with the novelty voice on"
+    );
+    enter_line("+sing");
+    require(
+        novelty_voice_ == 0 && !gates.novelty_voice, "+sing did not turn the novelty voice off"
+    );
+    const auto own = spoken();
+    require(
+        !own.empty() && own != "sounds/honk.wav" && own != "sounds/sing.wav",
+        "unit speech did not play the unit's own sound with the novelty voice off"
+    );
+    gates = kept_gates;
+    std::cout << "console sound check: +sound3d placed a clip from the view centre and saved, "
+                 "+sing played "
+              << novelty << " at tick " << tick << " and then " << own << '\n';
+}
+
+} // namespace oa::app

@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+cmake_minimum_required(VERSION 3.24)
+project(oa_sim_unit_health LANGUAGES CXX)
+include(CTest)
+add_library(oa-sim-unit-health src/unit_health.cpp src/paralysis.cpp)
+add_library(oa::sim::unit_health ALIAS oa-sim-unit-health)
+target_include_directories(oa-sim-unit-health PUBLIC include)
+target_compile_features(oa-sim-unit-health PUBLIC cxx_std_20)
+if(TARGET oa-options)
+  target_link_libraries(oa-sim-unit-health PUBLIC oa-options)
+endif()
+target_link_libraries(oa-sim-unit-health PUBLIC oa-core-types)
+if(BUILD_TESTING)
+  add_executable(oa-unit-health-test tests/unit_health_test.cpp)
+  target_link_libraries(oa-unit-health-test PRIVATE oa-sim-unit-health)
+  add_test(NAME unit-health COMMAND oa-unit-health-test)
+  add_executable(oa-unit-paralysis-test tests/paralysis_test.cpp)
+  target_link_libraries(oa-unit-paralysis-test PRIVATE oa-sim-unit-health)
+  add_test(NAME unit-paralysis COMMAND oa-unit-paralysis-test)
+endif()

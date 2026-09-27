@@ -1,0 +1,298 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Native boundaries the offline match runtime calls back into (audio, effects, footprints).
+#pragma once
+
+#include "oa/audio/unit_announcements.hpp"
+#include "oa/sim/unit_effects/effects_offline.hpp"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace oa::app {
+
+class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServices {
+  public:
+
+    /// Binds the unit effect runtime the script effect calls go to.
+    ///
+    /// @param effects effect runtime; must outlive the binding
+    void bind_effects(oa::sim::match_runtime::Effects& effects) noexcept { effects_ = &effects; }
+
+    /// Forgets the bound match; announcements need bind_announcements() again.
+    void clear_match() noexcept { match_ = nullptr; }
+
+    /// Sets the player whose units' announcements count as the viewer's own.
+    ///
+    /// @param viewpoint player index compared with the speaking slot's player byte
+    void set_viewpoint(uint8_t viewpoint) noexcept { viewpoint_ = viewpoint; }
+
+    /// Binds the unit sound catalog and the match for unit announcements.
+    ///
+    /// Maps each type's simulation record to its definition's sound category.
+    /// Throws std::runtime_error unless there is exactly one more type than
+    /// definitions (type 0 has none).
+    ///
+    /// @param catalog unit sound catalog; must outlive the binding
+    /// @param match running match; must outlive the binding
+    /// @param types spawn types, index 0 unused
+    /// @param definitions unit definitions of types 1 and up
+    /// @param gates presentation gates the queue starts with
+    void bind_announcements(
+        const oa::audio::game_audio::UnitSoundCatalog& catalog,
+        oa::sim::match_runtime::Match& match,
+        std::span<oa::sim::unit_spawn::Type> types,
+        std::span<const oa::data::unit_definitions::UnitDefinition> definitions,
+        oa::audio::game_audio::AnnouncementPresentationGates gates
+    ) {
+        if (types.size() != definitions.size() + 1U)
+            throw std::runtime_error("unit announcement type catalog is inconsistent");
+        announcement_catalog_ = &catalog;
+        match_ = &match;
+        announcement_gates_ = gates;
+        sound_categories_.clear();
+        for (std::size_t index = 1; index < types.size(); ++index)
+            sound_categories_.emplace(
+                &types[index].simulation, definitions[index - 1U].sound_category
+            );
+    }
+
+    /// Returns the presentation gates the queue reads as each record is presented.
+    ///
+    /// @return the gates, writable
+    oa::audio::game_audio::AnnouncementPresentationGates& announcement_gates() noexcept {
+        return announcement_gates_;
+    }
+
+    /// Presents at most one queued announcement and hands over those presented since the last call.
+    ///
+    /// A record is pumped only while the catalog and match are bound and the
+    /// queue is not empty; its random draw comes from the match's generator.
+    ///
+    /// @return the presented announcements, oldest first; the list starts empty again
+    [[nodiscard]] std::vector<oa::audio::game_audio::UnitAnnouncement> pump_announcements() {
+        if (announcement_catalog_ != nullptr && match_ != nullptr &&
+            announcement_queue_.size() != 0) {
+            const auto random = static_cast<uint16_t>(match_->random_bounded(0x8000U));
+            if (auto event = announcement_queue_.pump(
+                    *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
+                ))
+                presented_announcements_.push_back(std::move(*event));
+        }
+        return std::exchange(presented_announcements_, {});
+    }
+
+    /// Queues a unit's activation or deactivation sound as an announcement.
+    ///
+    /// @param slot unit whose state changed
+    /// @param sound sound the change calls for, taken as its sound category
+    void activation_sound(
+        oa::sim::unit_spawn::Slot& slot, oa::sim::unit_activation::Sound sound
+    ) override {
+        enqueue_announcement(slot, static_cast<uint32_t>(sound));
+    }
+
+    /// Appends an attachment notification to attachment_notifications.
+    ///
+    /// @param slot unit whose state changed
+    /// @param value event bits of the change
+    void attachment_notification(oa::sim::unit_spawn::Slot& slot, uint32_t value) override {
+        attachment_notifications.emplace_back(slot.unit_index, value);
+    }
+
+    /// Appends a unit whose order panel needs a redraw to refreshed_units.
+    ///
+    /// @param slot unit the panel shows
+    void refresh_selected_unit(oa::sim::unit_spawn::Slot& slot) override {
+        refreshed_units.push_back(slot.unit_index);
+    }
+
+    /// Queues a unit's command speech as an announcement.
+    ///
+    /// @param slot speaking unit
+    /// @param category speech category (5 order, 7 failed, 8 complete, ...)
+    void command_sound(oa::sim::unit_spawn::Slot& slot, uint32_t category) override {
+        enqueue_announcement(slot, category);
+    }
+
+    /// Appends a plot height range refresh to masked_registrations.
+    ///
+    /// @param origin first cell of the rectangle, one cell before the footprint
+    ///     origin on each axis
+    /// @param footprint rectangle size in cells, the footprint plus two on each axis
+    void refresh_plot_height_range(
+        std::array<int16_t, 2> origin, std::array<int16_t, 2> footprint
+    ) override {
+        masked_registrations.emplace_back(origin, footprint);
+    }
+
+    /// Appends a changed footprint to footprint_changes.
+    ///
+    /// @param cell footprint origin cell
+    /// @param footprint footprint size in cells
+    void notify_footprint_changed(
+        std::array<int16_t, 2> cell, std::array<int16_t, 2> footprint
+    ) override {
+        footprint_changes.emplace_back(cell, footprint);
+    }
+
+    /// Appends an object-backed unit that left its footprint to removed_footprints.
+    ///
+    /// @param unit the removed unit; its object tick has already advanced
+    /// @param old_tick the unit's object tick before removal
+    void notify_object_footprint_removed(
+        oa::sim::spatial_state::Unit& unit, uint32_t old_tick
+    ) override {
+        removed_footprints.emplace_back(unit.id, old_tick);
+    }
+
+    /// Passes a COB EMIT-SFX to the bound effect runtime.
+    ///
+    /// Throws std::runtime_error when no effect runtime is bound.
+    ///
+    /// @param slot unit running the script
+    /// @param piece COB piece index
+    /// @param effect SFX type the script passes
+    void emit_sfx(oa::sim::unit_spawn::Slot& slot, uint32_t piece, int32_t effect) override {
+        if (!effects_)
+            throw std::runtime_error("unit effect runtime is not bound");
+        effects_->emit_sfx(slot, piece, effect);
+    }
+
+    /// Passes a COB EXPLODE to the bound effect runtime.
+    ///
+    /// Throws std::runtime_error when no effect runtime is bound.
+    ///
+    /// @param slot unit running the script
+    /// @param piece COB piece index
+    /// @param flags explode type flags the script passes
+    void explode_piece(oa::sim::unit_spawn::Slot& slot, uint32_t piece, int32_t flags) override {
+        if (!effects_)
+            throw std::runtime_error("unit effect runtime is not bound");
+        effects_->explode_piece(slot, piece, flags);
+    }
+
+    /// Passes a COB ATTACH-UNIT to the bound effect runtime.
+    ///
+    /// Throws std::runtime_error when no effect runtime is bound.
+    ///
+    /// @param slot carrier running the script
+    /// @param first unit id to carry
+    /// @param second COB piece index to carry it on
+    /// @param third attachment mode
+    void attach_unit(
+        oa::sim::unit_spawn::Slot& slot, int32_t first, int32_t second, int32_t third
+    ) override {
+        if (!effects_)
+            throw std::runtime_error("unit effect runtime is not bound");
+        effects_->attach_unit(slot, first, second, third);
+    }
+
+    /// Passes a COB DROP-UNIT to the bound effect runtime.
+    ///
+    /// Throws std::runtime_error when no effect runtime is bound.
+    ///
+    /// @param slot carrier running the script
+    /// @param target unit id to set down
+    void drop_unit(oa::sim::unit_spawn::Slot& slot, int32_t target) override {
+        if (!effects_)
+            throw std::runtime_error("unit effect runtime is not bound");
+        effects_->drop_unit(slot, target);
+    }
+
+    std::vector<std::pair<std::array<int16_t, 2>, std::array<int16_t, 2>>> masked_registrations,
+        footprint_changes;
+    std::vector<std::pair<uint16_t, uint32_t>> removed_footprints;
+    std::vector<std::pair<uint16_t, uint32_t>> attachment_notifications;
+    std::vector<uint16_t> refreshed_units;
+
+  private:
+
+    /// Queues a unit announcement for a game sound category.
+    ///
+    /// A category with no announcement is dropped. When the queue was full and the
+    /// record is queued, the record it evicted is presented at once. Throws
+    /// std::runtime_error when nothing is bound or the unit's type is not in the
+    /// catalog.
+    ///
+    /// @param slot speaking unit
+    /// @param category_number the game's sound category, mapped through
+    ///     unit_announcement_category()
+    void enqueue_announcement(oa::sim::unit_spawn::Slot& slot, uint32_t category_number) {
+        if (announcement_catalog_ == nullptr || match_ == nullptr || slot.unit == nullptr ||
+            slot.unit->type == nullptr)
+            throw std::runtime_error("unit announcement runtime is not bound");
+        const auto category = oa::audio::game_audio::unit_announcement_category(category_number);
+        if (!category)
+            return;
+        const auto found = sound_categories_.find(slot.unit->type);
+        if (found == sound_categories_.end())
+            throw std::runtime_error("unit announcement type is not in the loaded catalog");
+        const bool was_full =
+            announcement_queue_.size() == oa::audio::game_audio::AnnouncementQueue::capacity;
+        const auto result = announcement_queue_.enqueue(
+            {slot.unit_index,
+             found->second,
+             *category,
+             match_->simulation().tick,
+             slot.owner_index == viewpoint_,
+             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0 &&
+                 (slot.unit->flags & OA_UNIT_FLAG_DEATH_PENDING) == 0,
+             // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
+             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
+             std::nullopt}
+        );
+        if (was_full && result == oa::audio::game_audio::AnnouncementEnqueueStatus::queued) {
+            const auto random = static_cast<uint16_t>(match_->random_bounded(0x8000U));
+            if (auto event = announcement_queue_.present_evicted(
+                    *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
+                ))
+                presented_announcements_.push_back(std::move(*event));
+        }
+    }
+
+    oa::sim::match_runtime::Effects* effects_{};
+    const oa::audio::game_audio::UnitSoundCatalog* announcement_catalog_{};
+    oa::sim::match_runtime::Match* match_{};
+    oa::audio::game_audio::AnnouncementQueue announcement_queue_;
+    oa::audio::game_audio::AnnouncementPresentationGates announcement_gates_{};
+    std::unordered_map<const oa::sim::simulation_state::UnitType*, std::string> sound_categories_;
+    std::vector<oa::audio::game_audio::UnitAnnouncement> presented_announcements_;
+    uint8_t viewpoint_{};
+};
+
+class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycle,
+                                   public oa::sim::unit_effects::Sink {
+  public:
+
+    /// Records a unit effect event with the current tick, keeping the latest 64.
+    ///
+    /// @param event effect event
+    void effect(const oa::sim::unit_effects::Event& event) override {
+        const auto tick = clock == nullptr ? 0u : *clock;
+        events.push_back({event, tick});
+        if (events.size() > 64)
+            events.erase(
+                events.begin(), events.begin() + static_cast<std::ptrdiff_t>(events.size() - 64)
+            );
+    }
+
+    struct LiveEffect {
+        oa::sim::unit_effects::Event event;
+        uint32_t spawn_tick{};
+    };
+
+    const uint32_t* clock = nullptr;
+    std::vector<LiveEffect> events;
+};
+
+} // namespace oa::app

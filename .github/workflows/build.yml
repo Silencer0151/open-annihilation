@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Portable build
+on: [push, pull_request, workflow_dispatch]
+env:
+  # SDL's X11, Wayland and audio back ends, zlib, and the FFmpeg libraries
+  # the intro player decodes movies with.
+  LINUX_PACKAGES: >-
+    zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev
+    libxfixes-dev libxss-dev libxtst-dev libasound2-dev libpulse-dev libwayland-dev
+    libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libdbus-1-dev
+    libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The layout of the sources, with the clang-format release that
+      # tools/format/requirements.txt pins, and the copyright and licence
+      # every file states. The format-check and licensing-check tests run
+      # the same checks in ctest on the macOS and Linux jobs (the Windows
+      # job runs no ctest); format-check skips where that release is not
+      # installed, which is everywhere this step has not run.
+      - name: Format and licence checks
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install --require-hashes -r tools/format/requirements.txt
+          python tools/format_sources.py --check --diff
+          python tools/spdx_headers.py --check
+      - name: Linux development dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - name: macOS FFmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Windows zlib
+        if: runner.os == 'Windows'
+        run: vcpkg install zlib:x64-windows
+      - name: Build pinned SDL
+        run: python tools/bootstrap_sdl.py
+      - name: Configure Unix
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+      # Windows has no FFmpeg here, so oa-game links the intro player that
+      # skips the movies.
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B build -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      - name: Build
+        run: cmake --build build --config Debug --parallel 4
+      # Clang reads the /// blocks of the public headers; a @param that names
+      # no parameter or a command it does not know fails the build
+      # (cmake/OaDocumentationCheck.cmake).
+      - name: Documentation check
+        if: runner.os == 'macOS'
+        run: cmake --build build --config Debug --target oa-doc-check --parallel 4
+      # oa-intro exists only when the FFmpeg intro player was configured, so
+      # this fails if the FFmpeg development libraries were not found.
+      - name: FFmpeg intro player
+        if: runner.os != 'Windows'
+        run: cmake --build build --config Debug --target oa-intro
+      - name: Game executable starts
+        shell: bash
+        env:
+          SDL_VIDEO_DRIVER: dummy
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          game=build/open-annihilation
+          bundle=build/open-annihilation.app
+          if [ -d "$bundle" ]; then
+            plutil -lint "$bundle/Contents/Info.plist"
+            game="$bundle/Contents/MacOS/open-annihilation"
+          fi
+          if [ -f build/Debug/open-annihilation.exe ]; then game=build/Debug/open-annihilation.exe; fi
+          "$game" --help | grep "usage: open-annihilation"
+      # Without a game installation the checks that start the game on game
+      # data are not registered and the game-data tests skip.
+      - name: Synthetic conformance and platform smoke tests
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error
+      # audio-sdl-music plays generated tracks through the FFmpeg music
+      # decoder, which this Windows build does not have.
+      - name: Synthetic conformance and platform smoke tests without FFmpeg
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error -E '^audio-sdl-music$'
+
+  # oa-game linked with the test extension that fills every hook of its
+  # extension table with a recorder (tests/extension) and adds a Runtime
+  # member through the members header. CI has no game installation, so
+  # this job checks the option hooks, the hook list, the members mechanism's
+  # build and the layout check; extension-hooks-game, which finds a dropped
+  # call of any other hook, skips here and runs only where OA_GAME_DIR names
+  # an installation (a local or private run). The rest of the suite runs as
+  # in the build job.
+  extension-recorder:
+    name: extension recorder (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux development dependencies
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - name: Build pinned SDL
+        run: python tools/bootstrap_sdl.py
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_EXTENSIONS_TARGET=oa-extension-recorder -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Tests with the recorder extension
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+  sanitizers:
+    name: sanitizers (ubuntu-latest, clang)
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      # Leak checking is off: the suite has not been run under LeakSanitizer
+      # yet. SIGFPE is left to the program: platform-shims checks that a
+      # divide fault ends a child process with it.
+      ASAN_OPTIONS: detect_leaks=0:handle_sigfpe=0
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux development dependencies
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - name: Build pinned SDL
+        run: python tools/bootstrap_sdl.py
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_SANITIZERS=ON -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+      - name: Build
+        run: cmake --build build --parallel 4
+      # AddressSanitizer's shadow memory fails to map when the kernel
+      # randomises more than 28 bits of the address space.
+      - name: Address-space randomisation AddressSanitizer supports
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Tests under AddressSanitizer and UndefinedBehaviorSanitizer
+        run: ctest --test-dir build --output-on-failure --no-tests=error

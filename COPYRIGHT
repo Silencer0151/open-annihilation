@@ -1,0 +1,22 @@
+Open Annihilation
+Copyright 2026 Steve Gray
+
+"The Open Annihilation Authors", named in the copyright line of the SPDX
+header at the top of each file in this repository and in REUSE.toml, means
+the copyright holder stated here.
+
+The copyright in this repository's files is held by Steve Gray, the
+project's maintainer. Contributors assign the copyright in their
+contributions to the maintainer under the Contributor Licence Agreement
+(CLA.md); CONTRIBUTORS.md lists who has contributed.
+
+The files are distributed under the GNU General Public License, version 3
+only (LICENSE), except where a file's own header or an annotation in
+REUSE.toml states other terms. Third-party components and their licences
+are listed in ATTRIBUTIONS.md and under licenses/.
+
+The Open Annihilation branding in branding/, the icon and the icons made
+from it that the builds put in the game, is not distributed under the GNU
+General Public License. Steve Gray reserves all rights in it: no licence to
+use, copy, modify or distribute it is granted without his prior written
+permission (licenses/LicenseRef-OpenAnnihilation-Branding.txt).

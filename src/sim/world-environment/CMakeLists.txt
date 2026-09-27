@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+cmake_minimum_required(VERSION 3.24)
+project(oa_sim_world_environment LANGUAGES CXX)
+include(CTest)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/OaOptions.cmake")
+add_library(oa-sim-world-environment src/wind.cpp src/sea.cpp src/meteor.cpp)
+add_library(oa::sim::world_environment ALIAS oa-sim-world-environment)
+target_include_directories(oa-sim-world-environment PUBLIC include)
+target_compile_features(oa-sim-world-environment PUBLIC cxx_std_20)
+target_link_libraries(oa-sim-world-environment PUBLIC oa-sim-unit-movement oa-core-types)
+if(TARGET oa-options)
+ target_link_libraries(oa-sim-world-environment PUBLIC oa-options)
+endif()
+if(BUILD_TESTING)
+ add_executable(oa-world-environment-test tests/wind_test.cpp)
+ target_link_libraries(oa-world-environment-test PRIVATE oa-sim-world-environment)
+ add_test(NAME world-environment COMMAND oa-world-environment-test)
+ add_executable(oa-meteor-test tests/meteor_test.cpp)
+ target_link_libraries(oa-meteor-test PRIVATE oa-sim-world-environment)
+ add_test(NAME world-meteors COMMAND oa-meteor-test)
+endif()

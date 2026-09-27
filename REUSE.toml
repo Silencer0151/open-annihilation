@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Copyright and licence of the engine's files that carry no header of their
+# own: documents, images and data. Every other file of the engine carries
+# two SPDX header lines, which tools/spdx_headers.py adds and checks (the
+# licensing-check test). A file's own header takes precedence over these
+# annotations. Licence texts and third-party notices (LICENSE, licenses/)
+# state their own terms. Every copyright line names the project's authors
+# and points to COPYRIGHT, which names the holder once for the repository,
+# except the branding's at the end, which is not under the project's
+# licence.
+#
+# The paths name the engine's own directories only: the projects nested in
+# this tree keep their own terms. '*' matches within one directory and '**'
+# across directories.
+#
+# The file is written in the REUSE specification's format (version 1), but
+# licensing-check is what the engine holds its files to. The tree does not
+# claim full REUSE compliance, which would also want each licence text
+# under LICENSES/ named by its SPDX identifier and the third-party notices
+# in licenses/ annotated with their own terms.
+version = 1
+
+# The documents, the copyright statement, and the diagrams and tables in
+# docs/.
+[[annotations]]
+path = [
+    "*.md",
+    "COPYRIGHT",
+    ".github/**.md",
+    "cmake/**.md",
+    "docs/**",
+    "src/**.md",
+    "tests/**.md",
+    "tools/**.md",
+]
+SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Data that cannot hold a comment: the checks' baselines and tables, JSON
+# anywhere in the engine's directories, and the macOS bundle's Info.plist
+# template.
+[[annotations]]
+path = [
+    "*.json",
+    "cmake/**.json",
+    "src/**.json",
+    "src/app/Info.plist.in",
+    "tests/**.json",
+    "tools/**.json",
+    "tools/**.txt",
+]
+SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Adapted from the Contributor Covenant, version 2.1, which is distributed
+# under the Creative Commons Attribution 4.0 licence.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+precedence = "override"
+SPDX-FileCopyrightText = "Contributor Covenant contributors <https://www.contributor-covenant.org>"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+# The Open Annihilation branding: the icon, from the Open Annihilation
+# branding repository, and the icons tools/make_icons.py makes from it,
+# which the builds put in the game. All rights reserved: no licence to use,
+# copy, modify or distribute them is granted, under the project's licence
+# or otherwise, without the holder's prior written permission
+# (licenses/LicenseRef-OpenAnnihilation-Branding.txt).
+[[annotations]]
+path = [
+    "branding/open-annihilation-256.png",
+    "branding/open-annihilation-icon.png",
+    "branding/open-annihilation.icns",
+    "branding/open-annihilation.ico",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "Steve Gray"
+SPDX-License-Identifier = "LicenseRef-OpenAnnihilation-Branding"

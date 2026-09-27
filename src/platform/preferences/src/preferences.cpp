@@ -1,0 +1,259 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/platform/preferences.hpp"
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shlobj.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+namespace oa::platform::preferences {
+void restore_music_defaults(MusicOptions& options) noexcept {
+    options.music_volume = default_music_volume;
+    options.cd_mode = default_cd_mode;
+    // The word is stored only when bit 0 is clear, and setting the bit keeps
+    // the rest of the word.
+    if ((options.music_flags & music_flag::mode) == 0) {
+        options.music_flags = static_cast<uint16_t>(options.music_flags | music_flag::mode);
+    }
+}
+
+namespace {
+constexpr std::size_t maximum_file_bytes = 1024U * 1024U;
+constexpr std::size_t maximum_entries = 4096;
+constexpr std::size_t maximum_value_bytes = 64U * 1024U;
+constexpr std::string_view format_header = "open-annihilation-preferences 1";
+std::atomic<unsigned long> temporary_sequence{};
+
+void validate(const Values& values) {
+    if (values.size() > maximum_entries)
+        throw std::runtime_error("too many game preferences");
+    for (const auto& [key, value] : values)
+        if (key.empty() || key.size() > maximum_value_bytes || value.size() > maximum_value_bytes)
+            throw std::runtime_error("game preference exceeds size limit");
+}
+
+std::runtime_error io_error(const char* operation, const std::filesystem::path& file) {
+    return std::runtime_error(std::string(operation) + ": " + file.string());
+}
+
+/// The engine's folder in Application Support, named after the project's domain.
+constexpr std::string_view apple_folder_name = "net.coreprime.open-annihilation";
+/// The name earlier versions gave that folder.
+constexpr std::string_view earlier_apple_folder_name = "com.coreprime.open-annihilation";
+} // namespace
+
+std::filesystem::path apple_data_directory(const std::filesystem::path& application_support) {
+    const auto folder = application_support / apple_folder_name;
+    const auto earlier = application_support / earlier_apple_folder_name;
+    std::error_code error;
+    // A folder whose existence cannot be told is treated as present, so the
+    // earlier folder is moved only when the new one is known to be absent.
+    const bool folder_absent = !std::filesystem::exists(folder, error) && !error;
+    if (!folder_absent || !std::filesystem::is_directory(earlier, error))
+        return folder;
+    std::filesystem::rename(earlier, folder, error);
+    // The folder may also have appeared from another instance starting at the
+    // same time; either way, it is the one to use.
+    std::error_code ignored;
+    if (!error || std::filesystem::exists(folder, ignored))
+        return folder;
+    std::cerr << "cannot rename " << earlier.string() << " to " << folder.string() << ": "
+              << error.message() << "; using it under its earlier name\n";
+    return earlier;
+}
+
+#ifndef __APPLE__
+#ifdef _WIN32
+namespace {
+/// Returns Local AppData/CorePrime/Open Annihilation, which holds the
+/// preferences file and the data the engine keeps.
+std::filesystem::path application_folder() {
+    PWSTR directory = nullptr;
+    const HRESULT result =
+        SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &directory);
+    if (FAILED(result))
+        throw std::runtime_error("Local AppData directory unavailable");
+    const std::filesystem::path root(directory);
+    CoTaskMemFree(directory);
+    return root / "CorePrime" / "Open Annihilation";
+}
+} // namespace
+
+std::filesystem::path default_file() {
+    return application_folder() / "preferences.conf";
+}
+
+std::filesystem::path data_directory() {
+    return application_folder();
+}
+#else
+namespace {
+/// Returns the folder an XDG base directory variable names, or `fallback`
+/// under the home directory when the variable is unset or relative.
+std::filesystem::path xdg_folder(const char* variable, const char* fallback, const char* purpose) {
+    const char* xdg = std::getenv(variable);
+    // XDG explicitly rejects relative environment-variable paths.
+    if (xdg != nullptr && std::filesystem::path(xdg).is_absolute())
+        return xdg;
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || !std::filesystem::path(home).is_absolute())
+        throw std::runtime_error(std::string("user home directory unavailable for ") + purpose);
+    return std::filesystem::path(home) / fallback;
+}
+} // namespace
+
+std::filesystem::path default_file() {
+    return xdg_folder("XDG_CONFIG_HOME", ".config", "preferences") / "open-annihilation" /
+           "preferences.conf";
+}
+
+std::filesystem::path data_directory() {
+    return xdg_folder("XDG_DATA_HOME", ".local/share", "game data") / "open-annihilation";
+}
+#endif
+#endif
+
+Values load(const std::filesystem::path& file) {
+    if (!std::filesystem::exists(file))
+        return {};
+    if (std::filesystem::file_size(file) > maximum_file_bytes)
+        throw std::runtime_error("game preferences file exceeds size limit");
+    std::ifstream input(file, std::ios::binary);
+    if (!input)
+        throw io_error("cannot read preferences", file);
+    std::string data;
+    data.resize(maximum_file_bytes + 1);
+    input.read(data.data(), static_cast<std::streamsize>(data.size()));
+    data.resize(static_cast<std::size_t>(input.gcount()));
+    if (input.bad())
+        throw io_error("cannot read preferences", file);
+    if (data.size() > maximum_file_bytes)
+        throw std::runtime_error("game preferences grew beyond size limit");
+    std::istringstream stream(data);
+    std::string header;
+    std::getline(stream, header);
+    if (header != format_header)
+        throw std::runtime_error("unrecognized game preferences format");
+    Values result;
+    while (stream >> std::ws && !stream.eof()) {
+        std::string key, value;
+        if (stream.peek() != '"' || !(stream >> std::quoted(key) >> std::ws) ||
+            stream.peek() != '"' || !(stream >> std::quoted(value)))
+            throw std::runtime_error("malformed game preference entry");
+        if (!result.emplace(std::move(key), std::move(value)).second)
+            throw std::runtime_error("duplicate game preference entry");
+        validate(result);
+    }
+    return result;
+}
+
+void save(const std::filesystem::path& file, const Values& values) {
+    validate(values);
+    // Check the encoded size before constructing it: individually valid
+    // entries can otherwise expand to hundreds of MiB before the file cap is
+    // checked. std::quoted adds an escape before each quote and backslash.
+    std::size_t encoded_bytes = format_header.size() + 1;
+    for (const auto& [key, value] : values) {
+        constexpr std::size_t entry_punctuation_bytes = 6; // four quotes, space, newline
+        const auto escaped_size = [](const std::string& text) {
+            return text.size() +
+                   static_cast<std::size_t>(std::count_if(text.begin(), text.end(), [](char ch) {
+                       return ch == '"' || ch == '\\';
+                   }));
+        };
+        const auto entry_bytes = escaped_size(key) + escaped_size(value) + entry_punctuation_bytes;
+        if (entry_bytes > maximum_file_bytes - encoded_bytes)
+            throw std::runtime_error("game preferences file exceeds size limit");
+        encoded_bytes += entry_bytes;
+    }
+    std::ostringstream stream;
+    stream << format_header << '\n';
+    for (const auto& [key, value] : values)
+        stream << std::quoted(key) << ' ' << std::quoted(value) << '\n';
+    const auto bytes = stream.str();
+    if (bytes.size() > maximum_file_bytes)
+        throw std::runtime_error("game preferences file exceeds size limit");
+    std::filesystem::create_directories(file.parent_path());
+#ifdef _WIN32
+    const auto process = GetCurrentProcessId();
+#else
+    const auto process = getpid();
+#endif
+    auto temporary = file;
+    temporary += ".tmp-" + std::to_string(process) + "-" + std::to_string(temporary_sequence++);
+
+    struct Cleanup {
+        std::filesystem::path path;
+        bool owned = false;
+
+        ~Cleanup() {
+            if (owned) {
+                std::error_code ignored;
+                std::filesystem::remove(path, ignored);
+            }
+        }
+    } cleanup{temporary};
+#ifdef _WIN32
+    HANDLE handle = CreateFileW(
+        temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+    if (handle == INVALID_HANDLE_VALUE)
+        throw io_error("cannot create preferences temporary file", temporary);
+    cleanup.owned = true;
+    DWORD written = 0;
+    const bool complete =
+        WriteFile(handle, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+        written == bytes.size() && FlushFileBuffers(handle);
+    const bool closed = CloseHandle(handle);
+    if (!complete || !closed)
+        throw io_error("cannot write preferences", temporary);
+    if (!MoveFileExW(
+            temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        ))
+        throw io_error("cannot replace preferences", file);
+#else
+    const int descriptor = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (descriptor < 0)
+        throw io_error("cannot create preferences temporary file", temporary);
+    cleanup.owned = true;
+    std::size_t position = 0;
+    bool complete = true;
+    while (position < bytes.size()) {
+        const auto written = ::write(descriptor, bytes.data() + position, bytes.size() - position);
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written <= 0) {
+            complete = false;
+            break;
+        }
+        position += static_cast<std::size_t>(written);
+    }
+    if (complete)
+        complete = ::fsync(descriptor) == 0;
+    const bool closed = ::close(descriptor) == 0;
+    if (!complete || !closed)
+        throw io_error("cannot write preferences", temporary);
+    std::filesystem::rename(temporary, file);
+#endif
+    cleanup.owned = false;
+}
+} // namespace oa::platform::preferences

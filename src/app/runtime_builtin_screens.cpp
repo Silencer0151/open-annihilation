@@ -1,0 +1,705 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Built-in frontend screens, dispatcher steps and the services table handed to
+// registered screen packages.
+#include "oa/app/runtime.hpp"
+#include "oa/ui/frontend_dialogs.hpp"
+#include "oa/ui/frontend/main_menu.hpp"
+#include "oa/ui/campaign/endgame.hpp"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+
+namespace oa::app {
+
+struct BuiltinScreens {
+    static Runtime& host(ScreenContext* ctx) { return *static_cast<Runtime*>(ctx->host); }
+
+    // Services.
+    static void request_screen(void* host, ScreenId id) {
+        static_cast<Runtime*>(host)->pending_screen_ = id;
+    }
+
+    static void play_sound(void* host, const char* name) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        if (name == nullptr)
+            return;
+        if (runtime.audio_registry_.find(name) != oa::audio::game_audio::missing_sound) {
+            runtime.play_ui_sound(name, 0);
+            return;
+        }
+        if (runtime.options_.mute)
+            return;
+        std::string error;
+        (void)runtime.audio_player_.play_resource(runtime.screen_sound_resource(name), error);
+    }
+
+    static void register_sound(void* host, const char* category, const char* file) {
+        if (category != nullptr && file != nullptr)
+            static_cast<Runtime*>(host)->audio_registry_.add(category, file);
+    }
+
+    static int read_number(void* host, const char* section, const char* key, uint32_t* value) {
+        const auto found = static_cast<Runtime*>(host)->read_number(section, key);
+        if (!found)
+            return 0;
+        *value = *found;
+        return 1;
+    }
+
+    static void write_number(void* host, const char* section, const char* key, uint32_t value) {
+        static_cast<Runtime*>(host)->write_number(section, key, value);
+    }
+
+    static int
+    read_string(void* host, const char* section, const char* key, char* out, std::size_t capacity) {
+        if (capacity == 0)
+            return 0;
+        const auto found = static_cast<Runtime*>(host)->read_string(section, key, capacity);
+        if (!found)
+            return 0;
+        std::memcpy(out, found->c_str(), found->size() + 1U);
+        return 1;
+    }
+
+    static void write_string(void* host, const char* section, const char* key, const char* value) {
+        static_cast<Runtime*>(host)->write_string(section, key, value);
+    }
+
+    static void set_status(void* host, const char* text) {
+        static_cast<Runtime*>(host)->status_ = text != nullptr ? text : "";
+    }
+
+    static void set_frontend_signal(void* host, uint8_t signal) {
+        auto& state = static_cast<Runtime*>(host)->state_;
+        state.signal = signal;
+        state.pending_signal = signal;
+    }
+
+    static void set_frontend_state(void* host, uint8_t state) {
+        static_cast<Runtime*>(host)->state_.state = state;
+    }
+
+    // The main menu is not held as a gadget panel: popping it drops its
+    // gadgets, so nothing on it can be hovered or pressed until it reloads.
+    static void close_main_menu_panel(void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        runtime.resources_.layout.gadgets.clear();
+        runtime.selected_ = -1;
+        runtime.hovered_.reset();
+        runtime.menu_sparks_ = {};
+    }
+
+    static void reload_main_menu_panel(void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        runtime.resources_ = load_main_menu(runtime);
+        setup_main_menu_panel(runtime);
+        runtime.selected_ = -1;
+        runtime.hovered_.reset();
+    }
+
+    // The match chat line keeps text input while it is open.
+    static void set_text_input(void* host, int enabled) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        if (runtime.sdl_.window == nullptr)
+            return;
+        if (enabled != 0)
+            SDL_StartTextInput(runtime.sdl_.window);
+        else if (!runtime.chat_composing_)
+            SDL_StopTextInput(runtime.sdl_.window);
+    }
+
+    static uint32_t current_tick(void* host) {
+        return static_cast<Runtime*>(host)->frontend_tick();
+    }
+
+    static void pointer_position(void* host, int32_t* x, int32_t* y) {
+        const auto* runtime = static_cast<Runtime*>(host);
+        *x = static_cast<int32_t>(runtime->pointer_x_);
+        *y = static_cast<int32_t>(runtime->pointer_y_);
+    }
+
+    static void set_main_menu_overlay(void* host, int present) {
+        static_cast<Runtime*>(host)->main_menu_overlay_ = present != 0;
+    }
+
+    static renderer::MainMenuResources load_main_menu(Runtime& runtime) {
+        return renderer::load_main_menu(
+            runtime.assets_,
+            runtime.main_menu_overlay_ ? renderer::MainMenuLayout::with_overlay
+                                       : renderer::MainMenuLayout::base_game
+        );
+    }
+
+    // Dialog host.
+    static void dialog_sound(void* host, const char* name) {
+        static_cast<Runtime*>(host)->play_ui_sound(name != nullptr ? name : "", 0);
+    }
+
+    // The end screen holds state 8 while CDCHECK.GUI is up; the click
+    // handler returns state 5 once the disc is present, which builds the
+    // outcome screen.
+    static int32_t dialog_cd_check_click(void* host, const char* control) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        oa::ui::campaign::FrontendHost campaign_host{};
+        campaign_host.context = &runtime;
+        campaign_host.play_sound = dialog_sound;
+        campaign_host.disc_present = [](void* context) {
+            return static_cast<Runtime*>(context)->find_disc(menu::Disc::campaign) != 0;
+        };
+        campaign_host.message_box = [](void* context, const char* text, int32_t width) {
+            static_cast<Runtime*>(context)->show_frontend_message(
+                text != nullptr ? text : "", width, entry::message_show_ok, entry::message_fit_width
+            );
+        };
+        constexpr int32_t waiting_for_disc = 8;
+        if (oa::ui::campaign::cd_check_click(&campaign_host, control, waiting_for_disc) ==
+            waiting_for_disc)
+            return 0;
+        runtime.resume_endgame_after_disc();
+        return 1;
+    }
+
+    // Stacked panels are indexed against the palette of the frame below.
+    static bool dialog_active_palette(void* host, oa::PaletteBytes* out) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        if (runtime.screen_ == Screen::match) {
+            *out = runtime.match_palette_;
+            return true;
+        }
+        if (!runtime.resources_.background.palette)
+            return false;
+        *out = *runtime.resources_.background.palette;
+        return true;
+    }
+
+    // The screen's top panel: the in-match panel (the options panel while
+    // paused) on the match canvas, or the frontend screen's root.
+    static bool
+    dialog_panel_below(void* host, int32_t* x, int32_t* y, int32_t* width, int32_t* height) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        if (runtime.screen_ == Screen::match) {
+            if (!runtime.match_hud_ || runtime.match_hud_->layout.gadgets.empty())
+                return false;
+            const auto& root = runtime.match_hud_->layout.gadgets.front().common;
+            const auto rect = oa::ui::display_layout::source_rect_to_canvas(
+                runtime.match_layout_, root.x, root.y, root.width, root.height
+            );
+            *x = rect.x;
+            *y = rect.y;
+            *width = rect.width;
+            *height = rect.height;
+            return true;
+        }
+        if (runtime.resources_.layout.gadgets.empty())
+            return false;
+        const auto& root = runtime.resources_.layout.gadgets.front().common;
+        *x = root.x;
+        *y = root.y;
+        *width = root.width;
+        *height = root.height;
+        return true;
+    }
+
+    // Beside-HUD panels centre right of the drawn side column in a match.
+    static int32_t dialog_hud_strip_width(void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        return runtime.screen_ == Screen::match ? runtime.match_layout_.left : 0;
+    }
+
+    // The layered match presenter draws the dialogs as a layer of its own.
+    static bool dialog_draws_layer(void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        return runtime.screen_ == Screen::match && runtime.match_use_layers_;
+    }
+
+    static void dialog_report(void* host, const char* message) {
+        static_cast<Runtime*>(host)->status_ = message;
+        std::fprintf(stderr, "%s\n", message);
+    }
+
+    // Screen hooks.
+    static void enter_main_menu(ScreenContext* ctx, void*) {
+        auto& runtime = host(ctx);
+        runtime.resources_ = load_main_menu(runtime);
+        runtime.state_.state = frontend::state_id::main_menu;
+        setup_main_menu_panel(runtime);
+        // The game reaches the main menu only through the dispatcher,
+        // which follows the setup with this step; screens that return here
+        // directly run it too. A second run from the dispatcher changes nothing.
+        if (const auto* step = step_find(&runtime.screens_, frontend::Step::return_to_main_menu))
+            step->run(ctx, step->state);
+    }
+
+    // Runs the MAINMENU.GUI setup over the loaded records and
+    // writes the version label back to its widget.
+    static void setup_main_menu_panel(Runtime& runtime) {
+        static ui::frontend::MainMenuChecks checks;
+        ui::frontend::MainMenuHost menu{};
+        menu.context = &runtime;
+        menu.play_music = [](void* context, const char* sound) {
+            static_cast<Runtime*>(context)->play_menu_voice(sound);
+        };
+        menu.set_music_kind = [](void* context, int32_t) {
+            static_cast<Runtime*>(context)->music_main_menu();
+        };
+        menu.measure_text = [](void* context, const char* text) {
+            return static_cast<int32_t>(oa::formats::fnt::measure_text(
+                static_cast<Runtime*>(context)->resources_.font, text
+            ));
+        };
+        menu.reset_sparks = [](void* context) {
+            auto& owner = *static_cast<Runtime*>(context);
+            renderer::reset_menu_sparks(owner.menu_sparks_, owner.resources_.background);
+        };
+        menu.foreign_cd_player = [](void* context) {
+            return static_cast<Runtime*>(context)->music_foreign_player();
+        };
+        menu.close_cd_player = [](void* context) {
+            static_cast<Runtime*>(context)->music_close_foreign_player();
+        };
+        menu.sound_driver_missing = [](void* context) {
+            return static_cast<Runtime*>(context)->music_no_driver();
+        };
+        menu.show_message = [](void* context, const char* text, int32_t width) {
+            static_cast<Runtime*>(context)->show_frontend_message(
+                text, width, entry::message_show_ok, entry::message_fit_width
+            );
+        };
+        menu.movies_present = [](void* context) {
+            return static_cast<Runtime*>(context)->offers_movies();
+        };
+        menu.revision_named = [](void* context) {
+            return static_cast<Runtime*>(context)->assets_.file_size("gamedata/version.tdf") != 0;
+        };
+        static ui::frontend::Panel panel;
+        ui::frontend::panel_load_layout(panel, runtime.resources_.layout);
+        ui::frontend::main_menu_setup(panel, checks, menu);
+        // The setup's version label, INTRO's gray and Credits' visibility.
+        for (const auto name :
+             {ui::frontend::kMainMenuVersionControl,
+              ui::frontend::kMainMenuIntroControl,
+              ui::frontend::kMainMenuCreditsControl}) {
+            const auto index = ui::frontend::panel_find(panel, name);
+            if (index < 0 ||
+                static_cast<std::size_t>(index) >= runtime.resources_.layout.gadgets.size())
+                continue;
+            const auto& control = panel.controls[static_cast<std::size_t>(index)];
+            auto& gadget = runtime.resources_.layout.gadgets[static_cast<std::size_t>(index)];
+            gadget.common.active = static_cast<int8_t>(control.active);
+            gadget.common.x = control.x;
+            if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
+                label->text = std::string(ui::frontend::control_text(control));
+            if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
+                button->grayed_out = control.grayed != 0;
+        }
+    }
+
+    static void enter_single_player(ScreenContext* ctx, void*) {
+        host(ctx).state_.state = frontend::state_id::single_player_menu;
+        host(ctx).enter_single_player_panel();
+    }
+
+    static void enter_skirmish(ScreenContext* ctx, void*) {
+        host(ctx).state_.state = frontend::state_id::skirmish_menu;
+    }
+
+    static void enter_loading(ScreenContext* ctx, void*) { host(ctx).ensure_loading_screen(); }
+
+    static void enter_visuals(ScreenContext* ctx, void*) { host(ctx).sync_visual_option_widgets(); }
+
+    // NEWGAME.GUI for a new campaign or any mission.
+    static void enter_new_game(ScreenContext* ctx, void*) {
+        auto& runtime = host(ctx);
+        runtime.enter_new_game_panel(ctx->screen == screen_id(Screen::any_mission));
+        runtime.sync_campaign_option_widgets();
+    }
+
+    // The save dialog shows on dsavegame2, the load dialog on dloadgame2.
+    static const char* load_game_background(ScreenContext* ctx, void*) {
+        return host(ctx).load_game_background();
+    }
+
+    // Outcome1 while a campaign can continue, else Outcome0.
+    static const char* campaign_end_background(ScreenContext* ctx, void*) {
+        return host(ctx).campaign_end_background();
+    }
+
+    static void enter_campaign_end(ScreenContext* ctx, void*) { host(ctx).enter_campaign_end(); }
+
+    static void leave_campaign_end(ScreenContext* ctx, void*) { host(ctx).leave_campaign_end(); }
+
+    static void enter_load_game(ScreenContext* ctx, void*) { host(ctx).enter_load_game(); }
+
+    static void leave_load_game(ScreenContext* ctx, void*) { host(ctx).leave_load_game(); }
+
+    // Dispatcher steps.
+    static void step_setup_main_menu(ScreenContext* ctx, void*) {
+        host(ctx).load(Screen::main_menu);
+    }
+
+    static void step_setup_single_player(ScreenContext* ctx, void*) {
+        host(ctx).load(Screen::single_player);
+    }
+
+    static void step_setup_skirmish(ScreenContext* ctx, void*) {
+        auto& runtime = host(ctx);
+        skirmish::setup(
+            runtime.state_,
+            runtime.skirmish_settings_,
+            runtime.preferences_,
+            runtime.skirmish_ui_,
+            runtime
+        );
+    }
+
+    static void step_reset_player_slots(ScreenContext* ctx, void*) {
+        auto& runtime = host(ctx);
+        init::reset_player_slots(runtime.state_, runtime.player_storage_, false);
+    }
+
+    static void step_load_preferences(ScreenContext* ctx, void*) {
+        auto& runtime = host(ctx);
+        init::load_preferences(
+            runtime.state_, runtime.skirmish_settings_, runtime.preferences_, runtime
+        );
+    }
+
+    static void step_save_preferences(ScreenContext* ctx, void*) { host(ctx).save_preferences(); }
+
+    static void step_clear_selection(ScreenContext* ctx, void*) { host(ctx).selected_ = -1; }
+
+    static void step_ignore(ScreenContext*, void*) {}
+
+    // The main-menu reset drops the named background.
+    static void step_load_default_palette(ScreenContext* ctx, void*) {
+        (void)host(ctx).load_named_background(nullptr, false, false, false);
+    }
+
+    // The end-game state runs as the ENDMSN.GUI screen's enter.
+    static void step_enter_end_mission(ScreenContext* ctx, void*) {
+        host(ctx).load(Screen::campaign_end);
+    }
+
+    static void register_all(ScreenRegistry* registry);
+};
+
+namespace {
+
+constexpr const char* kGuiPalette = "palettes/guipal.pal";
+constexpr const char* kCommonGaf = "anims/commongui.gaf";
+
+void add_screen(ScreenRegistry* registry, const ScreenDesc& desc) {
+    (void)screen_register(registry, &desc);
+}
+
+ScreenDesc gui_screen(
+    Screen screen, const char* name, const char* layout, const char* background, const char* sprites
+) {
+    ScreenDesc desc{};
+    desc.id = screen_id(screen);
+    desc.name = name;
+    desc.assets = {layout, background, kGuiPalette, sprites, kCommonGaf};
+    return desc;
+}
+
+} // namespace
+
+void BuiltinScreens::register_all(ScreenRegistry* registry) {
+    ScreenDesc desc{};
+    desc.id = screen_id(Screen::main_menu);
+    desc.name = "main_menu";
+    desc.enter = enter_main_menu;
+    add_screen(registry, desc);
+
+    desc = gui_screen(
+        Screen::single_player, "single_player", "guis/single.gui", "singlebg", "anims/single.gaf"
+    );
+    desc.enter = enter_single_player;
+    add_screen(registry, desc);
+
+    // SKIRMISH.GUI's setup asks for Skirmsetup4x itself.
+    desc = gui_screen(
+        Screen::skirmish, "skirmish", "guis/skirmish.gui", nullptr, "anims/skirmish.gaf"
+    );
+    desc.enter = enter_skirmish;
+    add_screen(registry, desc);
+
+    desc = {};
+    desc.id = screen_id(Screen::loading);
+    desc.name = "loading";
+    desc.enter = enter_loading;
+    add_screen(registry, desc);
+
+    add_screen(
+        registry,
+        gui_screen(Screen::options, "options", "guis/startopt.gui", "options4x", kCommonGaf)
+    );
+    add_screen(
+        registry, gui_screen(Screen::sound, "sound", "guis/sound.gui", "optsound4x", kCommonGaf)
+    );
+    desc = gui_screen(Screen::visuals, "visuals", "guis/visuals.gui", "optvisual4x", kCommonGaf);
+    desc.enter = enter_visuals;
+    add_screen(registry, desc);
+    add_screen(
+        registry,
+        gui_screen(Screen::speeds, "speeds", "guis/speeds.gui", "optinterface4x", kCommonGaf)
+    );
+    add_screen(
+        registry, gui_screen(Screen::music, "music", "guis/sound.gui", "optmusic4x", kCommonGaf)
+    );
+
+    // NEWGAME.GUI's setup asks for its background by mode and campaign count.
+    desc = gui_screen(
+        Screen::new_campaign, "new_campaign", "guis/newgame.gui", nullptr, "anims/newgame.gaf"
+    );
+    desc.enter = enter_new_game;
+    add_screen(registry, desc);
+    desc.id = screen_id(Screen::any_mission);
+    desc.name = "any_mission";
+    add_screen(registry, desc);
+
+    desc =
+        gui_screen(Screen::load_game, "load_game", "guis/loadgame.gui", "dloadgame2", kCommonGaf);
+    desc.background = load_game_background;
+    desc.enter = enter_load_game;
+    desc.leave = leave_load_game;
+    add_screen(registry, desc);
+
+    desc = gui_screen(
+        Screen::campaign_end, "campaign_end", "guis/endmsn.gui", nullptr, "anims/endmsn.gaf"
+    );
+    desc.background = campaign_end_background;
+    desc.enter = enter_campaign_end;
+    desc.leave = leave_campaign_end;
+    add_screen(registry, desc);
+
+    // Also the fallback for screens without a registration of their own.
+    // The map modal's setup asks for DSELECTMAP2 itself.
+    add_screen(
+        registry,
+        gui_screen(
+            Screen::map_selection, "map_selection", "guis/selmap.gui", nullptr, "anims/skirmish.gaf"
+        )
+    );
+
+    using frontend::Step;
+    (void)step_register(registry, Step::setup_main_menu, step_setup_main_menu, nullptr);
+    (void)step_register(registry, Step::setup_single_player, step_setup_single_player, nullptr);
+    (void)step_register(registry, Step::setup_skirmish, step_setup_skirmish, nullptr);
+    (void)step_register(registry, Step::reset_player_slots, step_reset_player_slots, nullptr);
+    (void)step_register(registry, Step::load_preferences, step_load_preferences, nullptr);
+    (void)step_register(registry, Step::save_preferences, step_save_preferences, nullptr);
+    (void)step_register(registry, Step::draw_current_frame, step_clear_selection, nullptr);
+    (void)step_register(registry, Step::load_default_palette, step_load_default_palette, nullptr);
+    for (const auto ignored :
+         {Step::check_state_checksum,
+          Step::present_frame,
+          Step::get_video_context,
+          Step::pop_input_event})
+        (void)step_register(registry, ignored, step_ignore, nullptr);
+    (void)step_register(registry, Step::enter_end_mission, step_enter_end_mission, nullptr);
+}
+
+std::string Runtime::screen_sound_resource(std::string_view name) const {
+    if (const auto* sound = audio_registry_.get(audio_registry_.find(name)))
+        return sound->resource;
+    return oa::audio::game_audio::sound_resource(name);
+}
+
+void register_builtin_screens(ScreenRegistry* registry) {
+    BuiltinScreens::register_all(registry);
+}
+
+namespace {
+
+constexpr ScreenServices kRuntimeServices{
+    BuiltinScreens::request_screen,
+    BuiltinScreens::play_sound,
+    BuiltinScreens::read_number,
+    BuiltinScreens::write_number,
+    BuiltinScreens::read_string,
+    BuiltinScreens::write_string,
+    BuiltinScreens::set_status,
+    BuiltinScreens::set_frontend_signal,
+    BuiltinScreens::set_frontend_state,
+    BuiltinScreens::close_main_menu_panel,
+    BuiltinScreens::reload_main_menu_panel,
+    BuiltinScreens::set_text_input,
+    BuiltinScreens::current_tick,
+    BuiltinScreens::register_sound,
+    BuiltinScreens::pointer_position,
+    BuiltinScreens::set_main_menu_overlay
+};
+
+bool overlay_applies(const OverlayDesc& overlay, ScreenId screen) {
+    return overlay.screen == kScreenAny || overlay.screen == screen;
+}
+
+bool translate_input(const SDL_Event& event, SDL_Renderer* renderer, ScreenInput& input) {
+    input = {};
+    switch (event.type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        input.kind =
+            event.type == SDL_EVENT_KEY_DOWN ? ScreenInputKind::key_down : ScreenInputKind::key_up;
+        input.key = static_cast<uint32_t>(event.key.key);
+        input.modifiers = static_cast<uint16_t>(event.key.mod);
+        return true;
+    case SDL_EVENT_TEXT_INPUT:
+        input.kind = ScreenInputKind::text;
+        input.text = event.text.text;
+        return true;
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL: {
+        SDL_Event converted = event;
+        // Headless checks have no renderer and send canvas coordinates.
+        if (renderer != nullptr && !SDL_ConvertEventToRenderCoordinates(renderer, &converted))
+            return false;
+        input.modifiers = static_cast<uint16_t>(SDL_GetModState());
+        if (converted.type == SDL_EVENT_MOUSE_MOTION) {
+            input.kind = ScreenInputKind::pointer_move;
+            input.x = converted.motion.x;
+            input.y = converted.motion.y;
+        } else if (converted.type == SDL_EVENT_MOUSE_WHEEL) {
+            input.kind = ScreenInputKind::wheel;
+            input.x = converted.wheel.mouse_x;
+            input.y = converted.wheel.mouse_y;
+            input.wheel_y = converted.wheel.y;
+        } else {
+            input.kind = converted.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+                             ? ScreenInputKind::pointer_down
+                             : ScreenInputKind::pointer_up;
+            input.button = converted.button.button;
+            input.clicks = converted.button.clicks;
+            input.x = converted.button.x;
+            input.y = converted.button.y;
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
+void Runtime::register_screens() {
+#define OA_REGISTER(fn) fn(&screens_);
+#include "oa/ui/screen_registry/screens.inc"
+#undef OA_REGISTER
+    if (extension_.register_screens != nullptr)
+        extension_.register_screens(extension_.context, &screens_);
+    // Without screens of the extension's for them, the multiplayer unit
+    // headers and a main-menu overlay's steps have nothing to do. The registry
+    // refuses a second handler, so these fill only the steps nobody took.
+    for (const auto unclaimed :
+         {frontend::Step::reload_unit_overrides,
+          frontend::Step::shut_down_resource,
+          frontend::Step::return_to_main_menu})
+        if (step_find(&screens_, unclaimed) == nullptr)
+            (void)step_register(&screens_, unclaimed, BuiltinScreens::step_ignore, nullptr);
+    if (screens_.rejected != nullptr)
+        throw std::runtime_error(std::string("screen registration rejected: ") + screens_.rejected);
+    if (screen_find(&screens_, screen_id(Screen::map_selection)) == nullptr)
+        throw std::runtime_error("built-in screens are not registered");
+    for (uint32_t index = 0; index < screens_.overlay_count; ++index) {
+        auto& overlay = screens_.overlays[index];
+        if (overlay.create != nullptr) {
+            auto context = screen_context();
+            overlay.create(&context, overlay.state);
+        }
+    }
+    oa::ui::frontend_dialogs::dialogs_bind_host(
+        {this,
+         BuiltinScreens::dialog_sound,
+         nullptr,
+         BuiltinScreens::dialog_cd_check_click,
+         BuiltinScreens::dialog_active_palette,
+         BuiltinScreens::dialog_panel_below,
+         BuiltinScreens::dialog_report,
+         BuiltinScreens::dialog_hud_strip_width,
+         BuiltinScreens::dialog_draws_layer}
+    );
+}
+
+ScreenContext Runtime::screen_context(const ScreenInput* input) {
+    return {this, &kRuntimeServices, &assets_, &surface_, match_.get(), input, screen_id(screen_)};
+}
+
+bool Runtime::dispatch_screen_input(const SDL_Event& event) {
+    const auto current = screen_id(screen_);
+    const auto* desc = screen_find(&screens_, current);
+    bool wanted = desc != nullptr && desc->event != nullptr;
+    for (uint32_t index = 0; !wanted && index < screens_.overlay_count; ++index)
+        wanted = screens_.overlays[index].event != nullptr &&
+                 overlay_applies(screens_.overlays[index], current);
+    if (!wanted)
+        return false;
+    ScreenInput input{};
+    if (!translate_input(event, sdl_.renderer, input))
+        return false;
+    auto context = screen_context(&input);
+    bool taken = false;
+    for (auto index = screens_.overlay_count; !taken && index > 0; --index) {
+        auto& overlay = screens_.overlays[index - 1];
+        taken = overlay.event != nullptr && overlay_applies(overlay, current) &&
+                overlay.event(&context, overlay.state) != 0;
+    }
+    if (!taken)
+        taken =
+            desc != nullptr && desc->event != nullptr && desc->event(&context, desc->state) != 0;
+    // The built-in handler never sees a taken event, so the cursor sprite
+    // follows the pointer here, whether an overlay or the screen took it.
+    if (taken && (input.kind == ScreenInputKind::pointer_move ||
+                  input.kind == ScreenInputKind::pointer_down ||
+                  input.kind == ScreenInputKind::pointer_up)) {
+        pointer_x_ = input.x;
+        pointer_y_ = input.y;
+    }
+    return taken;
+}
+
+void Runtime::tick_screen_packages() {
+    const auto current = screen_id(screen_);
+    auto context = screen_context();
+    for (uint32_t index = 0; index < screens_.overlay_count; ++index) {
+        auto& overlay = screens_.overlays[index];
+        if (overlay.tick != nullptr && overlay_applies(overlay, current))
+            overlay.tick(&context, overlay.state);
+    }
+    if (const auto* desc = screen_find(&screens_, current);
+        desc != nullptr && desc->tick != nullptr)
+        desc->tick(&context, desc->state);
+    run_pending_ending();
+    run_pending_notice_return();
+    apply_screen_request();
+}
+
+void Runtime::draw_screen_packages() {
+    const auto current = screen_id(screen_);
+    auto context = screen_context();
+    if (const auto* desc = screen_find(&screens_, current);
+        desc != nullptr && desc->draw != nullptr)
+        desc->draw(&context, desc->state);
+    for (uint32_t index = 0; index < screens_.overlay_count; ++index) {
+        auto& overlay = screens_.overlays[index];
+        if (overlay.draw != nullptr && overlay_applies(overlay, current))
+            overlay.draw(&context, overlay.state);
+    }
+}
+
+void Runtime::apply_screen_request() {
+    if (!pending_screen_)
+        return;
+    const auto id = *pending_screen_;
+    pending_screen_.reset();
+    load(static_cast<Screen>(id));
+}
+
+} // namespace oa::app

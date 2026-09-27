@@ -1,0 +1,801 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/formats/hpi.hpp"
+#include "oa/formats/sqsh.hpp"
+#include "oa/test/game_assets.hpp"
+
+#include <zlib.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+namespace fs = std::filesystem;
+using Bytes = std::vector<uint8_t>;
+
+int failures = 0;
+
+void check(bool condition, const std::string& message) {
+    if (!condition) {
+        std::cerr << "FAIL: " << message << '\n';
+        ++failures;
+    }
+}
+
+template <class Function>
+bool throws(Function&& function, std::string_view containing = {}) {
+    try {
+        function();
+    } catch (const std::exception& error) {
+        return containing.empty() ||
+               std::string(error.what()).find(containing) != std::string::npos;
+    }
+    return false;
+}
+
+Bytes text(std::string_view value) {
+    return Bytes(value.begin(), value.end());
+}
+
+uint32_t get32(const Bytes& bytes, std::size_t at) {
+    return static_cast<uint32_t>(bytes[at]) | (static_cast<uint32_t>(bytes[at + 1]) << 8U) |
+           (static_cast<uint32_t>(bytes[at + 2]) << 16U) |
+           (static_cast<uint32_t>(bytes[at + 3]) << 24U);
+}
+
+void put32(Bytes& bytes, std::size_t at, uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i)
+        bytes[at + i] = static_cast<uint8_t>(value >> (8U * i));
+}
+
+class TempDir {
+  public:
+
+    TempDir() {
+        static std::atomic<int> counter{0};
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = fs::temp_directory_path() /
+                ("oa-hpi-test-" + std::to_string(stamp) + "-" + std::to_string(counter++));
+        fs::create_directories(path_);
+    }
+
+    ~TempDir() {
+        std::error_code ignored;
+        fs::remove_all(path_, ignored);
+    }
+
+    const fs::path& path() const { return path_; }
+
+    fs::path write(const std::string& name, const Bytes& bytes) const {
+        const auto target = path_ / name;
+        fs::create_directories(target.parent_path());
+        std::ofstream stream(target, std::ios::binary);
+        stream.write(
+            reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
+        );
+        return target;
+    }
+
+  private:
+
+    fs::path path_;
+};
+
+Bytes archive_of(std::vector<oa::HpiWriteFile> files, oa::HpiWriteOptions options = {}) {
+    return oa::write_hpi(files, options);
+}
+
+// Offset of the single root file's 9-byte data record ("a" as the only name).
+constexpr std::size_t kSingleRecord = 20 + 8 + 9 + 2;
+
+Bytes pattern_bytes(std::size_t size) {
+    Bytes bytes(size);
+    uint32_t state = 12345;
+    for (auto& byte : bytes) {
+        state = state * 1103515245U + 12345U;
+        byte = static_cast<uint8_t>((state >> 16U) & 0x0F);
+    }
+    return bytes;
+}
+
+void hpi_writer_round_trip() {
+    TempDir dir;
+    const Bytes big = pattern_bytes(3 * oa::formats::hpi::BlockBytes + 777);
+    std::vector<oa::HpiWriteFile> files{
+        {"readme.txt", text("plain"), oa::formats::hpi::CompressionNone},
+        {"units/armcom.fbi",
+         text("[UNITINFO]{name=Commander;}"),
+         oa::formats::hpi::CompressionLZ77},
+        {"units/big.bin", big, oa::formats::hpi::CompressionZLib},
+        {"Units/Sub/deep.bin", big, oa::formats::hpi::CompressionLZ77},
+        {"empty.dat", {}, oa::formats::hpi::CompressionLZ77},
+    };
+    for (const uint8_t key : {uint8_t{0}, uint8_t{0x7D}, uint8_t{0xBF}}) {
+        for (const bool scramble : {false, true}) {
+            const auto path = dir.write("round.hpi", archive_of(files, {key, scramble, "1998"}));
+            oa::HpiArchive archive(path);
+            const auto entries = archive.entries();
+            check(entries.size() == files.size(), "round trip entry count");
+            check(entries[1].path == "units/armcom.fbi", "directory merge keeps first spelling");
+            for (const auto& file : files)
+                check(archive.read(file.path) == file.bytes, "round trip content " + file.path);
+        }
+    }
+}
+
+void hpi_requires_copyright_trailer_any_year() {
+    TempDir dir;
+    const auto good = archive_of({{"a", text("x"), 0}}, {0, true, "2001"});
+    check(
+        !throws([&] { oa::HpiArchive a(dir.write("year.hpi", good)); }), "any trailer year accepted"
+    );
+    auto year = good;
+    std::copy_n("ab\0d", 4, year.end() - 26);
+    check(
+        !throws([&] { oa::HpiArchive a(dir.write("odd-year.hpi", year)); }),
+        "year bytes are never compared"
+    );
+    auto brand = good;
+    brand.back() = 'T';
+    check(
+        throws([&] { oa::HpiArchive a(dir.write("brand.hpi", brand)); }, "trailer"),
+        "altered trailer rejected"
+    );
+    auto missing = good;
+    missing.resize(missing.size() - 36);
+    check(
+        throws([&] { oa::HpiArchive a(dir.write("bare.hpi", missing)); }, "trailer"),
+        "missing trailer rejected"
+    );
+}
+
+void hpi_version_must_be_one() {
+    TempDir dir;
+    auto bytes = archive_of({{"a", text("x"), 0}});
+    put32(bytes, 4, 0x00020000U);
+    check(throws([&] { oa::HpiArchive a(dir.write("v2.hpi", bytes)); }), "version 2 rejected");
+}
+
+void hpi_header_key_ff_disables_decryption() {
+    check(oa::hpi_archive_key(0xFF) == 0, "header 0xFF gives key zero");
+    check(oa::hpi_archive_key(0x01) == 0xFB, "header 0x01 key");
+    TempDir dir;
+    auto bytes = archive_of({{"a", text("Q"), 0}});
+    put32(bytes, 12, 0xFF);
+    oa::HpiArchive archive(dir.write("ff.hpi", bytes));
+    check(archive.read("a") == text("Q"), "header key 0xFF leaves data plain");
+}
+
+void hpi_lookup_last_duplicate_wins() {
+    TempDir dir;
+    oa::HpiArchive archive(
+        dir.write("dup.hpi", archive_of({{"a.txt", text("one"), 0}, {"A.TXT", text("two"), 0}}))
+    );
+    check(archive.entries().size() == 2, "duplicates are retained");
+    check(archive.read("a.txt") == text("two"), "last duplicate in a directory wins");
+}
+
+void hpi_intermediate_file_ends_lookup() {
+    TempDir dir;
+    const auto first = dir.write(
+        "first.hpi", archive_of({{"units/x.fbi", text("hidden"), 0}, {"UNITS", text("file"), 0}})
+    );
+    const auto second = dir.write("second.hpi", archive_of({{"units/x.fbi", text("second"), 0}}));
+    oa::HpiArchive archive(first);
+    check(!archive.lookup("units\\x.fbi"), "last 'units' is a file: lookup fails");
+    fs::create_directory(dir.path() / "loose");
+    oa::AssetStore store(dir.path() / "loose");
+    store.mount(first);
+    store.mount(second);
+    check(store.read("units/x.fbi").bytes == text("second"), "search continues in the next mount");
+}
+
+void hpi_directory_match_falls_through() {
+    TempDir dir;
+    const auto first = dir.write("first.hpi", archive_of({{"gamedata/x", text("dir"), 0}}));
+    const auto second = dir.write("second.hpi", archive_of({{"gamedata", text("file"), 0}}));
+    fs::create_directory(dir.path() / "loose");
+    oa::AssetStore store(dir.path() / "loose");
+    store.mount(first);
+    store.mount(second);
+    check(store.read("GAMEDATA").bytes == text("file"), "a directory hit moves to the next mount");
+}
+
+void hpi_entry_flag_bit0_is_directory() {
+    TempDir dir;
+    auto bytes = archive_of({{"d/f", text("inner"), 0}, {"g", text("file"), 0}});
+    // Root list at 28: entry 0 "d" (directory), entry 1 "g" (file).
+    bytes[28 + 8] = 0x03;
+    bytes[28 + 9 + 8] = 0x02;
+    oa::HpiArchive archive(dir.write("flags.hpi", bytes));
+    check(archive.read("d/f") == text("inner"), "flag 0x03 is a directory");
+    check(archive.read("g") == text("file"), "flag 0x02 is a file");
+}
+
+void hpi_any_nonzero_compression_is_chunked() {
+    TempDir dir;
+    auto bytes = archive_of({{"a", text("chunked"), oa::formats::hpi::CompressionLZ77}});
+    bytes[kSingleRecord + 8] = 0x07;
+    oa::HpiArchive archive(dir.write("method.hpi", bytes));
+    check(archive.read("a") == text("chunked"), "compression byte 7 reads as chunked");
+}
+
+std::size_t first_chunk(const Bytes& bytes) {
+    return get32(bytes, kSingleRecord) + 4;
+}
+
+void sqsh_stored_type_is_fatal() {
+    TempDir dir;
+    auto bytes =
+        archive_of({{"a", text("stored"), oa::formats::hpi::CompressionLZ77}}, {0, false, "1997"});
+    bytes[first_chunk(bytes) + 5] = 0;
+    oa::HpiArchive archive(dir.write("stored.hpi", bytes));
+    check(
+        throws([&] { (void)archive.read("a"); }, "SQUASHERR_BADUNPACKSIZE"), "stored chunk is fatal"
+    );
+    bytes[first_chunk(bytes) + 5] = 4;
+    oa::HpiArchive typed(dir.write("type4.hpi", bytes));
+    check(
+        throws([&] { (void)typed.read("a"); }, "SQUASHERR_BADUNPACKTYPE"), "type 4 chunk is fatal"
+    );
+}
+
+void sqsh_version_byte_ignored() {
+    TempDir dir;
+    auto bytes = archive_of({{"a", text("versioned"), oa::formats::hpi::CompressionZLib}});
+    bytes[first_chunk(bytes) + 4] = 0x99;
+    oa::HpiArchive archive(dir.write("version.hpi", bytes));
+    check(archive.read("a") == text("versioned"), "SQSH version byte is not checked");
+}
+
+void sqsh_zlib_error_keeps_expected_length() {
+    TempDir dir;
+    auto bytes = archive_of(
+        {{"a", text("adler tail"), oa::formats::hpi::CompressionZLib}}, {0, false, "1997"}
+    );
+    const std::size_t chunk = first_chunk(bytes);
+    const uint32_t packed = get32(bytes, chunk + 7);
+    bytes[chunk + 19 + packed - 1] ^= 0x5A;
+    put32(
+        bytes,
+        chunk + 15,
+        oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
+    );
+    oa::HpiArchive archive(dir.write("adler.hpi", bytes));
+    check(archive.read("a") == text("adler tail"), "bad adler32 still yields the expected length");
+    bytes[chunk + 19] ^= 0xFF;
+    put32(
+        bytes,
+        chunk + 15,
+        oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
+    );
+    oa::HpiArchive broken(dir.write("broken.hpi", bytes));
+    check(broken.read("a") == Bytes(10, 0), "undecodable zlib is accepted as a zero block");
+    bytes[chunk + 15] ^= 1;
+    oa::HpiArchive sum(dir.write("sum.hpi", bytes));
+    check(throws([&] { (void)sum.read("a"); }, "SQUASHERR_BADCHECKSUM"), "checksum is enforced");
+}
+
+void sqsh_chunk_table_locates_blocks() {
+    TempDir dir;
+    const Bytes big = pattern_bytes(oa::formats::hpi::BlockBytes + 100);
+    auto bytes = archive_of({{"a", big, oa::formats::hpi::CompressionLZ77}}, {0, true, "1997"});
+    const std::size_t table = get32(bytes, kSingleRecord);
+    const uint32_t first = get32(bytes, table);
+    const Bytes padding{0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
+    bytes.insert(
+        bytes.begin() + static_cast<std::ptrdiff_t>(table + 8 + first),
+        padding.begin(),
+        padding.end()
+    );
+    put32(bytes, table, first + static_cast<uint32_t>(padding.size()));
+    oa::HpiArchive archive(dir.write("gap.hpi", bytes));
+    check(archive.read("a") == big, "blocks are located by summing the size table");
+}
+
+void hpi_negative_directory_count_is_empty() {
+    TempDir dir;
+    auto bytes = archive_of({{"a", text("x"), 0}});
+    put32(bytes, 20, 0x80000001U);
+    oa::HpiArchive archive(dir.write("neg.hpi", bytes));
+    check(archive.entries().empty(), "negative count reads as an empty root");
+}
+
+void hpi_rejects_cycles() {
+    TempDir dir;
+    auto bytes = archive_of({{"d/f", text("x"), 0}});
+    // Entry "d" points its directory node back at the root node.
+    put32(bytes, 28 + 4, 20);
+    check(
+        throws([&] { oa::HpiArchive a(dir.write("cycle.hpi", bytes)); }, "cycle"), "cycle rejected"
+    );
+}
+
+void match_wildcard_rules() {
+    check(oa::match_wildcard("ARMCOM.FBI", "*.fbi"), "suffix match");
+    check(oa::match_wildcard("armcom.fbi", "ARM???.FBI"), "question marks");
+    check(!oa::match_wildcard("armcom.fbix", "*.fbi"), "no extra suffix");
+    check(oa::match_wildcard("abc", "a*"), "trailing star");
+    check(oa::match_wildcard("", "*"), "empty name with star");
+    check(!oa::match_wildcard("abc", ""), "empty pattern");
+    check(oa::match_wildcard("a.b.c", "*.c"), "backtracking star");
+}
+
+void asset_store_find_and_shadowing() {
+    TempDir dir;
+    const auto first = dir.write(
+        "first.hpi",
+        archive_of(
+            {{"units/b.fbi", text("1b"), 0},
+             {"units/a.fbi", text("1a"), 0},
+             {"units/x.txt", text("1x"), 0}}
+        )
+    );
+    const auto second = dir.write("second.hpi", archive_of({{"units/a.fbi", text("2a"), 0}}));
+    const auto loose = dir.path() / "game";
+    fs::create_directories(loose / "Units");
+    std::ofstream(loose / "Units" / "B.FBI") << "loose";
+    std::ofstream(loose / "Units" / "c.fbi") << "c";
+    oa::AssetStore store(loose);
+    store.mount(first);
+    store.mount(second);
+    store.mark_loose_shadows();
+    const auto found = store.find("units\\*.fbi");
+    std::vector<std::string> names;
+    for (const auto& entry : found)
+        names.push_back(entry.name + "@" + std::to_string(entry.mount));
+    const std::vector<std::string> expected{"B.FBI@-1", "c.fbi@-1", "a.fbi@0", "a.fbi@1"};
+    check(names == expected, "find: loose in NTFS order, then archives; loose-shadowed skipped");
+    const auto only_second = store.find("units\\*", {1, false});
+    check(
+        only_second.size() == 1 && only_second[0].name == "a.fbi", "scoped find stays in one mount"
+    );
+    check(store.count_entries("units\\*", false) == 5, "count skips . and ..");
+    const auto scanned = store.scan_recursive("units", "*.fbi");
+    check(scanned.size() == 4, "recursive scan keeps cross-archive duplicates");
+    check(store.read("units/b.fbi").bytes == text("loose"), "loose wins over archives");
+    check(store.read("units/a.fbi").bytes == text("1a"), "first mount wins");
+}
+
+void asset_store_discover_order_and_hpi_limit() {
+    TempDir dir;
+    const auto root = dir.path() / "game";
+    fs::create_directories(root);
+    const auto small = archive_of({{"x", text("x"), 0}});
+    for (int i = 0; i < 12; ++i)
+        std::ofstream(root / ("pack" + std::to_string(10 + i) + ".hpi"), std::ios::binary)
+            .write(
+                reinterpret_cast<const char*>(small.data()),
+                static_cast<std::streamsize>(small.size())
+            );
+    std::ofstream(root / "broken.hpi") << "not an archive";
+    for (const char* name :
+         {"rev31.gp3", "rev30.gp3", "b.ccx", "A.CCX", "corplas.ufo", "Cormabm.ufo", "CorNecro.ufo"})
+        std::ofstream(root / name, std::ios::binary)
+            .write(
+                reinterpret_cast<const char*>(small.data()),
+                static_cast<std::streamsize>(small.size())
+            );
+    oa::AssetStore store(root);
+    const auto report = store.discover("31");
+    std::vector<std::string> mounted;
+    for (const auto& path : store.mount_paths())
+        mounted.push_back(path.filename().string());
+    const std::vector<std::string> expected{
+        "rev31.gp3",
+        "A.CCX",
+        "b.ccx",
+        "Cormabm.ufo",
+        "CorNecro.ufo",
+        "corplas.ufo",
+        "pack10.hpi",
+        "pack11.hpi",
+        "pack12.hpi",
+        "pack13.hpi",
+        "pack14.hpi",
+        "pack15.hpi",
+        "pack16.hpi",
+        "pack17.hpi",
+        "pack18.hpi",
+        "pack19.hpi",
+    };
+    check(mounted == expected, "discovery order: rev GP3, CCX, UFO, then ten HPI in NTFS order");
+    check(
+        !report.empty() && !report[6].mounted && report[6].path.filename() == "broken.hpi",
+        "an invalid archive is skipped without counting"
+    );
+    // Already-mounted archives do not count toward the limit, so a rescan
+    // mounts the next two plain archives as well.
+    (void)store.discover("31");
+    check(
+        store.mount_paths().size() == expected.size() + 2 &&
+            store.mount_paths().back().filename() == "pack21.hpi",
+        "rescan continues past the ten-archive limit"
+    );
+}
+
+// Mount order of a full install's archives: the revision patch, the CCX and
+// UFO groups in Windows name order, then the first ten of its thirteen *.HPI
+// files. totala3.hpi, totala4.hpi and worlds.hpi are past the limit; the game
+// reaches them only through the CD-ROM root scan.
+const std::vector<std::string> kInstallMountOrder{
+    "rev31.gp3",    "btdata.ccx",   "btmaps.ccx",   "by.ccx",       "ccdata.ccx",   "ccmaps.ccx",
+    "ccmiss.ccx",   "AFark.ufo",    "AFlea.ufo",    "AScarab.ufo",  "Cometctr.ufo", "Cormabm.ufo",
+    "CorNecro.ufo", "corplas.ufo",  "Evadrivd.ufo", "Example.ufo",  "floggen.ufo",  "Mndsmars.ufo",
+    "tactics1.hpi", "tactics2.hpi", "tactics3.hpi", "tactics4.hpi", "tactics5.hpi", "tactics6.hpi",
+    "tactics7.hpi", "tactics8.hpi", "totala1.hpi",  "totala2.hpi",
+};
+const std::vector<std::string> kInstallDiscMountOrder{"totala3.hpi", "totala4.hpi", "worlds.hpi"};
+
+std::vector<std::string> install_order_with_disc() {
+    auto order = kInstallMountOrder;
+    order.insert(order.end(), kInstallDiscMountOrder.begin(), kInstallDiscMountOrder.end());
+    return order;
+}
+
+std::vector<std::string> mounted_names(const oa::AssetStore& store) {
+    std::vector<std::string> names;
+    for (const auto& path : store.mount_paths())
+        names.push_back(path.filename().string());
+    return names;
+}
+
+void asset_store_discover_pins_install_layout() {
+    TempDir dir;
+    const auto root = dir.path() / "game";
+    fs::create_directories(root / "Data");
+    fs::create_directories(root / "Sounds");
+    // A directory whose name matches the pattern is a candidate that fails.
+    fs::create_directories(root / "spare.hpi");
+    const auto pack = [&](const std::string& name, std::vector<oa::HpiWriteFile> extra) {
+        extra.push_back({"origin/" + name, text(name), 0});
+        dir.write("game/" + name, archive_of(std::move(extra)));
+    };
+    for (const auto& name : kInstallMountOrder)
+        pack(name, {});
+    for (const char* name : {"totala3.hpi", "totala4.hpi", "worlds.hpi", "rev30.gp3"})
+        pack(name, {});
+    // The same path in several groups resolves from the earliest group even
+    // when a plain name sort would put another first.
+    pack("rev31.gp3", {{"gamedata/sound.tdf", text("rev31.gp3"), 0}});
+    pack("ccdata.ccx", {{"gamedata/sound.tdf", text("ccdata.ccx"), 0}});
+    pack(
+        "totala1.hpi",
+        {{"gamedata/sound.tdf", text("totala1.hpi"), 0},
+         {"sounds/loose.wav", text("totala1.hpi"), 0}}
+    );
+    pack("by.ccx", {{"anims/shared.gaf", text("by.ccx"), 0}});
+    pack("AFark.ufo", {{"anims/shared.gaf", text("AFark.ufo"), 0}});
+    // Within a group Windows orders names case-insensitively, so Cormabm
+    // precedes CorNecro although a byte comparison puts 'N' before 'm'.
+    pack("CorNecro.ufo", {{"units/shared.fbi", text("CorNecro.ufo"), 0}});
+    pack("Cormabm.ufo", {{"units/shared.fbi", text("Cormabm.ufo"), 0}});
+    pack("btmaps.ccx", {{"maps/shared.ota", text("btmaps.ccx"), 0}});
+    pack("tactics1.hpi", {{"maps/shared.ota", text("tactics1.hpi"), 0}});
+    pack("totala2.hpi", {{"sounds/other.wav", text("totala2.hpi"), 0}});
+    // Only an archive past the *.HPI limit provides this file.
+    pack("totala3.hpi", {{"sounds/untdone.wav", text("totala3.hpi"), 0}});
+    for (const char* name : {"Game.exe", "readme.txt", "Example.tdf", "Helper.dll"})
+        dir.write(std::string("game/") + name, text("not an archive"));
+    dir.write("game/broken.ufo", text("junk"));
+    dir.write("game/Sounds/Loose.wav", text("loose"));
+
+    oa::AssetStore store(root);
+    const auto report = store.discover("31");
+    check(mounted_names(store) == kInstallMountOrder, "install layout mounts in the game's order");
+    int rejected = 0;
+    for (const auto& outcome : report)
+        if (!outcome.mounted) {
+            ++rejected;
+            const auto name = outcome.path.filename().string();
+            check(
+                name == "broken.ufo" || name == "spare.hpi",
+                "only unreadable candidates are rejected"
+            );
+        }
+    check(rejected == 2, "an invalid archive and a directory are both reported");
+    check(
+        store.read("gamedata/sound.tdf").bytes == text("rev31.gp3"),
+        "revision patch beats CCX and HPI"
+    );
+    check(
+        store.read("anims/shared.gaf").bytes == text("by.ccx"), "CCX beats UFO regardless of name"
+    );
+    check(
+        store.read("units/shared.fbi").bytes == text("Cormabm.ufo"),
+        "case-insensitive order within a group"
+    );
+    check(store.read("maps/shared.ota").bytes == text("btmaps.ccx"), "CCX beats HPI");
+    check(
+        store.open("sounds\\untdone.wav") == nullptr,
+        "an archive past the HPI limit provides nothing"
+    );
+    check(
+        store.read("sounds/loose.wav").bytes == text("loose"), "a loose file beats every archive"
+    );
+    std::vector<std::string> found;
+    for (const auto& entry : store.find("sounds\\*.wav"))
+        found.push_back(entry.name + "@" + std::to_string(entry.mount));
+    const std::vector<std::string> expected_found{"Loose.wav@-1", "other.wav@27"};
+    check(found == expected_found, "find skips the archive copy a loose file hides");
+
+    // The CD-ROM root scan takes every *.hpi with no limit but rejects paths
+    // already in the table, so with the same directory standing in for the
+    // disc the archives past the limit follow everything else.
+    oa::AssetStore with_disc(root);
+    const fs::path disc_roots[]{root};
+    int rejected_duplicates = 0;
+    for (const auto& outcome : with_disc.discover("31", disc_roots))
+        rejected_duplicates += outcome.already_mounted ? 1 : 0;
+    check(
+        mounted_names(with_disc) == install_order_with_disc(),
+        "disc-root scan appends the archives past the limit"
+    );
+    check(rejected_duplicates == 10, "the disc-root scan rejects the ten archives already mounted");
+    check(
+        with_disc.read("sounds/untdone.wav").bytes == text("totala3.hpi"),
+        "a disc-root archive provides what nothing earlier does"
+    );
+    check(
+        with_disc.read("gamedata/sound.tdf").bytes == text("rev31.gp3"),
+        "disc-root archives never outrank earlier mounts"
+    );
+}
+
+// The groups discovery scans the game directory in, in scan order.
+enum class ArchiveGroup : uint8_t { revision, ccx, ufo, hpi, none };
+
+// The revision patch of the 3.1c game, the one GP3 discovery mounts.
+constexpr std::string_view kRevisionPatch = "rev31.gp3";
+
+/// Upper-cases ASCII letters, as Windows compares names.
+///
+/// @param text a file name
+/// @return the name in upper case
+std::string upper_ascii(std::string_view text) {
+    std::string upper(text);
+    for (auto& c : upper)
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    return upper;
+}
+
+/// Tests whether an upper-cased name ends in an extension after a stem.
+///
+/// @param upper_name the name, upper-cased
+/// @param upper_extension the extension with its dot, upper-cased
+/// @return true when the name is longer than the extension and ends in it
+bool has_extension(const std::string& upper_name, std::string_view upper_extension) {
+    return upper_name.size() > upper_extension.size() &&
+           upper_name.compare(
+               upper_name.size() - upper_extension.size(), upper_extension.size(), upper_extension
+           ) == 0;
+}
+
+/// Classifies a file of the game directory by the scan that picks it up.
+///
+/// @param name the file's name
+/// @return its group, or none for a file no scan takes
+ArchiveGroup group_of(const std::string& name) {
+    const auto upper = upper_ascii(name);
+    if (upper == upper_ascii(kRevisionPatch))
+        return ArchiveGroup::revision;
+    if (has_extension(upper, ".CCX"))
+        return ArchiveGroup::ccx;
+    if (has_extension(upper, ".UFO"))
+        return ArchiveGroup::ufo;
+    if (has_extension(upper, ".HPI"))
+        return ArchiveGroup::hpi;
+    return ArchiveGroup::none;
+}
+
+/// Lists the archive files of an install's top directory in discovery's order.
+///
+/// By group, and within a group in Windows name order (ASCII upper-cased).
+///
+/// @param root the installation
+/// @return the archives' file names
+std::vector<std::string> listed_archives(const fs::path& root) {
+    std::vector<std::string> names;
+    for (const auto& entry : fs::directory_iterator(root))
+        if (entry.is_regular_file() &&
+            group_of(entry.path().filename().string()) != ArchiveGroup::none)
+            names.push_back(entry.path().filename().string());
+    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+        const auto group_a = group_of(a);
+        const auto group_b = group_of(b);
+        return group_a != group_b ? group_a < group_b : upper_ascii(a) < upper_ascii(b);
+    });
+    return names;
+}
+
+/// Checks the installed game's archives mount by discovery's rules.
+///
+/// Discovery mounts every archive of the install's top directory by the rules
+/// the synthetic layouts pin, all of them with its directory as the disc root.
+/// With the 3.1c revision patch present it also shows the data gap behind the
+/// silent factory-completion sound: the patch's gamedata/sound.tdf names
+/// untdone for every plant, but no shipped archive holds sounds/untdone.wav,
+/// so only a loose copy could ever supply it.
+///
+/// @param root the installation
+void asset_store_discover_installed_game(const fs::path& root) {
+    const auto listed = listed_archives(root);
+    std::vector<std::string> expected;
+    std::vector<std::string> past_limit;
+    int plain = 0;
+    for (const auto& name : listed) {
+        if (group_of(name) == ArchiveGroup::hpi &&
+            plain == oa::formats::hpi::PlainArchiveMountLimit) {
+            past_limit.push_back(name);
+            continue;
+        }
+        plain += group_of(name) == ArchiveGroup::hpi ? 1 : 0;
+        expected.push_back(name);
+    }
+    check(!expected.empty(), "the install's directory holds archives");
+
+    oa::AssetStore store(root);
+    int unreadable = 0;
+    for (const auto& outcome : store.discover(oa::test::kGameRevision))
+        unreadable += outcome.mounted ? 0 : 1;
+    check(unreadable == 0, "every archive the install's directory holds opens");
+    check(
+        mounted_names(store) == expected,
+        "the revision patch, the CCX and UFO groups, then at most ten *.HPI, each group in name "
+        "order"
+    );
+
+    oa::AssetStore with_disc(root);
+    const fs::path disc_roots[]{root};
+    int rejected_duplicates = 0;
+    for (const auto& outcome : with_disc.discover(oa::test::kGameRevision, disc_roots))
+        rejected_duplicates += outcome.already_mounted ? 1 : 0;
+    auto expected_with_disc = expected;
+    expected_with_disc.insert(expected_with_disc.end(), past_limit.begin(), past_limit.end());
+    check(
+        mounted_names(with_disc) == expected_with_disc,
+        "the disc-root scan adds the archives past the limit last"
+    );
+    check(rejected_duplicates == plain, "the disc-root scan rejects the *.HPI already mounted");
+
+    const auto is_revision_patch = [](const std::string& name) {
+        return group_of(name) == ArchiveGroup::revision;
+    };
+    if (std::none_of(listed.begin(), listed.end(), is_revision_patch))
+        return;
+    const auto sound_table = with_disc.read("gamedata/sound.tdf");
+    check(
+        is_revision_patch(sound_table.source.filename().string()),
+        "the revision patch provides sound.tdf"
+    );
+    const std::string table(sound_table.bytes.begin(), sound_table.bytes.end());
+    check(table.find("unitcomplete=untdone;") != std::string::npos, "sound.tdf names untdone");
+    oa::ResourceFile* file = with_disc.open("sounds\\untdone.wav");
+    check(
+        file == nullptr || !oa::AssetStore::archived(file), "no shipped archive holds untdone.wav"
+    );
+    if (file != nullptr)
+        oa::AssetStore::close(file);
+}
+
+void resource_file_semantics() {
+    TempDir dir;
+    const Bytes big = pattern_bytes(2 * oa::formats::hpi::BlockBytes + 10);
+    const auto path = dir.write(
+        "h.hpi",
+        archive_of(
+            {{"big", big, oa::formats::hpi::CompressionZLib},
+             {"raw", text("0123456789"), 0},
+             {"zero", {}, 0}}
+        )
+    );
+    fs::create_directory(dir.path() / "loose");
+    std::ofstream(dir.path() / "loose" / "empty.txt") << "";
+    oa::AssetStore store(dir.path() / "loose");
+    store.mount(path);
+    auto* file = store.open("big");
+    check(file != nullptr && oa::AssetStore::archived(file), "open archive handle");
+    check(oa::AssetStore::length(file) == big.size(), "handle length");
+    check(
+        oa::AssetStore::seek(file, oa::formats::hpi::BlockBytes - 3) == 0,
+        "archive seek returns zero"
+    );
+    Bytes window(8);
+    check(oa::AssetStore::read(file, window) == 8, "read across a block boundary");
+    check(
+        std::equal(window.begin(), window.end(), big.begin() + oa::formats::hpi::BlockBytes - 3),
+        "boundary bytes"
+    );
+    check(
+        oa::AssetStore::tell(file) == static_cast<int32_t>(oa::formats::hpi::BlockBytes + 5),
+        "tell advances"
+    );
+    (void)oa::AssetStore::seek(file, 0xFFFFFFFFU);
+    check(oa::AssetStore::read(file, window) == 0, "read at end");
+    oa::AssetStore::close(file);
+    Bytes part(4);
+    check(store.read_chunk("raw", 3, part) && part == text("3456"), "read_chunk");
+    check(!store.load_file_contents("zero").has_value(), "empty archive entry does not load");
+    check(!store.load_file_contents("empty.txt").has_value(), "empty loose file does not load");
+    check(store.load_file_contents("RAW") == text("0123456789"), "load_file_contents");
+    check(store.file_size("big") == big.size() && store.file_size("missing") == 0, "file_size");
+    check(store.open("missing") == nullptr, "open of a missing resource");
+    std::vector<int> reported;
+    const auto progressed = store.load_with_progress(
+        "big",
+        [](void* user, uint8_t percent) {
+            static_cast<std::vector<int>*>(user)->push_back(percent);
+        },
+        &reported
+    );
+    check(progressed == big, "progress load content");
+    check(reported == std::vector<int>{9, 18, 27, 36, 45, 54, 63, 72, 81, 90}, "progress steps");
+    check(
+        throws([&] { (void)store.load_with_progress("missing", nullptr, nullptr); }),
+        "missing progress load"
+    );
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    if (oa::test::game_data_requested(argc, argv)) {
+        const auto root = oa::test::require_game_directory("the installed game's archive order");
+        try {
+            asset_store_discover_installed_game(root);
+        } catch (const std::exception& error) {
+            std::cerr << "unexpected exception: " << error.what() << '\n';
+            return 1;
+        }
+        if (failures != 0) {
+            std::cerr << failures << " HPI install check(s) failed\n";
+            return 1;
+        }
+        std::cout << "hpi install tests passed\n";
+        return 0;
+    }
+    try {
+        hpi_writer_round_trip();
+        hpi_requires_copyright_trailer_any_year();
+        hpi_version_must_be_one();
+        hpi_header_key_ff_disables_decryption();
+        hpi_lookup_last_duplicate_wins();
+        hpi_intermediate_file_ends_lookup();
+        hpi_directory_match_falls_through();
+        hpi_entry_flag_bit0_is_directory();
+        hpi_any_nonzero_compression_is_chunked();
+        sqsh_stored_type_is_fatal();
+        sqsh_version_byte_ignored();
+        sqsh_zlib_error_keeps_expected_length();
+        sqsh_chunk_table_locates_blocks();
+        hpi_negative_directory_count_is_empty();
+        hpi_rejects_cycles();
+        match_wildcard_rules();
+        asset_store_find_and_shadowing();
+        asset_store_discover_order_and_hpi_limit();
+        asset_store_discover_pins_install_layout();
+        resource_file_semantics();
+    } catch (const std::exception& error) {
+        std::cerr << "unexpected exception: " << error.what() << '\n';
+        return 1;
+    }
+    if (failures != 0) {
+        std::cerr << failures << " HPI check(s) failed\n";
+        return 1;
+    }
+    std::cout << "hpi tests passed\n";
+    return 0;
+}

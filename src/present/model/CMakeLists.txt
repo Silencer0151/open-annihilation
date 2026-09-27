@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+add_library(oa-present-model src/mesh_raster.cpp src/model_library.cpp src/model_draw.cpp src/rgb_bridge.cpp)
+add_library(oa::present::model ALIAS oa-present-model)
+target_include_directories(oa-present-model PUBLIC include)
+target_link_libraries(oa-present-model PUBLIC oa-present oa-formats-objects3d oa-formats-gaf oa-sim-sprite-animation oa-formats-hpi
+  oa-sim-model-runtime oa-ui-hud oa-core-types oa-sim-effect-particles
+  PRIVATE oa-base-geometry oa-options)
+target_compile_features(oa-present-model PUBLIC cxx_std_20)
+
+if(BUILD_TESTING)
+  file(GLOB oa_model_render_tests CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*_test.cpp")
+  foreach(test_source IN LISTS oa_model_render_tests)
+    get_filename_component(test_name "${test_source}" NAME_WE)
+    string(REPLACE "_" "-" test_id "${test_name}")
+    add_executable(oa-model-render-${test_id} "${test_source}")
+    target_link_libraries(oa-model-render-${test_id} PRIVATE oa-present-model oa-options)
+    add_test(NAME model-render-${test_id} COMMAND oa-model-render-${test_id})
+    set_tests_properties(model-render-${test_id} PROPERTIES TIMEOUT 120)
+  endforeach()
+  # The installed game's texture archives.
+  target_link_libraries(oa-model-render-model-library-test PRIVATE oa-test-game-data)
+  oa_add_game_data_test(model-render-model-library-test-data oa-model-render-model-library-test --data)
+  set_tests_properties(model-render-model-library-test-data PROPERTIES TIMEOUT 120)
+endif()

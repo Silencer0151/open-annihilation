@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+cmake_minimum_required(VERSION 3.24)
+project(oa_sim_spatial_state LANGUAGES CXX)
+include(CTest)
+add_library(oa-sim-spatial-state src/spatial.cpp src/cell_classifier.cpp)
+add_library(oa::sim::spatial_state ALIAS oa-sim-spatial-state)
+target_include_directories(oa-sim-spatial-state PUBLIC include)
+target_compile_features(oa-sim-spatial-state PUBLIC cxx_std_20)
+if(TARGET oa-options)
+  target_link_libraries(oa-sim-spatial-state PUBLIC oa-options)
+endif()
+if(BUILD_TESTING)
+  add_executable(oa-spatial-state-test tests/spatial_test.cpp)
+  target_link_libraries(oa-spatial-state-test PRIVATE oa-sim-spatial-state)
+  add_test(NAME spatial-state COMMAND oa-spatial-state-test)
+  add_executable(oa-cell-classifier-test tests/cell_classifier_test.cpp)
+  target_link_libraries(oa-cell-classifier-test PRIVATE oa-sim-spatial-state)
+  add_test(NAME cell-classifier COMMAND oa-cell-classifier-test)
+endif()

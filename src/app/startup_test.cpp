@@ -1,0 +1,309 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// oa-game command-line parsing of the trace stream, seed, game directory,
+// data folder, window size, video capture and showcase options, and of the
+// options and switches an extension takes.
+#include "oa/app/app.hpp"
+#include "oa/app/extension.hpp"
+#include "oa/app/game_directory.hpp"
+#include "oa/app/command_line.hpp"
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, const char* what) {
+    if (!condition) {
+        std::fprintf(stderr, "FAILED: %s\n", what);
+        ++failures;
+    }
+}
+
+const oa::app::Extension kNoExtension{};
+
+oa::app::Options parse(
+    const std::vector<const char*>& arguments, const oa::app::Extension& extension = kNoExtension
+) {
+    std::vector<std::string> storage{"open-annihilation"};
+    storage.insert(storage.end(), arguments.begin(), arguments.end());
+    std::vector<char*> argv;
+    for (auto& argument : storage)
+        argv.push_back(argument.data());
+    return oa::app::parse_options(static_cast<int>(argv.size()), argv.data(), extension);
+}
+
+// The message parse_options rejects the arguments with, or "" when it takes them.
+std::string rejection(
+    const std::vector<const char*>& arguments, const oa::app::Extension& extension = kNoExtension
+) {
+    try {
+        (void)parse(arguments, extension);
+    } catch (const std::runtime_error& error) {
+        return error.what();
+    }
+    return {};
+}
+
+// A test extension: "--extra VALUE" (headless and unattended), "--quiet-extra"
+// (no effects) that "--extra" must not follow, and the game's -y switch.
+struct TestExtension {
+    std::string extra;
+    bool quiet = false;
+    int switches_taken = 0;
+    oa::app::command_line::SwitchHandler switches{};
+};
+
+oa::app::Extension test_extension(TestExtension& state) {
+    oa::app::Extension table{};
+    table.context = &state;
+    table.take_option = [](void* context,
+                           const char* name,
+                           const oa::app::OptionValues& values,
+                           uint32_t& effects) {
+        auto& self = *static_cast<TestExtension*>(context);
+        if (std::string_view(name) == "--extra") {
+            self.extra = values.next(values.arguments);
+            effects |= oa::app::option_effect::headless_check | oa::app::option_effect::unattended;
+            return true;
+        }
+        if (std::string_view(name) == "--quiet-extra") {
+            self.quiet = true;
+            effects |= oa::app::option_effect::skip_intro;
+            return true;
+        }
+        return false;
+    };
+    table.check_options = [](void* context) {
+        const auto& self = *static_cast<TestExtension*>(context);
+        if (self.quiet && !self.extra.empty())
+            throw std::runtime_error("--extra and --quiet-extra are used apart");
+    };
+    state.switches.context = &state;
+    state.switches.take = [](void* context,
+                             char letter,
+                             const oa::app::command_line::SwitchArguments*,
+                             uint32_t* effects) {
+        if (letter != 'y')
+            return 0;
+        ++static_cast<TestExtension*>(context)->switches_taken;
+        *effects |= oa::app::command_line::switch_effect_skip_intro;
+        return 1;
+    };
+    table.switch_handler = [](void* context) -> const oa::app::command_line::SwitchHandler* {
+        return &static_cast<TestExtension*>(context)->switches;
+    };
+    table.text = [](void*, oa::app::ExtensionText which) -> const char* {
+        return which == oa::app::ExtensionText::register_switch ? "-r is the extension's" : nullptr;
+    };
+    return table;
+}
+
+} // namespace
+
+int main() {
+    const auto plain = parse({"--headless-check"});
+    expect(plain.trace_digest.empty() && plain.trace_units.empty(), "no trace without the flag");
+    expect(!plain.seed, "no fixed seed without the flag");
+
+    const auto traced =
+        parse({"--trace-digest", "run.trace", "--trace-units", "run.units", "--seed", "1234567"});
+    expect(traced.trace_digest == "run.trace", "--trace-digest takes its file");
+    expect(traced.trace_units == "run.units", "--trace-units takes its file");
+    expect(traced.seed && *traced.seed == 1234567u, "--seed takes its value");
+
+    // Without an extension the engine knows none of an extension's options.
+    for (const char* flag : {"--extra", "--quiet-extra", "--not-an-option"})
+        expect(rejection({flag}) == std::string("unknown option: ") + flag, flag);
+    expect(
+        parse({"--check-multiplayer-menu"}).check_multiplayer_menu,
+        "the multiplayer menu check is still an option"
+    );
+    // Nor do the game's multiplayer switches: the first one stops the start.
+    for (const char* flag : {"-n1", "-hHost", "-y", "-t60", "-e5", "-p12", "-c"})
+        expect(
+            rejection({"-s", flag}) ==
+                std::string("-") + flag[1] +
+                    " is a multiplayer switch, which this release does not include",
+            flag
+        );
+    expect(parse({"-s", "-w"}).launch.system_sound == 1, "the other game switches still apply");
+    expect(
+        rejection({"-rkey"}) ==
+            "-r registers the game for multiplayer, which this release does not include",
+        "-r without an extension"
+    );
+
+    // An extension's options take their values and imply engine options.
+    {
+        TestExtension state;
+        const auto table = test_extension(state);
+        const auto extra = parse({"--extra", "value", "--seed", "3"}, table);
+        expect(
+            state.extra == "value" && extra.seed == 3u, "the extension takes its option's value"
+        );
+        expect(
+            extra.headless_check && extra.fixed_clock && extra.unattended,
+            "an extension option implies --headless-check and an unattended run"
+        );
+        expect(
+            rejection({"--extra"}, table) == "--extra requires a value", "its value is required"
+        );
+    }
+    {
+        TestExtension state;
+        const auto table = test_extension(state);
+        const auto quiet = parse({"--quiet-extra"}, table);
+        expect(
+            state.quiet && quiet.skip_intro && !quiet.headless_check && !quiet.unattended,
+            "an extension option implies --skip-intro alone"
+        );
+        expect(
+            rejection({"--unknown"}, table) == "unknown option: --unknown",
+            "options neither knows are refused"
+        );
+    }
+    {
+        TestExtension state;
+        const auto table = test_extension(state);
+        expect(
+            rejection({"--quiet-extra", "--extra", "x"}, table) ==
+                "--extra and --quiet-extra are used apart",
+            "the extension checks its options after the engine's"
+        );
+    }
+    {
+        // The switches it takes run and skip the intro; the ones it does not
+        // are still refused, and -r gives its reason.
+        TestExtension state;
+        const auto table = test_extension(state);
+        const auto switched = parse({"-y"}, table);
+        expect(
+            state.switches_taken == 1 && switched.launch.skip_intro != 0,
+            "the extension takes -y and asks for the intro skip"
+        );
+        expect(
+            rejection({"-t60"}, table) ==
+                "-t is a multiplayer switch, which this release does not include",
+            "a reserved switch the extension leaves is refused"
+        );
+        expect(rejection({"-rkey"}, table) == "-r is the extension's", "the extension words -r");
+    }
+
+    expect(parse({"--seed", "0"}).seed == 0u, "a zero seed is a seed");
+    expect(parse({"--seed", "4294967295"}).seed == 4294967295u, "the widest seed fits");
+    expect(
+        rejection({"--seed", "4294967296"}).find("--seed") == 0, "a seed past 32 bits is refused"
+    );
+    expect(rejection({"--seed", "-1"}).find("--seed") == 0, "a negative seed is refused");
+    expect(
+        rejection({"--seed", "12x"}).find("--seed") == 0, "trailing text after a seed is refused"
+    );
+    expect(
+        rejection({"--trace-digest"}) == "--trace-digest requires a value",
+        "the stream needs a file"
+    );
+    expect(
+        rejection({"--trace-digest", ""}) == "--trace-digest requires a value",
+        "an empty file name is refused"
+    );
+    expect(
+        rejection({"--trace-units", "run.units"}) == "--trace-units needs --trace-digest",
+        "a unit dump needs the stream"
+    );
+
+    expect(
+        parse({}).game_dir.empty() && !parse({}).choose_game_dir,
+        "no game directory until one is passed"
+    );
+    expect(
+        parse({"--game-dir", "Jeux vid\xc3\xa9o"}).game_dir ==
+            oa::app::path_from_utf8("Jeux vid\xc3\xa9o"),
+        "--game-dir takes a UTF-8 path"
+    );
+    expect(parse({"--choose-game-dir"}).choose_game_dir, "--choose-game-dir asks for the folder");
+    const char* data_folder = "Donn\xc3\xa9"
+                              "es";
+    expect(
+        !parse({}).data_dir &&
+            parse({"--data-dir", data_folder}).data_dir == oa::app::path_from_utf8(data_folder),
+        "--data-dir takes a UTF-8 path; without it the platform's data folder is used"
+    );
+    expect(rejection({"--data-dir"}) == "--data-dir requires a value", "--data-dir needs a folder");
+    expect(
+        rejection({"--choose-game-dir", "--game-dir", "ta"}) ==
+            "--choose-game-dir and --game-dir cannot be used together",
+        "--choose-game-dir does not take a folder"
+    );
+    expect(
+        !parse({}).unattended && !parse({"--skip-intro", "--mute"}).unattended,
+        "an interactive start may ask for the folder"
+    );
+    std::vector<std::vector<const char*>> scripted_runs{
+        {"--headless-check"},
+        {"--check-navigation"},
+        {"--check-multiplayer-menu"},
+        {"--check-load-save"},
+        {"--check-frontend-controls"},
+        {"--check-briefing-narration"},
+        {"--benchmark", "60"},
+        {"--frames", "120"},
+        {"--snapshot", "frame.ppm"},
+    };
+    for (auto scripted : scripted_runs) {
+        expect(parse(scripted).unattended, scripted.front());
+        scripted.push_back("--choose-game-dir");
+        expect(rejection(scripted).find("--choose-game-dir opens a dialog") == 0, scripted.front());
+    }
+
+    // --resolution sizes the window of a run that opens one.
+    expect(!parse({}).window_resolution, "the window keeps its default size");
+    const auto sized = parse({"--resolution", "1280x1024"});
+    expect(
+        sized.window_resolution && sized.match_width == 1280 && sized.match_height == 1024,
+        "--resolution sizes the window"
+    );
+    expect(
+        rejection({"--resolution", "0x480"}) == "--resolution expects a width and height above 0",
+        "a window has a size"
+    );
+
+    // A capture and a showcase run in the game's window; a showcase is
+    // unattended and seeded the same way each time.
+    const auto captured = parse({"--capture-video", "showcase.mp4"});
+    expect(
+        captured.capture_video == oa::app::path_from_utf8("showcase.mp4") && !captured.unattended,
+        "--capture-video takes its file and leaves the game to the player"
+    );
+    const auto showcase = parse({"--showcase", "arm-first-mission"});
+    expect(
+        showcase.showcase == oa::app::Showcase::arm_first_mission && showcase.unattended &&
+            showcase.seed == oa::app::kFixedRandomSeed && !showcase.fixed_clock,
+        "--showcase plays the first Arm mission, unattended, on the real clock"
+    );
+    expect(
+        parse({"--showcase", "arm-first-mission", "--seed", "9"}).seed == 9u,
+        "--seed chooses a showcase's seed"
+    );
+    expect(
+        rejection({"--showcase", "skirmish"}) == "--showcase knows one showcase: arm-first-mission",
+        "an unknown showcase is refused"
+    );
+    expect(
+        rejection({"--capture-video", "check.mp4", "--headless-check"}) ==
+            "--capture-video captures the game or a --showcase, not a check or benchmark",
+        "a headless run cannot be captured"
+    );
+    expect(
+        rejection({"--showcase", "arm-first-mission", "--check-navigation"}) ==
+            "--showcase plays in a window; it is not a check or benchmark",
+        "a showcase is not a check"
+    );
+    return failures == 0 ? 0 : 1;
+}

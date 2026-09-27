@@ -1,0 +1,1615 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Savegames of the running match: the Summary, Players and unit sections of
+// src/data/persist and the HUD over the canonical World, the start of a skirmish
+// or campaign mission from a savegame, and the match's meteor-storm state
+// they carry.
+#include "oa/app/runtime.hpp"
+
+#include "oa/data/campaign/campaign_file.hpp"
+#include "oa/formats/cob.hpp"
+#include "oa/sim/ground_orders/ground_runtime.hpp"
+#include "oa/sim/match_runtime.hpp"
+#include "oa/sim/world_environment/meteor.hpp"
+#include "oa/data/mission_types.hpp"
+#include "oa/sim/scenario/condition_persist.hpp"
+#include "oa/data/persist/hapibank.hpp"
+#include "oa/data/persist/save_sections.hpp"
+#include "oa/sim/feature_runtime.hpp"
+#include "oa/sim/script_state.hpp"
+#include "oa/sim/session.hpp"
+#include "oa/sim/state_hash.hpp"
+#include "oa/sim/trace.hpp"
+#include "oa/ui/hud/order_panel.hpp"
+#include "oa/ui/hud/player_records.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace oa::app {
+
+namespace persist = oa::data::persist;
+namespace missions = oa::data::campaign;
+namespace environment = oa::sim::world_environment;
+namespace hud = oa::ui::hud;
+namespace save_key = oa::data::persist::save_key;
+
+namespace {
+
+// The 3.1c build stamp, which fills two Summary keys ("BUILD DATE: %s",
+// "BUILD TIME: %s").
+constexpr const char* kGameBuildDate = "Nov 17 1999";
+constexpr const char* kGameBuildTime = "11:45:48";
+
+constexpr std::size_t kSightWordBytes = sizeof(uint16_t);
+constexpr const char* kHeadlessSaveName = "headless.sav";
+
+// gamedata\meteor.tdf [Default] and the map keys it stands in for.
+constexpr const char* kMeteorDefaults = "gamedata/meteor.tdf";
+constexpr const char* kMeteorDefaultSection = "Default";
+constexpr const char* kMeteorWeapon = "MeteorWeapon";
+constexpr const char* kMeteorRadius = "MeteorRadius";
+constexpr const char* kMeteorDensity = "MeteorDensity";
+constexpr const char* kMeteorDuration = "MeteorDuration";
+constexpr const char* kMeteorInterval = "MeteorInterval";
+
+// Movement image handed to the mobility writer: the 0x23-byte block the
+// ground runtime saves sits at the movement object's saved offset, its last
+// byte in the flags byte.
+constexpr std::size_t kMovementImageBytes = persist::movement_flags + 1;
+static_assert(persist::movement_saved_bytes + 1 == oa::sim::ground_orders::mobility_record_size);
+
+// The Features section reads and restores the feature runtime's placed-feature
+// records, whose fields sit where the section's names say.
+namespace placed = oa::sim::feature_runtime;
+static_assert(persist::feature_record_bytes == sizeof(placed::PlacedFeature));
+static_assert(persist::feature_record_bytes == OA_PLACED_FEATURE_BYTES);
+static_assert(
+    persist::feature_record::frame == offsetof(placed::PlacedFeature, sprite) +
+                                          offsetof(placed::PlacedFeatureSprite, animation) +
+                                          offsetof(placed::FeatureCursor, frame)
+);
+static_assert(
+    persist::feature_record::sequence == offsetof(placed::PlacedFeature, sprite) +
+                                             offsetof(placed::PlacedFeatureSprite, animation) +
+                                             offsetof(placed::FeatureCursor, sequence)
+);
+static_assert(
+    persist::feature_record::position ==
+    offsetof(placed::PlacedFeature, model) + offsetof(placed::PlacedFeatureModel, position)
+);
+static_assert(persist::feature_record::position_bytes == sizeof(FixedVec3));
+static_assert(persist::feature_record::orientation == offsetof(placed::PlacedFeature, orientation));
+static_assert(
+    persist::feature_record::orientation_bytes == sizeof(placed::PlacedFeature::orientation)
+);
+static_assert(persist::feature_record::damage == offsetof(placed::PlacedFeature, damage));
+static_assert(
+    persist::feature_record::spread_countdown == offsetof(placed::PlacedFeature, spread_countdown)
+);
+
+void store_le16(uint8_t* out, uint16_t value) noexcept {
+    out[0] = static_cast<uint8_t>(value);
+    out[1] = static_cast<uint8_t>(value >> 8);
+}
+
+void store_le32(uint8_t* out, uint32_t value) noexcept {
+    store_le16(out, static_cast<uint16_t>(value));
+    store_le16(out + 2, static_cast<uint16_t>(value >> 16));
+}
+
+uint16_t load_le16(const uint8_t* in) noexcept {
+    return static_cast<uint16_t>(in[0] | (in[1] << 8));
+}
+
+uint32_t load_le32(const uint8_t* in) noexcept {
+    return static_cast<uint32_t>(load_le16(in)) | (static_cast<uint32_t>(load_le16(in + 2)) << 16);
+}
+
+float load_le_float(const uint8_t* in) noexcept {
+    return std::bit_cast<float>(load_le32(in));
+}
+
+/// Marks the plots a load of a save of the match hides under the map's edges
+/// before it places the save's features: the edges laid over the map with its
+/// blocking markers alone.
+///
+/// @param world the match's world, for its plots and map size
+/// @param lava_world the map is a lava world
+/// @return one entry per plot, nonzero where the load hides it
+std::vector<uint8_t> plots_hidden_on_load(const oa::World& world, bool lava_world) {
+    namespace features = oa::sim::feature_runtime;
+    const auto cells = static_cast<std::size_t>(std::max(world.game.map_width, 0)) *
+                       static_cast<std::size_t>(std::max(world.game.map_height, 0));
+    std::vector<oa::MapPlot> plots(world.plots, world.plots + cells);
+    for (auto& plot : plots)
+        if (plot.feature != features::feature_marker)
+            plot.feature = features::no_feature;
+    const auto scratch = std::make_unique<oa::World>();
+    scratch->game = world.game;
+    scratch->plots = plots.data();
+    features::void_hidden_edges(*scratch, lava_world);
+    std::vector<uint8_t> hidden(cells);
+    for (std::size_t index = 0; index < cells; ++index)
+        hidden[index] = plots[index].feature == features::hidden_edge ? 1 : 0;
+    return hidden;
+}
+
+struct BankGuard {
+    persist::Bank bank{};
+
+    BankGuard() { persist::bank_init(&bank); }
+
+    ~BankGuard() { persist::bank_destroy(&bank); }
+
+    BankGuard(const BankGuard&) = delete;
+    BankGuard& operator=(const BankGuard&) = delete;
+};
+
+/// Reads every account of a save file into the guard's bank.
+///
+/// @param[out] guard bank the accounts are read into
+/// @param path savegame file
+/// @param[out] error why the read failed
+/// @return false when the file is missing or not a save
+bool read_whole_save(BankGuard& guard, const fs::path& path, persist::BankError* error) {
+    const persist::FileSource source = persist::stdio_file_source();
+    return persist::bank_read_file(
+        &guard.bank, path.string().c_str(), persist::savegame_description, nullptr, &source, error
+    );
+}
+
+// The offline match keeps the map size, camera, player count and in-match
+// mode in the runtime rather than in its Game block, which the save
+// sections read. This bounded scaffolding writes them
+// into the Game block for one save or load and puts the previous values back;
+// it goes away once the runtime keeps them in the Game block itself.
+class GameBinding {
+  public:
+
+    GameBinding(
+        oa::Game& game,
+        const oa::formats::tnt::Map& map,
+        int32_t camera_x,
+        int32_t camera_z,
+        uint16_t player_count
+    )
+        : game_(game), map_width_(game.map_width), map_height_(game.map_height),
+          camera_x_(game.camera_x), camera_y_(game.camera_y), player_count_(game.player_count),
+          mode_(game.mode) {
+        game.map_width = static_cast<int32_t>(map.attribute_width);
+        game.map_height = static_cast<int32_t>(map.attribute_height);
+        game.camera_x = static_cast<uint32_t>(camera_x);
+        game.camera_y = static_cast<uint32_t>(camera_z);
+        game.player_count = player_count;
+        game.mode = persist::game_mode_in_match;
+    }
+
+    ~GameBinding() {
+        game_.map_width = map_width_;
+        game_.map_height = map_height_;
+        game_.camera_x = camera_x_;
+        game_.camera_y = camera_y_;
+        game_.player_count = player_count_;
+        game_.mode = mode_;
+    }
+
+    GameBinding(const GameBinding&) = delete;
+    GameBinding& operator=(const GameBinding&) = delete;
+
+  private:
+
+    oa::Game& game_;
+    int32_t map_width_;
+    int32_t map_height_;
+    uint32_t camera_x_;
+    uint32_t camera_y_;
+    uint16_t player_count_;
+    int32_t mode_;
+};
+
+// The frontend keeps the campaign's mission results and mission index
+// (Game.mission_results, Game.mission_index) outside the match's Game block;
+// the same bounded scaffolding binds them for one save.
+class SessionRecordBinding {
+  public:
+
+    SessionRecordBinding(
+        oa::Game& game,
+        const std::array<uint8_t, oa::ui::frontend_state::start_pattern_bytes + 1>& results,
+        std::size_t mission_index
+    )
+        : game_(game), mission_index_(game.mission_index) {
+        std::memcpy(results_, game.mission_results, sizeof results_);
+        std::memcpy(game.mission_results, results.data(), sizeof game.mission_results);
+        game.mission_index = static_cast<int32_t>(mission_index);
+    }
+
+    ~SessionRecordBinding() {
+        std::memcpy(game_.mission_results, results_, sizeof results_);
+        game_.mission_index = mission_index_;
+    }
+
+    SessionRecordBinding(const SessionRecordBinding&) = delete;
+    SessionRecordBinding& operator=(const SessionRecordBinding&) = delete;
+
+  private:
+
+    oa::Game& game_;
+    char results_[sizeof oa::Game::mission_results];
+    int32_t mission_index_;
+};
+
+static_assert(sizeof oa::Game::mission_results == oa::ui::frontend_state::start_pattern_bytes + 1);
+
+// The coordinator clock the Players section keeps (Game.last_frame_time
+// through Game.sim_run_flags)
+// lives in the runtime's base::game_loop::Timing; the same bounded scaffolding.
+void store_timing(oa::Game& game, const oa::base::game_loop::Timing& timing) noexcept {
+    game.last_frame_time = timing.previous_clock;
+    game.pending_ticks = timing.pending_steps;
+    game.frame_elapsed = timing.elapsed_bits;
+    game.tick_remainder = timing.remainder;
+    game.tick = timing.tick;
+    game.requested_speed = timing.requested_rate;
+    game.current_speed = timing.actual_rate;
+    game.speed_adaptation = timing.adaptation;
+    game.sim_run_flags = timing.flags;
+}
+
+void load_timing(const oa::Game& game, oa::base::game_loop::Timing& timing) noexcept {
+    timing.previous_clock = game.last_frame_time;
+    timing.pending_steps = game.pending_ticks;
+    timing.elapsed_bits = game.frame_elapsed;
+    timing.remainder = game.tick_remainder;
+    timing.tick = game.tick;
+    timing.requested_rate = game.requested_speed;
+    timing.actual_rate = game.current_speed;
+    timing.adaptation = game.speed_adaptation;
+    timing.flags = game.sim_run_flags;
+}
+
+// The local player and clock bound for one save, as GameBinding does.
+class LocalClockBinding {
+  public:
+
+    LocalClockBinding(
+        oa::Game& game, uint8_t local_player, const oa::base::game_loop::Timing& timing
+    )
+        : game_(game), local_player_(game.local_player_index) {
+        load_timing(game, saved_);
+        game.local_player_index = local_player;
+        store_timing(game, timing);
+    }
+
+    ~LocalClockBinding() {
+        game_.local_player_index = local_player_;
+        store_timing(game_, saved_);
+    }
+
+    LocalClockBinding(const LocalClockBinding&) = delete;
+    LocalClockBinding& operator=(const LocalClockBinding&) = delete;
+
+  private:
+
+    oa::Game& game_;
+    uint8_t local_player_;
+    oa::base::game_loop::Timing saved_{};
+};
+
+// Game.saved_game for the length of one mission start.
+struct ResumedSave {
+    persist::Bank*& slot;
+
+    ResumedSave(persist::Bank*& resumed, persist::Bank* bank) : slot(resumed) { slot = bank; }
+
+    ~ResumedSave() { slot = nullptr; }
+
+    ResumedSave(const ResumedSave&) = delete;
+    ResumedSave& operator=(const ResumedSave&) = delete;
+};
+
+/// Returns a Summary reader over an open bank, for reading a save's Summary.
+///
+/// @return the reader
+ui::frontend::SaveSummaryReader bank_summary_reader() {
+    ui::frontend::SaveSummaryReader reader;
+    reader.get_int = [](void*, void* bank, const char* field, int32_t fallback) {
+        return persist::bank_get_int(static_cast<persist::Bank*>(bank), field, fallback);
+    };
+    reader.get_string = [](void*, void* bank, const char* field, char* out, std::size_t capacity) {
+        const char* text =
+            persist::bank_get_text(static_cast<persist::Bank*>(bank), field, nullptr);
+        if (text == nullptr || capacity == 0)
+            return false;
+        std::snprintf(out, capacity, "%s", text);
+        return true;
+    };
+    reader.has_field = [](void*, void* bank, const char* field) {
+        return persist::bank_has_field(static_cast<persist::Bank*>(bank), field);
+    };
+    return reader;
+}
+
+// A TDF section as the meteor-defaults reader sees it.
+persist::MeteorTdf meteor_tdf(const oa::data::unit_definitions::TdfSection& section) {
+    persist::MeteorTdf tdf{};
+    tdf.context = const_cast<oa::data::unit_definitions::TdfSection*>(&section);
+    tdf.text = [](void* context, const char* key, char* out, std::size_t out_bytes) {
+        const auto* value =
+            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
+        if (value == nullptr || out_bytes == 0)
+            return false;
+        std::snprintf(out, out_bytes, "%s", value->c_str());
+        return true;
+    };
+    tdf.integer = [](void* context, const char* key, int32_t fallback) {
+        const auto* value =
+            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
+        return value != nullptr ? static_cast<int32_t>(std::strtol(value->c_str(), nullptr, 10))
+                                : fallback;
+    };
+    tdf.real = [](void* context, const char* key, double fallback) {
+        const auto* value =
+            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
+        return value != nullptr ? std::strtod(value->c_str(), nullptr) : fallback;
+    };
+    return tdf;
+}
+
+} // namespace
+
+// Match state the sections read and write that lives outside the World.
+struct Runtime::SaveLoadState {
+    environment::MeteorState meteor{};
+    std::array<uint8_t, oa::sim::session::kSkirmishInfoBytes> skirmish_info{};
+    std::vector<uint8_t> mapping; // the sight words, little-endian
+    bool mapping_valid{};
+    std::array<uint8_t, kMovementImageBytes> movement_image{};
+    uint16_t current_unit{};
+    // Game.saved_game: the savegame a starting skirmish or campaign mission
+    // resumes, and whether its Players section restored.
+    persist::Bank* resumed_save{};
+    bool resumed_players{};
+    // The feature TDF set a load reads the types its save names from, held
+    // from the Features section's set load to its link pass.
+    std::vector<oa::data::unit_definitions::TdfDocument> feature_documents;
+    // Script, movement and economy state the last save could not write or the
+    // last load could not restore, and feature types the last load could not
+    // load.
+    std::size_t save_failures{};
+    std::size_t restore_failures{};
+
+    struct Bindings {
+        Runtime* runtime{};
+        SaveLoadState* state{};
+        oa::World* world{}; // the Game block the sections read
+    };
+
+    static void stage_sight(Runtime& runtime, SaveLoadState& state);
+    static void apply_plots(Runtime& runtime, const SaveLoadState& state);
+    static void stage_rules(const init::Preferences& preferences, SaveLoadState& state);
+    static persist::SaveHooks make_hooks(Bindings* bindings);
+    static persist::SaveContext match_context(
+        oa::World& world, SaveLoadState& state, uint8_t* mapping, const persist::SaveHooks& hooks
+    );
+};
+
+void Runtime::destroy_saveload_state(SaveLoadState* state) noexcept {
+    delete state;
+}
+
+Runtime::SaveLoadState& Runtime::saveload_state() {
+    if (!saveload_)
+        saveload_.reset(new SaveLoadState());
+    return *saveload_;
+}
+
+fs::path Runtime::save_game_root() const {
+    return preference_path_.parent_path();
+}
+
+fs::path save_relative_path(std::string_view path) {
+    std::string relative(path);
+    std::replace(relative.begin(), relative.end(), '\\', '/');
+    const auto first = relative.find('/');
+    const std::string_view head = std::string_view(relative).substr(0, first);
+    const auto same = [](char a, char b) {
+        return std::toupper(static_cast<unsigned char>(a)) ==
+               std::toupper(static_cast<unsigned char>(b));
+    };
+    if (head.size() == ui::frontend::kSaveDirectory.size() &&
+        std::equal(head.begin(), head.end(), ui::frontend::kSaveDirectory.begin(), same))
+        relative.replace(0, head.size(), ui::frontend::kSaveDirectory);
+    return fs::path(relative);
+}
+
+void Runtime::set_meteor_enabled(bool enabled) {
+    if (enabled)
+        environment::enable_meteors(saveload_state().meteor);
+    else
+        environment::disable_meteors(saveload_state().meteor);
+}
+
+bool Runtime::meteor_enabled() {
+    return saveload_state().meteor.enabled != 0;
+}
+
+void Runtime::start_meteor_strike() {
+    if (!match_ || !selected_tnt_)
+        return;
+    oa::World& world = match_->state();
+    const GameBinding binding(
+        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+    );
+    environment::MeteorHost host{};
+    host.context = this;
+    host.lcg_random = [](void* context) -> int32_t {
+        return static_cast<Runtime*>(context)->match_->lcg_rand();
+    };
+    environment::start_meteor_strike(saveload_state().meteor, world, host);
+}
+
+void Runtime::reset_meteors() {
+    auto& meteor = saveload_state().meteor;
+    environment::MeteorSettings settings{};
+    const auto load_defaults = [&] {
+        const auto bytes = assets_.load_file_contents(kMeteorDefaults);
+        if (!bytes)
+            return;
+        const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        const auto document = oa::data::unit_definitions::parse_tdf(text);
+        if (!document)
+            throw std::runtime_error("cannot parse " + std::string(kMeteorDefaults));
+        for (const auto& section : document.value.sections) {
+            if (!tdf_names_equal(section.name, kMeteorDefaultSection))
+                continue;
+            const auto tdf = meteor_tdf(section);
+            if (persist::load_meteor_config(&tdf, &settings) == persist::MeteorConfigResult::bogus)
+                throw std::runtime_error(
+                    "bogus meteor defaults in " + std::string(kMeteorDefaults)
+                );
+            return;
+        }
+    };
+    const auto real = [&](const char* key) {
+        const auto value = schema_text(key);
+        return value ? static_cast<float>(std::strtod(value->c_str(), nullptr)) : 0.0F;
+    };
+    const auto weapon = schema_text(kMeteorWeapon).value_or("");
+    if (weapon.empty()) {
+        environment::disable_meteors(meteor);
+        load_defaults();
+    } else {
+        std::snprintf(settings.weapon, sizeof settings.weapon, "%s", weapon.c_str());
+        settings.radius = schema_integer(kMeteorRadius, 0);
+        settings.density = real(kMeteorDensity);
+        settings.duration = real(kMeteorDuration);
+        settings.interval = real(kMeteorInterval);
+        if (settings.radius == 0 || settings.density == 0.0F || settings.duration == 0.0F ||
+            settings.interval == 0.0F)
+            load_defaults();
+        environment::enable_meteors(meteor);
+    }
+    environment::configure_meteors(meteor, settings);
+    environment::MeteorHost host{};
+    host.context = this;
+    host.find_weapon = [](void* context, const char* name) -> oa_ref32 {
+        const auto* definition = static_cast<Runtime*>(context)->weapon_registry_.find(name);
+        return definition != nullptr ? oa::oa_ref_from_index(definition->registry_index) : 0u;
+    };
+    environment::reset_meteors(meteor, match_->state(), host);
+}
+
+void Runtime::step_meteors() {
+    if (!match_)
+        return;
+    environment::MeteorHost host{};
+    host.context = this;
+    host.lcg_random = [](void* context) -> int32_t {
+        return static_cast<Runtime*>(context)->match_->lcg_rand();
+    };
+    host.spawn_projectile =
+        [](void* context, oa_ref32 weapon, const FixedVec3* position, const FixedVec3* velocity) {
+            (void)static_cast<Runtime*>(context)->match_->launch_meteor(
+                weapon, *position, *velocity, true
+            );
+        };
+    environment::step_meteors(saveload_state().meteor, match_->state(), host);
+}
+
+// Stages the sight words the Mapping section reads; the other map sections
+// read and restore the match's canonical plots.
+void Runtime::SaveLoadState::stage_sight(Runtime& runtime, SaveLoadState& state) {
+    const oa::formats::tnt::Map& map = *runtime.selected_tnt_;
+    const auto cells = static_cast<std::size_t>(map.attribute_width) * map.attribute_height;
+    const auto& sight = runtime.match_->sight();
+    // One sight word per two cells.
+    state.mapping.assign(cells / 2, 0);
+    state.mapping_valid = sight.player_bits.size() * kSightWordBytes == state.mapping.size();
+    if (state.mapping_valid)
+        for (std::size_t i = 0; i < sight.player_bits.size(); ++i)
+            store_le16(state.mapping.data() + i * kSightWordBytes, sight.player_bits[i]);
+}
+
+// Takes the metal and placing-player bits a load restored into the canonical
+// plots, and the restored sight words, into the match.
+void Runtime::SaveLoadState::apply_plots(Runtime& runtime, const SaveLoadState& state) {
+    const oa::World& world = runtime.match_->state();
+    auto& plots = runtime.match_->spatial().plots;
+    const auto cells = static_cast<std::size_t>(std::max(world.game.map_width, 0)) *
+                       static_cast<std::size_t>(std::max(world.game.map_height, 0));
+    for (std::size_t i = 0; i < cells && i < plots.size(); ++i) {
+        const oa::MapPlot& plot = world.plots[i];
+        plots[i].metal = plot.metal;
+        plots[i].flags = static_cast<uint8_t>(
+            (plots[i].flags & ~persist::plot_flags_player_features) |
+            (plot.flags & persist::plot_flags_player_features)
+        );
+    }
+    if (!state.mapping_valid)
+        return;
+    auto& sight = runtime.match_->sight_mutable();
+    for (std::size_t i = 0; i < sight.player_bits.size(); ++i)
+        sight.player_bits[i] = load_le16(state.mapping.data() + i * kSightWordBytes);
+}
+
+// The sections over a match: its canonical plots and placed-feature records,
+// the sight words staged at `mapping` and the meteor state.
+persist::SaveContext Runtime::SaveLoadState::match_context(
+    oa::World& world, SaveLoadState& state, uint8_t* mapping, const persist::SaveHooks& hooks
+) {
+    return {
+        &world,
+        reinterpret_cast<uint8_t*>(world.plots),
+        mapping,
+        world.placed_features,
+        &state.meteor,
+        &hooks,
+        world.placed_features != nullptr ? world.placed_feature_count : 0u
+    };
+}
+
+// The skirmish rule words the Summary reads through Game.skirmish_info.
+void Runtime::SaveLoadState::stage_rules(
+    const init::Preferences& preferences, SaveLoadState& state
+) {
+    namespace rules = data::persist::skirmish_rules;
+    uint8_t* info = state.skirmish_info.data();
+    state.skirmish_info.fill(0);
+    store_le32(info + rules::commander_death, preferences.skirmish.commander_death);
+    store_le32(info + rules::mapping, preferences.skirmish.mapping);
+    store_le32(info + rules::line_of_sight, preferences.skirmish.line_of_sight);
+    store_le32(info + rules::line_of_sight_type, preferences.skirmish.los_type);
+    store_le32(info + rules::location, preferences.skirmish_location);
+}
+
+persist::SaveHooks Runtime::SaveLoadState::make_hooks(Bindings* bindings) {
+    persist::SaveHooks hooks{};
+    hooks.context = bindings;
+    hooks.resolve = [](void* context, persist::SaveRef kind, oa_ref32 ref) -> void* {
+        auto* b = static_cast<Bindings*>(context);
+        oa::World& world = *b->world;
+        switch (kind) {
+        case persist::SaveRef::player_info:
+            return ref != 0 && ref <= OA_PLAYER_COUNT ? &world.player_info[ref - 1] : nullptr;
+        case persist::SaveRef::mission_rules:
+            return b->state->skirmish_info.data();
+        case persist::SaveRef::movement: {
+            // Unit.movement only flags the native movement object, which only
+            // mobile units have; the unit is the one whose script the writer
+            // stored just before.
+            auto* ground = b->runtime->match_->ground_runtime(b->state->current_unit);
+            if (ground == nullptr)
+                return nullptr;
+            const auto saved = ground->save_mobility();
+            auto& image = b->state->movement_image;
+            image.fill(0);
+            std::copy_n(
+                saved.begin(),
+                persist::movement_saved_bytes,
+                image.begin() + persist::movement_saved_offset
+            );
+            image[persist::movement_flags] = saved[persist::movement_saved_bytes];
+            return image.data();
+        }
+        }
+        return nullptr;
+    };
+    // The runtime's camera placement.
+    hooks.set_camera = [](void* context, int32_t x, int32_t z) {
+        auto* runtime = static_cast<Bindings*>(context)->runtime;
+        runtime->match_camera_x_ = x;
+        runtime->match_camera_z_ = z;
+        runtime->match_camera_flags_ = 0;
+    };
+    hooks.write_script = [](void* context, oa::Unit* unit, persist::Bank* bank) {
+        auto* b = static_cast<Bindings*>(context);
+        b->state->current_unit = unit->id;
+        auto* instance = b->runtime->match_->instance(unit->id);
+        if (instance == nullptr || instance->script() == nullptr)
+            return;
+        const auto exported = instance->script()->vm().export_state(
+            oa::formats::cob::script_identity(instance->script()->program())
+        );
+        std::vector<uint8_t> bytes;
+        try {
+            if (exported.ok())
+                bytes = oa::sim::script_state::encode(*exported.state);
+        } catch (const std::exception&) {
+            bytes.clear();
+        }
+        if (bytes.empty()) {
+            ++b->state->save_failures;
+            return;
+        }
+        persist::bank_blob_seek(bank, 0);
+        persist::bank_blob_write(bank, bytes.data(), static_cast<uint32_t>(bytes.size()));
+    };
+    hooks.visit_orders = [](void* context,
+                            const oa::Unit* unit,
+                            persist::SavedOrderVisit visit,
+                            void* walk) {
+        static_cast<Bindings*>(context)->runtime->match_->visit_saved_orders(unit->id, visit, walk);
+    };
+    hooks.restore_unit = [](void* context, uint16_t id, persist::Bank* bank) {
+        (void)static_cast<Bindings*>(context)->runtime->restore_saved_unit(id, bank);
+    };
+    // The Features section's load reads the feature TDF set again, loads the
+    // types its save names that the table lacks, links their remnants and
+    // places the save's features on the match's canonical plots. The match
+    // takes each extended table, so every placed type is in it.
+    hooks.load_feature_set = [](void* context) {
+        auto* b = static_cast<Bindings*>(context);
+        auto documents = b->runtime->load_feature_tdf_set();
+        if (!documents) {
+            std::cerr << "saved features: " << documents.error.message << '\n';
+            ++b->state->restore_failures;
+            b->state->feature_documents.clear();
+            return;
+        }
+        b->state->feature_documents = std::move(documents.value);
+    };
+    hooks.find_or_load_feature = [](void* context, const char* name) -> int16_t {
+        auto* b = static_cast<Bindings*>(context);
+        auto& runtime = *b->runtime;
+        const auto host = runtime.feature_def_host();
+        const auto loaded = oa::sim::map_runtime::find_or_load_feature(
+            runtime.feature_table_, b->state->feature_documents, name, &host
+        );
+        runtime.match_->adopt_feature_defs(runtime.feature_table_.defs);
+        if (!loaded.ok()) {
+            std::cerr << "saved feature '" << name << "': " << loaded.error->message << '\n';
+            ++b->state->restore_failures;
+            return static_cast<int16_t>(oa::sim::feature_runtime::no_feature);
+        }
+        return static_cast<int16_t>(loaded.index);
+    };
+    hooks.link_feature_set = [](void* context) {
+        auto* b = static_cast<Bindings*>(context);
+        auto& runtime = *b->runtime;
+        const auto host = runtime.feature_def_host();
+        if (const auto error = oa::sim::map_runtime::load_feature_links(
+                runtime.feature_table_, b->state->feature_documents, &host
+            )) {
+            std::cerr << "saved features: " << error->message << '\n';
+            ++b->state->restore_failures;
+        }
+        runtime.match_->adopt_feature_defs(runtime.feature_table_.defs);
+        b->state->feature_documents.clear();
+    };
+    hooks.place_feature = [](void* context,
+                             uint8_t* plot,
+                             uint16_t type,
+                             const uint8_t* position,
+                             const uint8_t* orientation) {
+        static_cast<Bindings*>(context)->runtime->match_->place_saved_feature(
+            plot, type, position, orientation
+        );
+    };
+    hooks.burn_feature = [](void* context, uint16_t x, uint16_t z) {
+        static_cast<Bindings*>(context)->runtime->match_->ignite_saved_feature(x, z);
+    };
+    hooks.queue_feature_event = [](void* context, uint16_t x, uint16_t z, int32_t kind) {
+        static_cast<Bindings*>(context)->runtime->match_->restart_saved_feature_sequence(
+            x, z, kind
+        );
+    };
+    return hooks;
+}
+
+bool Runtime::save_match_game(const fs::path& path, const char* description, int32_t game_id) {
+    if (!match_ || !selected_tnt_) {
+        status_ = "There is no match to save";
+        return false;
+    }
+    auto& state = saveload_state();
+    state.save_failures = 0;
+    oa::World& world = match_->state();
+    const GameBinding binding(
+        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+    );
+    const LocalClockBinding clock(world.game, match_local_player_, match_timing_);
+    const SessionRecordBinding session(world.game, state_.mission_results, selected_mission_index_);
+    SaveLoadState::stage_sight(*this, state);
+    SaveLoadState::stage_rules(preferences_, state);
+    SaveLoadState::Bindings bindings{this, &state, &world};
+    const persist::SaveHooks hooks = SaveLoadState::make_hooks(&bindings);
+    persist::SaveContext save = SaveLoadState::match_context(
+        world, state, state.mapping_valid ? state.mapping.data() : nullptr, hooks
+    );
+    return write_saved_game(save, campaign_mission_, path, description, game_id);
+}
+
+bool Runtime::save_between_missions(
+    const fs::path& path, const char* description, int32_t game_id
+) {
+    oa::World* world = endgame_world();
+    const auto* options = endgame_game_options();
+    if (world == nullptr || options == nullptr ||
+        options->kind != missions::SessionKind::campaign) {
+        status_ = "There is no finished campaign mission to save";
+        return false;
+    }
+    auto& state = saveload_state();
+    state.save_failures = 0;
+    SaveLoadState::Bindings bindings{this, &state, world};
+    const persist::SaveHooks hooks = SaveLoadState::make_hooks(&bindings);
+    persist::SaveContext save{world, nullptr, nullptr, nullptr, &state.meteor, &hooks};
+    return write_saved_game(save, true, path, description, game_id);
+}
+
+bool Runtime::save_dialog_game(std::string_view dialog_path, const char* description) {
+    const auto path = save_game_root() / save_relative_path(dialog_path);
+    const auto game_id = static_cast<int32_t>(std::time(nullptr));
+    try {
+        if (match_)
+            return save_match_game(path, description, game_id);
+        return save_between_missions(path, description, game_id);
+    } catch (const std::exception& failure) {
+        status_ = std::string("Save: ") + failure.what();
+        std::cerr << "unsupported operation: " << status_ << '\n';
+        return false;
+    }
+}
+
+bool Runtime::write_saved_game(
+    persist::SaveContext& save,
+    bool campaign,
+    const fs::path& path,
+    const char* description,
+    int32_t game_id
+) {
+    struct SummaryBindings {
+        Runtime* runtime{};
+        oa::World* world{};
+        missions::CampaignFile* campaign{}; // null for a skirmish
+        missions::CampaignEnv env{};
+    } summary_bindings{
+        this, save.world, campaign ? &campaign_object() : nullptr, campaign_object_env()
+    };
+
+    persist::SummaryHooks summary{};
+    summary.context = &summary_bindings;
+    summary.build_date = kGameBuildDate;
+    summary.build_time = kGameBuildTime;
+    summary.campaign_name = [](void* context) -> const char* {
+        const auto* campaign = static_cast<SummaryBindings*>(context)->campaign;
+        return campaign != nullptr ? missions::campaign_name_if_loaded(campaign) : nullptr;
+    };
+    summary.advance_next_mission = [](void* context) {
+        auto* b = static_cast<SummaryBindings*>(context);
+        if (b->campaign != nullptr)
+            (void)missions::campaign_advance_next_mission(b->campaign, &b->env);
+    };
+    summary.mission_name = [](void* context) -> const char* {
+        const auto* b = static_cast<SummaryBindings*>(context);
+        return b->campaign != nullptr ? missions::campaign_mission_name(b->campaign)
+                                      : b->runtime->selected_map_name_runtime_.c_str();
+    };
+    summary.game_type = [](void* context) -> int32_t {
+        return static_cast<SummaryBindings*>(context)->campaign != nullptr
+                   ? persist::game_type_campaign
+                   : persist::game_type_skirmish;
+    };
+    summary.bind_mission_info = [](void* context) {
+        auto* b = static_cast<SummaryBindings*>(context);
+        if (b->campaign != nullptr)
+            (void)missions::campaign_bind_mission(
+                b->campaign, &b->env, b->world->game.mission_index
+            );
+    };
+    // The radar thumbnail (Game.radar_final_surface) is not rendered for saves yet.
+    summary.radar_image = [](void*) -> const persist::ImageRows* { return nullptr; };
+    summary.write_stats_panel = [](void* context, persist::Bank* bank) {
+        hud::save_players_section(*static_cast<SummaryBindings*>(context)->world, *bank);
+    };
+    summary.save_conditions = [](void* context, persist::Bank* bank) {
+        auto* runtime = static_cast<SummaryBindings*>(context)->runtime;
+        sim::scenario::save_conditions(
+            runtime->match_->scenario_controller(), bank, runtime->scenario_map_kind()
+        );
+    };
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    const persist::FileSink sink = persist::stdio_file_sink();
+    const bool written = persist::save_write_game(
+        &save, &summary, path.string().c_str(), description, game_id, &sink
+    );
+    status_ = written ? "Saved " + path.filename().string() : "Could not write " + path.string();
+    return written;
+}
+
+oa::Unit* Runtime::restore_saved_unit(uint16_t id, persist::Bank* bank) {
+    namespace r = data::persist::unit_record;
+    namespace f = data::persist::unit_record_flags;
+    auto& state = saveload_state();
+    auto& slots = match_->world().slots;
+    if (id == 0 || id >= slots.size())
+        return nullptr;
+    if (auto& existing = slots[id];
+        existing.unit != nullptr && (existing.record.flags & OA_UNIT_FLAG_LIVE) != 0)
+        return &existing.record;
+    // The ids that hold records; the walk stops at the first id below the
+    // count without one, as the game's does.
+    int32_t* stored_ids = nullptr;
+    const int32_t stored = persist::save_unit_record_ids(
+        bank, persist::bank_get_int(bank, save_key::unit_count, 0), &stored_ids
+    );
+    const std::unique_ptr<int32_t, void (*)(void*)> ids(stored_ids, std::free);
+    for (int32_t index = 0; index < stored && ids.get()[index] == index; ++index) {
+        if (!persist::bank_open_blob_id(bank, index))
+            return nullptr;
+        persist::bank_blob_seek(bank, 0);
+        uint8_t record[persist::unit_record_bytes];
+        if (persist::bank_blob_read(bank, record, persist::unit_record_bytes) !=
+            persist::unit_record_bytes)
+            return nullptr;
+        if (load_le16(record + r::id) != id)
+            continue;
+        char type_name[r::type_name_bytes + 1] = {};
+        std::memcpy(type_name, record + r::type_name, r::type_name_bytes);
+        const uint32_t flags = load_le32(record + r::flags);
+        const uint32_t creation_state = (flags >> f::low_shift) & f::state;
+        oa::sim::unit_spawn::Request request;
+        request.player = record[r::owner];
+        request.type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, type_name);
+        request.position = {
+            load_le32(record + r::position + offsetof(FixedVec3, x)),
+            load_le32(record + r::position + offsetof(FixedVec3, y)),
+            load_le32(record + r::position + offsetof(FixedVec3, z))
+        };
+        request.finished = true;
+        request.state = creation_state;
+        request.requested_slot = id;
+        oa::sim::unit_spawn::Slot* slot = nullptr;
+        try {
+            slot = match_->create(request);
+        } catch (const std::exception& failure) {
+            std::cerr << "saved unit " << id << " (" << type_name << "): " << failure.what()
+                      << '\n';
+        }
+        if (slot == nullptr || slot->unit == nullptr) {
+            ++state.restore_failures;
+            return nullptr;
+        }
+        oa::Unit& unit = slot->record;
+        unit.bank = static_cast<int16_t>(load_le16(record + r::bank));
+        unit.heading = load_le16(record + r::heading);
+        unit.pitch = static_cast<int16_t>(load_le16(record + r::pitch));
+        unit.health = static_cast<int16_t>(load_le16(record + r::health));
+        unit.veteran_level = load_le16(record + r::veteran_level);
+        unit.position.y =
+            static_cast<oa_fixed>(load_le32(record + r::position + offsetof(FixedVec3, y)));
+        if (const uint16_t carrier = load_le16(record + r::carrier_id);
+            carrier != 0 && restore_saved_unit(carrier, bank) != nullptr)
+            match_->set_carry_link(
+                id,
+                carrier,
+                static_cast<int8_t>(record[r::carrier_slot]),
+                static_cast<uint8_t>(creation_state)
+            );
+        const oa::Unit* linked = restore_saved_unit(load_le16(record + r::linked_id), bank);
+        unit.last_attacker_id = linked != nullptr ? linked->id : 0u;
+        unit.attach_piece = record[r::carrier_slot];
+        unit.last_attacker_owner = record[r::last_attacker_owner];
+        unit.extracted_metal = load_le_float(record + r::extracted_metal);
+        unit.cell_x = static_cast<int16_t>(load_le16(record + r::cell_x));
+        unit.cell_z = static_cast<int16_t>(load_le16(record + r::cell_z));
+        unit.sight_center_x = load_le16(record + r::sight_center_x);
+        unit.sight_center_z = load_le16(record + r::sight_center_z);
+        unit.footprint_x = static_cast<int16_t>(load_le16(record + r::footprint_x));
+        unit.footprint_z = static_cast<int16_t>(load_le16(record + r::footprint_z));
+        unit.squad = static_cast<int32_t>(load_le32(record + r::squad));
+        match_->set_unit_squad(id, static_cast<uint32_t>(unit.squad));
+        unit.build_remaining = load_le_float(record + r::build_remaining);
+        unit.damage_kind = record[r::damage_kind];
+        unit.health_percent = record[r::health_percent];
+        unit.previous_health_percent = record[r::previous_health_percent];
+        unit.events = load_le16(record + r::events);
+        unit.sight_band = record[r::sight_band];
+        unit.damage_countdown = record[r::damage_countdown];
+        unit.state_flags = record[r::state_flags];
+        unit.build_flags =
+            static_cast<uint8_t>((unit.build_flags & ~f::build_nibble) | (flags & f::build_nibble));
+        const uint32_t restored = ((flags >> f::low_shift) & (f::low & ~f::state)) |
+                                  ((flags >> f::construction_dirty_shift) & f::construction_dirty) |
+                                  ((flags >> f::high_shift) & f::high_kept);
+        unit.flags = (unit.flags & ~f::restored) | restored;
+        unit.decloak_until_tick = load_le32(record + r::decloak_until_tick);
+        // Unit.movement keeps what the creation set: only mobile units have
+        // the movement object the record's flag and mobility blob describe.
+        const bool has_movement = load_le32(record + r::has_movement) != 0;
+        char blob[persist::save_name_bytes];
+        if (!persist::save_read_unit_economy(&unit, bank))
+            ++state.restore_failures;
+        const auto read_blob = [bank](const char* name, void* out, uint32_t bytes) {
+            if (!persist::bank_open_blob_name(bank, name))
+                return false;
+            persist::bank_blob_seek(bank, 0);
+            return persist::bank_blob_read(bank, out, bytes) == bytes;
+        };
+        if (has_movement) {
+            std::snprintf(blob, sizeof blob, save_key::mobility_format, static_cast<unsigned>(id));
+            std::array<uint8_t, oa::sim::ground_orders::mobility_record_size> saved{};
+            auto* ground = match_->ground_runtime(id);
+            if (ground != nullptr &&
+                read_blob(blob, saved.data(), static_cast<uint32_t>(saved.size())))
+                ground->load_mobility(saved);
+            else
+                ++state.restore_failures;
+        }
+        restore_saved_orders(unit, load_le32(record + r::order_count), bank);
+        if (auto* instance = match_->instance(id);
+            instance != nullptr && instance->script() != nullptr) {
+            std::snprintf(blob, sizeof blob, save_key::script_format, static_cast<int>(index));
+            bool imported = false;
+            if (persist::bank_open_blob_name(bank, blob)) {
+                std::vector<uint8_t> bytes(static_cast<std::size_t>(persist::bank_blob_size(bank)));
+                persist::bank_blob_seek(bank, 0);
+                const auto& header = instance->script()->program().header;
+                if (persist::bank_blob_read(
+                        bank, bytes.data(), static_cast<uint32_t>(bytes.size())
+                    ) == bytes.size()) {
+                    const auto decoded = oa::sim::script_state::decode(
+                        bytes,
+                        oa::formats::cob::script_identity(instance->script()->program()),
+                        header.static_variable_count,
+                        header.piece_count
+                    );
+                    imported = decoded.ok() &&
+                               !instance->script()->vm().import_state(*decoded.state).has_value();
+                }
+            }
+            if (!imported)
+                ++state.restore_failures;
+        }
+        for (std::size_t w = 0; w < OA_UNIT_WEAPON_COUNT; ++w)
+            persist::save_restore_unit_weapon(
+                &match_->state(), record + r::weapons + w * r::weapon_bytes, unit.weapons[w]
+            );
+        // An open yard (build flags bit 2) settles its footprint and its
+        // neighbours' through the footprint clear.
+        constexpr uint8_t yard_open_flag = 0x04;
+        if ((unit.build_flags & yard_open_flag) != 0)
+            match_->refresh_restored_footprint(id);
+        return &unit;
+    }
+    return nullptr;
+}
+
+void Runtime::restore_saved_orders(
+    const oa::Unit& unit, uint32_t order_count, persist::Bank* bank
+) {
+    auto& state = saveload_state();
+    const persist::BankAccounts* accounts = bank->accounts;
+    const int32_t stored =
+        accounts != nullptr && accounts->open >= 0 && accounts->open < accounts->count
+            ? accounts->items[accounts->open].blob_count
+            : 0;
+    const uint32_t count = std::min(order_count, static_cast<uint32_t>(std::max(stored, 0)));
+    auto tails = match_->saved_order_tails(unit.id);
+    const auto restored = [&](uint16_t id) -> uint16_t {
+        return id != 0 && restore_saved_unit(id, bank) != nullptr ? id : uint16_t{0};
+    };
+    for (uint32_t index = 0; index < count; ++index) {
+        char blob[persist::save_name_bytes];
+        std::snprintf(
+            blob, sizeof blob, save_key::order_format, static_cast<unsigned>(unit.id), index
+        );
+        persist::SavedOrder order;
+        persist::SavedGoal goal;
+        if (persist::bank_find_blob_name(bank, blob, false) < 0 ||
+            !persist::save_read_order(&match_->state(), &unit, bank, blob, &order, &goal)) {
+            ++state.restore_failures;
+            continue;
+        }
+        order.target_id = restored(order.target_id);
+        goal.air_target.unit_id = restored(goal.air_target.unit_id);
+        goal.air_target.target_id = restored(goal.air_target.target_id);
+        goal.air_seek.unit_id = restored(goal.air_seek.unit_id);
+        (void)match_->restore_saved_order(unit.id, order, goal, tails);
+    }
+    match_->install_head_goal(unit.id);
+}
+
+bool Runtime::start_saved_game(std::string_view dialog_path) {
+    try {
+        return load_saved_game(save_game_root() / save_relative_path(dialog_path));
+    } catch (const std::exception& failure) {
+        status_ = std::string("Saved game start: ") + failure.what();
+        std::cerr << "unsupported operation: " << status_ << '\n';
+        return false;
+    }
+}
+
+int32_t Runtime::scenario_map_kind() const noexcept {
+    return campaign_mission_ ? init::map_list_kind::selection_setup : init::map_list_kind::skirmish;
+}
+
+bool Runtime::restore_saved_session(persist::Bank* bank) {
+    auto& state = saveload_state();
+    state.restore_failures = 0;
+    oa::World& world = match_->state();
+    const GameBinding binding(
+        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+    );
+    SaveLoadState::stage_sight(*this, state);
+    SaveLoadState::Bindings bindings{this, &state, &world};
+    const persist::SaveHooks hooks = SaveLoadState::make_hooks(&bindings);
+    persist::SaveContext save =
+        SaveLoadState::match_context(world, state, state.mapping.data(), hooks);
+    persist::bank_open_account(bank, save_key::summary);
+    if (persist::bank_has_field(bank, save_key::max_units))
+        world.game.max_units_setting =
+            static_cast<uint16_t>(persist::bank_get_int(bank, save_key::max_units, 0));
+    const bool players = hud::load_players_section(world, *bank);
+    persist::save_read_camera(&save, bank);
+    persist::save_read_features(&save, bank);
+    persist::save_read_metal_plotmap(&save, bank);
+    persist::save_read_player_features(&save, bank);
+    persist::save_read_terrain_mapping(&save, bank);
+    persist::save_read_units(&save, bank);
+    persist::save_read_meteor(&state.meteor, bank);
+    sim::scenario::load_conditions(match_->scenario_controller(), bank, scenario_map_kind());
+    match_->selection().frame_flags |= hud::kFrameRedrawBuildMenu;
+    SaveLoadState::apply_plots(*this, state);
+    rebuild_feature_draws();
+    for (std::size_t i = 0; i < OA_PLAYER_COUNT; ++i) {
+        skirmish_settings_.slots[i].side = world.player_info[i].side;
+        skirmish_settings_.slots[i].color = world.player_info[i].color;
+    }
+    return players;
+}
+
+bool Runtime::resume_saved_mission() {
+    auto& state = saveload_state();
+    if (state.resumed_save == nullptr)
+        return false;
+    state.resumed_players = restore_saved_session(state.resumed_save);
+    return true;
+}
+
+bool Runtime::resuming_saved_game() const noexcept {
+    return saveload_ && saveload_->resumed_save != nullptr;
+}
+
+bool Runtime::read_save_summary(const fs::path& path, ui::frontend::LoadSummary& summary) {
+    BankGuard guard;
+    persist::BankError error{};
+    if (!read_whole_save(guard, path, &error))
+        return false;
+    persist::bank_open_account(&guard.bank, save_key::summary);
+    return ui::frontend::savegame_read_load_summary(bank_summary_reader(), &guard.bank, summary);
+}
+
+bool Runtime::load_saved_game(const fs::path& path) {
+    BankGuard guard;
+    persist::Bank* bank = &guard.bank;
+    persist::BankError error{};
+    if (!read_whole_save(guard, path, &error)) {
+        status_ = std::string("Invalid savegame file: ") + error.message;
+        return false;
+    }
+    persist::bank_open_account(bank, save_key::summary);
+    ui::frontend::LoadSummary summary;
+    if (!ui::frontend::savegame_read_load_summary(bank_summary_reader(), bank, summary)) {
+        status_ = "Savegame names no mission";
+        return false;
+    }
+    if (summary.game_type == persist::game_type_campaign)
+        return load_saved_campaign(path, bank, summary);
+    if (summary.game_type != persist::game_type_skirmish) {
+        status_ = "Invalid savegame file";
+        return false;
+    }
+    // The controllers come from a scratch game block: the match is not built yet.
+    std::array<hud::SkirmishSlot, OA_PLAYER_COUNT> controllers{};
+    {
+        const auto scratch = std::make_unique<oa::World>();
+        hud::load_player_controllers(*scratch, *bank, controllers.data());
+    }
+    persist::bank_open_account(bank, save_key::players);
+    const auto human =
+        persist::bank_get_int(bank, save_key::human_player, persist::no_human_player);
+    if (human < 0 || human >= persist::no_human_player ||
+        controllers[static_cast<std::size_t>(human)].controller != entry::controller::human) {
+        status_ = "Savegame has no human player";
+        return false;
+    }
+
+    if (match_)
+        leave_match();
+    campaign_mission_ = false;
+    preferences_.difficulty = static_cast<uint32_t>(summary.difficulty);
+    preferences_.skirmish.commander_death = static_cast<uint32_t>(summary.commander_death);
+    preferences_.skirmish.mapping = static_cast<uint32_t>(summary.mapping);
+    preferences_.skirmish.line_of_sight = static_cast<uint32_t>(summary.line_of_sight);
+    preferences_.skirmish.los_type = static_cast<uint32_t>(summary.line_of_sight_type);
+    preferences_.skirmish_location = static_cast<uint32_t>(summary.location);
+    state_.player_count = static_cast<uint16_t>(summary.players);
+    const std::string map(summary.mission.data());
+    skirmish_settings_.map_name = map;
+    if (select_map(map) == 0 || map_player_capacity() == 0) {
+        status_ = "Saved map '" + map + "' is not available";
+        return false;
+    }
+    std::copy_n(
+        summary.start_pattern.begin(), state_.mission_results.size(), state_.mission_results.begin()
+    );
+    // Side, logo and alliances are the saved players' own and follow with
+    // the Players section; each player starts alone. The slot count covers
+    // the highest active slot, not the number of players.
+    int32_t active_slots = 0;
+    for (std::size_t i = 0; i < skirmish_settings_.slots.size(); ++i) {
+        auto& slot = skirmish_settings_.slots[i];
+        slot = {};
+        slot.alliance = entry::unassigned_alliance;
+        if (i >= controllers.size() || (controllers[i].controller != entry::controller::human &&
+                                        controllers[i].controller != entry::controller::computer))
+            continue;
+        slot.controller = controllers[i].controller;
+        active_slots = static_cast<int32_t>(i) + 1;
+    }
+    skirmish_settings_.slot_count = std::max(skirmish_settings_.slot_count, active_slots);
+    {
+        // The match is built for the save, which places its features.
+        const ResumedSave resumed(saveload_state().resumed_save, bank);
+        bootstrap_match({.place_commanders = false, .seat_roster = true});
+    }
+    if (!match_ || altitude_sight_blocked_) {
+        status_ = "Saved game start was blocked";
+        return false;
+    }
+    // Mission start rebuilds the sight grids before the saved session loads.
+    reset_match_sight(true);
+    finish_saved_game_start(restore_saved_session(bank));
+    enter_match_view();
+    status_ =
+        "Loaded " + path.filename().string() + " at tick " + std::to_string(match_timing_.tick);
+    return true;
+}
+
+bool Runtime::load_saved_campaign(
+    const fs::path& path, persist::Bank* bank, const ui::frontend::LoadSummary& summary
+) {
+    if (match_)
+        leave_match();
+    preferences_.side = static_cast<uint32_t>(summary.side);
+    preferences_.difficulty = static_cast<uint32_t>(summary.difficulty);
+    // The side's campaign lists, bound to the saved campaign.
+    discover_campaigns();
+    const std::string_view campaign(summary.campaign.data());
+    const auto named = std::find_if(
+        campaign_labels_.begin(), campaign_labels_.end(), [&](const std::string& label) {
+            return tdf_names_equal(label, campaign);
+        }
+    );
+    if (!summary.has_campaign || named == campaign_labels_.end()) {
+        status_ = "Invalid savegame file: no campaign '" + std::string(campaign) + "'";
+        return false;
+    }
+    selected_campaign_index_ = static_cast<std::size_t>(named - campaign_labels_.begin());
+    load_campaign_missions(selected_campaign_index_);
+    missions::CampaignFile& file = campaign_object();
+    const missions::CampaignEnv env = campaign_object_env();
+    if (!missions::campaign_select_mission(&file, &env, summary.mission.data()) ||
+        static_cast<std::size_t>(file.mission_index) >= campaign_mission_files_.size()) {
+        status_ = "Invalid savegame file: no mission '" + std::string(summary.mission.data()) + "'";
+        return false;
+    }
+    selected_mission_index_ = static_cast<std::size_t>(file.mission_index);
+    std::copy_n(
+        summary.start_pattern.begin(), state_.mission_results.size(), state_.mission_results.begin()
+    );
+    if (summary.between_missions) {
+        // The briefing keeps the bound lists as it does from Any Mission.
+        screen_ = Screen::any_mission;
+        show_mission_briefing();
+        if (screen_ != Screen::briefing) {
+            const auto failure = status_;
+            load(Screen::single_player);
+            status_ = failure;
+            return false;
+        }
+        briefing_parent_ = Screen::single_player;
+        status_ = "Loaded " + path.filename().string() + " before " + file.mission_name;
+        return true;
+    }
+    auto& state = saveload_state();
+    state.resumed_players = false;
+    briefing_parent_ = Screen::single_player;
+    {
+        const ResumedSave resumed(state.resumed_save, bank);
+        start_campaign_mission();
+    }
+    if (!match_ || !campaign_mission_ || screen_ != Screen::match) {
+        status_ = "Saved campaign start failed: " + status_;
+        return false;
+    }
+    finish_saved_game_start(state.resumed_players);
+    status_ =
+        "Loaded " + path.filename().string() + " at tick " + std::to_string(match_timing_.tick);
+    return true;
+}
+
+void Runtime::finish_saved_game_start(bool restored_players) {
+    oa::World& world = match_->state();
+    if (restored_players)
+        load_timing(world.game, match_timing_);
+    for (std::size_t i = 0; i < OA_PLAYER_COUNT; ++i) {
+        if (skirmish_settings_.slots[i].controller == entry::controller::disabled)
+            continue;
+        std::array<uint8_t, OA_PLAYER_COUNT> allies{};
+        std::copy_n(world.game.players[i].alliance, allies.size(), allies.begin());
+        match_->configure_player_alliances(static_cast<uint8_t>(i), allies);
+    }
+    radar_explored_.clear();
+    radar_state_.release();
+    // The saved host clock belongs to the session that wrote it.
+    match_timing_.previous_clock =
+        oa::base::game_loop::scaled_clock(clock_milliseconds(), match_clock_scale());
+    match_tick_blocked_ = false;
+}
+
+uint64_t Runtime::match_world_digest() const {
+    if (!match_)
+        return oa::sim::trace::digest_basis;
+    return oa::sim::trace::match_state_hash(
+        *match_,
+        match_timing_,
+        match_camera_x_,
+        match_camera_z_,
+        saveload_ ? &saveload_->meteor : nullptr
+    );
+}
+
+void Runtime::give_saveload_orders() {
+    const auto type = [&](std::string_view name) {
+        const auto index = oa::sim::unit_spawn::find_type_index(spawn_type_names_, name);
+        if (index == 0)
+            throw std::runtime_error("saveload orders lack " + std::string(name));
+        return index;
+    };
+    const auto lab = type("ARMLAB");
+    const auto peewee = type("ARMPW");
+    const auto solar = type("ARMSOLAR");
+    const auto& slots = match_->world().slots;
+    uint16_t commander = 0;
+    for (const auto& slot : slots)
+        if (slot.unit != nullptr && slot.record.type_index != 0 &&
+            slot.record.owner_index == match_local_player_) {
+            commander = slot.unit_index;
+            break;
+        }
+    if (commander == 0)
+        throw std::runtime_error("saveload orders need the local commander");
+    const auto* factory = place_finished_structure(lab, commander);
+    if (factory == nullptr)
+        throw std::runtime_error("saveload orders found no site for ARMLAB");
+    match_->queue_factory_build(factory->unit_index, peewee, 3);
+    const auto map_w = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_h = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    const auto at = [&](int32_t x, int32_t z) {
+        x = std::clamp(x, 32, map_w - 32);
+        z = std::clamp(z, 32, map_h - 32);
+        return oa::sim::ground_orders::Point{
+            x * 65536,
+            match_->map_height(static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16) *
+                65536,
+            z * 65536
+        };
+    };
+    const auto x = static_cast<int32_t>(slots[commander].unit->position[0] >> 16);
+    const auto z = static_cast<int32_t>(slots[commander].unit->position[2] >> 16);
+    (void)match_->issue_mobile_build(commander, solar, at(x, z - 64), false);
+    std::array<uint16_t, 3> walkers{};
+    for (std::size_t i = 0; i < walkers.size(); ++i) {
+        const auto point = at(x - 24 + static_cast<int32_t>(i) * 24, z + 100);
+        oa::sim::unit_spawn::Request request;
+        request.player = match_local_player_;
+        request.type = peewee;
+        request.finished = true;
+        request.state = kGroundOccupancyState;
+        request.position = {
+            std::bit_cast<uint32_t>(point[0]),
+            std::bit_cast<uint32_t>(point[1]),
+            std::bit_cast<uint32_t>(point[2])
+        };
+        auto* walker = match_->create(request);
+        if (walker == nullptr || walker->unit == nullptr)
+            throw std::runtime_error("saveload orders could not place ARMPW");
+        walkers[i] = walker->unit_index;
+    }
+    (void)match_->issue_patrol(walkers[0], at(x, z + 300), false);
+    (void)match_->issue_guard(walkers[1], commander, false);
+    (void)match_->issue_ground_move(
+        walkers[2], at(x < map_w / 2 ? map_w : 0, z < map_h / 2 ? map_h : 0), false
+    );
+}
+
+void Runtime::print_saved_orders() const {
+    std::array<uint32_t, 256> counts{};
+    uint32_t total = 0;
+
+    struct Tally {
+        std::array<uint32_t, 256>& counts;
+        uint32_t& total;
+    } tally{counts, total};
+
+    for (const auto& slot : match_->world().slots) {
+        if (slot.unit == nullptr || slot.record.type_index == 0 ||
+            (slot.record.flags & OA_UNIT_FLAG_LIVE) == 0)
+            continue;
+        match_->visit_saved_orders(
+            slot.unit_index,
+            [](void* walk, const persist::SavedOrder* order, const persist::SavedGoal*) {
+                auto& t = *static_cast<Tally*>(walk);
+                ++t.counts[order->kind];
+                ++t.total;
+            },
+            &tally
+        );
+    }
+    std::string line = "saveload: orders " + std::to_string(total);
+    const auto names = oa::data::mission_types::registered_names();
+    for (std::size_t kind = 0; kind < counts.size(); ++kind)
+        if (counts[kind] != 0)
+            line += ' ' + (kind < names.size() ? std::string(names[kind]) : std::to_string(kind)) +
+                    '=' + std::to_string(counts[kind]);
+    std::printf("%s\n", line.c_str());
+}
+
+void Runtime::give_saveload_feature_events() {
+    namespace features = oa::sim::feature_runtime;
+    oa::World& world = match_->state();
+    const auto host = match_->feature_host();
+    const auto width = world.game.map_width;
+    const auto height = world.game.map_height;
+    bool burning = false, dying = false, reclaimed = false, cleared = false;
+    // Features in the middle half of the map, away from the edges a load
+    // hides.
+    for (int32_t z = height / 4; z < height - height / 4; ++z) {
+        for (int32_t x = width / 4; x < width - width / 4; ++x) {
+            const auto index = static_cast<std::size_t>(z) * static_cast<std::size_t>(width) +
+                               static_cast<std::size_t>(x);
+            const oa::MapPlot& plot = world.plots[index];
+            if (plot.feature >= world.feature_def_count ||
+                (plot.flags & OA_PLOT_FLAG_ANIMATING_FEATURE) != 0)
+                continue;
+            const oa::FeatureDef& def = world.feature_defs[plot.feature];
+            const bool sprite = (def.flags & OA_FEATURE_FLAG_SPRITE) != 0;
+            if (!burning && sprite && def.seq_name_burn != 0 &&
+                (def.flags & OA_FEATURE_FLAG_FLAMABLE) != 0) {
+                features::ignite_feature(world, host, x, z, false);
+                burning = true;
+            } else if (!dying && sprite && def.seq_name_die != 0) {
+                features::start_feature_sequence(world, host, x, z, false);
+                dying = true;
+            } else if (!reclaimed && sprite && def.seq_name_reclamate != 0) {
+                features::start_feature_sequence(world, host, x, z, true);
+                reclaimed = true;
+            } else if (!cleared && (def.flags & OA_FEATURE_FLAG_INDESTRUCTIBLE) == 0) {
+                cleared = features::clear_plot_feature(world, host, index, false);
+            }
+        }
+    }
+    if (!burning || !dying || !reclaimed || !cleared)
+        throw std::runtime_error(
+            "saveload features: the map lacks a feature to burn, kill, reclaim or clear"
+        );
+}
+
+void Runtime::print_saved_features() {
+    namespace features = oa::sim::feature_runtime;
+    oa::World& world = match_->state();
+    const GameBinding binding(
+        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+    );
+    const auto width = world.game.map_width;
+    const auto height = world.game.map_height;
+    const auto cells = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    // A load hides the plots under the map's edges before it places the
+    // saved features, so a feature whose footprint reaches one does not come
+    // back; the line leaves those out.
+    const auto hidden = plots_hidden_on_load(world, match_->effects().lava_world);
+    std::vector<oa::MapPlot> plots(world.plots, world.plots + cells);
+    std::size_t burning = 0, dying = 0, reclaimed = 0;
+    for (std::size_t index = 0; index < cells; ++index) {
+        oa::MapPlot& plot = plots[index];
+        if (plot.feature >= world.feature_def_count)
+            continue;
+        const oa::FeatureDef& def = world.feature_defs[plot.feature];
+        const auto x = static_cast<int32_t>(index % static_cast<std::size_t>(width));
+        const auto z = static_cast<int32_t>(index / static_cast<std::size_t>(width));
+        bool restored = x + def.footprint_x <= width && z + def.footprint_z <= height;
+        for (int32_t row = 0; restored && row < def.footprint_z; ++row)
+            for (int32_t column = 0; restored && column < def.footprint_x; ++column)
+                restored = hidden[index + static_cast<std::size_t>(row * width + column)] == 0;
+        if (!restored) {
+            plot.feature = features::no_feature;
+            continue;
+        }
+        const auto* record = (plot.flags & OA_PLOT_FLAG_ANIMATING_FEATURE) != 0
+                                 ? features::feature_record(world, plot.feature_record)
+                                 : nullptr;
+        if ((def.flags & OA_FEATURE_FLAG_SPRITE) == 0 || record == nullptr)
+            continue;
+        // The sequences as the Features section tells them apart.
+        const auto sequence = record->sprite.animation.sequence;
+        if (sequence == def.seq_name_burn)
+            ++burning;
+        else if (sequence == def.seq_name_die)
+            ++dying;
+        else if (sequence == def.seq_name_reclamate)
+            ++reclaimed;
+    }
+    auto& state = saveload_state();
+    SaveLoadState::Bindings bindings{this, &state, &world};
+    const persist::SaveHooks hooks = SaveLoadState::make_hooks(&bindings);
+    persist::SaveContext save = SaveLoadState::match_context(world, state, nullptr, hooks);
+    save.plots = reinterpret_cast<uint8_t*>(plots.data());
+    BankGuard guard;
+    if (!persist::bank_reset(&guard.bank))
+        throw std::runtime_error("saveload features: no bank to write to");
+    persist::save_write_features(&save, &guard.bank);
+    persist::bank_open_account(&guard.bank, save_key::features);
+    uint64_t digest = oa::sim::trace::digest_basis;
+    for (const char* name :
+         {save_key::feature_type_names,
+          save_key::normal_features,
+          save_key::animating_features,
+          save_key::object_features}) {
+        std::vector<uint8_t> bytes;
+        if (persist::bank_open_blob_name(&guard.bank, name)) {
+            bytes.resize(static_cast<std::size_t>(persist::bank_blob_size(&guard.bank)));
+            persist::bank_blob_seek(&guard.bank, 0);
+            (void)persist::bank_blob_read(
+                &guard.bank, bytes.data(), static_cast<uint32_t>(bytes.size())
+            );
+        }
+        for (const uint8_t byte : bytes) {
+            digest ^= byte;
+            digest *= oa::sim::trace::digest_prime;
+        }
+    }
+    std::printf(
+        "saveload: features normal %d 3d %d animating %d burn %zu die %zu reclaim %zu digest "
+        "%016llx\n",
+        persist::bank_get_int(&guard.bank, save_key::normal_feature_count, 0),
+        persist::bank_get_int(&guard.bank, save_key::object_feature_count, 0),
+        persist::bank_get_int(&guard.bank, save_key::animating_feature_count, 0),
+        burning,
+        dying,
+        reclaimed,
+        static_cast<unsigned long long>(digest)
+    );
+}
+
+void Runtime::run_headless_saveload() {
+    if (!options_.load_file.empty()) {
+        if (!load_saved_game(options_.load_file))
+            throw std::runtime_error("saved game did not load: " + status_);
+        if (!match_) {
+            std::printf(
+                "saveload: %s; %s mission %zu\n",
+                status_.c_str(),
+                screen_ == Screen::briefing ? "briefing" : "no",
+                selected_mission_index_
+            );
+            std::fflush(stdout);
+            return;
+        }
+        std::cout << "saveload: " << status_ << "; restore failures "
+                  << saveload_state().restore_failures << '\n';
+    } else if (options_.campaign_mission) {
+        (void)start_headless_campaign_mission();
+        if (options_.give_orders)
+            give_mission_orders();
+    } else {
+        start_benchmark_skirmish();
+        if (options_.combat_units != 0)
+            spawn_combat_armies(options_.combat_units);
+        if (options_.give_orders)
+            give_saveload_orders();
+    }
+    match_layout_ =
+        oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+    bool saved = false;
+    const auto save_if_due = [&] {
+        if (saved || !options_.save_after || match_timing_.tick < *options_.save_after)
+            return;
+        const fs::path target =
+            options_.save_file.empty()
+                ? save_game_root() / ui::frontend::kSaveDirectory / kHeadlessSaveName
+                : options_.save_file;
+        if (!save_match_game(
+                target, persist::command_line_description, persist::command_line_game_id
+            ))
+            throw std::runtime_error("save failed: " + status_);
+        std::cout << "saveload: saved " << target.string() << " at tick " << match_timing_.tick
+                  << "; save failures " << saveload_state().save_failures << '\n';
+        saved = true;
+    };
+    save_if_due();
+    // Shortly before the save, features start burning, dying and being
+    // reclaimed, so the save holds them while they play.
+    constexpr uint32_t feature_event_lead = 2;
+    const std::size_t ticks = options_.match_ticks.value_or(0);
+    auto outcome = match_->outcome();
+    for (std::size_t step = 0; step < ticks; ++step) {
+        if (options_.give_orders && options_.save_after &&
+            match_timing_.tick + feature_event_lead == *options_.save_after)
+            give_saveload_feature_events();
+        try {
+            step_match_simulation();
+        } catch (const std::exception& failure) {
+            report_match_tick_error(failure.what());
+        }
+        save_if_due();
+        // The first victory or defeat the ticks decide.
+        const auto decided = match_->outcome();
+        if (outcome == sim::scenario::Outcome::ongoing &&
+            (decided == sim::scenario::Outcome::victory ||
+             decided == sim::scenario::Outcome::defeat)) {
+            outcome = decided;
+            std::printf(
+                "saveload: outcome %s at tick %u\n",
+                outcome == sim::scenario::Outcome::victory ? "victory" : "defeat",
+                match_timing_.tick
+            );
+        }
+    }
+    std::size_t live = 0;
+    for (const auto& slot : match_->world().slots)
+        live += slot.unit != nullptr && slot.record.type_index != 0 ? 1 : 0;
+    print_saved_orders();
+    print_saved_features();
+    std::printf(
+        "saveload: tick %u units %zu digest %016llx\n",
+        match_timing_.tick,
+        live,
+        static_cast<unsigned long long>(match_world_digest())
+    );
+    std::fflush(stdout);
+    if (!options_.snapshot.empty()) {
+        rebuild_surface();
+        write_ppm(options_.snapshot, surface_);
+    }
+}
+
+} // namespace oa::app
