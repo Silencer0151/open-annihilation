@@ -1,14 +1,13 @@
-The FFmpeg libraries in this release are FFmpeg 9.0.2, used under
-the GNU Lesser General Public License version 2.1 or later (COPYING.LGPLv2.1).
-They were built unmodified from
+The FFmpeg libraries in the Open Annihilation release packages are FFmpeg
+9.0.2, used under the GNU Lesser General Public License version 2.1 or
+later (COPYING.LGPLv2.1). They were built unmodified from
 
   https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.gz
   SHA-256 84960df915059e8754fef2cd7c9afeb614062b1b5458ec471eecee619ee04e98
 
-with these configure options besides the installation --prefix:
+Every package's build passed these configure options besides the
+installation --prefix:
 
-  --enable-shared
-  --disable-static
   --disable-programs
   --disable-doc
   --disable-debug
@@ -22,13 +21,36 @@ with these configure options besides the installation --prefix:
   --enable-demuxer=smacker,mp3,ogg,wav,flac
   --enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8
   --enable-parser=mpegaudio,vorbis,flac
-  --enable-pthreads
-  --install-name-dir=@rpath
-  --extra-cflags=-mmacosx-version-min=11.0
-  --extra-ldflags=-mmacosx-version-min=11.0
 
-They are separate shared libraries and can be replaced by another compatible
-FFmpeg build of the same major versions.
+and these for each package:
+
+macOS (universal): --enable-static --disable-shared --enable-pthreads
+  --extra-cflags=-mmacosx-version-min=11.0
+  --extra-ldflags=-mmacosx-version-min=11.0, built once with
+  --cc='clang -arch arm64' and once with --cc='clang -arch x86_64'
+  --enable-cross-compile --arch=x86_64 --target-os=darwin. The two builds
+  are combined into universal libraries and linked into the application.
+
+Windows x64: --enable-cross-compile --arch=x86_64 --target-os=mingw32
+  --cross-prefix=x86_64-w64-mingw32- --enable-shared --disable-static
+  --enable-w32threads --extra-ldflags=-static-libgcc
+  --extra-libs=-Wl,-Bstatic,-lwinpthread,-Bdynamic, with GCC 14.2.0 and
+  mingw-w64 12.0.0. The DLLs are beside open-annihilation.exe.
+
+Windows ARM64 (experimental): the Windows x64 options with --arch=aarch64
+  --cross-prefix=aarch64-w64-mingw32- --cc=aarch64-w64-mingw32-clang
+  --cxx=aarch64-w64-mingw32-clang++, with llvm-mingw 20260922 (LLVM 23.1.2,
+  mingw-w64 15.0.0). The DLLs are beside open-annihilation.exe.
+
+Linux (x86-64 and ARM64): --enable-shared --disable-static
+  --enable-pthreads, built natively on Debian 12. The libraries are in lib/
+  beside the programs.
+
+On Windows and Linux they are separate shared libraries and can be
+replaced by another compatible FFmpeg build of the same major versions. On
+macOS they are linked into the application: to use another FFmpeg, build
+the application from the Open Annihilation source against it, as described
+below and in ATTRIBUTIONS.md.
 
 Builds from the Open Annihilation source
 

@@ -20,8 +20,8 @@ in this repository or in the release packages.
 | [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
 | [FFmpeg](#ffmpeg) (libavcodec, libavformat, libavutil, libswresample, libswscale) | 9.0.2 | LGPL 2.1 or later | static, inside the app | DLLs beside `open-annihilation.exe` | shared libraries in `lib/` |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
-| [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 14.0.0 | ZPL 2.1, MIT, BSD | | static | |
-| [GCC runtime](#gcc-runtime) | 16.2.0 | GPL 3 with the GCC Runtime Library Exception | | static | |
+| [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 12.0.0 (x64), 15.0.0 (ARM64) | ZPL 2.1, MIT, BSD | | static | |
+| [GCC runtime](#gcc-runtime) | 14.2.0 | GPL 3 with the GCC Runtime Library Exception | | static | |
 
 The operating system's own libraries, such as the C and C++ runtimes and
 the graphics, audio and windowing libraries, are not included.
@@ -115,18 +115,22 @@ which is their complete corresponding source. They include only the
 components below, and no GPL or non-free component:
 
 ```
---enable-shared --disable-static --disable-programs --disable-doc
---disable-debug --disable-autodetect --disable-network --disable-avdevice
---disable-avfilter --disable-everything --enable-protocol=file
+--disable-programs --disable-doc --disable-debug --disable-autodetect
+--disable-network --disable-avdevice --disable-avfilter --disable-x86asm
+--disable-everything --enable-protocol=file
 --enable-demuxer=smacker,mp3,ogg,wav,flac
 --enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8
 --enable-parser=mpegaudio,vorbis,flac
 ```
 
-The Windows build adds the cross-compilation, `--enable-w32threads` and
-static runtime options for mingw-w64. The Windows cross-build in this
-repository takes its options from `tools/bootstrap_windows_deps.py`, which
-also passes `--disable-x86asm`.
+The Windows and Linux packages build them as shared libraries
+(`--enable-shared --disable-static`), and the macOS package as static
+libraries (`--enable-static --disable-shared`). Windows adds the
+cross-compilation, `--enable-w32threads` and static runtime options for
+mingw-w64, and macOS and Linux add `--enable-pthreads`. The Windows
+cross-build in this repository takes its options from
+`tools/bootstrap_windows_deps.py`. The exact options of each package are in
+[`licenses/FFmpeg-SOURCE.txt`](licenses/FFmpeg-SOURCE.txt).
 
 On Windows and Linux the libraries are separate files, so you can replace
 them with another compatible build of FFmpeg 9.0. On macOS they are linked
@@ -166,7 +170,7 @@ All packages link zlib 1.3.1 statically, from
 
 ## mingw-w64 runtime and winpthreads
 
-The Windows package is linked statically against the mingw-w64 14.0.0
+The Windows package is linked statically against the mingw-w64 12.0.0
 runtime (Zope Public License 2.1, with parts in the public domain or under
 BSD licences; Copyright (c) 2009-2013 by the mingw-w64 project) and its
 winpthreads library (MIT; Copyright (c) 2011-2016 mingw-w64 project; parts
@@ -177,7 +181,8 @@ are in [`licenses/mingw-w64.txt`](licenses/mingw-w64.txt).
 
 The experimental Windows ARM64 package contains the same components as the
 Windows package (SDL, zlib and the mingw-w64 runtime linked statically, and
-the FFmpeg DLLs), built with the LLVM toolchain instead of GCC. It also links
+the FFmpeg DLLs), built with the LLVM toolchain instead of GCC: llvm-mingw
+20260922, with LLVM 23.1.2 and the mingw-w64 15.0.0 runtime. It also links
 LLVM's C++ standard library and its support libraries (libc++, libc++abi,
 libunwind and compiler-rt) statically. These are licensed under the Apache
 License 2.0 with LLVM Exceptions, which place no requirements on programs that
@@ -185,6 +190,6 @@ embed them in compiled form.
 
 ## GCC runtime
 
-The Windows package links libgcc and libstdc++ from GCC 16.2.0 statically.
+The Windows package links libgcc and libstdc++ from GCC 14.2.0 statically.
 They are covered by the GCC Runtime Library Exception, which places no
 requirements on programs compiled with an unmodified GCC.

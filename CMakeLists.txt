@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 cmake_minimum_required(VERSION 3.24)
-project(open_annihilation VERSION 0.1.0 LANGUAGES C CXX)
+project(open_annihilation VERSION 0.2.0 LANGUAGES C CXX)
 # End-to-end app checks run the real game headless; a loaded machine can
 # stretch their wall time several-fold without any extra CPU work.
 set(OA_NATIVE_CHECK_TIMEOUT 1800)
@@ -287,6 +287,9 @@ if(OA_BUILD_PLATFORM)
   include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaGameBundle.cmake")
   oa_game_bundle(oa-game)
   if(WIN32)
+    # A Windows program, so a game started from Explorer opens no console
+    # window; its output goes to the log folder, or to whatever captures it.
+    set_target_properties(oa-game PROPERTIES WIN32_EXECUTABLE ON)
     # open-annihilation.exe's icon and version information.
     set(OA_WINDOWS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/branding/open-annihilation.ico")
     configure_file(src/app/open-annihilation.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc" @ONLY)
