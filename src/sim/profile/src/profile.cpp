@@ -6,8 +6,10 @@
 namespace oa::sim::profile {
 
 void accumulate(ProfileTimes& times, uint32_t now, Category category) noexcept {
-    auto& slot = times.pending[static_cast<int32_t>(category)];
-    slot = static_cast<int32_t>(static_cast<uint32_t>(slot) + (now - times.sampled_at));
+    const auto index = static_cast<int32_t>(category);
+    times.pending[index] = static_cast<int32_t>(
+        static_cast<uint32_t>(times.pending[index]) + (now - times.sampled_at)
+    );
     times.sampled_at = now;
 }
 

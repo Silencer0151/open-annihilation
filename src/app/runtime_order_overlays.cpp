@@ -241,10 +241,11 @@ void Runtime::check_console_range_overlays(const std::function<void(const char*)
     const auto kept_selection = selected_match_unit_;
     clear_local_selection();
     adopt_selection(commander);
+    const std::array<uint32_t, 3> start = unit.position;
     const oa::sim::ground_orders::Point destination{
-        std::bit_cast<int32_t>(unit.position[0]) + (96 << 16),
-        std::bit_cast<int32_t>(unit.position[1]),
-        std::bit_cast<int32_t>(unit.position[2])
+        std::bit_cast<int32_t>(start[0]) + (96 << 16),
+        std::bit_cast<int32_t>(start[1]),
+        std::bit_cast<int32_t>(start[2])
     };
     match_->issue_ground_move(commander, destination, false);
     const auto pass = [&] {

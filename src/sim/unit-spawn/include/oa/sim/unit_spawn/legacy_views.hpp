@@ -9,19 +9,29 @@
 // into the canonical records or a native side table and owns no state, so a
 // write through a view is a write to the World. Views are bound once by
 // LegacyViews and must not outlive it. Delete a member once nothing reads it.
+//
+// The canonical records are packed, so some of their fields sit at addresses
+// their types do not align to. A member over such a field is a Field (or
+// Words3), which reads and writes the field's bytes; the members over fields
+// their types align to stay plain references.
 #pragma once
 
 #include "oa/sim/unit_spawn/spawn.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace oa::sim::unit_spawn::legacy {
 /// Reinterprets a canonical integer field as the same-sized type of the other signedness.
+///
+/// Only for a field at an address its type aligns to; bind a Field otherwise.
 ///
 /// @param field canonical field
 /// @return the field seen as `To`
@@ -30,6 +40,254 @@ To& as(From& field) noexcept {
     static_assert(sizeof(To) == sizeof(From));
     return reinterpret_cast<To&>(field);
 }
+
+// Legacy `T&` member backed by a canonical field at an address `T` does not
+// align to. It reads and writes the field's bytes, so it never binds a `T&` to
+// the field. Like a reference it writes through a const view, and assigning
+// one Field to another copies the value. It converts to `T` but cannot be
+// copied: a local that keeps the value is declared as `T`, not `auto`.
+template <class T>
+class Field {
+    static_assert(std::is_trivially_copyable_v<T>);
+
+  public:
+
+    /// Binds the member to a field of a canonical record.
+    ///
+    /// @param record canonical record
+    /// @param member the record's field, the size of `T` (its signedness may differ)
+    template <class Record, class Member>
+    Field(Record& record, Member Record::* member) noexcept
+        : bytes_(reinterpret_cast<unsigned char*>(&(record.*member))) {
+        static_assert(sizeof(Member) == sizeof(T));
+    }
+
+    Field(const Field&) = delete;
+    Field(Field&&) = default;
+
+    /// Returns the field's value.
+    ///
+    /// @return the value
+    operator T() const noexcept {
+        T value{};
+        std::memcpy(&value, bytes_, sizeof(T));
+        return value;
+    }
+
+    /// Stores a value in the field.
+    ///
+    /// @param value value stored
+    /// @return this member
+    const Field& operator=(T value) const noexcept {
+        std::memcpy(bytes_, &value, sizeof(T));
+        return *this;
+    }
+
+    /// Stores another member's value in the field.
+    ///
+    /// @param other member whose value is stored
+    /// @return this member
+    const Field& operator=(const Field& other) const noexcept {
+        return *this = static_cast<T>(other);
+    }
+
+    // A swap moves a member into a temporary that still names the same bytes,
+    // so moving one member into another does not compile.
+    const Field& operator=(Field&&) const = delete;
+
+    /// Adds to the field, as `+=` on a `T` does.
+    ///
+    /// @param operand value added
+    /// @return this member
+    template <class U>
+    const Field& operator+=(U operand) const noexcept {
+        T value = *this;
+        value += operand;
+        return *this = value;
+    }
+
+    /// Subtracts from the field, as `-=` on a `T` does.
+    ///
+    /// @param operand value subtracted
+    /// @return this member
+    template <class U>
+    const Field& operator-=(U operand) const noexcept {
+        T value = *this;
+        value -= operand;
+        return *this = value;
+    }
+
+    /// Multiplies the field, as `*=` on a `T` does.
+    ///
+    /// @param operand factor
+    /// @return this member
+    template <class U>
+    const Field& operator*=(U operand) const noexcept {
+        T value = *this;
+        value *= operand;
+        return *this = value;
+    }
+
+    /// Divides the field, as `/=` on a `T` does.
+    ///
+    /// @param operand divisor
+    /// @return this member
+    template <class U>
+    const Field& operator/=(U operand) const noexcept {
+        T value = *this;
+        value /= operand;
+        return *this = value;
+    }
+
+    /// Sets bits of the field, as `|=` on a `T` does.
+    ///
+    /// @param operand bits set
+    /// @return this member
+    template <class U>
+    const Field& operator|=(U operand) const noexcept {
+        T value = *this;
+        value |= operand;
+        return *this = value;
+    }
+
+    /// Keeps bits of the field, as `&=` on a `T` does.
+    ///
+    /// @param operand bits kept
+    /// @return this member
+    template <class U>
+    const Field& operator&=(U operand) const noexcept {
+        T value = *this;
+        value &= operand;
+        return *this = value;
+    }
+
+    /// Flips bits of the field, as `^=` on a `T` does.
+    ///
+    /// @param operand bits flipped
+    /// @return this member
+    template <class U>
+    const Field& operator^=(U operand) const noexcept {
+        T value = *this;
+        value ^= operand;
+        return *this = value;
+    }
+
+    /// Adds one to the field, as `++` on a `T` does.
+    ///
+    /// @return this member
+    const Field& operator++() const noexcept {
+        T value = *this;
+        ++value;
+        return *this = value;
+    }
+
+    /// Subtracts one from the field, as `--` on a `T` does.
+    ///
+    /// @return this member
+    const Field& operator--() const noexcept {
+        T value = *this;
+        --value;
+        return *this = value;
+    }
+
+    /// Adds one to the field, as `++` on a `T` does.
+    ///
+    /// @return the value before the increment
+    T operator++(int) const noexcept {
+        T value = *this;
+        T incremented = value;
+        ++incremented;
+        *this = incremented;
+        return value;
+    }
+
+    /// Subtracts one from the field, as `--` on a `T` does.
+    ///
+    /// @return the value before the decrement
+    T operator--(int) const noexcept {
+        T value = *this;
+        T decremented = value;
+        --decremented;
+        *this = decremented;
+        return value;
+    }
+
+    /// The member has no address that points at a `T`.
+    void operator&() const = delete;
+
+  private:
+
+    unsigned char* bytes_{};
+};
+
+// Legacy `std::array<uint32_t, 3>&` member backed by a canonical FixedVec3 at
+// an address uint32_t does not align to. Each component is the bit pattern of
+// its 16.16 value, read and written through a Field.
+class Words3 {
+  public:
+
+    /// Binds the member to a canonical vector.
+    ///
+    /// @param vector canonical vector
+    explicit Words3(oa::FixedVec3& vector) noexcept
+        : components_{
+              {Field<uint32_t>(vector, &oa::FixedVec3::x),
+               Field<uint32_t>(vector, &oa::FixedVec3::y),
+               Field<uint32_t>(vector, &oa::FixedVec3::z)}
+          } {}
+
+    Words3(const Words3&) = delete;
+    Words3(Words3&&) = default;
+
+    /// Returns a component.
+    ///
+    /// @param index 0 for x, 1 for y, 2 for z
+    /// @return the component
+    const Field<uint32_t>& operator[](std::size_t index) const noexcept {
+        return components_[index];
+    }
+
+    /// Returns the three components' values.
+    ///
+    /// @return x, y and z
+    operator std::array<uint32_t, 3>() const noexcept {
+        return {components_[0], components_[1], components_[2]};
+    }
+
+    /// Stores three components.
+    ///
+    /// @param words x, y and z
+    /// @return this member
+    const Words3& operator=(const std::array<uint32_t, 3>& words) const noexcept {
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            components_[i] = words[i];
+        return *this;
+    }
+
+    /// Stores another member's components.
+    ///
+    /// @param other member whose components are stored
+    /// @return this member
+    const Words3& operator=(const Words3& other) const noexcept {
+        return *this = static_cast<std::array<uint32_t, 3>>(other);
+    }
+
+    // A swap moves a member into a temporary that still names the same bytes,
+    // so moving one member into another does not compile.
+    const Words3& operator=(Words3&&) const = delete;
+
+    /// Tests whether the components hold the given values.
+    ///
+    /// @param words x, y and z
+    /// @return true when all three are equal
+    bool operator==(const std::array<uint32_t, 3>& words) const noexcept {
+        return static_cast<std::array<uint32_t, 3>>(*this) == words;
+    }
+
+  private:
+
+    std::array<Field<uint32_t>, 3> components_;
+};
 
 // Span of views with the bounds-checked at() the replaced vectors offered.
 template <class T>
@@ -65,7 +323,8 @@ class RefField {
     ///
     /// @param ref canonical oa_ref32 field (0 null, else index + 1)
     /// @param table views the reference indexes
-    RefField(oa_ref32& ref, std::span<T> table) noexcept : ref_(ref), table_(table) {}
+    RefField(Field<oa_ref32> ref, std::span<T> table) noexcept
+        : ref_(std::move(ref)), table_(table) {}
 
     RefField(const RefField&) = delete;
     RefField(RefField&&) = default;
@@ -94,7 +353,7 @@ class RefField {
 
   private:
 
-    oa_ref32& ref_;
+    Field<oa_ref32> ref_;
     std::span<T> table_;
 };
 
@@ -106,8 +365,8 @@ class TypeField {
     ///
     /// @param ref the unit's def reference
     /// @param types runtime types, indexed like World.unit_defs
-    TypeField(oa_ref32& ref, std::span<sim::unit_spawn::Type> types) noexcept
-        : ref_(ref), types_(types) {}
+    TypeField(Field<oa_ref32> ref, std::span<sim::unit_spawn::Type> types) noexcept
+        : ref_(std::move(ref)), types_(types) {}
 
     TypeField(const TypeField&) = delete;
     TypeField(TypeField&&) = default;
@@ -129,7 +388,7 @@ class TypeField {
 
   private:
 
-    oa_ref32& ref_;
+    Field<oa_ref32> ref_;
     std::span<sim::unit_spawn::Type> types_;
 };
 
@@ -187,24 +446,24 @@ struct Unit {
 
     oa::Unit& record;
     OrderQueue& orders;
-    uint32_t& object_present;                        // Unit.movement
-    Order*& primary;                                 // OrderQueue.primary
-    Order*& secondary;                               // OrderQueue.secondary
-    std::array<uint32_t, 3>& position;               // Unit.position as 16.16 words
-    sim::unit_spawn::legacy::TypeField type;         // Unit.def
-    sim::unit_spawn::legacy::RefField<Player> owner; // Unit.owner
-    uint32_t& script_present;                        // Unit.script
-    int16_t& type_index;                             // Unit.type_index
-    int32_t& squad;                                  // Unit.squad
-    uint16_t& events;                                // Unit.events
-    uint8_t& damage_kind;                            // Unit.damage_kind
-    uint8_t& health_percent;                         // Unit.health_percent
-    uint8_t& previous_health_percent;                // Unit.previous_health_percent
-    uint8_t& damage_countdown;                       // Unit.damage_countdown
-    uint32_t& capture_cooldown;                      // Unit.capture_cooldown
-    int16_t& health;                                 // Unit.health
-    uint8_t& state_flags;                            // Unit.state_flags
-    uint32_t& flags;                                 // Unit.flags
+    uint32_t& object_present;                                  // Unit.movement
+    Order*& primary;                                           // OrderQueue.primary
+    Order*& secondary;                                         // OrderQueue.secondary
+    sim::unit_spawn::legacy::Words3 position;                  // Unit.position as 16.16 words
+    sim::unit_spawn::legacy::TypeField type;                   // Unit.def
+    sim::unit_spawn::legacy::RefField<Player> owner;           // Unit.owner
+    sim::unit_spawn::legacy::Field<uint32_t> script_present;   // Unit.script
+    int16_t& type_index;                                       // Unit.type_index
+    int32_t& squad;                                            // Unit.squad
+    uint16_t& events;                                          // Unit.events
+    uint8_t& damage_kind;                                      // Unit.damage_kind
+    uint8_t& health_percent;                                   // Unit.health_percent
+    uint8_t& previous_health_percent;                          // Unit.previous_health_percent
+    uint8_t& damage_countdown;                                 // Unit.damage_countdown
+    sim::unit_spawn::legacy::Field<uint32_t> capture_cooldown; // Unit.capture_cooldown
+    int16_t& health;                                           // Unit.health
+    uint8_t& state_flags;                                      // Unit.state_flags
+    uint32_t& flags;                                           // Unit.flags
 };
 
 // View of oa::Player under the old simulation-state member names.
@@ -217,11 +476,11 @@ struct Player {
     Player(Player&&) = default;
 
     oa::Player& record;
-    uint32_t& present;      // Player.in_use
-    int32_t& machine_group; // Player.machine_group
-    uint8_t& status;        // Player.status
-    uint8_t& index;         // Player.index
-    std::span<Unit> units;  // inclusive first_unit..last_unit, bound with the pool
+    sim::unit_spawn::legacy::Field<uint32_t> present;      // Player.in_use
+    sim::unit_spawn::legacy::Field<int32_t> machine_group; // Player.machine_group
+    uint8_t& status;                                       // Player.status
+    uint8_t& index;                                        // Player.index
+    std::span<Unit> units; // inclusive first_unit..last_unit, bound with the pool
 };
 
 // View of oa::World (Game fields) under the old simulation-state member names.
@@ -234,14 +493,14 @@ struct World {
 
     oa::World& record;
     std::array<Player, 10> players;
-    uint32_t& tick;                                  // Game.tick
-    uint32_t& active_units;                          // Game.active_unit_count
-    uint8_t& sea_level;                              // Game.sea_level
-    sim::unit_spawn::legacy::BitField run_flag;      // Game.session_flags bit 0
-    sim::unit_spawn::legacy::BitField periodic_flag; // Game.periodic_flags bit 1
-    int16_t& periodic_countdown;                     // Game.periodic_countdown
-    uint32_t& environment_enabled;                   // World.environment_enabled
-    int32_t& environment_damage;                     // World.environment_damage
+    sim::unit_spawn::legacy::Field<uint32_t> tick;              // Game.tick
+    sim::unit_spawn::legacy::Field<uint32_t> active_units;      // Game.active_unit_count
+    uint8_t& sea_level;                                         // Game.sea_level
+    sim::unit_spawn::legacy::BitField run_flag;                 // Game.session_flags bit 0
+    sim::unit_spawn::legacy::BitField periodic_flag;            // Game.periodic_flags bit 1
+    sim::unit_spawn::legacy::Field<int16_t> periodic_countdown; // Game.periodic_countdown
+    uint32_t& environment_enabled;                              // World.environment_enabled
+    int32_t& environment_damage;                                // World.environment_damage
 };
 
 // View forms of the canonical order and ownership functions.
@@ -352,28 +611,28 @@ struct PlayerRange {
     PlayerRange(PlayerRange&&) = default;
 
     oa::Player& record;
-    std::size_t first{}, count{};       // bound with the pool from first_unit/last_unit
-    uint16_t& current_count;            // Player.unit_count
-    uint32_t& total_created;            // Player.units_created
-    uint8_t& setup_side;                // PlayerSetupState.side
-    uint8_t& setup_color;               // PlayerSetupState.color
-    uint8_t& resource_flags;            // Player.resource_flags
-    float& energy;                      // Player.energy
-    float& metal;                       // Player.metal
-    float& energy_produced;             // Player.energy_produced
-    float& energy_consumed;             // Player.energy_requested
-    float& metal_produced;              // Player.metal_produced
-    float& metal_consumed;              // Player.metal_requested
-    float& energy_cap;                  // Player.energy_storage
-    float& metal_cap;                   // Player.metal_storage
-    double& energy_harvested;           // Player.energy_produced_total
-    double& metal_harvested;            // Player.metal_produced_total
-    double& cumulative_energy_consumed; // Player.energy_requested_total
-    double& cumulative_metal_consumed;  // Player.metal_requested_total
-    double& cumulative_energy_wasted;   // Player.energy_wasted_total
-    double& cumulative_metal_wasted;    // Player.metal_wasted_total
-    float& shared_energy;               // Player.shared_energy_storage
-    float& shared_metal;                // Player.shared_metal_storage
+    std::size_t first{}, count{};           // bound with the pool from first_unit/last_unit
+    legacy::Field<uint16_t> current_count;  // Player.unit_count
+    legacy::Field<uint32_t> total_created;  // Player.units_created
+    uint8_t& setup_side;                    // PlayerSetupState.side
+    uint8_t& setup_color;                   // PlayerSetupState.color
+    uint8_t& resource_flags;                // Player.resource_flags
+    legacy::Field<float> energy;            // Player.energy
+    legacy::Field<float> metal;             // Player.metal
+    legacy::Field<float> energy_produced;   // Player.energy_produced
+    legacy::Field<float> energy_consumed;   // Player.energy_requested
+    legacy::Field<float> metal_produced;    // Player.metal_produced
+    legacy::Field<float> metal_consumed;    // Player.metal_requested
+    legacy::Field<float> energy_cap;        // Player.energy_storage
+    legacy::Field<float> metal_cap;         // Player.metal_storage
+    legacy::Field<double> energy_harvested; // Player.energy_produced_total
+    legacy::Field<double> metal_harvested;  // Player.metal_produced_total
+    legacy::Field<double> cumulative_energy_consumed; // Player.energy_requested_total
+    legacy::Field<double> cumulative_metal_consumed;  // Player.metal_requested_total
+    legacy::Field<double> cumulative_energy_wasted;   // Player.energy_wasted_total
+    legacy::Field<double> cumulative_metal_wasted;    // Player.metal_wasted_total
+    legacy::Field<float> shared_energy;               // Player.shared_energy_storage
+    legacy::Field<float> shared_metal;                // Player.shared_metal_storage
 };
 
 // View of oa::World (Game fields) under the old spawn-world member names.
@@ -397,10 +656,10 @@ struct World {
     sim::unit_spawn::legacy::Span<Slot> slots; // bound by LegacyViews
     std::span<Type> types;
     std::array<PlayerRange, 10> players;
-    uint16_t& cycle_unit_id;    // Game.cycle_unit_id
-    uint16_t& per_player_limit; // Game.units_per_player
-    uint16_t& total_slots;      // Game.unit_slot_count
-    uint8_t& viewpoint_player;  // Game.viewpoint_player
+    legacy::Field<uint16_t> cycle_unit_id; // Game.cycle_unit_id
+    uint16_t& per_player_limit;            // Game.units_per_player
+    legacy::Field<uint16_t> total_slots;   // Game.unit_slot_count
+    uint8_t& viewpoint_player;             // Game.viewpoint_player
 };
 
 // Owns the views of one World. The World, its unit table and every side table

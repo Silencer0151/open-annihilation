@@ -3,27 +3,18 @@
 
 # Where an OA_SANITIZERS build with Clang leaves alignment unchecked
 # (-fsanitize-ignorelist). The canonical records keep their packed layouts,
-# so many of their fields sit at offsets their types do not align to, and
-# the code below binds references to those fields and reads them in place.
-# Everywhere else, the readers of game files included, a misaligned load or
-# reference stops the test that makes it. Drop a directory once its code
-# copies packed fields out instead of reading them in place.
+# so whether a field sits at an address its type aligns to depends on where
+# its record sits. The code below still binds references to fields that the
+# World's tables place at aligned addresses, and would be reported for a
+# record placed elsewhere. Everywhere else, the readers of game files
+# included, a misaligned load or reference stops the test that makes it.
+# Drop a directory once its code copies packed fields out instead of reading
+# them in place.
 #
 # The standard library headers are listed too: a misaligned reference handed
 # to them is reported where the caller binds it, unless the caller is listed.
 [alignment]
 src:*/src/app/*
-src:*/src/sim/ballistics/*
 src:*/src/sim/match-runtime/*
-src:*/src/sim/unit-effects/*
 src:*/src/sim/unit-spawn/*
-src:*/src/sim/weapon-execution/*
-src:*/src/sim/ground-orders/*
-src:*/src/sim/scenario/*
-src:*/src/data/campaign/*
-src:*/src/sim/script-vm/*
-src:*/src/sim/unit-script/*
-src:*/src/sim/profile/*
-src:*/src/sim/state-hash/*
-src:*/src/sim/visibility-state/*
 src:*/include/c++/*

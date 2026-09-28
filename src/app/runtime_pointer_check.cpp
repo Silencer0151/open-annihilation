@@ -989,8 +989,9 @@ void Runtime::check_pointer_picks() {
     const auto first_cell_z =
         std::clamp(commander_z + 3 * kNearby, kEdgeMargin, map_height - 3 * kEdgeMargin) /
         kCellPixels;
+    const int32_t game_feature_defs = game.feature_def_count;
     const auto shown_types = std::min<uint32_t>(
-        world.feature_def_count, static_cast<uint32_t>(std::max(0, game.feature_def_count))
+        world.feature_def_count, static_cast<uint32_t>(std::max(0, game_feature_defs))
     );
     for (uint32_t type = 0; type < shown_types && !feature_cell; ++type) {
         const auto& def = world.feature_defs[type];
@@ -1208,8 +1209,9 @@ void Runtime::check_pointer_picks() {
         }
     if (visited.size() < live_local) {
         key(SDLK_N, SDL_SCANCODE_N);
+        const uint16_t cycled = game.cycle_unit_id;
         require_pick(
-            std::find(visited.begin(), visited.end(), game.cycle_unit_id) == visited.end(),
+            std::find(visited.begin(), visited.end(), cycled) == visited.end(),
             "'n' after a click reached a unit that was on screen"
         );
     }

@@ -755,7 +755,8 @@ void air_transport_flies_the_game_goals() {
     f.match->issue_unload(transport, point(200, 800), false);
     int32_t highest = 0;
     CHECK(f.run_until(900, [&] {
-        highest = std::max(highest, atlas.record.position.y);
+        const oa_fixed height = atlas.record.position.y;
+        highest = std::max(highest, height);
         return kind_of(atlas) == vtol_unload && phase() >= 2;
     }));
     CHECK(std::abs(highest - 60 * one) < one);
@@ -797,8 +798,10 @@ void air_transport_waits_for_a_clear_unload_point() {
     uint32_t last_failure = 0;
     for (uint32_t tick = 0; tick < 400; ++tick) {
         f.run(1);
-        if (failures != 0)
-            lowest = std::min(lowest, atlas.record.position.y);
+        if (failures != 0) {
+            const oa_fixed height = atlas.record.position.y;
+            lowest = std::min(lowest, height);
+        }
         if (const auto spoken = f.services.spoken(transport, speech_failed); spoken != failures) {
             CHECK(spoken == failures + 1);
             CHECK(failures == 0 || tick - last_failure >= 30);

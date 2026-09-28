@@ -323,7 +323,7 @@ int main() {
     std::array<uint8_t, 10> allies{};
     allies[0] = 1;
     match.configure_outcomes(0, allies, true);
-    const auto position_before_ticks = moving->unit->position;
+    const std::array<uint32_t, 3> position_before_ticks = moving->unit->position;
     for (uint32_t tick = 0; tick < 35; ++tick) {
         match.simulation().tick = tick;
         match.tick();
@@ -380,7 +380,7 @@ int main() {
     match.simulation().tick = 182;
     match.tick();
     CHECK(moving->unit->primary != reached);
-    const auto before_move = moving->unit->position;
+    const std::array<uint32_t, 3> before_move = moving->unit->position;
     const sim::ground_orders::Point destination{96 * 65536, 0, 160 * 65536};
     (void)match.insert_ground_order(2, sim::ground_orders::move_ground_kind, destination, 0);
     for (uint32_t tick = 183; tick < 243; ++tick) {
@@ -505,7 +505,7 @@ int main() {
     opponent->record.bank = 0x11;
     opponent->yaw = 0x1234;
     opponent->record.pitch = 0x22;
-    const auto count0 = match.world().players[0].current_count;
+    const uint16_t count0 = match.world().players[0].current_count;
     services.command = [](sim::unit_spawn::Slot&, uint32_t) {};
     services.strict_activation = false;
     match.capture_unit(*opponent, *moving);

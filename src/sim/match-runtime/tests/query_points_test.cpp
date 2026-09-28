@@ -43,7 +43,7 @@ void sweet_spot_box_starts_at_the_origin() {
     CHECK(instance != nullptr);
     const auto& vertices = instance->model().pieces()[0].transformed_vertices;
     CHECK(vertices.size() == 2 && vertices[0].x == -(fx(4) + 3) && vertices[1].x == -fx(10));
-    const auto position = unit.unit->position;
+    const std::array<uint32_t, 3> position = unit.unit->position;
     // X box [-(10<<16), 0]: -327680 / 2. Y box [0, 12<<16], Z box [0, 8<<16].
     const auto centre = instance->piece_box_center(0);
     CHECK(centre[0] == offset(position[0], -fx(5)));

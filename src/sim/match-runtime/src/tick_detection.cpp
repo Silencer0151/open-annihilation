@@ -194,12 +194,7 @@ void Match::scan_contacts() {
         auto& unit = world.units[slot];
         if ((unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & detection::radar_contact) == 0 &&
             (unit.state_flags & OA_UNIT_STATE_CLOAKED) == 0 &&
-            point_visible(
-                viewpoint,
-                {std::bit_cast<uint32_t>(unit.position.x),
-                 std::bit_cast<uint32_t>(unit.position.y),
-                 std::bit_cast<uint32_t>(unit.position.z)}
-            ))
+            point_visible(viewpoint, fixed_words(unit.position)))
             unit.flags |= detection::radar_contact;
     }
 }

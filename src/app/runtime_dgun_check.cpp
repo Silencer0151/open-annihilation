@@ -230,7 +230,7 @@ void Runtime::check_dgun_order() {
     // below the ground.
     const auto blast = [&](uint16_t target, const char* how, const char* label) {
         view_commander();
-        const auto aim = slots[target].unit->position;
+        const std::array<uint32_t, 3> aim = slots[target].unit->position;
         const auto [x, y] = point_at(target);
         if (const auto cursor = pick_match_cursor(); cursor != attack_cursor)
             fail(how, "shows cursor " + std::to_string(cursor) + " over the enemy");

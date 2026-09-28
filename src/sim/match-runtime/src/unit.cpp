@@ -168,7 +168,7 @@ void UnitInstance::tick(uint32_t elapsed) {
 }
 
 std::array<uint32_t, 3> UnitInstance::piece_box_center(uint32_t piece) const {
-    const auto position = slot_.unit->position;
+    const std::array<uint32_t, 3> position = slot_.unit->position;
     if (piece >= model_.pieces().size())
         return position;
     int32_t low_x = 0, high_x = 0, low_y = 0, high_y = 0, low_z = 0, high_z = 0;

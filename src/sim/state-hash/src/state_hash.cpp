@@ -11,6 +11,7 @@
 #include "oa/sim/trace.hpp"
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 
 namespace oa::sim::trace {
@@ -33,10 +34,14 @@ void mix(uint64_t& hash, const void* bytes, size_t size) noexcept {
 
 /// Folds a value's bytes, as the host holds them, into a 64-bit FNV-1a digest.
 ///
+/// Takes a copy, so a field of a packed record is read wherever it sits. An
+/// array is folded with mix instead.
+///
 /// @param[in,out] hash digest so far
 /// @param value value to fold
 template <class T>
-void mix_value(uint64_t& hash, const T& value) noexcept {
+void mix_value(uint64_t& hash, T value) noexcept {
+    static_assert(!std::is_pointer_v<T>, "fold the pointed-to bytes with mix");
     mix(hash, &value, sizeof value);
 }
 
@@ -145,7 +150,7 @@ uint64_t match_state_hash(
             mix_value(hash, weapon.target_a);
             mix_value(hash, weapon.target_b);
             mix_value(hash, weapon.aim_ready);
-            mix_value(hash, weapon.muzzle_offset);
+            mix(hash, weapon.muzzle_offset, sizeof weapon.muzzle_offset);
             mix_value(hash, weapon.reload);
             mix_value(hash, weapon.aim_heading);
             mix_value(hash, weapon.aim_pitch);

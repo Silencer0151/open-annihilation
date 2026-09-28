@@ -272,7 +272,8 @@ void draw_text_rows(
             x = bounds.x2 - width;
             span = width;
         } else if ((attrs & attribute::centered) != 0) {
-            x = std::max((bounds.x2 - width + bounds.x1) / 2, bounds.x1);
+            const int32_t left = bounds.x1;
+            x = std::max((bounds.x2 - width + left) / 2, left);
             span = bounds.x2 - x + 1;
         } else {
             // Without an alignment bit nothing lands on the face.
@@ -441,7 +442,8 @@ void draw_button(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {
     if ((attrs & attribute::horizontal) != 0) {
         draw_text(renderer, panel, face, text, rect.x1 + press + kCaptionInset, y, span, 0);
     } else if ((attrs & attribute::right_aligned) != 0) {
-        const int32_t x = std::max(rect.x2 - fit_width - kCaptionInset, rect.x1);
+        const int32_t left = rect.x1;
+        const int32_t x = std::max(rect.x2 - fit_width - kCaptionInset, left);
         draw_text(renderer, panel, face, text, x, y, span, 0);
     } else if ((attrs & attribute::centered) != 0) {
         int32_t x = rect.x1 + (rect.x2 - rect.x1 - fit_width) / 2 + press + 1;

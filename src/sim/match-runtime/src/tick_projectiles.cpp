@@ -592,9 +592,14 @@ void Match::update_projectiles() {
                             {shot.position.x, shot.position.y, shot.position.z},
                             {aim.x, aim.y, aim.z}
                         );
-                        if (!sim::weapon_execution::steer_projectile(
-                                shot.heading, shot.pitch, desired, *weapon
-                            ))
+                        uint16_t heading = shot.heading;
+                        uint16_t pitch = shot.pitch;
+                        const bool steered = sim::weapon_execution::steer_projectile(
+                            heading, pitch, desired, *weapon
+                        );
+                        shot.heading = heading;
+                        shot.pitch = pitch;
+                        if (!steered)
                             detonate(shot, nullptr);
                     }
                     const auto velocity =

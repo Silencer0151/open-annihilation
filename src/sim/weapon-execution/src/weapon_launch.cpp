@@ -86,9 +86,10 @@ int32_t launch_speed(const WeaponDef& weapon) noexcept {
 uint32_t auto_range_expiry_tick(const WeaponDef& weapon, uint32_t current_tick) noexcept {
     uint32_t ticks = word(weapon.weapon_timer);
     const uint32_t flags = weapon.flags;
-    if (weapon.weapon_velocity != 0 && (flags & OA_WEAPON_FLAG_NO_AUTO_RANGE) == 0)
-        ticks = (std::bit_cast<uint32_t>(weapon.range) << 16) /
-                std::bit_cast<uint32_t>(weapon.weapon_velocity);
+    const int32_t range = weapon.range;
+    const oa_fixed weapon_velocity = weapon.weapon_velocity;
+    if (weapon_velocity != 0 && (flags & OA_WEAPON_FLAG_NO_AUTO_RANGE) == 0)
+        ticks = (std::bit_cast<uint32_t>(range) << 16) / std::bit_cast<uint32_t>(weapon_velocity);
     return ticks + current_tick;
 }
 
@@ -131,7 +132,8 @@ ProjectileLaunch launch_ballistic_projectile(
     ProjectileLaunch launch;
     launch.heading = word(slot.aim_heading);
     launch.pitch = word(slot.aim_pitch);
-    const auto velocity = std::bit_cast<uint32_t>(weapon.weapon_velocity);
+    const oa_fixed weapon_velocity = weapon.weapon_velocity;
+    const auto velocity = std::bit_cast<uint32_t>(weapon_velocity);
     // A zero velocity costs the barrel no gravity.
     const auto barrel_ticks = velocity != 0 ? weapon_muzzle_offset(slot) / velocity : 0U;
     const auto lift = sim::unit_movement::sine_scaled(launch.pitch, weapon.weapon_velocity);
@@ -415,12 +417,13 @@ ShotPlan plan_line_shot(
     plan.slot_aim = {
         std::bit_cast<int16_t>(bearing.heading), std::bit_cast<int16_t>(bearing.pitch)
     };
+    const oa_angle unit_heading = unit.heading;
     if (!turret_within_tolerance(
             {word(weapon.tolerance),
              word(weapon.pitch_tolerance),
              plan.slot_aim.heading,
              plan.slot_aim.pitch,
-             std::bit_cast<int16_t>(unit.heading),
+             std::bit_cast<int16_t>(unit_heading),
              unit.pitch,
              (unit.flags & OA_UNIT_FLAG_MOVE_RATE_MASK) != 0}
         ))

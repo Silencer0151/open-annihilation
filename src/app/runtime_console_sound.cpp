@@ -190,7 +190,7 @@ void Runtime::check_console_sound_commands(const std::function<void(const char*)
     enter_line("+sing");
     require(novelty_voice_ == 1 && gates.novelty_voice, "+sing did not turn the novelty voice on");
     const auto novelty = spoken();
-    const auto tick = match_->simulation().tick;
+    const uint32_t tick = match_->simulation().tick;
     const bool honk_window = tick / announcement_window_ticks % novelty_honk_windows == 0;
     require(
         novelty == (honk_window ? "sounds/honk.wav" : "sounds/sing.wav"),

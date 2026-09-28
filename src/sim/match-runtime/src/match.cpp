@@ -867,7 +867,7 @@ bool Match::unit_visible(uint8_t player, uint16_t index) const {
         }
     if (!bounds)
         throw std::logic_error("visibility query requires resolved unit bounds");
-    auto point = unit.position;
+    std::array<uint32_t, 3> point = unit.position;
     point[0] += static_cast<uint32_t>(bounds->bounds_min_x);
     point[1] += static_cast<uint32_t>(bounds->model_height);
     point[2] += static_cast<uint32_t>(bounds->bounds_min_z);
@@ -1050,10 +1050,11 @@ std::vector<Match::NanoLaser> Match::nano_lasers() const {
                 bounds = &*type_bounds_[i];
                 break;
             }
+        const std::array<uint32_t, 3> position = target.position;
         std::array<int32_t, 3> min_p{
-            std::bit_cast<int32_t>(target.position[0]),
-            std::bit_cast<int32_t>(target.position[1]),
-            std::bit_cast<int32_t>(target.position[2])
+            std::bit_cast<int32_t>(position[0]),
+            std::bit_cast<int32_t>(position[1]),
+            std::bit_cast<int32_t>(position[2])
         };
         std::array<int32_t, 3> max_p = min_p;
         if (bounds) {

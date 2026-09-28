@@ -152,7 +152,8 @@ void Match::advance_local_outcome() {
     auto& view = *outcome_view_;
     auto& world = state();
     for (std::size_t i = 0; i < world_.players.size(); ++i)
-        view.live_units[i] = std::bit_cast<int16_t>(world_.players[i].current_count);
+        view.live_units[i] =
+            std::bit_cast<int16_t>(static_cast<uint16_t>(world_.players[i].current_count));
     outcome_unit_status_.clear();
     for (const auto& slot : slots_) {
         if (slot.unit == nullptr || slot.record.owner_index != 0 || !slot.unit->record.type_index)

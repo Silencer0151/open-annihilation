@@ -178,7 +178,7 @@ void TickHost::movement_tick(oa::Unit& record) {
     if (parent_index) {
         auto& parent = match.slots_.at(parent_index);
         const auto piece = std::bit_cast<int8_t>(s.record.attach_piece);
-        auto world = parent.unit ? parent.unit->position : u.position;
+        std::array<uint32_t, 3> world = parent.unit ? parent.unit->position : u.position;
         if (piece >= 0)
             world = match.piece_world_position(parent, static_cast<uint32_t>(piece));
         std::array<sim::unit_movement::Fixed, 3> next{

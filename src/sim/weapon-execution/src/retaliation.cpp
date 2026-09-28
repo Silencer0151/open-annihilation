@@ -8,8 +8,6 @@
 #include "oa/core/unit_def.h"
 #include "oa/core/weapon_def.h"
 
-#include <bit>
-
 namespace oa::sim::weapon_execution {
 
 namespace {
@@ -18,9 +16,9 @@ constexpr uint8_t weapon_damage_kind = 1;
 
 sim::ballistics::ReachUnitGeometry reach_geometry(const Unit& unit, const UnitDef& def) noexcept {
     return {
-        {std::bit_cast<uint32_t>(unit.position.x),
-         std::bit_cast<uint32_t>(unit.position.y),
-         std::bit_cast<uint32_t>(unit.position.z)},
+        {static_cast<uint32_t>(unit.position.x),
+         static_cast<uint32_t>(unit.position.y),
+         static_cast<uint32_t>(unit.position.z)},
         static_cast<int16_t>(static_cast<uint32_t>(def.model_height) >> 16),
         unit.flags,
         def.flags
@@ -121,9 +119,9 @@ bool slot_reaches_point(
     return sim::ballistics::fire_can_reach(
         reach,
         reach_geometry(shooter, *shooter_def),
-        {std::bit_cast<uint32_t>(target.x),
-         std::bit_cast<uint32_t>(target.y),
-         std::bit_cast<uint32_t>(target.z)},
+        {static_cast<uint32_t>(target.x),
+         static_cast<uint32_t>(target.y),
+         static_cast<uint32_t>(target.z)},
         world.game.sea_level
     );
 }

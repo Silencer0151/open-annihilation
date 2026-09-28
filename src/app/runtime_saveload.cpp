@@ -133,8 +133,10 @@ float load_le_float(const uint8_t* in) noexcept {
 /// @return one entry per plot, nonzero where the load hides it
 std::vector<uint8_t> plots_hidden_on_load(const oa::World& world, bool lava_world) {
     namespace features = oa::sim::feature_runtime;
-    const auto cells = static_cast<std::size_t>(std::max(world.game.map_width, 0)) *
-                       static_cast<std::size_t>(std::max(world.game.map_height, 0));
+    const int32_t map_width = world.game.map_width;
+    const int32_t map_height = world.game.map_height;
+    const auto cells = static_cast<std::size_t>(std::max(map_width, 0)) *
+                       static_cast<std::size_t>(std::max(map_height, 0));
     std::vector<oa::MapPlot> plots(world.plots, world.plots + cells);
     for (auto& plot : plots)
         if (plot.feature != features::feature_marker)
@@ -551,8 +553,10 @@ void Runtime::SaveLoadState::stage_sight(Runtime& runtime, SaveLoadState& state)
 void Runtime::SaveLoadState::apply_plots(Runtime& runtime, const SaveLoadState& state) {
     const oa::World& world = runtime.match_->state();
     auto& plots = runtime.match_->spatial().plots;
-    const auto cells = static_cast<std::size_t>(std::max(world.game.map_width, 0)) *
-                       static_cast<std::size_t>(std::max(world.game.map_height, 0));
+    const int32_t map_width = world.game.map_width;
+    const int32_t map_height = world.game.map_height;
+    const auto cells = static_cast<std::size_t>(std::max(map_width, 0)) *
+                       static_cast<std::size_t>(std::max(map_height, 0));
     for (std::size_t i = 0; i < cells && i < plots.size(); ++i) {
         const oa::MapPlot& plot = world.plots[i];
         plots[i].metal = plot.metal;

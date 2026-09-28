@@ -484,7 +484,8 @@ void texture_quad(
                             v = wrap_add(v, wrap_mul(skipped, dv));
                             from = clip.y1;
                         }
-                        const int32_t to = std::min(yb, clip.y2);
+                        const int32_t clip_bottom = clip.y2;
+                        const int32_t to = std::min(yb, clip_bottom);
                         for (int32_t n = from; n < to; ++n, ++cursor) {
                             MeshSpanRow& r = table[cursor];
                             if (left_side) {

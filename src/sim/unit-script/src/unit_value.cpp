@@ -81,23 +81,27 @@ int32_t unit_script_get_value(
         value = pack_xz(at.x, at.z);
         break;
     }
-    case UnitValue::piece_y:
-        value = std::bit_cast<uint32_t>(
-            services.piece_world(services.context, world, unit, argument).y
-        );
+    case UnitValue::piece_y: {
+        const oa_fixed height = services.piece_world(services.context, world, unit, argument).y;
+        value = std::bit_cast<uint32_t>(height);
         break;
+    }
     case UnitValue::unit_xz:
         if (const Unit* target = live_unit(world, argument))
             value = pack_xz(target->position.x, target->position.z);
         break;
     case UnitValue::unit_y:
-        if (const Unit* target = live_unit(world, argument))
-            value = std::bit_cast<uint32_t>(target->position.y);
+        if (const Unit* target = live_unit(world, argument)) {
+            const oa_fixed height = target->position.y;
+            value = std::bit_cast<uint32_t>(height);
+        }
         break;
     case UnitValue::unit_height:
         if (const Unit* target = live_unit(world, argument))
-            if (const UnitDef* def = world_unit_def_of(world, target))
-                value = std::bit_cast<uint32_t>(def->model_height);
+            if (const UnitDef* def = world_unit_def_of(world, target)) {
+                const oa_fixed model_height = def->model_height;
+                value = std::bit_cast<uint32_t>(model_height);
+            }
         break;
     case UnitValue::xz_atan: {
         const auto at = unpack_xz(argument);

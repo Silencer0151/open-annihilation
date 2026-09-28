@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -319,7 +320,8 @@ void Runtime::check_console_debug_commands(const std::function<void(const char*)
     if (game.profiling != 1)
         throw std::runtime_error("console check: +profile did not turn the bars on");
     constexpr std::array<int32_t, profile::category_count> kShown{10, 20, 5, 15, 0, 25, 5, 10, 10};
-    std::copy(kShown.begin(), kShown.end(), game.profile_times.shown);
+    static_assert(sizeof kShown == sizeof game.profile_times.shown);
+    std::memcpy(game.profile_times.shown, kShown.data(), sizeof game.profile_times.shown);
     game.profile_times.shown_total = 100;
     const auto bars = capture();
     const oa::formats::fnt::Font* font = match_label_font();

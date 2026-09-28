@@ -604,10 +604,10 @@ void hotkey_self_destruct_is_scaled() {
     auto& counted = idle(f, 0, 160, 64);
     f.run(1);
     sudden.record.veteran_level = 20;
-    auto& abilities = f.match->state().unit_defs[1].abilities;
-    const auto countdown = [&abilities](uint32_t counts) {
-        abilities = (abilities & ~OA_UNIT_DEF_ABILITY_SELF_DESTRUCT_MASK) |
-                    (counts << OA_UNIT_DEF_ABILITY_SELF_DESTRUCT_SHIFT);
+    auto& def = f.match->state().unit_defs[1];
+    const auto countdown = [&def](uint32_t counts) {
+        def.abilities = (def.abilities & ~OA_UNIT_DEF_ABILITY_SELF_DESTRUCT_MASK) |
+                        (counts << OA_UNIT_DEF_ABILITY_SELF_DESTRUCT_SHIFT);
     };
     countdown(0);
     const std::array<uint16_t, 1> first{sudden.unit_index};
@@ -737,7 +737,7 @@ void unit_type_killed_counts_tick_deaths() {
         CHECK(!live(unit));
         CHECK(condition.kills_left == (named ? 0 : 1));
         CHECK(condition.satisfied == (named ? 1 : 0));
-        const auto tick = f.match->simulation().tick;
+        const uint32_t tick = f.match->simulation().tick;
         f.run(30);
         CHECK(f.match->simulation().tick == tick + 30 && live(bystander));
         CHECK(condition.kills_left == (named ? 0 : 1));

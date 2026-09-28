@@ -212,7 +212,7 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
             return false;
         auto* instance = match.instance(source.unit_index);
         // The muzzle is the QueryWeapon piece in world space.
-        auto muzzle = source.unit->position;
+        std::array<uint32_t, 3> muzzle = source.unit->position;
         uint16_t query_piece = 0;
         if (instance && instance->script()) {
             const auto piece = instance->query_weapon_piece(index);

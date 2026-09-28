@@ -225,7 +225,7 @@ void fired_shots(sim::match_runtime::Match& match, const Art& art) {
     slot.target_b = OA_UNIT_TARGET_IS_UNIT;
     auto& world = match.effects();
     world.explosion_count = 0;
-    const auto start = match.simulation().tick;
+    const uint32_t start = match.simulation().tick;
     int32_t launched_at = -1;
     int32_t trail_puffs = 0;
     int32_t entry_splashes = 0;

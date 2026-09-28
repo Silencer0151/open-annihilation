@@ -263,10 +263,11 @@ void Match::visit_primary_queue(
         const auto* target =
             record->construction.target ? record->construction.target : record->attack.target;
         if (target) {
+            const std::array<uint32_t, 3> position = target->position;
             view.destination = {
-                std::bit_cast<sim::ground_orders::Fixed>(target->position[0]),
-                std::bit_cast<sim::ground_orders::Fixed>(target->position[1]),
-                std::bit_cast<sim::ground_orders::Fixed>(target->position[2])
+                std::bit_cast<sim::ground_orders::Fixed>(position[0]),
+                std::bit_cast<sim::ground_orders::Fixed>(position[1]),
+                std::bit_cast<sim::ground_orders::Fixed>(position[2])
             };
         } else if (
             view.destination[0] == 0 && view.destination[2] == 0 &&

@@ -622,7 +622,8 @@ void Runtime::check_end_screen_darkening(const std::filesystem::path& report_dir
             game.endgame_state == OA_ENDGAME_DISC_CHECK) {
             if (countdown && game.endgame_shade_countdown < *countdown)
                 ++steps;
-            countdown = game.endgame_shade_countdown;
+            const int32_t shade_countdown = game.endgame_shade_countdown;
+            countdown = shade_countdown;
         }
         if (steps == campaign::kShadeSteps / 2 && !halfway_written) {
             write_ppm(report_directory / "native-campaign-darkening.ppm", surface_);

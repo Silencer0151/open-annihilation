@@ -29,19 +29,20 @@ Unit::Unit(
     oa::Unit& u, OrderQueue& q, std::span<sim::unit_spawn::Type> types, std::span<Player> players
 ) noexcept
     : record(u), orders(q), object_present(u.movement), primary(q.primary), secondary(q.secondary),
-      position(reinterpret_cast<std::array<uint32_t, 3>&>(u.position)), type(u.def, types),
-      owner(u.owner, players), script_present(u.script),
+      position(u.position),
+      type(sim::unit_spawn::legacy::Field<oa_ref32>(u, &oa::Unit::def), types),
+      owner(sim::unit_spawn::legacy::Field<oa_ref32>(u, &oa::Unit::owner), players),
+      script_present(u, &oa::Unit::script),
       type_index(sim::unit_spawn::legacy::as<int16_t>(u.type_index)), squad(u.squad),
       events(u.events), damage_kind(u.damage_kind), health_percent(u.health_percent),
       previous_health_percent(u.previous_health_percent), damage_countdown(u.damage_countdown),
-      capture_cooldown(u.capture_cooldown), health(u.health), state_flags(u.state_flags),
-      flags(u.flags) {
+      capture_cooldown(u, &oa::Unit::capture_cooldown), health(u.health),
+      state_flags(u.state_flags), flags(u.flags) {
 }
 
 Player::Player(oa::Player& p) noexcept
-    : record(p), present(p.in_use),
-      machine_group(sim::unit_spawn::legacy::as<int32_t>(p.machine_group)), status(p.status),
-      index(p.index) {
+    : record(p), present(p, &oa::Player::in_use), machine_group(p, &oa::Player::machine_group),
+      status(p.status), index(p.index) {
 }
 
 namespace {
@@ -52,10 +53,11 @@ std::array<Player, 10> player_views(oa::World& w, std::index_sequence<I...>) {
 } // namespace
 
 World::World(oa::World& w) noexcept
-    : record(w), players(player_views(w, std::make_index_sequence<10>{})), tick(w.game.tick),
-      active_units(sim::unit_spawn::legacy::as<uint32_t>(w.game.active_unit_count)),
+    : record(w), players(player_views(w, std::make_index_sequence<10>{})),
+      tick(w.game, &oa::Game::tick), active_units(w.game, &oa::Game::active_unit_count),
       sea_level(w.game.sea_level), run_flag(w.game.session_flags, 1),
-      periodic_flag(w.game.periodic_flags, 2), periodic_countdown(w.game.periodic_countdown),
+      periodic_flag(w.game.periodic_flags, 2),
+      periodic_countdown(w.game, &oa::Game::periodic_countdown),
       environment_enabled(w.environment_enabled), environment_damage(w.environment_damage) {
 }
 } // namespace oa::sim::simulation_state
@@ -81,17 +83,22 @@ Slot::Slot(sim::simulation_state::Unit& view, SlotAssets& assets) noexcept
 }
 
 PlayerRange::PlayerRange(oa::World&, oa::Player& p, PlayerSetupState& setup) noexcept
-    : record(p), current_count(p.unit_count), total_created(p.units_created),
-      setup_side(setup.side), setup_color(setup.color), resource_flags(p.resource_flags),
-      energy(p.energy), metal(p.metal), energy_produced(p.energy_produced),
-      energy_consumed(p.energy_requested), metal_produced(p.metal_produced),
-      metal_consumed(p.metal_requested), energy_cap(p.energy_storage), metal_cap(p.metal_storage),
-      energy_harvested(p.energy_produced_total), metal_harvested(p.metal_produced_total),
-      cumulative_energy_consumed(p.energy_requested_total),
-      cumulative_metal_consumed(p.metal_requested_total),
-      cumulative_energy_wasted(p.energy_wasted_total),
-      cumulative_metal_wasted(p.metal_wasted_total), shared_energy(p.shared_energy_storage),
-      shared_metal(p.shared_metal_storage) {
+    : record(p), current_count(p, &oa::Player::unit_count),
+      total_created(p, &oa::Player::units_created), setup_side(setup.side),
+      setup_color(setup.color), resource_flags(p.resource_flags), energy(p, &oa::Player::energy),
+      metal(p, &oa::Player::metal), energy_produced(p, &oa::Player::energy_produced),
+      energy_consumed(p, &oa::Player::energy_requested),
+      metal_produced(p, &oa::Player::metal_produced),
+      metal_consumed(p, &oa::Player::metal_requested), energy_cap(p, &oa::Player::energy_storage),
+      metal_cap(p, &oa::Player::metal_storage),
+      energy_harvested(p, &oa::Player::energy_produced_total),
+      metal_harvested(p, &oa::Player::metal_produced_total),
+      cumulative_energy_consumed(p, &oa::Player::energy_requested_total),
+      cumulative_metal_consumed(p, &oa::Player::metal_requested_total),
+      cumulative_energy_wasted(p, &oa::Player::energy_wasted_total),
+      cumulative_metal_wasted(p, &oa::Player::metal_wasted_total),
+      shared_energy(p, &oa::Player::shared_energy_storage),
+      shared_metal(p, &oa::Player::shared_metal_storage) {
 }
 
 namespace {
@@ -110,8 +117,8 @@ World::World(
 )
     : record(w), simulation(&simulation_view), types(type_table),
       players(range_views(w, setups, std::make_index_sequence<10>{})),
-      cycle_unit_id(w.game.cycle_unit_id), per_player_limit(w.game.units_per_player),
-      total_slots(w.game.unit_slot_count), viewpoint_player(w.game.viewpoint_player) {
+      cycle_unit_id(w.game, &oa::Game::cycle_unit_id), per_player_limit(w.game.units_per_player),
+      total_slots(w.game, &oa::Game::unit_slot_count), viewpoint_player(w.game.viewpoint_player) {
 }
 
 namespace {

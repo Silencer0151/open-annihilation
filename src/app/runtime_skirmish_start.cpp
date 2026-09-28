@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -821,11 +822,8 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         // A campaign's block stays in Game.session_record where its loader
         // wrote it, and so does the mission's nomovie flag.
         if (campaign_mission_) {
-            std::copy(
-                std::begin(session_record),
-                std::end(session_record),
-                std::begin(match_->state().game.session_record)
-            );
+            static_assert(sizeof session_record == sizeof match_->state().game.session_record);
+            std::memcpy(match_->state().game.session_record, session_record, sizeof session_record);
             match_->state().game.no_movie = campaign_object().no_movie;
         }
         oa::sim::session::apply_session_flags(&match_->state().game, session_record);
@@ -938,7 +936,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     if (console_)
         console_->bound_world = nullptr;
     (void)match_console();
-    effect_boundary_.clock = &match_->simulation().tick;
+    effect_boundary_.clock = &match_->state().game;
     set_load_progress(3, 100);
     set_load_progress(4, 70);
     offline_effects_.bind(*match_);

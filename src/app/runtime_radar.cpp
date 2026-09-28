@@ -219,7 +219,7 @@ void Runtime::run_radar_ticks() {
         refresh_radar_mapped();
         compose_radar_final();
     }
-    const auto now = match_->simulation().tick;
+    const uint32_t now = match_->simulation().tick;
     if (now <= radar.tick) {
         radar.tick = now;
         return;

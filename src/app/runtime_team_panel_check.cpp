@@ -150,14 +150,18 @@ void Runtime::check_pause_key() {
     // 'h' moves nothing and Tab opens no team menu outside a multiplayer game.
     std::vector<float> stores;
     for (const auto& player : game.players) {
-        stores.push_back(player.metal);
-        stores.push_back(player.energy);
+        const float metal = player.metal;
+        const float energy = player.energy;
+        stores.push_back(metal);
+        stores.push_back(energy);
     }
     key(SDLK_H, SDL_SCANCODE_H);
     std::vector<float> after;
     for (const auto& player : game.players) {
-        after.push_back(player.metal);
-        after.push_back(player.energy);
+        const float metal = player.metal;
+        const float energy = player.energy;
+        after.push_back(metal);
+        after.push_back(energy);
     }
     require(stores == after, "'h' moved resources in a skirmish");
     require(

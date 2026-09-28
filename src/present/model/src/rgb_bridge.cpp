@@ -177,11 +177,15 @@ void bridge_begin(
 }
 
 void bridge_open(RgbBridge& bridge, const Rect32& region) {
+    const int32_t left = region.x1;
+    const int32_t top = region.y1;
+    const int32_t right = region.x2;
+    const int32_t bottom = region.y2;
     Rect32 clip{
-        std::max(region.x1, 0),
-        std::max(region.y1, 0),
-        std::min(region.x2, bridge.surface.width - 1),
-        std::min(region.y2, bridge.surface.height - 1)
+        std::max(left, 0),
+        std::max(top, 0),
+        std::min(right, bridge.surface.width - 1),
+        std::min(bottom, bridge.surface.height - 1)
     };
     if (clip.x1 > clip.x2 || clip.y1 > clip.y2) {
         // An empty clip: the draw routines reject everything.

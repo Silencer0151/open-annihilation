@@ -332,7 +332,7 @@ struct Fixture {
     int32_t cell_x(const sim::unit_spawn::Slot& slot) const { return slot.record.cell_x; }
 
     int32_t height(const sim::unit_spawn::Slot& slot) const {
-        return std::bit_cast<int32_t>(slot.unit->position[1]) >> 16;
+        return std::bit_cast<int32_t>(static_cast<uint32_t>(slot.unit->position[1])) >> 16;
     }
 };
 
@@ -859,7 +859,7 @@ struct InstalledFixture {
     }
 
     int32_t height(const sim::unit_spawn::Slot& slot) const {
-        return std::bit_cast<int32_t>(slot.unit->position[1]) >> 16;
+        return std::bit_cast<int32_t>(static_cast<uint32_t>(slot.unit->position[1])) >> 16;
     }
 
     /// Runs until the unit's slot is empty, for at most 120 ticks.

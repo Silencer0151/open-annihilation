@@ -319,8 +319,10 @@ void vent_smokes_every_five_ticks() {
     auto next = emitter.next_spawn;
     for (uint32_t tick = 0; tick < 20; ++tick) {
         f.run(1);
-        if (emitter.next_spawn != next)
-            puffs.push_back(f.match->state().game.tick);
+        if (emitter.next_spawn != next) {
+            const uint32_t now = f.match->state().game.tick;
+            puffs.push_back(now);
+        }
         next = emitter.next_spawn;
     }
     CHECK((puffs == std::vector<uint32_t>{5, 10, 15, 20}));

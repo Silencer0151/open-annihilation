@@ -595,8 +595,10 @@ void Runtime::spawn_campaign_units() {
     }
     // A mission grants its resources as start storage and stores.
     oa::ui::hud::MissionResources resources{};
-    std::copy(std::begin(file.metal), std::end(file.metal), std::begin(resources.metal));
-    std::copy(std::begin(file.energy), std::end(file.energy), std::begin(resources.energy));
+    static_assert(sizeof file.metal == sizeof resources.metal);
+    static_assert(sizeof file.energy == sizeof resources.energy);
+    std::memcpy(resources.metal, file.metal, sizeof resources.metal);
+    std::memcpy(resources.energy, file.energy, sizeof resources.energy);
     oa::ui::hud::set_starting_resources(
         match_->state(), oa::ui::hud::kSessionCampaign, &resources, nullptr
     );

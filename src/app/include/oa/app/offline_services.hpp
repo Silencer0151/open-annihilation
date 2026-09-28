@@ -5,6 +5,7 @@
 #pragma once
 
 #include "oa/audio/unit_announcements.hpp"
+#include "oa/core/game_state.h"
 #include "oa/sim/unit_effects/effects_offline.hpp"
 #include <array>
 #include <cstddef>
@@ -322,7 +323,7 @@ class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycl
     ///
     /// @param event effect event
     void effect(const oa::sim::unit_effects::Event& event) override {
-        const auto tick = clock == nullptr ? 0u : *clock;
+        const uint32_t tick = clock == nullptr ? 0u : clock->tick;
         events.push_back({event, tick});
         if (events.size() > 64)
             events.erase(
@@ -335,7 +336,7 @@ class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycl
         uint32_t spawn_tick{};
     };
 
-    const uint32_t* clock = nullptr;
+    const oa::Game* clock = nullptr; ///< game whose tick stamps each event; null stamps 0
     std::vector<LiveEffect> events;
 };
 

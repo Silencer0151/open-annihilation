@@ -84,13 +84,14 @@ void attack_special_fires_the_dgun_once() {
     CHECK(f.shots_from(commander) > 0);
     CHECK(tertiary_shots(f, commander) == 0);
 
-    auto& energy = f.match->state().game.players[0].energy;
-    energy = start_energy;
+    auto& player = f.match->state().game.players[0];
+    player.energy = start_energy;
     const auto primary_before = f.shots_from(commander);
+    const std::array<uint32_t, 3> enemy_position = enemy.unit->position;
     const sim::ground_orders::Point at_enemy{
-        std::bit_cast<int32_t>(enemy.unit->position[0]),
-        std::bit_cast<int32_t>(enemy.unit->position[1]),
-        std::bit_cast<int32_t>(enemy.unit->position[2])
+        std::bit_cast<int32_t>(enemy_position[0]),
+        std::bit_cast<int32_t>(enemy_position[1]),
+        std::bit_cast<int32_t>(enemy_position[2])
     };
     auto& order =
         f.match->issue_attack_special(commander.unit_index, at_enemy, false, enemy.unit_index);
@@ -105,7 +106,7 @@ void attack_special_fires_the_dgun_once() {
     CHECK(tertiary_shots(f, commander) == 1 && dgun_projectiles(f, commander) == 1);
     // The first gun kept firing while the commander closed in.
     CHECK(f.shots_from(commander) > primary_before);
-    CHECK(energy == start_energy - dgun_energy);
+    CHECK(player.energy == start_energy - dgun_energy);
     CHECK(enemy.unit->record.type_index != 0);
 
     // The commandfire shot event ends the order, and the order's end frees
@@ -115,7 +116,7 @@ void attack_special_fires_the_dgun_once() {
     CHECK(commander.record.weapons[dgun_slot].target_a == 0);
     f.run(3 * dgun_reload_ticks);
     CHECK(tertiary_shots(f, commander) == 1);
-    CHECK(energy == start_energy - dgun_energy);
+    CHECK(player.energy == start_energy - dgun_energy);
     std::cout << "AttackSpecial fired the D-gun once, " << fired_at << " ticks after the order\n";
 }
 
@@ -128,19 +129,20 @@ void dgun_waits_for_energy() {
     fund(f);
     auto& commander = f.spawn(0, 100, 128);
     auto& enemy = unarmed_enemy(f, 160, 128);
-    auto& energy = f.match->state().game.players[0].energy;
-    energy = dgun_energy - 1.0F;
+    auto& player = f.match->state().game.players[0];
+    player.energy = dgun_energy - 1.0F;
+    const std::array<uint32_t, 3> enemy_position = enemy.unit->position;
     const sim::ground_orders::Point at_enemy{
-        std::bit_cast<int32_t>(enemy.unit->position[0]),
-        std::bit_cast<int32_t>(enemy.unit->position[1]),
-        std::bit_cast<int32_t>(enemy.unit->position[2])
+        std::bit_cast<int32_t>(enemy_position[0]),
+        std::bit_cast<int32_t>(enemy_position[1]),
+        std::bit_cast<int32_t>(enemy_position[2])
     };
     (void)f.match->issue_attack_special(commander.unit_index, at_enemy, false, enemy.unit_index);
     f.run(60);
     CHECK(tertiary_shots(f, commander) == 0 && attacking(commander));
-    energy = dgun_energy;
+    player.energy = dgun_energy;
     f.run(10);
-    CHECK(tertiary_shots(f, commander) == 1 && energy == 0.0F);
+    CHECK(tertiary_shots(f, commander) == 1 && player.energy == 0.0F);
     std::cout << "the D-gun waited for its energy\n";
 }
 

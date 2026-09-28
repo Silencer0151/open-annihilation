@@ -1052,13 +1052,14 @@ void Runtime::check_navigation() {
         match_->simulation().players[match_local_player_].status != entry::controller::human)
         throw std::runtime_error("navigation check found inactive local simulation player");
     auto& commander_slot = match_->world().slots[local_commander];
+    const std::array<uint32_t, 3> start = commander_slot.unit->position;
     const oa::sim::ground_orders::Point bounded_destination{
-        std::bit_cast<int32_t>(commander_slot.unit->position[0]),
-        std::bit_cast<int32_t>(commander_slot.unit->position[1]),
-        std::bit_cast<int32_t>(commander_slot.unit->position[2]) + 64 * 65536
+        std::bit_cast<int32_t>(start[0]),
+        std::bit_cast<int32_t>(start[1]),
+        std::bit_cast<int32_t>(start[2]) + 64 * 65536
     };
-    const auto position_x_before = commander_slot.unit->position[0];
-    const auto position_z_before = commander_slot.unit->position[2];
+    const uint32_t position_x_before = start[0];
+    const uint32_t position_z_before = start[2];
     match_->issue_ground_move(local_commander, bounded_destination, false);
     match_timing_.tick = 1;
     match_->simulation().tick = match_timing_.tick;
@@ -1108,10 +1109,11 @@ void Runtime::check_navigation() {
     }
     const auto solar = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMSOLAR");
     if (solar != 0) {
+        const std::array<uint32_t, 3> at = commander_slot.unit->position;
         const oa::sim::ground_orders::Point yard{
-            std::bit_cast<int32_t>(commander_slot.unit->position[0]) + 64 * 65536,
-            std::bit_cast<int32_t>(commander_slot.unit->position[1]),
-            std::bit_cast<int32_t>(commander_slot.unit->position[2])
+            std::bit_cast<int32_t>(at[0]) + 64 * 65536,
+            std::bit_cast<int32_t>(at[1]),
+            std::bit_cast<int32_t>(at[2])
         };
         try {
             (void)match_->issue_mobile_build(local_commander, solar, yard, false);

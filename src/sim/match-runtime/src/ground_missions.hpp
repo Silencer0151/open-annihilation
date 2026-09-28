@@ -646,11 +646,7 @@ class TickHost::GroundMissions {
                 const auto& unit = match.slots_[id].record;
                 projected = {};
                 projected.identity = id;
-                projected.position = {
-                    std::bit_cast<uint32_t>(unit.position.x),
-                    std::bit_cast<uint32_t>(unit.position.y),
-                    std::bit_cast<uint32_t>(unit.position.z)
-                };
+                projected.position = fixed_words(unit.position);
                 projected.unit_flags = unit.flags;
                 return &projected;
             }

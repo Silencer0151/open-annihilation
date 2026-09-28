@@ -145,10 +145,11 @@ bool Runtime::issue_radar_orders(float x, float y) {
                         auto dest = world.value_or(oa::sim::ground_orders::Point{});
                         auto& slot = slots[enemy];
                         if (slot.unit) {
+                            const std::array<uint32_t, 3> position = slot.unit->position;
                             dest = {
-                                std::bit_cast<int32_t>(slot.unit->position[0]),
-                                std::bit_cast<int32_t>(slot.unit->position[1]),
-                                std::bit_cast<int32_t>(slot.unit->position[2])
+                                std::bit_cast<int32_t>(position[0]),
+                                std::bit_cast<int32_t>(position[1]),
+                                std::bit_cast<int32_t>(position[2])
                             };
                         }
                         (void)match_->issue_attack_special(source, dest, queueing(), enemy);

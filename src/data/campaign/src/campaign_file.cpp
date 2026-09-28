@@ -607,8 +607,11 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
 
     file->mapping = oa::formats::tdf::get_int(header, "mapping", 0);
     file->line_of_sight = oa::formats::tdf::get_int(header, "lineofsight", 0);
-    if (env->game != nullptr)
-        campaign_session_record(file, env->game->session_record);
+    if (env->game != nullptr) {
+        int32_t record[4]{};
+        campaign_session_record(file, record);
+        std::memcpy(env->game->session_record, record, sizeof record);
+    }
     cursor_string(&ota, "memory", file->memory, kCampaignShortTextBytes, "");
     cursor_string(&ota, "numplayers", file->num_players, kCampaignShortTextBytes, "");
     cursor_string(&ota, "Planet", file->planet, kCampaignShortTextBytes, "");

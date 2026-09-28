@@ -40,8 +40,9 @@ GroundRuntime::GroundRuntime(
 
 void GroundRuntime::project_slot() {
     const auto& u = *slot_.unit;
+    const std::array<uint32_t, 3> position = u.position;
     for (std::size_t i = 0; i < 3; ++i)
-        geometry.position[i] = std::bit_cast<Fixed>(u.position[i]);
+        geometry.position[i] = std::bit_cast<Fixed>(position[i]);
     geometry.cell = {slot_.record.cell_x, slot_.record.cell_z};
     geometry.footprint = {slot_.record.footprint_x, slot_.record.footprint_z};
     geometry.heading = slot_.record.heading;

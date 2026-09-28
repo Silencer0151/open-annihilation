@@ -1803,6 +1803,9 @@ void Runtime::activate_pause_gadget(std::string_view name) {
     case IngamePanel::game_settings:
         action = ui::ingame_on_game_settings_click(panel, context);
         break;
+    case IngamePanel::preferences:
+        // The preferences took their clicks above and returned.
+        break;
     }
     switch (action) {
     case ui::IngameAction::none:

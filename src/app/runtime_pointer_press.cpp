@@ -254,12 +254,14 @@ std::string_view Runtime::issue_selection_orders(
     std::optional<oa::sim::ground_orders::Point> target_point;
     if (bound != 0) {
         const auto& slot = match_->world().slots[bound];
-        if (slot.unit != nullptr)
+        if (slot.unit != nullptr) {
+            const std::array<uint32_t, 3> position = slot.unit->position;
             target_point = oa::sim::ground_orders::Point{
-                std::bit_cast<int32_t>(slot.unit->position[0]),
-                std::bit_cast<int32_t>(slot.unit->position[1]),
-                std::bit_cast<int32_t>(slot.unit->position[2])
+                std::bit_cast<int32_t>(position[0]),
+                std::bit_cast<int32_t>(position[1]),
+                std::bit_cast<int32_t>(position[2])
             };
+        }
     }
     std::string_view issued;
     for (uint32_t index = 0; index < count; ++index) {

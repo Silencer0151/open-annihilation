@@ -211,7 +211,7 @@ void air_strike() {
     auto& bomber = f.spawn(0, fighter_type, 100, 100);
     auto& tank = f.spawn(1, tank_type, 300, 100);
     auto& order = f.attack(bomber, tank, sim::match_runtime::air_strike_kind);
-    const auto tick = f.match->simulation().tick;
+    const uint32_t tick = f.match->simulation().tick;
 
     CHECK(f.dispatch(bomber, order, 0) == 1);
     step(order, 1);
@@ -274,7 +274,7 @@ void air_to_air() {
     auto& fighter = f.spawn(0, fighter_type, 100, 100);
     auto& enemy = f.spawn(1, fighter_type, 400, 400);
     auto& order = f.attack(fighter, enemy, sim::match_runtime::air_to_air_kind);
-    const auto tick = f.match->simulation().tick;
+    const uint32_t tick = f.match->simulation().tick;
     CHECK(f.dispatch(fighter, order, 0) == 1);
     // The fighter starts landed, so the take-off climb's goal events (0xe0)
     // join the one-tick timer.
@@ -334,7 +334,7 @@ void seek_attack() {
     CHECK(f.dispatch(fighter, order, 0) == 1);
     step(order, 1);
     order.wait_events = 0;
-    const auto tick = f.match->simulation().tick;
+    const uint32_t tick = f.match->simulation().tick;
     CHECK(f.dispatch(fighter, order, 0) == 2);
     CHECK((order.wait_events & 0xe1) == 0xe1);
     CHECK(order.wake_tick >= tick + 0x1e && order.wake_tick < tick + 0x3c);

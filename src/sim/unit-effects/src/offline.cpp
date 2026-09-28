@@ -201,8 +201,9 @@ void OfflineEffects::refresh_transform(sim::unit_spawn::Slot& slot) {
     auto* i = match_->instance(slot.unit_index);
     if (!i)
         throw std::logic_error("effect unit has no model instance");
+    const oa_angle heading = slot.record.heading;
     i->model().rebuild_transforms(
-        {slot.record.bank, std::bit_cast<int16_t>(slot.record.heading), slot.record.pitch}
+        {slot.record.bank, std::bit_cast<int16_t>(heading), slot.record.pitch}
     );
 }
 

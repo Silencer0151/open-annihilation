@@ -449,9 +449,9 @@ uint32_t TickHost::GroundMissions::park() {
     if (def().min_water_depth >= 0)
         spread += 3;
     const auto cell_x =
-        static_cast<int16_t>(std::bit_cast<uint32_t>(s.record.position.x) >> ground::cell_shift);
+        static_cast<int16_t>(static_cast<uint32_t>(s.record.position.x) >> ground::cell_shift);
     const auto cell_z =
-        static_cast<int16_t>(std::bit_cast<uint32_t>(s.record.position.z) >> ground::cell_shift);
+        static_cast<int16_t>(static_cast<uint32_t>(s.record.position.z) >> ground::cell_shift);
     outline_goal(
         {static_cast<int16_t>(cell_x - spread * 4), static_cast<int16_t>(cell_z - spread * 3)},
         {static_cast<int16_t>(spread * 8), static_cast<int16_t>(spread * 6)}

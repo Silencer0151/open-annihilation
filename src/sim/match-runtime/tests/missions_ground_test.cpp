@@ -229,8 +229,8 @@ int main() {
         allies[p] = 1;
         match.configure_player_alliances(p, allies);
     }
-    auto& tick = match.state().game.tick;
-    tick = 100;
+    auto& game = match.state().game;
+    game.tick = 100;
 
     auto* builder = match.create({0, 1, {(120u << 16), 0, (120u << 16)}, true, 1, 0});
     CHECK(builder && builder->record.movement && match.ground_runtime(builder->unit_index));
@@ -250,7 +250,10 @@ int main() {
         services.speech.clear();
         CHECK(step(match, *builder, order) == 2);
         CHECK(services.speech == std::vector<uint32_t>{0x0b});
-        CHECK(order.wake_tick == tick + 2 && builder->record.decloak_until_tick == tick + 300);
+        CHECK(
+            order.wake_tick == game.tick + 2 &&
+            builder->record.decloak_until_tick == game.tick + 300
+        );
         uint32_t steps = 0;
         uint32_t result = 2;
         while (result == 2 && steps < 100) {
@@ -374,7 +377,7 @@ int main() {
         auto& economy = builder->record.economy;
         economy.energy.requested = economy.energy.accepted = economy.energy.gate = 0.0F;
         economy.metal.requested = economy.metal.accepted = economy.metal.gate = 0.0F;
-        CHECK(step(match, *builder, order) == 2 && order.wake_tick == tick + 5);
+        CHECK(step(match, *builder, order) == 2 && order.wake_tick == game.tick + 5);
         CHECK(economy.energy.requested == 50.0F && economy.metal.requested == 25.0F);
         CHECK(step(match, *builder, order) == 2);
         CHECK(step(match, *builder, order) == 1);
@@ -391,7 +394,7 @@ int main() {
     {
         auto& order = match.insert_ground_order(builder_id, park_kind);
         CHECK(step(match, *builder, order) == 1 && order.wait_events == 0xe0);
-        CHECK(step(match, *builder, order) == 0 && order.wake_tick == tick + 0x1e);
+        CHECK(step(match, *builder, order) == 0 && order.wake_tick == game.tick + 0x1e);
         order.phase = 1;
         CHECK(step(match, *builder, order, sim::ground_orders::arrived_event) == 5);
         match.stop_orders(builder_id);
@@ -403,7 +406,7 @@ int main() {
         auto& order = match.insert_ground_order(builder_id, guard_no_move_kind);
         CHECK(step(match, *builder, order, 8) == 2 && order.phase == 3);
         CHECK(step(match, *builder, order) == 0);
-        CHECK(step(match, *builder, order) == 1 && order.wake_tick == tick + 0x1e);
+        CHECK(step(match, *builder, order) == 1 && order.wake_tick == game.tick + 0x1e);
         CHECK(step(match, *builder, order) == 2 && order.phase == 1);
         match.stop_orders(builder_id);
     }
@@ -412,7 +415,7 @@ int main() {
     {
         auto& order = match.insert_ground_order(builder_id, kamikaze_kind, cell_point(12, 7));
         CHECK(step(match, *builder, order) == 1);
-        CHECK(order.wait_events == (0xe0u | 1u) && order.wake_tick == tick + 0x3c);
+        CHECK(order.wait_events == (0xe0u | 1u) && order.wake_tick == game.tick + 0x3c);
         services.speech.clear();
         CHECK(step(match, *builder, order, sim::ground_orders::arrived_event) == 5);
         CHECK(services.speech == std::vector<uint32_t>{6});
@@ -433,7 +436,7 @@ int main() {
         CHECK(mine);
         auto& armed = match.insert_ground_order(mine->unit_index, standby_mine_kind);
         CHECK(step(match, *mine, armed) == 1);
-        CHECK(armed.wait_events == 0x10001u && armed.wake_tick == tick + 1);
+        CHECK(armed.wait_events == 0x10001u && armed.wake_tick == game.tick + 1);
         match.stop_orders(mine->unit_index);
     }
 
@@ -441,7 +444,7 @@ int main() {
     {
         auto& order =
             match.insert_ground_order(builder_id, sim::match_runtime::wait_kind, std::nullopt, 40);
-        CHECK(step(match, *builder, order) == 1 && order.wake_tick == tick + 40);
+        CHECK(step(match, *builder, order) == 1 && order.wake_tick == game.tick + 40);
         CHECK(step(match, *builder, order) == 5);
         match.stop_orders(builder_id);
     }
@@ -565,7 +568,7 @@ int main() {
             for (uint32_t step = 0; step < ticks; ++step) {
                 if (until_trees_gone && trees_left() == 0)
                     break;
-                match.simulation().tick = tick + 1;
+                match.simulation().tick = game.tick + 1;
                 match.tick();
                 const auto* head = match.orders(id).primary;
                 CHECK(head);

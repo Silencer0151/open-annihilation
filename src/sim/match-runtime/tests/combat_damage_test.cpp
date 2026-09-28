@@ -82,7 +82,7 @@ void paralysis_stops_and_resumes() {
     CHECK(victim.unit->health == 999);
 
     f.run(1);
-    const auto start = f.match->simulation().tick;
+    const uint32_t start = f.match->simulation().tick;
     auto& gun = victim.record.weapons[0];
     CHECK(victim.record.state_flags & sim::unit_health::paralyzed_state_flag);
     CHECK(gun.target_a == 0 && !(gun.flags & OA_UNIT_WEAPON_RETALIATE));
@@ -112,7 +112,7 @@ void paralysis_is_clamped() {
     f.run(1);
     f.match->apply_damage_event(victim, &attacker, 3000, paralyzer_hit, 0);
     f.run(1);
-    const auto start = f.match->simulation().tick;
+    const uint32_t start = f.match->simulation().tick;
     CHECK(head_is(victim, paralyze_order));
     CHECK(victim.unit->primary->wake_tick == start + sim::unit_health::paralysis_wait_limit);
     f.run(sim::unit_health::paralysis_wait_limit + 1);
@@ -138,7 +138,7 @@ void paralysis_keeps_the_route() {
     f.run(1);
     (void)f.match->issue_ground_move(mover.unit_index, {140 << 16, 0, 64 << 16}, false);
     f.run(30);
-    const auto paralyzed_at = mover.unit->position[0];
+    const uint32_t paralyzed_at = mover.unit->position[0];
     CHECK(paralyzed_at > (40u << 16) && paralyzed_at < (120u << 16));
     f.match->apply_damage_event(mover, nullptr, 90, paralyzer_hit, 0);
     CHECK(head_is(mover, paralyze_order));
@@ -149,7 +149,7 @@ void paralysis_keeps_the_route() {
     f.run(80);
     CHECK(head_is(mover, paralyze_order));
     CHECK(mover.record.state_flags & sim::unit_health::paralyzed_state_flag);
-    const auto stopped_at = mover.unit->position[0];
+    const uint32_t stopped_at = mover.unit->position[0];
     const auto x = static_cast<int32_t>(stopped_at >> 16);
     CHECK(x > 120 && x < 160);
     f.run(5);
@@ -161,7 +161,7 @@ void paralysis_keeps_the_route() {
     // An idle unit has no route and stays where it was hit.
     auto& idle = f.spawn(0, 64, 160);
     f.run(1);
-    const auto rest = idle.unit->position;
+    const std::array<uint32_t, 3> rest = idle.unit->position;
     f.match->apply_damage_event(idle, nullptr, 40, paralyzer_hit, 0);
     f.run(30);
     CHECK(head_is(idle, paralyze_order) && idle.unit->position == rest);

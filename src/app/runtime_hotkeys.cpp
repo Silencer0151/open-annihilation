@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -392,8 +393,10 @@ void Runtime::box_select_units(int x0, int y0, int x1, int y1, bool add) {
     };
     const auto start = map_point(x0, y0);
     const auto end = map_point(x1, y1);
-    std::copy(start.begin(), start.end(), world.game.drag_start);
-    std::copy(end.begin(), end.end(), world.game.drag_end);
+    static_assert(sizeof start == sizeof world.game.drag_start);
+    static_assert(sizeof end == sizeof world.game.drag_end);
+    std::memcpy(world.game.drag_start, start.data(), sizeof world.game.drag_start);
+    std::memcpy(world.game.drag_end, end.data(), sizeof world.game.drag_end);
     if (!add)
         selected_match_unit_ = 0;
     const bool any =

@@ -316,7 +316,7 @@ void Runtime::draw_match_projectiles(
     if (!match_)
         return;
     ensure_ui_colors();
-    const auto now = match_->simulation().tick;
+    const uint32_t now = match_->simulation().tick;
     uint32_t jitter_seed = now * 0x343fdU + 0x269ec3U;
     const auto jitter = [&jitter_seed]() {
         jitter_seed = jitter_seed * 0x343fdU + 0x269ec3U;

@@ -156,10 +156,14 @@ model_render::ModelRef carried_model(void* user, const oa::Unit& unit) {
 }
 
 void include(oa::Rect32& region, int32_t x, int32_t y, int32_t width, int32_t height) {
-    region.x1 = std::min(region.x1, x);
-    region.y1 = std::min(region.y1, y);
-    region.x2 = std::max(region.x2, x + width);
-    region.y2 = std::max(region.y2, y + height);
+    const int32_t left = region.x1;
+    const int32_t top = region.y1;
+    const int32_t right = region.x2;
+    const int32_t bottom = region.y2;
+    region.x1 = std::min(left, x);
+    region.y1 = std::min(top, y);
+    region.x2 = std::max(right, x + width);
+    region.y2 = std::max(bottom, y + height);
 }
 
 // Bridge region a unit draw can touch: its model, cached image and ground

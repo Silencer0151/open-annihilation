@@ -322,13 +322,16 @@ SightStamp unit_sight_stamp(
 ) noexcept {
     SightStamp stamp{};
     stamp.owner = owner.index;
-    stamp.center_x = std::bit_cast<int16_t>(unit.sight_center_x);
-    stamp.center_z = std::bit_cast<int16_t>(unit.sight_center_z);
+    const uint16_t sight_center_x = unit.sight_center_x;
+    const uint16_t sight_center_z = unit.sight_center_z;
+    stamp.center_x = std::bit_cast<int16_t>(sight_center_x);
+    stamp.center_z = std::bit_cast<int16_t>(sight_center_z);
     stamp.sight_distance = def.sight_distance;
     stamp.model_height = static_cast<uint8_t>(static_cast<uint32_t>(def.model_height) >> 16U);
     stamp.band = unit.sight_band;
     stamp.position_x = unit.position.x;
-    stamp.position_y = std::max(unit.position.y, sight_floor(minimum_height_cell));
+    const oa_fixed height = unit.position.y;
+    stamp.position_y = std::max(height, sight_floor(minimum_height_cell));
     stamp.position_z = unit.position.z;
     return stamp;
 }
@@ -546,7 +549,8 @@ void remember_sight(
     stamp.sight_distance = sight_distance;
     stamp.model_height = model_height;
     stamp.position_x = position.x;
-    stamp.position_y = std::max(position.y, sight_floor(context.minimum_height_cell));
+    const oa_fixed height = position.y;
+    stamp.position_y = std::max(height, sight_floor(context.minimum_height_cell));
     stamp.position_z = position.z;
     slot.expiry = tick + static_cast<uint32_t>(duration);
     refresh_area_coverage(stamp, context);
