@@ -3,8 +3,8 @@
 These are the rules every change to the engine follows, whoever writes it.
 Each rule says what it asks, why, which directories it covers and what checks
 it, with a good and a bad example. [CONTRIBUTING.md](../CONTRIBUTING.md)
-covers the process around a change (the licence agreement, pull requests and
-review), and [testing.md](testing.md) covers writing and running tests in
+covers the process around a change (the licence of contributions, pull
+requests and review), and [testing.md](testing.md) covers writing and running tests in
 more detail.
 
 Some rules protect compatibility with Total Annihilation 3.1c: its save

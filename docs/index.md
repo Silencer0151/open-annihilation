@@ -9,8 +9,7 @@ Every document in the repository, by what you want to do.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): the developer guide: what the engine
   does today, what it needs, how to build, test and run it from source, the
   layout of the tree, the checks and what to do when one fails, and how a
-  change gets in (the contributor licence agreement, pull requests and
-  review).
+  change gets in (the licence of contributions, pull requests and review).
 - [conventions.md](conventions.md): the rules every change follows, each with
   its reason, examples and the directories it covers.
 - [testing.md](testing.md): running the tests and checks, and writing a new
@@ -22,7 +21,6 @@ Every document in the repository, by what you want to do.
 - [LICENSE](../LICENSE): the GNU General Public License version 3.
 - [ATTRIBUTIONS.md](../ATTRIBUTIONS.md) and [licenses/](../licenses): the
   third-party components and their licences.
-- [CLA.md](../CLA.md): the contributor licence agreement.
 - [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md): how everyone taking part
   behaves.
 - [SECURITY.md](../SECURITY.md): reporting a security problem privately.

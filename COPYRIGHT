@@ -3,12 +3,12 @@ Copyright 2026 Steve Gray
 
 "The Open Annihilation Authors", named in the copyright line of the SPDX
 header at the top of each file in this repository and in REUSE.toml, means
-the copyright holder stated here.
+the copyright holders stated here.
 
-The copyright in this repository's files is held by Steve Gray, the
-project's maintainer. Contributors assign the copyright in their
-contributions to the maintainer under the Contributor Licence Agreement
-(CLA.md); CONTRIBUTORS.md lists who has contributed.
+The copyright in this repository's files is held by their authors: Steve
+Gray, the project's maintainer, and each contributor in their own
+contributions, which they release under the same licence as the rest of the
+repository. CONTRIBUTORS.md lists who has contributed.
 
 The files are distributed under the GNU General Public License, version 3
 only (LICENSE), except where a file's own header or an annotation in

@@ -57,7 +57,6 @@ These documents set out how the project is run and how changes are made:
 | Testing guide | Running the tests and checks, and writing a new test | [View Document](docs/testing.md) |
 | Documentation index | Every document in the repository, the module guides and file format notes among them | [View Document](docs/index.md) |
 | Code of Conduct | How everyone taking part is expected to behave, and how to report a problem | [View Document](CODE_OF_CONDUCT.md) |
-| Contributor Licence Agreement | The agreement every contributor accepts before a change is merged | [View Document](CLA.md) |
 | Security policy | How to report a security problem privately | [View Document](SECURITY.md) |
 | Licence | The GNU General Public License version 3, which the code is released under | [View Document](LICENSE) |
 | Copyright | Who holds the copyright in the repository's files, which each file's header points to | [View Document](COPYRIGHT) |
@@ -200,28 +199,10 @@ Credits are in [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ## Licence
 
-Open Annihilation is dual licensed. The code in this repository is free
-software, released under the GNU General Public License version 3: see
-[LICENSE](LICENSE). A separate edition of Open Annihilation is also
-maintained under closed terms. Contributions are accepted under a
-[Contributor Licence Agreement](CLA.md), so that they can be included in both.
+Open Annihilation is free software, released under the GNU General Public
+License version 3 only: see [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT).
+Contributions are accepted under the same licence, and their authors keep the
+copyright in them.
 
 The releases include third-party libraries under their own licences. See
 [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
-
-### Why Dual Licensing
-
-Open Annihilation is published here under the GNU GPL v3, so that anyone can
-play it, study it and improve it.
-
-A separate edition of Open Annihilation, which can play online with the
-original game, is maintained alongside this one. That edition is not open
-source.
-Publishing code that is network-compatible with the original game would make
-it easy to build cheats that affect real players in live online matches, and
-keeping it closed protects that community.
-
-So that improvements made here can be included in both editions, contributions
-are accepted under a [Contributor Licence Agreement](CLA.md) that assigns
-copyright in each contribution to the maintainer. Everything published in this
-repository remains available under the GNU GPL v3.

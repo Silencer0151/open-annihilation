@@ -68,8 +68,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # The first Python whose standard library reads TOML (tomllib).
 MIN_PYTHON = (3, 11)
 # The copyright line every header gives: the project's authors, and the file
-# at the tree's root that names the holder (the maintainer, to whom
-# contributions are assigned under CLA.md) and the licence. The licence
+# at the tree's root that names the holders and the licence. The licence
 # expression is the engine's (README.md, LICENSE).
 COPYRIGHT_HOLDER = "The Open Annihilation Authors"
 COPYRIGHT_FILE = "COPYRIGHT"

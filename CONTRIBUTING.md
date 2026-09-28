@@ -21,7 +21,7 @@ the [Code of Conduct](CODE_OF_CONDUCT.md).
   - [Checks](#checks)
   - [When a source check fails](#when-a-source-check-fails)
 - **Getting a change in**
-  - [The contributor licence agreement](#the-contributor-licence-agreement)
+  - [Licence of contributions](#licence-of-contributions)
   - [Pull requests and review](#pull-requests-and-review)
 - [Where to read next](#where-to-read-next)
 - [Questions](#questions)
@@ -267,35 +267,13 @@ The `doc-links` check fails when a relative Markdown link, an anchor or a
 repository path written in backticks does not resolve; fix the link or the
 path.
 
-## The contributor licence agreement
+## Licence of contributions
 
 Open Annihilation is released under the GNU General Public License version 3
-only (see [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT)). Before a pull
-request can be merged, every author of its commits must have accepted the
-[Contributor Licence Agreement](CLA.md). Read it in full; it assigns
-copyright in your contributions to the maintainer and grants you a licence
-back. The README's
-[Why Dual Licensing](README.md#why-dual-licensing) section explains why.
-
-The CLA check on each pull request records acceptance:
-
-1. When you open your first pull request, the check comments on it with a
-   link to [CLA.md](CLA.md) and marks the pull request as not ready to merge.
-2. If you agree to it, reply on the pull request with this sentence, exactly
-   as written:
-
-   ```text
-   I have read the CLA Document and I hereby sign the CLA
-   ```
-
-3. The check records your GitHub account in the project's list of
-   signatures and passes. You sign once; later pull requests find the
-   signature.
-4. If the check does not update, comment `recheck` on the pull request.
-
-The check matches commits to GitHub accounts by their author email, so
-commit with an email address that is linked to your GitHub account. Section
-11 of the agreement sets out how it is accepted.
+only (see [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT)). By opening a pull
+request you agree that your contribution is released under the same licence;
+you keep the copyright in it. Commit with an email address that is linked to
+your GitHub account, so that your commits are credited to you.
 
 ## Pull requests and review
 
@@ -313,8 +291,7 @@ commit with an email address that is linked to your GitHub account. Section
    starts `open-annihilation` on each, builds the FFmpeg intro player on
    macOS and Linux, and runs the tests that need no game data. The tests
    that read game data and the native checks, which run the game headless
-   over an installation, run only on your machine. The CLA check runs on the
-   pull request as well.
+   over an installation, run only on your machine.
 6. A maintainer reviews the change. Answer comments by pushing further
    commits to the same branch; there is no need to rewrite its history.
 7. Pull requests are merged by squashing, so the pull request's title and
