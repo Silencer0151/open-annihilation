@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -367,20 +368,50 @@ void Runtime::check_team_panels() {
         );
         const auto menu_ticks = ticks_in_one_second();
         require(match_clock_steps() && menu_ticks > 0, "the options menu held a shared match");
-        // The preferences it opens leave the match screen, and the match
-        // goes on beneath them. Escape leaves them; the screen resources they
-        // loaded are put back for the checks that follow, which return to the
-        // skirmish menu without loading it.
-        const auto frontend_resources = resources_;
+        // The preferences it opens stay on the match screen, PREFS.GUI in
+        // the side column, and the match goes on beneath them and beneath a
+        // tab's sub-panel. Escape takes them back to the menu.
         click("PREFS");
-        require(screen_ == Screen::options, "PREFS did not open the preferences");
+        require(
+            screen_ == Screen::match && match_paused_ && match_hud_panel_ == "guis/PREFS.GUI",
+            "PREFS did not open PREFS.GUI over the match"
+        );
         const auto preference_ticks = ticks_in_one_second();
         require(
             match_running() && match_clock_steps() && preference_ticks > 0,
             "the preferences held a shared match"
         );
+        click("SOUND");
+        require(shows("FXVOL"), "SOUND did not open SOUNDSRT.GUI");
+        require(ticks_in_one_second() > 0, "the preferences' SOUND held a shared match");
+        // A speed another machine sets while they are open stays: a click
+        // that sets no speed writes none.
+        const auto opened_requested = game.requested_speed;
+        const auto opened_current = game.current_speed;
+        const auto opened_rates =
+            std::pair{match_timing_.requested_rate, match_timing_.actual_rate};
+        const auto opened_preferences = preferences_;
+        const auto other_speed = static_cast<uint16_t>(opened_requested == 15 ? 14 : 15);
+        game.requested_speed = other_speed;
+        game.current_speed = other_speed;
+        click("SOUND");
+        require(
+            game.requested_speed == other_speed && game.current_speed == other_speed &&
+                preferences_.current_game_speed == other_speed,
+            "a click in the preferences put back the speed they opened with"
+        );
         key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
-        resources_ = frontend_resources;
+        require(
+            game.requested_speed == other_speed,
+            "leaving the preferences put back the speed they opened with"
+        );
+        game.requested_speed = opened_requested;
+        game.current_speed = opened_current;
+        match_timing_.requested_rate = opened_rates.first;
+        match_timing_.actual_rate = opened_rates.second;
+        preferences_.game_speed = opened_preferences.game_speed;
+        preferences_.current_game_speed = opened_preferences.current_game_speed;
+        flush_preferences();
         require(
             screen_ == Screen::match && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
             "leaving the preferences did not return to ARMOPT.GUI"

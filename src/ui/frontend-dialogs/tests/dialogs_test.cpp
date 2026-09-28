@@ -72,24 +72,11 @@ void write_string(void*, const char*, const char*, const char*) {
 void set_status(void*, const char*) {
 }
 
-constexpr oa::app::ScreenServices kServices{
-    request_screen,
-    play_sound,
-    read_number,
-    write_number,
-    read_string,
-    write_string,
-    set_status,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr
-};
+constexpr oa::app::ScreenServices kServices{request_screen, play_sound,   read_number, write_number,
+                                            read_string,    write_string, set_status,  nullptr,
+                                            nullptr,        nullptr,      nullptr,     nullptr,
+                                            nullptr,        nullptr,      nullptr,     nullptr,
+                                            nullptr,        nullptr,      nullptr,     nullptr};
 
 void dialog_sound(void* host, const char* name) {
     static_cast<Host*>(host)->sound = name;

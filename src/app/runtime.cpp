@@ -286,7 +286,7 @@ int Runtime::run() {
     if (extension_.shutdown != nullptr)
         extension_.shutdown(extension_.context, *this);
     flush_preferences();
-    return 0;
+    return exit_status_;
 }
 
 void Runtime::take_video_capture(std::unique_ptr<VideoCapture> capture) {
@@ -345,6 +345,12 @@ void Runtime::idle_tick() {
         mark_profile(OA_PROFILE_SYNC);
     if (extension_.frame != nullptr)
         extension_.frame(extension_.context, *this, FrameStage::after_pump);
+    // The extension may have asked to end the run (ScreenServices::quit):
+    // it ends here, leaving the match first, and nothing more of the frame
+    // runs.
+    finish_quit_request();
+    if (exit_requested_)
+        return;
     // The frame's pointer pass picks the unit under the still pointer too,
     // before the ticks, so a unit that moves under it becomes the cursor unit.
     if (screen_ == Screen::match && match_ && !match_paused_ && !match_finished_)
@@ -373,15 +379,7 @@ uint32_t Runtime::clock_milliseconds() const {
 }
 
 bool Runtime::match_running() const {
-    if (!match_)
-        return false;
-    if (screen_ == Screen::match)
-        return true;
-    const bool beneath_preferences =
-        options_parent_ == Screen::match &&
-        (screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
-         screen_ == Screen::speeds || screen_ == Screen::music);
-    return beneath_preferences && (current_extension_state() & extension_state::shared_match) != 0;
+    return match_ && screen_ == Screen::match;
 }
 
 bool Runtime::match_clock_steps() const {

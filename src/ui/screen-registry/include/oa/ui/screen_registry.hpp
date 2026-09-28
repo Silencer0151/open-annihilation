@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Registration tables for frontend screens, overlays and dispatcher steps.
+// Registration tables for frontend screens, overlays, dispatcher steps and
+// dispatcher queries.
 //
 // Packages describe their screens with plain descriptor structs and register
 // them from one function listed in screens.inc, or from the extension's
@@ -26,7 +27,8 @@ class Match;
 
 namespace oa::ui::frontend_state {
 enum class Step : uint32_t;
-}
+enum class Query : uint32_t;
+} // namespace oa::ui::frontend_state
 
 namespace oa::app {
 
@@ -39,6 +41,7 @@ constexpr ScreenId kScreenAny = 0xffff;
 constexpr uint32_t kMaxScreens = 64;
 constexpr uint32_t kMaxOverlays = 32;
 constexpr uint32_t kMaxSteps = 64;
+constexpr uint32_t kMaxQueries = 32;
 
 enum class ScreenInputKind : uint8_t {
     key_down,
@@ -99,8 +102,32 @@ struct ScreenServices {
     // MAINMENU.GUI's stands on the main menu; the main menu then takes the
     // layout made for that overlay instead of TA's own.
     void (*set_main_menu_overlay)(void* host, int present);
+    // Ends the run after the current event or frame, as the exit
+    // confirmation's first choice does: a running match is left first, the
+    // main loop stops, the extension's shutdown runs, the preferences are
+    // written and oa-game exits with `exit_code`. `reason`, when neither null
+    // nor empty, is shown first in a message box over the window, or written
+    // to standard error without one (read at once).
+    void (*quit)(void* host, const char* reason, int exit_code){};
+    // Stops every sound that plays: the interface and unit sounds, the one
+    // stream and the sound on the alternate route (the menu music). The CD
+    // and track music go on.
+    void (*stop_sounds)(void* host){};
+    // Plays the sound registered under `name`, compared case-insensitively,
+    // on the alternate route, which streams and repeats it as the menu music
+    // plays, in place of whatever that route plays; nothing when sound is off
+    // or the name is not registered.
+    void (*play_sound_alternate)(void* host, const char* name){};
+    // Runs one pass of the frontend dispatcher, as a pointer press does, once
+    // the current event or frame has been handled; requests before then run
+    // one pass, and none runs while a match is on screen.
+    void (*run_frontend)(void* host){};
 };
 
+// What screens, overlays and dispatcher steps are called with. host and
+// services stay the same while the runtime lives; a package may keep them
+// and use the services outside its callbacks, on the thread that runs
+// main().
 struct ScreenContext {
     void* host;
     const ScreenServices* services;
@@ -157,6 +184,15 @@ struct StepDesc {
     void* state;
 };
 
+// Answers a dispatcher query; its result is the query's.
+using ScreenQueryFn = uint32_t (*)(ScreenContext* ctx, void* state);
+
+struct QueryDesc {
+    oa::ui::frontend_state::Query query{};
+    ScreenQueryFn run{};
+    void* state{};
+};
+
 struct ScreenRegistry {
     ScreenDesc screens[kMaxScreens];
     uint32_t screen_count;
@@ -164,6 +200,8 @@ struct ScreenRegistry {
     uint32_t overlay_count;
     StepDesc steps[kMaxSteps];
     uint32_t step_count;
+    QueryDesc queries[kMaxQueries]{};
+    uint32_t query_count{};
     const char* rejected; // name of the first rejected registration
 };
 
@@ -201,6 +239,21 @@ bool step_register(
     ScreenRegistry* registry, oa::ui::frontend_state::Step step, ScreenFn run, void* state
 );
 
+/// Binds a handler to a dispatcher query.
+///
+/// Returns false and records "dispatcher query" in `rejected` for a null
+/// handler, a query already bound or a full table. A query no handler takes
+/// is answered with 0.
+///
+/// @param[in,out] registry registry to add to
+/// @param query dispatcher query
+/// @param run handler
+/// @param state handler state passed back to `run`
+/// @return true when registered
+bool query_register(
+    ScreenRegistry* registry, oa::ui::frontend_state::Query query, ScreenQueryFn run, void* state
+);
+
 /// Finds a registered screen.
 ///
 /// @param registry registry to search
@@ -215,6 +268,14 @@ bool step_register(
 /// @return the binding, or null when the step has none
 [[nodiscard]] const StepDesc*
 step_find(const ScreenRegistry* registry, oa::ui::frontend_state::Step step);
+
+/// Finds the handler bound to a dispatcher query.
+///
+/// @param registry registry to search
+/// @param query dispatcher query
+/// @return the binding, or null when the query has none
+[[nodiscard]] const QueryDesc*
+query_find(const ScreenRegistry* registry, oa::ui::frontend_state::Query query);
 
 /// Asks the host to show a screen.
 ///

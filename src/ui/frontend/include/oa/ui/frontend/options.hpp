@@ -40,6 +40,7 @@ enum class ControlType : uint8_t {
     slider = 4,
     label = 5,
     hot_surface = 6,
+    filler = 11, // PANEL: the area an in-game sub-panel is merged into
     frame = 12,
 };
 
@@ -429,12 +430,37 @@ void options_capture_entry(OptionsContext& context) noexcept;
 /// Widens an in-game options panel and adds its PANEL filler record.
 ///
 /// With the realtime-panel flag the root grows by 150 pixels and, when the
-/// layout has no PANEL record, a filler from x 128 to the new right edge is
-/// appended.
+/// layout has no PANEL record, a filler from x 128 to the new right edge, as
+/// high as the root, is appended.
 ///
 /// @param[in,out] panel The loaded panel.
 /// @param context Supplies the realtime-panel flag.
 void options_extend_panel_for_game(Panel& panel, const OptionsContext& context) noexcept;
+
+/// Sets up a freshly loaded PREFS.GUI for the in-game sub-panel a tab opens.
+///
+/// Runs options_enter_tabs, then widens the panel for the sub-panel
+/// (options_extend_panel_for_game). The sub-panel's own set-up
+/// (options_enter_sound and the others) runs after the merge and widens
+/// nothing more.
+///
+/// @param[in,out] panel The loaded PREFS.GUI, positions relative to its root.
+/// @param[in,out] context Its realtime_panels and hold_game flags change.
+void options_prepare_realtime_panel(Panel& panel, OptionsContext& context) noexcept;
+
+/// Merges an in-game sub-panel (SOUNDSRT, MUSICRT, SPEEDSRT or VISUALRT.GUI)
+/// into the tab panel.
+///
+/// The sub-panel's records after its root are appended after the panel's
+/// last record, centred in the PANEL filler: each moves by PANEL's position
+/// plus half the difference between PANEL's size and the sub-panel root's,
+/// rounded toward zero, and PANEL's active byte clears. Without a PANEL record
+/// they move by the sub-panel root's own position. Records past
+/// kPanelControls are dropped.
+///
+/// @param[in,out] panel The prepared tab panel, positions relative to its root.
+/// @param sub The loaded sub-panel, positions relative to its root.
+void options_merge_realtime_panel(Panel& panel, const Panel& sub) noexcept;
 
 /// Handles a click on the options tab panel.
 ///

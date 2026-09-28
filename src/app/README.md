@@ -46,6 +46,9 @@ and `app-window-icon` that the embedded one decodes.
    `OverlayDesc`: `screen` filter (`kScreenAny` for all), `z` (drawn
    ascending, input descending), `create/event/tick/draw`; `overlay_register`.
 4. Dispatcher steps: `step_register(registry, frontend::Step::..., fn, state)`.
+   Dispatcher queries: `query_register(registry, frontend::Query::..., fn, state)`;
+   the handler's result is the query's, and a query no handler takes is
+   answered with 0.
 5. Append one line `OA_REGISTER(register_<pkg>_screens)` to `screens.inc`,
    or, for an extension's screens, call the function from its
    `register_screens` hook.
@@ -53,7 +56,15 @@ and `app-window-icon` that the embedded one decodes.
    (null outside a match), `input` (events only) and services. Navigate with
    `screen_request(ctx, id)` (applied after the current event/tick), play
    sounds with `screen_play_sound`, set the status line with `screen_status`,
-   and use `ctx->services->read_number/...` for preferences.
+   and use `ctx->services->read_number/...` for preferences. The services
+   also stop every sound (`stop_sounds`), play a sound on the alternate
+   route the menu music takes (`play_sound_alternate`), run one pass of the
+   frontend dispatcher once the current event or frame is handled
+   (`run_frontend`, never while a match is on screen) and end the run with
+   a reason and an exit status once the current event or frame is handled
+   (`quit`, which leaves a running match first). The context's `host` and `services` stay the same while the
+   runtime lives, so a package may keep them and use the services outside
+   its callbacks.
 7. Event hooks return nonzero to consume input; otherwise the built-in
    handler still runs.
 
@@ -131,8 +142,10 @@ that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
 
 `extension.hpp` is the table of hooks through which one library linked into
 `oa-game` extends it: long options and game switches, start-up and
-shutdown, screens, the frontend's entry, run modes, per-frame work, match
-events, the Pause key, the loading's progress, the team panels' host,
+shutdown, screens, the frontend's entry (its game name and nickname), run
+modes, per-frame work, match events, the Pause key, the loading's
+progress, the team panels' host (a tournament game withholds CONTROL),
+requests to close the window, the launcher's label in the match menus,
 console commands and checks. `main()` has the library's
 `oa_extensions_init` fill it before the command line is parsed; every hook
 left null keeps the engine's behaviour, the game without multiplayer, which
@@ -157,8 +170,17 @@ fills every hook with a recorder and adds one `Runtime` member;
 `extension-hooks-game` check that the game calls every hook but
 `disconnect_text`, which only a shared match reaches (of `match_event`'s
 events they see `finished`, `torn_down` and `results_released`); the
-navigation check's Pause key reaches `pause_changed`, and a skirmish's
-loading `load_progress` and `team_panel_host`. CI builds
+navigation check's Pause key reaches `pause_changed`, a skirmish's
+loading `load_progress`, `team_panel_host` and `service_label`, and
+`--check-match-dialogs`'s close requests `close_requested`. With
+`--record-quit STATUS` the recorder keeps the screen services an overlay
+is given, stops the sounds, plays BGM on the alternate route, asks for a
+frontend pass and ends the run through `quit`, which must exit with
+STATUS. The navigation check itself puts probes in place of the hooks to
+check what the engine does with their answers: a close request answered
+or declined, quit's status, one frontend pass for two requests, a query
+binding, the launch's nickname, the launcher's label kept as a match
+starts and quit leaving a match, with the preferences open over it, first. CI builds
 that configuration as a job of its own, but has no game installation:
 there `extension-hooks-game` skips, and only the option hooks and the hook
 list are checked. The rest of the hook coverage runs only where

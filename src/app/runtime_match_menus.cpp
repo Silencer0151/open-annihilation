@@ -4,6 +4,7 @@
 // In-match HUD layout, pause, outcome and options menus.
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
+#include "oa/sim/speed.hpp"
 #include "oa/ui/frontend/end_mission.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/options.hpp"
@@ -40,29 +41,38 @@ namespace {
 namespace ui = oa::ui::frontend;
 using StageMap = std::map<std::string, std::size_t>;
 
-enum class IngamePanel : uint8_t { options, exit_menu, exit_confirm, restart, game_settings };
+enum class IngamePanel : uint8_t {
+    options,
+    exit_menu,
+    exit_confirm,
+    restart,
+    game_settings,
+    preferences, // PREFS.GUI in the side column, its open tab's sub-panel beside it
+};
+
+// The preferences a match opens: PREFS.GUI, and each tab's sub-panel merged
+// into it.
+constexpr const char* kPreferencesLayout = "guis/PREFS.GUI";
 
 // Options/in-game menu state that outlives one click. The runtime
 // shows one frontend screen at a time, so a single session suffices.
 struct MatchMenuSession {
-    ui::Panel panel;
+    ui::Panel panel; // the preferences' records are relative to PREFS.GUI's root
     ui::OptionsContext options;
     ui::IngameContext ingame;
     ui::OptionsPanel kind = ui::OptionsPanel::tabs;
     IngamePanel ingame_panel = IngamePanel::options;
-    const void* options_bound = nullptr; // layout the panel mirrors
+    const void* options_bound = nullptr; // frontend layout the panel mirrors
     bool options_open = false;           // entry snapshot captured
     // The exit confirmation answers a request to close the window; CHOICE2
     // goes back to what was on screen before it.
     bool close_confirm = false;
     bool close_confirm_from_menu = false; // the in-game menu was open then
-    // Steps and draws the OPTIONS lightbar on the frame; set where the options
-    // context is bound.
-    void (*draw_lightbar)(void* runtime) = nullptr;
     // The lightbar steps once a frame: on the first draw after the options
     // open, then on the first draw after each frame's tick.
     bool lightbar_due = false;
     ui::OptionsLightbarStep lightbar_step{}; // the step the frame draws
+    std::vector<uint8_t> lightbar_cover;     // HUD pixels the frame's lightbar covers
 };
 
 /// Returns the options and in-game menu state, created on first use.
@@ -535,18 +545,63 @@ void load_overlay_draw(ScreenContext* ctx, void*) {
         );
 }
 
-/// Lets the OPTIONS lightbar take its next step on the frame's draw.
+/// Lets the OPTIONS lightbar take its next step on the match frame's draw.
 void options_lightbar_tick(ScreenContext*, void*) {
     match_menu_session().lightbar_due = true;
 }
 
-/// Steps and draws the OPTIONS lightbar over the preferences a match opened.
+/// Moves a panel model's records from frame positions to positions relative
+/// to its root, as the panel's own GUI file gives them.
 ///
-/// @param ctx screen context; its host is the runtime
-void options_lightbar_draw(ScreenContext* ctx, void*) {
-    const auto& session = match_menu_session();
-    if (session.draw_lightbar != nullptr)
-        session.draw_lightbar(ctx->host);
+/// @param[in,out] panel model copied from a match HUD layout
+void panel_relative_to_root(ui::Panel& panel) {
+    const auto& root = panel.controls[0];
+    for (int32_t index = 1; index <= panel.count; ++index) {
+        auto& control = panel.controls[static_cast<std::size_t>(index)];
+        control.x = static_cast<int16_t>(control.x - root.x);
+        control.y = static_cast<int16_t>(control.y - root.y);
+    }
+}
+
+/// Appends to a loaded layout the records a merge added to its panel model.
+///
+/// Each record past the layout's last is placed on the frame at the model's
+/// position from the root: the PANEL filler as a record of its own, the
+/// others copied from the sub-panel's layout in order.
+///
+/// @param[in,out] layout the loaded tab panel, root first
+/// @param panel the merged model, positions relative to the root
+/// @param sub the sub-panel's layout, root first
+void append_merged_records(
+    oa::ui::gui_layout::Layout& layout,
+    const ui::Panel& panel,
+    const oa::ui::gui_layout::Layout& sub
+) {
+    if (layout.gadgets.empty())
+        return;
+    const auto root_x = layout.gadgets.front().common.x;
+    const auto root_y = layout.gadgets.front().common.y;
+    std::size_t next = 1;
+    for (auto index = layout.gadgets.size();
+         index <= static_cast<std::size_t>(panel.count) && index < ui::kPanelControls;
+         ++index) {
+        const auto& control = panel.controls[index];
+        oa::ui::gui_layout::Gadget gadget;
+        if (control.type == ui::ControlType::filler) {
+            gadget.common.type = static_cast<oa::ui::gui_layout::GadgetType>(control.type);
+            gadget.common.name = std::string(ui::control_name(control));
+        } else if (next < sub.gadgets.size())
+            gadget = sub.gadgets[next++];
+        gadget.common.x = static_cast<int16_t>(root_x + control.x);
+        gadget.common.y = static_cast<int16_t>(root_y + control.y);
+        gadget.common.width = control.width;
+        gadget.common.height = control.height;
+        gadget.common.active = static_cast<int8_t>(control.active);
+        layout.gadgets.push_back(std::move(gadget));
+    }
+    layout.gadgets.front().common.width = panel.controls[0].width;
+    if (auto* fields = std::get_if<oa::ui::gui_layout::PanelFields>(&layout.gadgets.front().fields))
+        fields->loaded_total_gadgets = static_cast<int16_t>(layout.gadgets.size() - 1U);
 }
 
 /// Copies `rect` of an RGB image into a new picture of the rect's size;
@@ -599,9 +654,14 @@ copy_picture(const renderer::Surface& source, int32_t x, int32_t y, int32_t widt
 /// @param[in,out] frame RGB frame drawn on
 /// @param picture RGB picture read
 /// @param step the lightbar step's source and destination corners
+/// @param[out] cover one byte per frame pixel, set where the picture was drawn
 void blit_lightbar(
-    renderer::Surface& frame, const renderer::Surface& picture, const ui::OptionsLightbarStep& step
+    renderer::Surface& frame,
+    const renderer::Surface& picture,
+    const ui::OptionsLightbarStep& step,
+    std::vector<uint8_t>& cover
 ) {
+    cover.assign(static_cast<std::size_t>(frame.width) * frame.height, 0);
     const auto& to = step.destination;
     const auto& from = step.source;
     // Corners 0 and 3 share one upright edge, 1 and 2 the other.
@@ -631,12 +691,77 @@ void blit_lightbar(
             const auto read = (static_cast<std::size_t>(source_y) * picture.width +
                                static_cast<std::size_t>(source_x)) *
                               3U;
-            const auto write =
-                (static_cast<std::size_t>(y) * frame.width + static_cast<std::size_t>(x)) * 3U;
+            const auto at = static_cast<std::size_t>(y) * frame.width + static_cast<std::size_t>(x);
             std::copy_n(
                 picture.rgb.begin() + static_cast<std::ptrdiff_t>(read),
                 3,
-                frame.rgb.begin() + static_cast<std::ptrdiff_t>(write)
+                frame.rgb.begin() + static_cast<std::ptrdiff_t>(at * 3U)
+            );
+            cover[at] = 1;
+        }
+    }
+}
+
+/// Shows part of the HUD layer over the battlefield, at the side column's
+/// scale.
+///
+/// Each world-layer pixel is the 640x480 source point the chrome's scale
+/// takes it to; one that lies in `area`, and is set in `cover` when one is
+/// given, takes the HUD layer's pixel there. Source rows from the bottom
+/// bar's down belong to the bottom bar, which shows the HUD layer's own, so
+/// battlefield rows past the chrome's (in a window wider than 4:3) keep the
+/// battlefield.
+///
+/// @param[in,out] world the world layer, canvas pixels from the battlefield corner
+/// @param hud the HUD layer, in 640x480 source space
+/// @param layout the match canvas's layout
+/// @param area source rectangle shown
+/// @param cover one byte per HUD pixel, set where the HUD layer shows; null
+///        shows all of `area`
+void show_hud_over_battlefield(
+    renderer::Surface& world,
+    const renderer::Surface& hud,
+    const oa::ui::display_layout::MatchLayout& layout,
+    const oa::ui::display_layout::Rect& area,
+    const std::vector<uint8_t>* cover
+) {
+    if (area.width <= 0 || area.height <= 0 || hud.rgb.empty() || world.rgb.empty() ||
+        layout.scale <= 0.0)
+        return;
+    const auto unscaled = [&layout](int32_t value) {
+        return static_cast<int32_t>(std::lround(static_cast<double>(value) / layout.scale));
+    };
+    const auto scaled = [&layout](int32_t value) {
+        return static_cast<int32_t>(std::lround(static_cast<double>(value) * layout.scale));
+    };
+    const auto bottom = std::min(area.y + area.height, oa::ui::display_layout::kSourceBottomBarY);
+    // A pixel either side catches the rounding of the scale.
+    const auto first_x = std::max(layout.left, scaled(area.x) - 1);
+    const auto last_x = std::min(layout.width - 1, scaled(area.x + area.width) + 1);
+    const auto first_y = std::max(layout.top, scaled(area.y) - 1);
+    const auto last_y = std::min(layout.bottom_bar_y() - 1, scaled(bottom) + 1);
+    for (int32_t y = first_y; y <= last_y; ++y) {
+        const auto world_y = y - layout.top;
+        const auto source_y = unscaled(y);
+        if (world_y < 0 || world_y >= static_cast<int32_t>(world.height) || source_y < area.y ||
+            source_y >= bottom || source_y >= static_cast<int32_t>(hud.height))
+            continue;
+        for (int32_t x = first_x; x <= last_x; ++x) {
+            const auto world_x = x - layout.left;
+            const auto source_x = unscaled(x);
+            if (world_x < 0 || world_x >= static_cast<int32_t>(world.width) || source_x < area.x ||
+                source_x >= area.x + area.width || source_x >= static_cast<int32_t>(hud.width))
+                continue;
+            const auto from =
+                static_cast<std::size_t>(source_y) * hud.width + static_cast<std::size_t>(source_x);
+            if (cover != nullptr && (from >= cover->size() || (*cover)[from] == 0))
+                continue;
+            const auto to =
+                static_cast<std::size_t>(world_y) * world.width + static_cast<std::size_t>(world_x);
+            std::copy_n(
+                hud.rgb.begin() + static_cast<std::ptrdiff_t>(from * 3U),
+                3,
+                world.rgb.begin() + static_cast<std::ptrdiff_t>(to * 3U)
             );
         }
     }
@@ -671,10 +796,85 @@ void stamp_frame(
         }
 }
 
+/// Finds a GAF entry by its name, compared without regard to case.
+///
+/// @param archive archive searched
+/// @param name entry name
+/// @return the first entry of that name, or null
+const oa::formats::gaf::Sequence*
+find_sequence(const oa::formats::gaf::Archive& archive, std::string_view name) {
+    for (const auto& sequence : archive.sequences)
+        if (sequence.name.size() == name.size() &&
+            std::equal(name.begin(), name.end(), sequence.name.begin(), [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) ==
+                       std::tolower(static_cast<unsigned char>(b));
+            }))
+            return &sequence;
+    return nullptr;
+}
+
+/// Draws a panel's image records, from `first` on, onto its background.
+///
+/// Each active image record shows the first frame of the GAF entry named
+/// after it, from the panel's own GAF file, else the shared interface GAF,
+/// with the frame's top-left on the record's position; a record found in
+/// neither shows nothing.
+///
+/// @param[in,out] background the panel's background, in 640x480 source space
+/// @param gadgets the panel's records, placed on the frame
+/// @param first first record drawn
+/// @param panel_art the panel's own GAF file (anims/<panel>.GAF)
+/// @param shared_art the shared interface GAF
+/// @param palette 4 bytes per colour
+void draw_image_records(
+    oa::Image& background,
+    const std::vector<oa::ui::gui_layout::Gadget>& gadgets,
+    std::size_t first,
+    const oa::formats::gaf::Archive& panel_art,
+    const oa::formats::gaf::Archive& shared_art,
+    const oa::PaletteBytes& palette
+) {
+    for (auto index = first; index < gadgets.size(); ++index) {
+        const auto& common = gadgets[index].common;
+        if (common.type != oa::ui::gui_layout::GadgetType::image || common.active == 0)
+            continue;
+        const auto* sequence = find_sequence(panel_art, common.name);
+        if (sequence == nullptr)
+            sequence = find_sequence(shared_art, common.name);
+        if (sequence == nullptr || sequence->frames.empty())
+            continue;
+        const auto rendered = oa::formats::gaf::render_normal(sequence->frames.front());
+        if (!rendered.ok())
+            continue;
+        const auto& frame = *rendered.frame;
+        for (std::size_t row = 0; row < frame.height; ++row)
+            for (std::size_t column = 0; column < frame.width; ++column) {
+                const auto at = row * frame.width + column;
+                const auto x = common.x + static_cast<int>(column);
+                const auto y = common.y + static_cast<int>(row);
+                if (at >= frame.coverage.size() || frame.coverage[at] == 0 || x < 0 || y < 0 ||
+                    x >= static_cast<int>(background.width) ||
+                    y >= static_cast<int>(background.height))
+                    continue;
+                const auto colour = static_cast<std::size_t>(frame.pixels[at]) * 4U;
+                if (colour + 2 >= palette.size())
+                    continue;
+                const auto to =
+                    (static_cast<std::size_t>(y) * background.width + static_cast<std::size_t>(x)) *
+                    3U;
+                if (to + 2 >= background.rgb.size())
+                    continue;
+                background.rgb[to] = palette[colour];
+                background.rgb[to + 1] = palette[colour + 1];
+                background.rgb[to + 2] = palette[colour + 2];
+            }
+    }
+}
+
 } // namespace
 
 /// Registers the load-game overlay, which lists the saves and fills the load and save dialogs,
-/// and the OPTIONS lightbar the preferences opened from a match draw.
+/// and the match frame's tick that steps the OPTIONS lightbar of the preferences a match opens.
 ///
 /// @param[in,out] registry registry receiving the overlays
 void register_load_game_screens(ScreenRegistry* registry) {
@@ -686,12 +886,12 @@ void register_load_game_screens(ScreenRegistry* registry) {
     load_game.tick = load_overlay_tick;
     load_game.draw = load_overlay_draw;
     (void)overlay_register(registry, &load_game);
+    // The match frame draws the lightbar itself (draw_options_lightbar).
     OverlayDesc lightbar{};
     lightbar.name = "options_lightbar";
-    lightbar.screen = screen_id(Screen::options);
+    lightbar.screen = screen_id(Screen::match);
     lightbar.z = 0;
     lightbar.tick = options_lightbar_tick;
-    lightbar.draw = options_lightbar_draw;
     (void)overlay_register(registry, &lightbar);
 }
 
@@ -836,22 +1036,9 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
         std::cerr << "match CONSOLE.FNT unavailable: " << error.what() << '\n';
         match_small_font_ = small_font_;
     }
-    auto stem_fold = stem;
-    for (auto& ch : stem_fold)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    const auto pause_menu = stem_fold == "armopt" || stem_fold == "coropt";
     overlay_gaf_sequence(
         match_hud_->background, match_hud_->shared_sprites, "PANELSIDE", 0, 0, icon_palette
     );
-    if (pause_menu) {
-        // ARMOPT.GAF OPTBG covers the command well (0,128); keep PANELSIDE
-        // under the 0x7e radar so the minimap chrome does not change colour.
-        const int bg_x = header != nullptr ? header->common.x : 0;
-        const int bg_y = header != nullptr ? header->common.y : kBattlefieldTop;
-        overlay_gaf_sequence(
-            match_hud_->background, match_hud_->sprites, "OPTBG", bg_x, bg_y, icon_palette
-        );
-    }
     overlay_gaf_sequence(
         match_hud_->background,
         match_hud_->shared_sprites,
@@ -872,6 +1059,18 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
             kBattlefieldLeft,
             kCanvasHeight - static_cast<int>(bottom->frames.front().height),
             icon_palette
+        );
+    }
+    // The panel's image records go over the chrome: ARMOPT's OPTBG and
+    // PREFS's IGOPT in the command well, under the radar PANELSIDE frames.
+    const auto& gadgets = match_hud_->layout.gadgets;
+    if (std::any_of(gadgets.begin(), gadgets.end(), [](const auto& gadget) {
+            return gadget.common.type == oa::ui::gui_layout::GadgetType::image;
+        })) {
+        oa::formats::gaf::Archive panel_art;
+        append_gaf_file(panel_art, "anims/" + stem + ".GAF");
+        draw_image_records(
+            match_hud_->background, gadgets, 1, panel_art, match_hud_->sprites, icon_palette
         );
     }
     return true;
@@ -923,6 +1122,9 @@ void Runtime::show_match_pause_menu() {
             campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
         );
         session.ingame.saved_games_offered = offers_saved_games();
+        // A launcher's game names the launcher in the exit menus.
+        session.ingame.service_launch = service_launch_;
+        session.ingame.service_label = service_label_;
         panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
         ui::ingame_enter_options(session.panel, session.ingame);
         panel_to_widgets(
@@ -939,6 +1141,9 @@ void Runtime::show_match_pause_menu() {
 void Runtime::resume_match_pause() {
     if (match_finished_)
         return;
+    // Resuming over the preferences keeps what they set, as leaving them does.
+    if (match_preferences_open())
+        leave_options_screen();
     match_menu_session().close_confirm = false;
     match_menu_session().ingame_panel = IngamePanel::options;
     forget_team_panel();
@@ -981,6 +1186,7 @@ void Runtime::present_match_outcome() {
     if (result == sim::scenario::Outcome::ongoing)
         return;
     match_finished_ = true;
+    outcome_over_menu_ = match_paused_;
     match_paused_ = true;
     match_command_ = MatchCommand::none;
     pending_build_type_ = 0;
@@ -1045,6 +1251,10 @@ void Runtime::enter_campaign_end() {
     // (keep_finished_match), so the closing call has no session to leave.
     context.state = &state_;
     context.frontend = this;
+    // A launcher's game names the launcher on MAIN MENU and leaves the
+    // pointer's picture as it is.
+    context.service_launch = service_launch_;
+    context.service_label = service_label_;
     context.campaign = endgame_game_options();
     context.env = &session.env;
     context.world = endgame_world();
@@ -1268,8 +1478,10 @@ void Runtime::draw_end_overlay() {
     const bool shared = (current_extension_state() & extension_state::shared_match) != 0;
     if (pause_bit || (match_paused_ && !shared))
         draw_igtitle("igpaused");
-    if (match_paused_)
+    if (match_paused_) {
         draw_battlefield_panel();
+        draw_options_lightbar();
+    }
 }
 
 void Runtime::draw_battlefield_panel() {
@@ -1300,6 +1512,18 @@ void Runtime::draw_battlefield_panel() {
         show(root);
         return;
     }
+    // The preferences' sub-panel lies beside the side column, at its scale.
+    if (match_menu_session().ingame_panel == IngamePanel::preferences &&
+        match_hud_panel_ == kPreferencesLayout) {
+        show_hud_over_battlefield(
+            match_world_cpu_,
+            match_hud_cpu_,
+            match_layout_,
+            {kBattlefieldLeft, root.y, root.x + root.width - kBattlefieldLeft, root.height},
+            nullptr
+        );
+        return;
+    }
     for (std::size_t index = 1; index < gadgets.size(); ++index) {
         const auto& area = gadgets[index].common;
         if (area.active != 0 && area.width > 0 && area.height > 0)
@@ -1314,6 +1538,188 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         return;
     if (team_panel_open()) {
         click_team_panel(name);
+        return;
+    }
+    if (session.ingame_panel == IngamePanel::preferences) {
+        auto& context = session.options;
+        bind_options_context();
+        auto& layout = match_hud_->layout;
+        const auto index = ui::panel_find(panel, name);
+        if (index < 0 || static_cast<std::size_t>(index) >= layout.gadgets.size())
+            return;
+        if (!match_)
+            return;
+        // The speed they show is the match's own, read afresh for each click:
+        // another player's machine may have set it since they opened.
+        preferences_.game_speed = match_->state().game.requested_speed;
+        preferences_.current_game_speed = match_->state().game.current_speed;
+        // The match takes the preferences' option fields at once, as they
+        // are its own, and the speed when the click put another back (UNDO,
+        // RESTORE, Cancel), which is written as it is; the GAME slider sets
+        // the running speed itself.
+        const auto apply_to_match = [this] {
+            auto& game = match_->state().game;
+            seed_match_options(game);
+            if (game.requested_speed != preferences_.game_speed ||
+                game.current_speed != preferences_.current_game_speed) {
+                game.requested_speed = preferences_.game_speed;
+                game.current_speed = preferences_.current_game_speed;
+                match_timing_.requested_rate = game.requested_speed;
+                match_timing_.actual_rate = game.current_speed;
+            }
+        };
+        panel.selected = index;
+        auto& control = panel.controls[static_cast<std::size_t>(index)];
+        const auto& gadget = layout.gadgets[static_cast<std::size_t>(index)];
+        if (control.type == ui::ControlType::slider) {
+            // A click on the track moves the knob to the pointer; a greyed
+            // slider takes none.
+            panel.selected = ui::kNoSelection;
+            if (control.grayed != 0)
+                return;
+            const auto source = oa::ui::display_layout::canvas_to_source(
+                match_layout_,
+                static_cast<int>(match_pointer_x_),
+                static_cast<int>(match_pointer_y_)
+            );
+            const bool vertical = gadget.common.height > gadget.common.width;
+            const int extent =
+                std::max(1, vertical ? gadget.common.height - 1 : gadget.common.width - 1);
+            const int offset = vertical ? source.y - gadget.common.y : source.x - gadget.common.x;
+            const int steps = std::max(1, static_cast<int>(control.slider.range) - 1);
+            control.slider.knob =
+                static_cast<int16_t>(std::clamp((offset * steps + extent / 2) / extent, 0, steps));
+            if (control.on_change != nullptr)
+                control.on_change(panel, context);
+            panel_to_widgets(panel, layout, widget_gaf_frames_, widget_text_stages_);
+            apply_to_match();
+            render_match_surface();
+            return;
+        }
+        control.stage = oa::ui::gui_input::released_button_stage(gadget, control.stage);
+        auto action = ui::OptionsAction::none;
+        switch (session.kind) {
+        case ui::OptionsPanel::sound:
+            action = ui::options_on_sound_click(panel, context);
+            break;
+        case ui::OptionsPanel::visuals:
+        case ui::OptionsPanel::select_video_mode:
+            action = ui::options_on_visuals_click(panel, context);
+            break;
+        case ui::OptionsPanel::speeds:
+            action = ui::options_on_speeds_click(panel, context);
+            break;
+        case ui::OptionsPanel::tabs:
+        case ui::OptionsPanel::music:
+            if (session.kind == ui::OptionsPanel::music && music_panel_clicked(panel, context))
+                break;
+            action = ui::options_on_tab_click(panel, context);
+            break;
+        }
+        panel_to_widgets(panel, layout, widget_gaf_frames_, widget_text_stages_);
+        // Each tab loads PREFS.GUI afresh, widens it and merges the tab's
+        // in-game sub-panel into it, beside the tabs over the battlefield.
+        const auto open_sub_panel = [this, &session, &context](ui::OptionsPanel which) {
+            const auto file = "guis/" + std::string(ui::options_panel_file(which, true));
+            oa::ui::gui_layout::Layout sub;
+            try {
+                auto parsed = oa::ui::gui_layout::parse(assets_.read(file).bytes);
+                if (!parsed.ok() || parsed.layout->gadgets.empty())
+                    throw std::runtime_error(
+                        parsed.error ? parsed.error->message : file + " has no panel"
+                    );
+                sub = std::move(*parsed.layout);
+            } catch (const std::exception& error) {
+                status_ = "options panel unavailable: " + std::string(error.what());
+                return;
+            }
+            if (!load_match_hud_layout(kPreferencesLayout))
+                return;
+            widget_gaf_frames_.clear();
+            widget_text_stages_.clear();
+            auto& layout = match_hud_->layout;
+            auto& panel = session.panel;
+            session.kind = which;
+            panel_from_widgets(panel, layout, widget_text_stages_);
+            panel_relative_to_root(panel);
+            ui::options_prepare_realtime_panel(panel, context);
+            ui::Panel loaded;
+            ui::panel_load_layout(loaded, sub);
+            ui::options_merge_realtime_panel(panel, loaded);
+            const auto first = layout.gadgets.size();
+            append_merged_records(layout, panel, sub);
+            for (auto index = first; index < layout.gadgets.size(); ++index) {
+                const auto* button =
+                    std::get_if<oa::ui::gui_layout::ButtonFields>(&layout.gadgets[index].fields);
+                match_hud_states_.push_back(
+                    button != nullptr ? MatchGadgetState{button->status, button->grayed_out}
+                                      : MatchGadgetState{}
+                );
+            }
+            // The sub-panel's picture is its image record, looked up in
+            // PREFS.GAF (the merged panel's own) and then the shared GAF.
+            oa::formats::gaf::Archive panel_art;
+            append_gaf_file(
+                panel_art, "anims/" + fs::path(kPreferencesLayout).stem().string() + ".GAF"
+            );
+            draw_image_records(
+                match_hud_->background,
+                layout.gadgets,
+                first,
+                panel_art,
+                match_hud_->sprites,
+                match_hud_->background.palette ? *match_hud_->background.palette
+                                               : match_hud_->gui_palette
+            );
+            switch (which) {
+            case ui::OptionsPanel::sound:
+                ui::options_enter_sound(panel, context);
+                break;
+            case ui::OptionsPanel::visuals:
+            case ui::OptionsPanel::select_video_mode:
+                ui::options_enter_visuals(panel, context, false);
+                break;
+            case ui::OptionsPanel::speeds:
+                ui::options_enter_speeds(panel, context);
+                break;
+            case ui::OptionsPanel::music:
+                ui::options_enter_music(panel, context);
+                music_panel_entered(panel, context);
+                break;
+            case ui::OptionsPanel::tabs:
+                ui::options_enter_tabs(panel, context);
+                break;
+            }
+            panel_to_widgets(panel, layout, widget_gaf_frames_, widget_text_stages_);
+            // Each sub-panel loader ends by giving its labels the shadow bit.
+            oa::ui::gui_input::mark_label_shadows(layout.gadgets);
+        };
+        switch (action) {
+        case ui::OptionsAction::open_sound:
+            open_sub_panel(ui::OptionsPanel::sound);
+            break;
+        case ui::OptionsAction::open_visuals:
+            open_sub_panel(ui::OptionsPanel::visuals);
+            break;
+        case ui::OptionsAction::open_speeds:
+            open_sub_panel(ui::OptionsPanel::speeds);
+            break;
+        case ui::OptionsAction::open_music:
+            open_sub_panel(ui::OptionsPanel::music);
+            break;
+        case ui::OptionsAction::reload:
+            open_sub_panel(session.kind);
+            break;
+        case ui::OptionsAction::close_saved:
+        case ui::OptionsAction::close_restored:
+            apply_to_match();
+            leave_options_screen();
+            return;
+        case ui::OptionsAction::none:
+            break;
+        }
+        apply_to_match();
+        render_match_surface();
         return;
     }
     panel_from_widgets(panel, match_hud_->layout, widget_text_stages_);
@@ -1367,6 +1773,8 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
     );
     context.in_game = true;
+    context.service_launch = service_launch_;
+    context.service_label = service_label_;
     const auto show = [this, &session](const char* layout, IngamePanel which) {
         if (!load_match_hud_layout(layout))
             return false;
@@ -1479,10 +1887,9 @@ void Runtime::activate_pause_gadget(std::string_view name) {
 bool Runtime::return_to_match_for_close() {
     if (!match_ || match_finished_)
         return false;
-    const bool over_match_page =
-        options_parent_ == Screen::match &&
-        (screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
-         screen_ == Screen::speeds || screen_ == Screen::music || screen_ == Screen::load_game);
+    // The preferences a match opens stay on the match screen; only the load
+    // and save pages leave it.
+    const bool over_match_page = options_parent_ == Screen::match && screen_ == Screen::load_game;
     if (over_match_page) {
         if (save_dialog_open())
             close_save_dialog();
@@ -1501,6 +1908,19 @@ void Runtime::escape_match_menu() {
         activate_pause_gadget("CHOICE2");
         return;
     }
+    // The preferences take Escape as their Escape default, PREV.
+    if (session.ingame_panel == IngamePanel::preferences && match_hud_ &&
+        match_hud_panel_ == kPreferencesLayout && !match_hud_->layout.gadgets.empty()) {
+        const auto* root = std::get_if<oa::ui::gui_layout::PanelFields>(
+            &match_hud_->layout.gadgets.front().fields
+        );
+        activate_pause_gadget(
+            root != nullptr && !root->escape_default.empty()
+                ? std::string_view(root->escape_default)
+                : std::string_view("PREV")
+        );
+        return;
+    }
     resume_match_pause();
 }
 
@@ -1510,6 +1930,10 @@ void Runtime::request_match_close() {
     auto& session = match_menu_session();
     if (match_paused_ && session.close_confirm)
         return;
+    // The preferences go back to the in-game menu first, as the pages over
+    // the match do, so the confirmation's CHOICE2 returns to that menu.
+    if (match_preferences_open())
+        leave_options_screen();
     const bool from_menu = match_paused_;
     forget_team_panel();
     match_paused_ = true;
@@ -1531,6 +1955,8 @@ void Runtime::request_match_close() {
         campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
     );
     context.in_game = true;
+    context.service_launch = service_launch_;
+    context.service_label = service_label_;
     panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
     ui::ingame_open_leave_confirm(session.panel, context);
     panel_to_widgets(session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_);
@@ -1776,25 +2202,31 @@ void Runtime::restart_match() {
 }
 
 void Runtime::draw_options_lightbar() {
-    // Only the preferences a match opened sweep the in-game menu away.
+    // Only the preferences a match opens sweep the in-game menu away; the
+    // full-screen options of the frontend set the lightbar up and never draw it.
     auto& session = match_menu_session();
-    if (options_parent_ != Screen::match || !match_ || options_flip_.rgb.empty() ||
-        surface_.rgb.empty())
+    if (session.ingame_panel != IngamePanel::preferences || options_parent_ != Screen::match ||
+        !match_ || !match_hud_ || match_hud_panel_ != kPreferencesLayout ||
+        session.options.lightbar.active == 0 || options_flip_.rgb.empty() ||
+        match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
     if (session.lightbar_due) {
         session.lightbar_due = false;
         session.lightbar_step = ui::options_lightbar_step(session.options.lightbar);
         const auto& step = session.lightbar_step;
         const auto stamp = static_cast<std::size_t>(ui::kLightbarStampFrame);
-        if (step.stamp_lightbar && match_hud_)
-            if (const auto* bar = gaf_sequence(match_hud_->shared_sprites, "LIGHTBAR");
-                bar != nullptr && bar->frames.size() > stamp)
+        if (step.stamp_lightbar) {
+            const auto* bar = gaf_sequence(match_hud_->sprites, "LIGHTBAR");
+            if (bar == nullptr)
+                bar = gaf_sequence(match_hud_->shared_sprites, "LIGHTBAR");
+            if (bar != nullptr && bar->frames.size() > stamp)
                 stamp_frame(
                     bar->frames[stamp],
                     match_hud_->background.palette ? *match_hud_->background.palette
                                                    : match_hud_->gui_palette,
                     options_flip_
                 );
+        }
         if (step.play_options_sound) {
             play_ui_sound("Options", 0);
             ++options_lightbar_sounds_;
@@ -1804,14 +2236,51 @@ void Runtime::draw_options_lightbar() {
             match_->state().game.radar_blink_flags | oa::present::world_renderer::radar_flag_redraw
         );
     }
-    if (session.lightbar_step.drawn)
-        blit_lightbar(surface_, options_flip_, session.lightbar_step);
+    const auto& step = session.lightbar_step;
+    if (!step.drawn)
+        return;
+    // The quad is in 640x480 source space. The side column and the bottom bar
+    // show the HUD layer as it is; the columns over the battlefield go onto
+    // the world layer at the side column's scale.
+    auto& cover = session.lightbar_cover;
+    blit_lightbar(match_hud_cpu_, options_flip_, step, cover);
+    int32_t right = kBattlefieldLeft - 1;
+    int32_t top = kCanvasHeight;
+    for (const auto& corner : step.destination) {
+        right = std::max(right, corner.x);
+        top = std::min(top, corner.y);
+    }
+    show_hud_over_battlefield(
+        match_world_cpu_,
+        match_hud_cpu_,
+        match_layout_,
+        {kBattlefieldLeft, top, right - kBattlefieldLeft + 1, kCanvasHeight - top},
+        &cover
+    );
 }
 
 void Runtime::leave_options_screen() {
     flush_preferences();
-    match_menu_session().options_bound = nullptr;
-    match_menu_session().options.lightbar.active = 0;
+    auto& session = match_menu_session();
+    session.options_bound = nullptr;
+    session.options.lightbar.active = 0;
+    session.lightbar_step = {};
+    if (options_parent_ == Screen::match && match_ &&
+        session.ingame_panel == IngamePanel::preferences) {
+        // The preferences close to the in-game menu they were opened over;
+        // the match takes their options.
+        session.ingame_panel = IngamePanel::options;
+        session.options_open = false;
+        session.options.realtime_panels = false;
+        session.options.hold_game = false;
+        options_flip_ = {};
+        options_backup_.clear();
+        seed_match_options(match_->state().game);
+        apply_output_mode();
+        options_parent_ = Screen::main_menu;
+        show_match_pause_menu();
+        return;
+    }
     if (options_parent_ == Screen::match && match_) {
         leave_load_game();
         seed_match_options(match_->state().game);
@@ -1827,6 +2296,39 @@ void Runtime::leave_options_screen() {
     }
     load(options_parent_);
     options_parent_ = Screen::main_menu;
+}
+
+bool Runtime::match_preferences_open() const {
+    return match_menu_session().ingame_panel == IngamePanel::preferences &&
+           options_parent_ == Screen::match;
+}
+
+bool Runtime::match_music_panel_open() const {
+    return match_preferences_open() && match_menu_session().kind == ui::OptionsPanel::music;
+}
+
+void Runtime::forget_match_preferences() {
+    auto& session = match_menu_session();
+    if (session.ingame_panel != IngamePanel::preferences)
+        return;
+    flush_preferences();
+    session.ingame_panel = IngamePanel::options;
+    session.options_bound = nullptr;
+    session.options_open = false;
+    session.options.realtime_panels = false;
+    session.options.hold_game = false;
+    session.options.lightbar.active = 0;
+    session.lightbar_due = false;
+    session.lightbar_step = {};
+    session.lightbar_cover.clear();
+    options_flip_ = {};
+    options_backup_.clear();
+    if (options_parent_ == Screen::match)
+        options_parent_ = Screen::main_menu;
+}
+
+bool Runtime::pause_menu_shown() const {
+    return match_paused_ && (!match_finished_ || outcome_over_menu_);
 }
 
 void Runtime::sync_visual_option_widgets() {
@@ -1853,9 +2355,17 @@ void Runtime::bind_options_context() {
     auto& context = match_menu_session().options;
     context.preferences = &preferences_;
     context.state = &state_;
-    // The native options screens are the full-screen frontend panels even when
-    // opened from a match, so the in-game (*RT) variants are not selected.
-    context.in_game = false;
+    // Opened from a running match, the preferences are PREFS.GUI in the side
+    // column with the in-game (*RT) sub-panels; elsewhere they are the
+    // full-screen frontend panels.
+    const bool in_match = options_parent_ == Screen::match && screen_ == Screen::match && match_;
+    context.in_game = in_match;
+    if (!in_match) {
+        context.realtime_panels = false;
+        context.hold_game = false;
+    }
+    const bool multiplayer = (current_extension_state() & extension_state::multiplayer) != 0;
+    context.session_kind = static_cast<uint8_t>(ingame_session(campaign_mission_, multiplayer));
     // A watcher's game speed slider is locked.
     context.game_speed_locked = (current_extension_state() & extension_state::local_watcher) != 0;
     context.host = {};
@@ -1910,9 +2420,21 @@ void Runtime::bind_options_context() {
             list.modes[static_cast<std::size_t>(list.count++)] = mode;
         return true;
     };
+    if (in_match)
+        // The GAME slider sets the running game's speed, as the speed keys do.
+        context.host.set_game_speed = [](void* host, uint16_t speed) {
+            auto& runtime = *static_cast<Runtime*>(host);
+            if (!runtime.match_)
+                return;
+            auto& world = runtime.match_->state();
+            (void)oa::sim::speed::set_speed(world, speed, runtime.message_hooks());
+            runtime.match_timing_.requested_rate = world.game.requested_speed;
+            runtime.match_timing_.actual_rate = world.game.current_speed;
+            runtime.preferences_.current_game_speed = world.game.current_speed;
+        };
 
     // The OPTIONS lightbar: the top panel's own picture as FLIPSURFACE. Over
-    // a match that is the in-game menu beside the battlefield, from the HUD
+    // a match that is the in-game menu in the side column, from the HUD
     // image; elsewhere the frontend panel, from the frame.
     context.host.copy_top_panel =
         [](void* host, int32_t* width, int32_t* height, int32_t* y) -> oa_ref32 {
@@ -1947,16 +2469,29 @@ void Runtime::bind_options_context() {
         );
         return kOptionsBackupSurface;
     };
+    // A tab click or a close frees the lightbar's pictures; it draws no more.
     context.host.release_lightbar = [](void* host) {
         auto& runtime = *static_cast<Runtime*>(host);
         runtime.options_flip_ = {};
         runtime.options_backup_.clear();
-    };
-    match_menu_session().draw_lightbar = [](void* host) {
-        static_cast<Runtime*>(host)->draw_options_lightbar();
+        match_menu_session().options.lightbar.active = 0;
     };
     context.host.load_panel = [](void* host, ui::Panel& panel) {
         auto& runtime = *static_cast<Runtime*>(host);
+        auto& session = match_menu_session();
+        if (session.options.in_game) {
+            // PREFS.GUI takes the in-game menu's place in the side column.
+            if (!runtime.load_match_hud_layout(kPreferencesLayout)) {
+                panel = {};
+                return;
+            }
+            session.ingame_panel = IngamePanel::preferences;
+            runtime.widget_gaf_frames_.clear();
+            runtime.widget_text_stages_.clear();
+            panel_from_widgets(panel, runtime.match_hud_->layout, runtime.widget_text_stages_);
+            panel_relative_to_root(panel);
+            return;
+        }
         runtime.load(Screen::options);
         panel_from_widgets(panel, runtime.resources_.layout, runtime.widget_text_stages_);
     };
@@ -1968,10 +2503,38 @@ void Runtime::bind_options_context() {
 void Runtime::enter_options_panel() {
     auto& session = match_menu_session();
     auto& context = session.options;
+    const bool in_match = options_parent_ == Screen::match && screen_ == Screen::match && match_;
+    if (in_match) {
+        // The preferences show the match's own option fields and speed.
+        auto& game = match_->state().game;
+        take_match_options(game);
+        preferences_.game_speed = game.requested_speed;
+        preferences_.current_game_speed = game.current_speed;
+    }
     bind_options_context();
     ui::options_open(session.panel, context);
     session.kind = ui::OptionsPanel::tabs;
     session.options_open = true;
+    if (in_match) {
+        session.options_bound = nullptr;
+        if (session.ingame_panel != IngamePanel::preferences) {
+            // Without PREFS.GUI the in-game menu stays as it was.
+            context.host.release_lightbar(context.host.context);
+            context.realtime_panels = false;
+            context.hold_game = false;
+            session.options_open = false;
+            options_parent_ = Screen::main_menu;
+            status_ = "Preferences unavailable";
+            render_match_surface();
+            return;
+        }
+        panel_to_widgets(
+            session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_
+        );
+        status_ = "Options";
+        render_match_surface();
+        return;
+    }
     session.options_bound = resources_.layout.gadgets.data();
     panel_to_widgets(session.panel, resources_.layout, widget_gaf_frames_, widget_text_stages_);
     rebuild_surface();

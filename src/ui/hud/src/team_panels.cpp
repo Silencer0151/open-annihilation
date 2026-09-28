@@ -252,6 +252,12 @@ bool hosts_multiplayer_game(const World& world) noexcept {
     return false;
 }
 
+bool control_offered(const World& world, const TeamPanelHost& host) {
+    if (!hosts_multiplayer_game(world))
+        return false;
+    return host.tournament_game == nullptr || !host.tournament_game(host.context);
+}
+
 int32_t team_member_count(const World& world, uint8_t team) noexcept {
     if (team == OA_PLAYER_NO_TEAM)
         return 0;

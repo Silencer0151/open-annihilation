@@ -25,9 +25,10 @@
 //   "Restart failed: <message>", which stderr also receives, and a failed
 //   restart returns to the main menu. Other starts (a skirmish from the
 //   menus or a headless run, a saved skirmish a --load run loads) are not
-//   caught. frontend_game, state, match_game, match_event, console_host,
-//   team_panel_host, load_progress, draw_loading, draw_match_hud and
-//   draw_match_overlay are reached there;
+//   caught. frontend_game, state, match_game, match_event,
+//   launched_by_service, console_host, team_panel_host, service_label,
+//   load_progress, draw_loading, draw_match_hud and draw_match_overlay are
+//   reached there;
 // - a simulation tick of the main loop or of a headless run (--match-ticks,
 //   a --campaign mission, a --save-after or --load run), which reports the
 //   error as a simulation error and runs the match on: simulation_step,
@@ -61,8 +62,13 @@
 /// pause bit is set, whoever set it; a shared match's clock keeps running
 /// while its in-game menu, or the preferences that menu opens, are up
 /// (Runtime::match_running) and while outcome_ready holds it on its
-/// outcome.
-#define OA_EXTENSION_API_VERSION 5
+/// outcome. Version 6 adds close_requested and service_label,
+/// FrontendEntry::nickname, TeamPanelHost::tournament_game, the
+/// ScreenServices entries quit, stop_sounds, play_sound_alternate and
+/// run_frontend, and query_register; launched_by_service is also asked as
+/// each match starts, and a ScreenContext's host and services may be kept
+/// while the runtime lives.
+#define OA_EXTENSION_API_VERSION 6
 
 namespace oa {
 struct Game;
@@ -171,6 +177,7 @@ enum class MatchEvent : uint8_t {
 // The frontend's launch values (Extension::frontend_entry).
 struct FrontendEntry {
     const char* game_name{}; // preferred to the stored game name; null for none
+    const char* nickname{};  // preferred to the stored nickname; null or empty for none
 };
 
 // The fonts MatchOverlay draws text in.
@@ -317,7 +324,8 @@ struct Extension {
     ///
     /// @param context Extension::context
     /// @param[out] entry the values, all null on entry; the engine copies
-    ///        game_name (up to 16 characters) as soon as the hook returns
+    ///        game_name and nickname (up to 16 characters each) as soon as
+    ///        the hook returns
     void (*frontend_entry)(void* context, FrontendEntry& entry){};
 
     /// Names the frontend states the extension runs in place of the engine's.
@@ -402,8 +410,13 @@ struct Extension {
 
     /// Tells whether a launcher the extension recognises started the game.
     ///
-    /// Called when the frontend writes the preferences: a game such a
-    /// launcher started keeps the stored password.
+    /// Called when the frontend writes the preferences, and as each match
+    /// starts: a game such a launcher started keeps the stored password, its
+    /// in-game menus and end-of-game screen take the launcher's label
+    /// (service_label), and the end-of-game screen's MAIN MENU leaves the
+    /// pointer's picture as it is. An exception it throws during a match
+    /// start the file header lists abandons the start; elsewhere it ends
+    /// oa-game.
     ///
     /// @param context Extension::context
     /// @return true when such a launcher started the game; a null hook means false
@@ -704,6 +717,41 @@ struct Extension {
     ///        address while it lives; functions the extension sets must
     ///        accept the runtime as their context
     void (*team_panel_host)(void* context, Runtime& runtime, oa::ui::hud::TeamPanelHost& host){};
+
+    /// Answers a request to end the program: the window's close button, or
+    /// the system's quit while the window is open.
+    ///
+    /// Called for each such request the main loop receives, before the engine
+    /// does anything for it; a request that arrives while a match loads is
+    /// not offered, and the load stops at once. The extension may answer
+    /// with a box of its own, or leave its session and end the run through
+    /// ScreenServices::quit. Declining keeps the engine's handling: in a
+    /// running match, or a page opened over one, the surrender confirmation
+    /// (YESORNO.GUI) with its second choice preselected; anywhere else the
+    /// run ends at once.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @return true when the extension answered the request; false, or a null
+    ///         hook, keeps the engine's handling
+    bool (*close_requested)(void* context, Runtime& runtime){};
+
+    /// Returns the label of the launcher that started the game.
+    ///
+    /// Called as each match starts, beside launched_by_service; the runtime
+    /// copies up to 31 characters at once and keeps them for that match's
+    /// in-game menus and end-of-game screen. While launched_by_service answers
+    /// true and the label holds 1 to 9 characters, the end-of-game screen's
+    /// MAIN MENU entry and the in-game exit menu's MAIN MENU entry read it
+    /// (the exit menu then hides EXIT GAME), and the exit confirmation asks
+    /// "Surrender this battle and return to <label>?". An exception it throws
+    /// during a match start the file header lists abandons the start;
+    /// elsewhere it ends oa-game.
+    ///
+    /// @param context Extension::context
+    /// @return the label, kept by the extension and read at once; null, an
+    ///         empty label or a null hook means none
+    const char* (*service_label)(void* context){};
 };
 
 } // namespace oa::app

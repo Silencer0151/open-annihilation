@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Fixed-capacity screen, overlay and dispatcher-step tables.
+// Fixed-capacity screen, overlay, dispatcher-step and dispatcher-query tables.
 #include "oa/ui/screen_registry.hpp"
 
 #include <cstdint>
@@ -48,6 +48,16 @@ bool step_register(
     return true;
 }
 
+bool query_register(
+    ScreenRegistry* registry, oa::ui::frontend_state::Query query, ScreenQueryFn run, void* state
+) {
+    if (run == nullptr || registry->query_count >= kMaxQueries ||
+        query_find(registry, query) != nullptr)
+        return reject(registry, "dispatcher query");
+    registry->queries[registry->query_count++] = {query, run, state};
+    return true;
+}
+
 const ScreenDesc* screen_find(const ScreenRegistry* registry, ScreenId id) {
     for (uint32_t index = 0; index < registry->screen_count; ++index)
         if (registry->screens[index].id == id)
@@ -59,6 +69,13 @@ const StepDesc* step_find(const ScreenRegistry* registry, oa::ui::frontend_state
     for (uint32_t index = 0; index < registry->step_count; ++index)
         if (registry->steps[index].step == step)
             return &registry->steps[index];
+    return nullptr;
+}
+
+const QueryDesc* query_find(const ScreenRegistry* registry, oa::ui::frontend_state::Query query) {
+    for (uint32_t index = 0; index < registry->query_count; ++index)
+        if (registry->queries[index].query == query)
+            return &registry->queries[index];
     return nullptr;
 }
 

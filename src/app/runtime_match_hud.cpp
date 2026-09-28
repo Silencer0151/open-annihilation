@@ -71,6 +71,10 @@ void Runtime::refresh_build_page(bool check_validity) {
 }
 
 void Runtime::draw_build_captions() {
+    // A paused menu's panel (ARMOPT.GUI, PREFS.GUI, ...) is no build page:
+    // its buttons carry no build counts.
+    if (pause_menu_shown())
+        return;
     refresh_build_page(false);
     if (!match_hud_)
         return;

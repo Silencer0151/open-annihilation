@@ -283,6 +283,23 @@ bool SdlWavPlayer::stream_busy() const noexcept {
                                         SDL_GetAudioStreamAvailable(impl_->stream) > 0);
 }
 
+void SdlWavPlayer::stop_all() noexcept {
+    for (auto& sound : impl_->streams)
+        SDL_DestroyAudioStream(sound.stream);
+    impl_->streams.clear();
+    stop_loop();
+    stop_stream();
+}
+
+bool SdlWavPlayer::playing() const noexcept {
+    const bool effect =
+        std::any_of(impl_->streams.begin(), impl_->streams.end(), [](const PlayingSound& sound) {
+            return SDL_GetAudioStreamQueued(sound.stream) > 0 ||
+                   SDL_GetAudioStreamAvailable(sound.stream) > 0;
+        });
+    return effect || impl_->looping != nullptr || stream_busy();
+}
+
 void SdlWavPlayer::set_volume(uint32_t wave_out_volume, uint32_t fx_volume) noexcept {
     impl_->wave_out_volume = wave_out_volume;
     impl_->fx_volume = fx_volume;

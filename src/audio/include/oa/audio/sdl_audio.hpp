@@ -91,6 +91,15 @@ class SdlWavPlayer {
     /// @return False once the stream has played out, has been stopped or never started.
     [[nodiscard]] bool stream_busy() const noexcept;
 
+    /// Stops every sound the player plays: each effect, the loop and the stream.
+    void stop_all() noexcept;
+
+    /// Tells whether any sound plays: an effect, the loop or the stream.
+    ///
+    /// @return false once every effect and the stream have played out or been
+    ///         stopped and no loop plays
+    [[nodiscard]] bool playing() const noexcept;
+
     /// Sets the output volume of every current and later sound.
     ///
     /// @param wave_out_volume Restored WaveOutVolume scalar, 0..0xffff.

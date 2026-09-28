@@ -315,6 +315,38 @@ OA_GAME_DATA_TEST(end_mission_clicks) {
     OA_CHECK(context.mission_count == 0);
 }
 
+// After a launcher started the game, MAIN MENU leaves for the main menu as
+// it always does but leaves the pointer's picture as it is.
+OA_GAME_DATA_TEST(end_mission_main_menu_after_a_launch) {
+    auto fixture = std::make_unique<Fixture>();
+    if (!fixture->load())
+        return;
+    auto& context = fixture->context;
+    auto& panel = fixture->panel;
+    fixture->world->game.victory = 1;
+    context.service_launch = true;
+    std::strcpy(context.service_label.data(), "Launcher");
+    end_mission_enter(panel, context);
+    const auto cursors = fixture->frontend.cursors.size();
+    fixture->frontend.cursor_visible = -1;
+    select(panel, "MainMenu");
+    OA_CHECK(end_mission_on_click(panel, context) == EndMissionAction::main_menu);
+    OA_CHECK(fixture->calls.sounds.back() == "BigButton");
+    OA_CHECK(fixture->state.state == fs_state::state_id::main_menu);
+    OA_CHECK(!fixture->frontend.modes.empty() && fixture->frontend.modes.back() == 1);
+    OA_CHECK(fixture->frontend.cursor_visible == 1);
+    OA_CHECK(fixture->frontend.cursors.size() == cursors);
+
+    // Without the launch the same press selects the leaving cursor.
+    context.service_launch = false;
+    end_mission_enter(panel, context);
+    const auto before = fixture->frontend.cursors.size();
+    select(panel, "MainMenu");
+    OA_CHECK(end_mission_on_click(panel, context) == EndMissionAction::main_menu);
+    OA_CHECK(fixture->frontend.cursors.size() == before + 1);
+    OA_CHECK(!fixture->frontend.cursors.empty() && fixture->frontend.cursors.back() == 0x14);
+}
+
 OA_GAME_DATA_TEST(end_mission_state_opens_the_panel) {
     auto fixture = std::make_unique<Fixture>();
     if (!fixture->load())

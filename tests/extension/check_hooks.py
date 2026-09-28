@@ -14,10 +14,13 @@ that call only. --runs picks the runs:
            unknown option and a game directory that does not exist;
   game     the rest, over the installation OA_GAME_DIR names: a headless
            skirmish, the headless --check-navigation run, and interactive
-           main menu frames and --check-multiplayer-menu through SDL's dummy
-           drivers. When OA_GAME_DIR is unset, empty or names no directory
-           it exits with --skip-code (OA_GAME_DATA_SKIP_CODE), which ctest
-           reports as skipped, or fails when OA_REQUIRE_GAME_DATA=1.
+           main menu frames, --check-multiplayer-menu, --check-match-dialogs
+           (whose close requests reach close_requested) and a run the
+           recorder ends through ScreenServices::quit (--record-quit) with
+           status 3, through SDL's dummy drivers. When OA_GAME_DIR is unset,
+           empty or names no directory it exits with --skip-code
+           (OA_GAME_DATA_SKIP_CODE), which ctest reports as skipped, or fails
+           when OA_REQUIRE_GAME_DATA=1.
 
 HOOKS must name the hooks src/app/include/oa/app/extension.hpp declares, in its order.
 With every run of both sets, each of them is reached except those UNREACHED
@@ -56,6 +59,7 @@ HOOKS = [
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
+    "close_requested", "service_label",
 ]
 # Hooks only a match played with other machines reaches.
 UNREACHED = {
@@ -68,7 +72,8 @@ class Run:
 
     expected names calls recorded at least once; at_least maps a call to
     the fewest times it must be recorded, for a hook every run reaches
-    once through --record-hooks itself.
+    once through --record-hooks itself. output is a text, or a list of
+    texts, the run's output must hold.
     """
 
     def __init__(self, name, arguments, expected, *, at_least=None, game=False, status=0, output="",
@@ -104,7 +109,7 @@ RUNS = {
              "frontend_game", "launched_by_service", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
              "draw_loading", "draw_match_hud", "draw_match_overlay", "state", "load_progress",
-             "team_panel_host"],
+             "team_panel_host", "service_label"],
             game=True),
         Run("headless-navigation",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],
@@ -117,6 +122,14 @@ RUNS = {
         Run("multiplayer-menu", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-multiplayer-menu"],
             ["check_multiplayer_menu", "select_multiplayer"], game=True, dummy=True,
             output="recorder: --check-multiplayer-menu"),
+        Run("match-dialogs", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-match-dialogs"],
+            ["close_requested", "service_label", "launched_by_service"], game=True, dummy=True,
+            output="match close check:"),
+        # The recorder uses the screen services it keeps on the fifth frame
+        # and ends the run through quit on the tenth, long before 60.
+        Run("quit", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "60", "--record-quit", "3"],
+            ["start_scene", "frame after_pump", "shutdown"], game=True, dummy=True, status=3,
+            output=["recorder: stop_sounds, play_sound_alternate and run_frontend", "recorder: quit 3"]),
     ],
 }
 
@@ -162,8 +175,9 @@ def run_game(game, run, scratch, game_dir):
     failures = []
     if result.returncode != run.status:
         failures.append(f"exit status {result.returncode}, expected {run.status}")
-    if run.output and run.output not in output:
-        failures.append(f"no '{run.output}' in its output")
+    for text in run.output if isinstance(run.output, list) else [run.output]:
+        if text and text not in output:
+            failures.append(f"no '{text}' in its output")
     counts = read_record(record)
     for expected in run.expected:
         if recorded(counts, expected) == 0:

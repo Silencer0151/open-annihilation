@@ -12,6 +12,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace oa::app {
 
@@ -124,6 +125,33 @@ struct BuiltinScreens {
 
     static void set_main_menu_overlay(void* host, int present) {
         static_cast<Runtime*>(host)->main_menu_overlay_ = present != 0;
+    }
+
+    // The run ends once the event or frame that asked has been handled
+    // (finish_quit_request), so no callback still running meets a match
+    // that has gone; run() returns the status once the loop ends.
+    static void quit(void* host, const char* reason, int exit_code) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        runtime.quit_requested_ = true;
+        runtime.quit_reason_ = reason != nullptr ? reason : "";
+        runtime.exit_status_ = exit_code;
+    }
+
+    // The CD and track music go on.
+    static void stop_sounds(void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        runtime.audio_player_.stop_all();
+        runtime.menu_music_playing_ = false;
+    }
+
+    static void play_sound_alternate(void* host, const char* name) {
+        if (name != nullptr)
+            (void)static_cast<Runtime*>(host)->play_alternate_sound(name);
+    }
+
+    // The pass runs from apply_screen_request, never inside a callback.
+    static void run_frontend(void* host) {
+        static_cast<Runtime*>(host)->frontend_pass_requested_ = true;
     }
 
     static renderer::MainMenuResources load_main_menu(Runtime& runtime) {
@@ -532,7 +560,11 @@ constexpr ScreenServices kRuntimeServices{
     BuiltinScreens::current_tick,
     BuiltinScreens::register_sound,
     BuiltinScreens::pointer_position,
-    BuiltinScreens::set_main_menu_overlay
+    BuiltinScreens::set_main_menu_overlay,
+    BuiltinScreens::quit,
+    BuiltinScreens::stop_sounds,
+    BuiltinScreens::play_sound_alternate,
+    BuiltinScreens::run_frontend
 };
 
 bool overlay_applies(const OverlayDesc& overlay, ScreenId screen) {
@@ -694,12 +726,43 @@ void Runtime::draw_screen_packages() {
     }
 }
 
-void Runtime::apply_screen_request() {
-    if (!pending_screen_)
+void Runtime::finish_quit_request() {
+    if (!quit_requested_)
         return;
-    const auto id = *pending_screen_;
-    pending_screen_.reset();
-    load(static_cast<Screen>(id));
+    quit_requested_ = false;
+    // A running match is left first, as the exit confirmation's first
+    // choice leaves it.
+    if (match_ && !match_finished_)
+        leave_match();
+    const std::string reason = std::move(quit_reason_);
+    quit_reason_.clear();
+    quit_application(reason.c_str());
+}
+
+void Runtime::apply_screen_request() {
+    // A run a package ended shows nothing more.
+    if (quit_requested_) {
+        finish_quit_request();
+        return;
+    }
+    const auto load_requested_screen = [this] {
+        if (!pending_screen_)
+            return;
+        const auto id = *pending_screen_;
+        pending_screen_.reset();
+        load(static_cast<Screen>(id));
+    };
+    load_requested_screen();
+    if (!frontend_pass_requested_)
+        return;
+    // A request made during the pass asks for the next one.
+    frontend_pass_requested_ = false;
+    if (screen_ == Screen::match)
+        return;
+    // The pass a pointer press runs: the unit header step, then the dispatcher.
+    step(frontend::Step::reload_unit_overrides, state_);
+    frontend::dispatch(state_, *this, frontend_states_);
+    load_requested_screen();
 }
 
 } // namespace oa::app

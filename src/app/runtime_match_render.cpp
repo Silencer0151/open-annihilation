@@ -475,8 +475,11 @@ void Runtime::render_match_surface() {
                 // cannot save, shows grayed rather than hidden.
                 condition = renderer::ButtonCondition::disabled;
             else if (
+                // Build page navigation is on a unit's build pages, never on
+                // a paused menu (PREFS.GUI's OK is PREV).
                 !status_frame &&
-                ((is_build_page_nav(match_hud_->layout.gadgets[index].common.name) &&
+                ((!pause_menu_shown() &&
+                  is_build_page_nav(match_hud_->layout.gadgets[index].common.name) &&
                   builder_gui_page_count() <= 1) ||
                  (match_hud_action(match_hud_->layout.gadgets[index].common.name) == "MISSION" &&
                   !campaign_mission_) ||

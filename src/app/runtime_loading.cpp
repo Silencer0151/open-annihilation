@@ -221,8 +221,10 @@ void Runtime::draw_loading_screen() {
 void Runtime::teardown_match() {
     if (extension_.match_event != nullptr)
         extension_.match_event(extension_.context, *this, MatchEvent::torn_down);
-    // A team panel open as the match ended goes with it.
+    // A team panel open as the match ended goes with it, and so do the
+    // preferences its in-game menu opened.
     forget_team_panel();
+    forget_match_preferences();
     offline_effects_.unbind();
     offline_services_.clear_match();
     offline_services_.set_on_screen_test(nullptr, nullptr);
@@ -250,6 +252,7 @@ void Runtime::leave_match() {
         extension_.match_event(extension_.context, *this, MatchEvent::left);
     match_paused_ = false;
     match_finished_ = false;
+    outcome_over_menu_ = false;
     match_outcome_ = sim::scenario::Outcome::ongoing;
     campaign_mission_ = false;
     stop_match_tracking();

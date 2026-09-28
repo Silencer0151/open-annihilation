@@ -3,8 +3,9 @@
 
 // The in-game team panels of a multiplayer game over a synthetic World: the
 // tab menu's buttons, ALLIES.GUI's rows, alliances and allied victory,
-// CONTROL.GUI's watching and removals, the removal question, and what each
-// tells the other players' machines through TeamPanelHost.
+// CONTROL.GUI's watching and removals, the removal question, what each
+// tells the other players' machines through TeamPanelHost, and when a
+// tournament game withholds CONTROL.
 #include "check.hpp"
 #include "fixtures.hpp"
 
@@ -107,6 +108,42 @@ void test_host_role() {
     game.info(1).role = 1;
     game.info(3).role = 1;
     CHECK(hosts_multiplayer_game(*game.world.world));
+}
+
+/// Answers TeamPanelHost::tournament_game with its context's flag, counting the calls.
+struct Tournament {
+    bool tournament = false;
+    int asked = 0;
+
+    TeamPanelHost host() {
+        TeamPanelHost h{};
+        h.context = this;
+        h.tournament_game = [](void* c) {
+            auto& self = *static_cast<Tournament*>(c);
+            ++self.asked;
+            return self.tournament;
+        };
+        return h;
+    }
+};
+
+void test_control_offered() {
+    Game4 game;
+    Tournament answer;
+    // A machine that does not host is never offered CONTROL, and the host
+    // is not asked.
+    CHECK(!control_offered(*game.world.world, TeamPanelHost{}));
+    CHECK(!control_offered(*game.world.world, answer.host()));
+    CHECK(answer.asked == 0);
+    game.info(0).role = 1;
+    // The host is offered CONTROL unless the game is a tournament game; a
+    // null entry means it is not one.
+    CHECK(control_offered(*game.world.world, TeamPanelHost{}));
+    CHECK(control_offered(*game.world.world, answer.host()));
+    CHECK(answer.asked == 1);
+    answer.tournament = true;
+    CHECK(!control_offered(*game.world.world, answer.host()));
+    CHECK(answer.asked == 2);
 }
 
 void test_alliances() {
@@ -409,6 +446,7 @@ void test_removal_question() {
 
 int main() {
     test_host_role();
+    test_control_offered();
     test_alliances();
     test_team_members();
     test_tab_menu();

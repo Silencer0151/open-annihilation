@@ -14,6 +14,12 @@
 // says that it ran. The recorder also adds one member to Runtime
 // (recorder_runtime_members.hpp) and calls it through RuntimeExtension, the
 // friend, as the extension table's startup hook runs.
+//
+// --record-quit STATUS reaches the screen services an extension keeps: an
+// overlay with nothing to draw keeps the host and services its create is
+// given, and on the fifth frame the recorder stops the sounds, plays BGM on
+// the alternate route and asks for a frontend pass, and on the tenth ends
+// the run through quit with STATUS. Without the option none of this runs.
 #include "oa/app/runtime.hpp"
 
 #include <cstddef>
@@ -36,8 +42,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 5;
-constexpr std::size_t kHookCount = 34;
+constexpr uint32_t kExtensionApiVersionRecorded = 6;
+constexpr std::size_t kHookCount = 36;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -51,11 +57,22 @@ static_assert(
 
 // The option that names the file the counts go to.
 constexpr std::string_view kRecordOption = "--record-hooks";
+// The option that ends the run through ScreenServices::quit with a status.
+constexpr std::string_view kQuitOption = "--record-quit";
+// The after_pump frames --record-quit waits before the sound and frontend
+// services, and before quit.
+constexpr uint64_t kServicesFrame = 5;
+constexpr uint64_t kQuitFrame = 10;
 
 struct Recorder {
     std::string path{};                       // --record-hooks FILE; empty writes nothing
     std::map<std::string, uint64_t> counts{}; // by "<hook>[ <enumerator>]"
     oa::Game frontend_game{};
+    bool quit{};                      // --record-quit was given
+    int quit_status{};                // its STATUS
+    uint64_t after_pump_frames{};     // frames seen at FrameStage::after_pump
+    void* host{};                     // ScreenContext::host, kept from the overlay
+    const ScreenServices* services{}; // ScreenContext::services, kept likewise
 };
 
 /// Returns the recorder of this process.
@@ -164,21 +181,27 @@ const char* event_name(MatchEvent event) {
     return "unknown";
 }
 
-/// Takes --record-hooks FILE and no other option (Extension::take_option).
+/// Takes --record-hooks FILE and --record-quit STATUS and no other option (Extension::take_option).
 ///
 /// @param context Extension::context (unused)
 /// @param name the option as given
 /// @param values takes the arguments after it
 /// @param[out] effects option_effect bits; left 0
-/// @return true for --record-hooks
+/// @return true for --record-hooks and --record-quit
 bool take_option(
     void* /*context*/, const char* name, const OptionValues& values, uint32_t& /*effects*/
 ) {
     record("take_option");
-    if (std::string_view(name) != kRecordOption)
-        return false;
-    recorder().path = values.next(values.arguments);
-    return true;
+    if (std::string_view(name) == kRecordOption) {
+        recorder().path = values.next(values.arguments);
+        return true;
+    }
+    if (std::string_view(name) == kQuitOption) {
+        recorder().quit = true;
+        recorder().quit_status = std::atoi(values.next(values.arguments));
+        return true;
+    }
+    return false;
 }
 
 /// Counts the check of the options (Extension::check_options).
@@ -207,12 +230,47 @@ const char* text(void* /*context*/, ExtensionText which) {
     return nullptr;
 }
 
-/// Counts the registration of the screens (Extension::register_screens).
+/// Keeps the host and services an overlay's create is given.
+///
+/// @param ctx the overlay's context
+void keep_services(ScreenContext* ctx, void* /*state*/) {
+    recorder().host = ctx->host;
+    recorder().services = ctx->services;
+}
+
+/// Counts the registration of the screens; with --record-quit, registers an
+/// overlay that only keeps the services (Extension::register_screens).
 ///
 /// @param context Extension::context (unused)
-/// @param[in,out] registry the runtime's registry; left as it is
-void register_screens(void* /*context*/, ScreenRegistry* /*registry*/) {
+/// @param[in,out] registry the runtime's registry; left as it is without
+///        --record-quit
+void register_screens(void* /*context*/, ScreenRegistry* registry) {
     record("register_screens");
+    if (!recorder().quit)
+        return;
+    OverlayDesc overlay{};
+    overlay.name = "recorder services";
+    overlay.screen = kScreenAny;
+    overlay.create = keep_services;
+    (void)overlay_register(registry, &overlay);
+}
+
+/// Uses the kept screen services on the frames --record-quit names.
+void use_services() {
+    auto& state = recorder();
+    if (!state.quit || state.services == nullptr)
+        return;
+    ++state.after_pump_frames;
+    if (state.after_pump_frames == kServicesFrame) {
+        state.services->stop_sounds(state.host);
+        state.services->play_sound_alternate(state.host, "BGM");
+        state.services->run_frontend(state.host);
+        std::printf("recorder: stop_sounds, play_sound_alternate and run_frontend\n");
+    } else if (state.after_pump_frames == kQuitFrame) {
+        std::printf("recorder: quit %d\n", state.quit_status);
+        std::fflush(stdout);
+        state.services->quit(state.host, nullptr, state.quit_status);
+    }
 }
 
 /// Leaves the frontend's launch values to the preferences (Extension::frontend_entry).
@@ -274,6 +332,15 @@ void match_game(void* /*context*/, oa::Game& /*game*/) {
 /// @return null
 const char* disconnect_text(void* /*context*/, uint8_t /*reason*/) {
     record("disconnect_text");
+    return nullptr;
+}
+
+/// Names no launcher (Extension::service_label).
+///
+/// @param context Extension::context (unused)
+/// @return null
+const char* service_label(void* /*context*/) {
+    record("service_label");
     return nullptr;
 }
 
@@ -355,6 +422,8 @@ struct RuntimeExtension {
     /// @param stage the point of the frame
     static void frame(void* /*context*/, Runtime& /*runtime*/, FrameStage stage) {
         record("frame", stage_name(stage));
+        if (stage == FrameStage::after_pump)
+            use_services();
     }
 
     /// Leaves the simulation step to the engine (Extension::simulation_step).
@@ -523,6 +592,16 @@ struct RuntimeExtension {
     ) {
         record("team_panel_host");
     }
+
+    /// Leaves a close request to the engine (Extension::close_requested).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @return false
+    static bool close_requested(void* /*context*/, Runtime& /*runtime*/) {
+        record("close_requested");
+        return false;
+    }
 };
 
 } // namespace oa::app
@@ -565,6 +644,8 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->pause_changed = RuntimeExtension::pause_changed;
     table->load_progress = RuntimeExtension::load_progress;
     table->team_panel_host = RuntimeExtension::team_panel_host;
+    table->close_requested = RuntimeExtension::close_requested;
+    table->service_label = service_label;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs.
     uintptr_t words[1 + kHookCount]{};

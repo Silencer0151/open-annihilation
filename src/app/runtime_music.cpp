@@ -231,7 +231,9 @@ void Runtime::step_music() {
         audio::cd_set_play_mode(*host.mixer, game.cd_mode);
     }
 
-    const bool on_panel = screen_ == Screen::music;
+    // The music panel is the Music screen, or the MUSIC tab of the
+    // preferences a match opens; leaving either resumes the music.
+    const bool on_panel = screen_ == Screen::music || match_music_panel_open();
     if (host.on_panel && !on_panel)
         audio::music_panel_leave(session);
     host.on_panel = on_panel;

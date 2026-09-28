@@ -43,9 +43,11 @@ void Runtime::update_pointer(float x, float y) {
             if (hovered_ && *hovered_ < match_hud_->layout.gadgets.size()) {
                 const auto& gadget = match_hud_->layout.gadgets[*hovered_];
                 const auto action = match_hud_action(gadget.common.name);
-                // A grayed order page status button still takes the click and ignores it.
+                // A grayed order page status button still takes the click and
+                // ignores it. Build page navigation is never on a paused menu.
                 if (match_gadget_state(gadget) == nullptr &&
-                    ((is_build_page_nav(gadget.common.name) && builder_gui_page_count() <= 1) ||
+                    ((!pause_menu_shown() && is_build_page_nav(gadget.common.name) &&
+                      builder_gui_page_count() <= 1) ||
                      (action == "MISSION" && !campaign_mission_) ||
                      !gadget_command_available(gadget)))
                     hovered_.reset();

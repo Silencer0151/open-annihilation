@@ -332,10 +332,11 @@ void Runtime::toggle_team_menu() {
         team_session().panel = TeamPanel::tab_menu;
         return true;
     };
+    // CONTROL is the host's, and withheld in a tournament game.
     const bool opened = hud::toggle_tab_menu(
         world,
         hud::kSessionMultiplayer,
-        hud::hosts_multiplayer_game(world),
+        hud::control_offered(world, team_panel_host_),
         loader,
         team_panel_controls(),
         events

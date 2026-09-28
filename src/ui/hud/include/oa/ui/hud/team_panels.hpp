@@ -27,8 +27,9 @@ inline constexpr uint16_t kFrameAlliesPanelOpen = 0x0020u;
 /// Bytes of TeamPanelResult::announcement, its terminator included.
 inline constexpr size_t kAnnouncementBytes = 64;
 
-/// What the team panels tell the other players' machines. Every entry is
-/// optional: a null entry changes this machine only.
+/// What the team panels tell the other players' machines, and what they ask
+/// of the running game. Every entry is optional: a null entry changes this
+/// machine only, or answers as its own comment says.
 struct TeamPanelHost {
     void* context{};
     /// Tells a player's machine that a local player's alliance with it
@@ -70,6 +71,12 @@ struct TeamPanelHost {
     /// @param from sharing player index 0..9
     /// @param to receiving player index 0..9
     void (*sight_shared)(void* context, uint8_t from, uint8_t to){};
+    /// Tells whether the running game is a tournament game, in which
+    /// CONTROL.GUI is not offered.
+    ///
+    /// @param context the host's context
+    /// @return true for a tournament game; a null entry means it is not one
+    bool (*tournament_game)(void* context){};
 };
 
 /// What the runtime does after a click on ALLIES.GUI, CONTROL.GUI or the
@@ -97,6 +104,17 @@ struct TeamPanelResult {
 /// @param world players and their setup blocks
 /// @return false when no slot carries the host role
 [[nodiscard]] bool hosts_multiplayer_game(const World& world) noexcept;
+
+/// Tells whether this machine may control the other players (CONTROL.GUI).
+///
+/// It may when it hosts the game (hosts_multiplayer_game) and the host does
+/// not answer that the game is a tournament game; the lock bit is
+/// toggle_tab_menu's.
+///
+/// @param world players and their setup blocks
+/// @param host the team panels' host
+/// @return true when CONTROL is offered
+[[nodiscard]] bool control_offered(const World& world, const TeamPanelHost& host);
 
 /// Counts a team's members.
 ///

@@ -131,6 +131,108 @@ void draw_overlay_probe(void* /*context*/, Runtime& /*runtime*/, const MatchOver
     );
 }
 
+// What the service checks' probe hooks answer and what they saw. The probes
+// stand in for the extension's hooks, whose context stays the extension's,
+// so they keep their state here.
+struct ServiceProbe {
+    bool close_answer{};     // close_requested's answer
+    int close_requests{};    // close requests offered
+    int entry_calls{};       // frontend_entry calls
+    const char* nickname{};  // FrontendEntry::nickname given
+    const char* game_name{}; // FrontendEntry::game_name given
+    bool launched{};         // launched_by_service's answer
+    const char* label{};     // service_label's answer
+    int left_events{};       // MatchEvent::left heard
+    int setup_runs{};        // runs of the main menu's setup step
+    uint32_t query_value{};  // what the probe query answers
+    StepDesc setup_step{};   // the setup step's own binding, run after the count
+    void (*match_event)(void* context, Runtime& runtime, MatchEvent event){}; // the extension's
+};
+
+/// Returns the service checks' probe record.
+///
+/// @return the record, which lives until the process exits
+ServiceProbe& service_probe() {
+    static ServiceProbe probe;
+    return probe;
+}
+
+/// Answers a close request as the probe says, counting it (Extension::close_requested).
+///
+/// @return the probe's answer
+bool probe_close_requested(void* /*context*/, Runtime& /*runtime*/) {
+    auto& probe = service_probe();
+    ++probe.close_requests;
+    return probe.close_answer;
+}
+
+/// Gives the probe's nickname and game name, counting the call (Extension::frontend_entry).
+///
+/// @param[out] entry the launch values
+void probe_frontend_entry(void* /*context*/, FrontendEntry& entry) {
+    auto& probe = service_probe();
+    ++probe.entry_calls;
+    entry.nickname = probe.nickname;
+    entry.game_name = probe.game_name;
+}
+
+/// Answers whether a launcher started the game as the probe says (Extension::launched_by_service).
+///
+/// @return the probe's answer
+bool probe_launched_by_service(void* /*context*/) {
+    return service_probe().launched;
+}
+
+/// Answers the launcher's label as the probe says (Extension::service_label).
+///
+/// @return the probe's label
+const char* probe_service_label(void* /*context*/) {
+    return service_probe().label;
+}
+
+/// Counts MatchEvent::left, then passes every event on to the extension's hook.
+///
+/// @param context Extension::context, passed on
+/// @param[in,out] runtime the running app
+/// @param event what happened
+void probe_match_event(void* context, Runtime& runtime, MatchEvent event) {
+    auto& probe = service_probe();
+    if (event == MatchEvent::left)
+        ++probe.left_events;
+    if (probe.match_event != nullptr)
+        probe.match_event(context, runtime, event);
+}
+
+/// Counts a run of the main menu's setup step, then runs the step's own binding.
+///
+/// @param ctx the step's context
+void probe_setup_step(ScreenContext* ctx, void* /*state*/) {
+    auto& probe = service_probe();
+    ++probe.setup_runs;
+    probe.setup_step.run(ctx, probe.setup_step.state);
+}
+
+/// Answers the probe query with the probe's value.
+///
+/// @param ctx the query's context
+/// @return the probe's value; 0 without the runtime's services
+uint32_t probe_query(ScreenContext* ctx, void* /*state*/) {
+    return ctx != nullptr && ctx->host != nullptr && ctx->services != nullptr
+               ? service_probe().query_value
+               : 0;
+}
+
+/// Returns the binding of the main menu's setup step in a registry.
+///
+/// @param[in,out] registry the runtime's registry
+/// @return the binding, or null when the step has none
+StepDesc* setup_step_binding(ScreenRegistry& registry) {
+    for (uint32_t index = 0; index < registry.step_count; ++index)
+        if (registry.steps[index].step == frontend::Step::setup_main_menu)
+            return &registry.steps[index];
+    return nullptr;
+}
+
 bool contains(CanvasRect rect, int x, int y) {
     return x >= rect.x && y >= rect.y && x < rect.x + rect.w && y < rect.y + rect.h;
 }
@@ -901,6 +1003,7 @@ void Runtime::check_navigation() {
         return;
     }
     write_ppm(report_directory / "native-main.ppm", surface_);
+    check_screen_services();
     load_progress_ = {100, 70, 40, 15, 0, 0};
     loading_flash_.fill(0);
     ensure_loading_screen();
@@ -1054,6 +1157,7 @@ void Runtime::check_navigation() {
     check_skirmish_victory(report_directory);
     check_deathmatch_respawn();
     check_dgun_order();
+    check_launch_services();
     exercise_click(skirmish::resource_name(skirmish::Button::select_map));
     if (screen_ != Screen::map_selection || bound_map_names_.empty())
         throw std::runtime_error("navigation check did not open the map selection");
@@ -1143,6 +1247,286 @@ void Runtime::check_navigation() {
     std::cout << "any mission check: " << campaign_labels_.size() << " campaigns, "
               << campaign_mission_files_.size() << " missions\n";
     check_dialogs(report_directory);
+}
+
+void Runtime::check_screen_services() {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("screen service check: " + what);
+    };
+    require(screen_ == Screen::main_menu && !match_, "needs the main menu with no match");
+    auto* setup = setup_step_binding(screens_);
+    require(setup != nullptr, "the main menu's setup step has no binding");
+    auto& probe = service_probe();
+    probe = {};
+    probe.setup_step = *setup;
+    // What the check changes, put back at its end.
+    const Extension saved_extension = extension_;
+    const StepDesc saved_setup = *setup;
+    const uint32_t saved_query_count = screens_.query_count;
+    const auto saved_values = preference_values_;
+    const bool saved_dirty = preferences_dirty_;
+    const auto restore = [&] {
+        extension_ = saved_extension;
+        *setup = saved_setup;
+        screens_.query_count = saved_query_count;
+        exit_requested_ = false;
+        exit_status_ = 0;
+        quit_requested_ = false;
+        quit_reason_.clear();
+        frontend_pass_requested_ = false;
+        // The preferences load again from the stored values, with the
+        // extension's own launch values.
+        preference_values_ = saved_values;
+        step(frontend::Step::load_preferences, state_);
+        preferences_dirty_ = saved_dirty;
+    };
+    const auto context = screen_context();
+    const auto& services = *context.services;
+    try {
+        // A close request the extension answers leaves the run going; one it
+        // declines, or no hook, ends it at once on the main menu.
+        SDL_Event close{};
+        close.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        bool running = true;
+        extension_.close_requested = probe_close_requested;
+        probe.close_answer = true;
+        handle_sdl_event(close, running);
+        require(
+            running && !exit_requested_ && screen_ == Screen::main_menu &&
+                probe.close_requests == 1,
+            "a close request the extension answered ended the run"
+        );
+        probe.close_answer = false;
+        handle_sdl_event(close, running);
+        require(
+            !running && probe.close_requests == 2,
+            "a close request the extension declined did not end the run on the main menu"
+        );
+        if (sdl_.window == nullptr) {
+            // Without a window the system's quit is not offered.
+            SDL_Event quit_event{};
+            quit_event.type = SDL_EVENT_QUIT;
+            running = true;
+            handle_sdl_event(quit_event, running);
+            require(
+                !running && probe.close_requests == 2,
+                "the system's quit without a window was offered to the extension"
+            );
+        }
+        extension_.close_requested = nullptr;
+        running = true;
+        handle_sdl_event(close, running);
+        require(!running, "a close request without the hook did not end the run");
+
+        // quit ends the run with its status once the callback has returned;
+        // the reason goes to standard error without a window.
+        services.quit(context.host, "the reason the screen service check gives quit", 5);
+        require(!exit_requested_, "quit ended the run inside the callback");
+        apply_screen_request();
+        require(
+            exit_requested_ && exit_status_ == 5 && screen_ == Screen::main_menu &&
+                !quit_requested_,
+            "quit did not end the run with its status"
+        );
+        exit_requested_ = false;
+        exit_status_ = 0;
+
+        // The sound stops and the alternate route; a headless run plays
+        // nothing on it.
+        services.stop_sounds(context.host);
+        require(
+            !menu_music_playing_ && !audio_player_.playing(), "stop_sounds left a sound playing"
+        );
+        services.play_sound_alternate(context.host, "BGM");
+        services.play_sound_alternate(context.host, nullptr);
+        require(!menu_music_playing_, "the alternate route played in a headless run");
+
+        // Two requests make one pass of the dispatcher, once the callback has
+        // returned: the main menu's initialize runs its setup again.
+        setup->run = probe_setup_step;
+        services.set_frontend_state(context.host, frontend::state_id::main_menu);
+        services.set_frontend_signal(context.host, frontend::signal_id::initialize);
+        services.run_frontend(context.host);
+        services.run_frontend(context.host);
+        require(probe.setup_runs == 0, "run_frontend ran the dispatcher at once");
+        apply_screen_request();
+        require(
+            probe.setup_runs == 1 && !frontend_pass_requested_ && screen_ == Screen::main_menu,
+            "two requests did not make one pass that set the main menu up again"
+        );
+        apply_screen_request();
+        require(probe.setup_runs == 1, "a frontend pass ran without a request");
+
+        // A query binding answers through Runtime::query; an unbound query
+        // answers 0.
+        // A label no dispatcher state asks, and what its probe answers.
+        const auto spare_query = static_cast<frontend::Query>(0x2ff);
+        constexpr uint32_t kProbeAnswer = 0x5eed;
+        probe.query_value = kProbeAnswer;
+        require(query(spare_query, state_) == 0, "an unbound query did not answer 0");
+        require(
+            query_register(&screens_, spare_query, probe_query, nullptr),
+            "the probe query was not registered"
+        );
+        require(
+            query(spare_query, state_) == kProbeAnswer,
+            "a bound query did not answer the dispatcher"
+        );
+
+        // The preferences load takes the launch's nickname and game name, and
+        // asks for them once.
+        extension_.frontend_entry = probe_frontend_entry;
+        probe.nickname = "Launcher";
+        probe.game_name = "Room";
+        step(frontend::Step::load_preferences, state_);
+        require(
+            preferences_.nickname == "Launcher" && preferences_.game_name == "Room" &&
+                probe.entry_calls == 1,
+            "the preferences load did not take the launch's nickname and game name once"
+        );
+        probe.nickname = "NicknameOfTwentyChar";
+        step(frontend::Step::load_preferences, state_);
+        require(preferences_.nickname == "NicknameOfTwenty", "a long nickname was not cut to 16");
+        write_string(init::general_section, "Nickname", "Stored");
+        probe.nickname = nullptr;
+        step(frontend::Step::load_preferences, state_);
+        require(
+            preferences_.nickname == "Stored" && preferences_.game_name == "Room",
+            "a launch without a nickname did not keep the stored one"
+        );
+        probe.nickname = "";
+        step(frontend::Step::load_preferences, state_);
+        require(preferences_.nickname == "Stored", "an empty nickname replaced the stored one");
+    } catch (...) {
+        restore();
+        throw;
+    }
+    restore();
+    std::cout << "screen service check: close requests answered and declined, quit's status, "
+                 "sound stops, one frontend pass for two requests, a query binding and the "
+                 "launch's nickname\n";
+}
+
+void Runtime::check_launch_services() {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("launch service check: " + what);
+    };
+    require(screen_ == Screen::skirmish, "needs the skirmish menu");
+    auto* setup = setup_step_binding(screens_);
+    require(setup != nullptr, "the main menu's setup step has no binding");
+    auto& probe = service_probe();
+    probe = {};
+    probe.setup_step = *setup;
+    const Extension saved_extension = extension_;
+    const StepDesc saved_setup = *setup;
+    probe.match_event = saved_extension.match_event;
+    const auto restore = [&] {
+        if (match_ && match_paused_ && !match_finished_)
+            resume_match_pause();
+        extension_ = saved_extension;
+        *setup = saved_setup;
+        exit_requested_ = false;
+        exit_status_ = 0;
+        quit_requested_ = false;
+        quit_reason_.clear();
+        frontend_pass_requested_ = false;
+    };
+    constexpr std::size_t kLabelLength = oa::ui::frontend::kServiceLabelBytes - 1U;
+    try {
+        // The match start keeps whether a launcher started the game and its label.
+        extension_.launched_by_service = probe_launched_by_service;
+        extension_.service_label = probe_service_label;
+        extension_.match_event = probe_match_event;
+        probe.launched = true;
+        probe.label = "Launcher";
+        exercise_click(skirmish::resource_name(skirmish::Button::start));
+        require(screen_ == Screen::match && match_, "Start did not enter a match");
+        require(
+            service_launch_ && std::string_view(service_label_.data()) == "Launcher",
+            "the match start did not keep the launcher and its label"
+        );
+        // A label longer than the menus take is cut; none leaves it empty.
+        const std::string long_label(kLabelLength + 9U, 'L');
+        probe.label = long_label.c_str();
+        take_launcher_label();
+        require(
+            ::strnlen(service_label_.data(), service_label_.size()) == kLabelLength,
+            "a long label was not cut to the menus' length"
+        );
+        probe.launched = false;
+        probe.label = nullptr;
+        take_launcher_label();
+        require(!service_launch_ && service_label_[0] == '\0', "no label left one kept");
+
+        // A close request the extension answers asks nothing in the match; one
+        // it declines asks whether to surrender.
+        SDL_Event close{};
+        close.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        bool running = true;
+        const auto panel = match_hud_panel_;
+        extension_.close_requested = probe_close_requested;
+        probe.close_answer = true;
+        handle_sdl_event(close, running);
+        require(
+            running && !exit_requested_ && !match_paused_ && match_hud_panel_ == panel &&
+                probe.close_requests == 1,
+            "a close request the extension answered asked in the match"
+        );
+        probe.close_answer = false;
+        handle_sdl_event(close, running);
+        require(
+            running && match_paused_ && match_hud_panel_ == "guis/YESORNO.GUI" &&
+                probe.close_requests == 2,
+            "a close request the extension declined did not ask to surrender"
+        );
+        escape_match_menu();
+        require(!match_paused_, "Escape did not close the surrender confirmation");
+
+        // A frontend pass requested in a match does not run, and is dropped.
+        const auto context = screen_context();
+        setup->run = probe_setup_step;
+        context.services->run_frontend(context.host);
+        apply_screen_request();
+        require(
+            probe.setup_runs == 0 && !frontend_pass_requested_ && screen_ == Screen::match,
+            "a frontend pass ran in a match"
+        );
+
+        // quit leaves the running match first, as the exit confirmation's
+        // first choice does, once the callback has returned; the preferences
+        // open over it close with it, and the next match opens with none.
+        show_match_pause_menu();
+        activate_pause_gadget("PREFS");
+        require(
+            match_preferences_open() && match_hud_panel_ == "guis/PREFS.GUI",
+            "PREFS did not open the preferences over the match"
+        );
+        context.services->quit(context.host, nullptr, 7);
+        require(
+            match_ && !exit_requested_ && probe.left_events == 0,
+            "quit left the match inside the callback"
+        );
+        apply_screen_request();
+        require(
+            exit_requested_ && exit_status_ == 7 && !match_ && probe.left_events == 1,
+            "quit in a match did not leave it before ending the run"
+        );
+        require(
+            !match_preferences_open() && options_parent_ != Screen::match,
+            "the preferences open as the match went stayed open for the next match"
+        );
+    } catch (...) {
+        restore();
+        throw;
+    }
+    restore();
+    return_to_skirmish_menu();
+    std::cout << "launch service check: the launcher's label kept at the match start and cut to "
+              << kLabelLength
+              << " characters, close requests in the match, no frontend pass there, and quit "
+                 "leaving the match first with its preferences\n";
 }
 
 void Runtime::return_to_skirmish_menu() {

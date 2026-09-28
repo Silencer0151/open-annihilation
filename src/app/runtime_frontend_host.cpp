@@ -90,8 +90,12 @@ void Runtime::step(frontend::Step step_id, frontend::State&) {
               std::to_string(static_cast<uint32_t>(step_id));
 }
 
-uint32_t Runtime::query(frontend::Query, frontend::State&) {
-    return 0;
+uint32_t Runtime::query(frontend::Query query, frontend::State&) {
+    const auto* handler = query_find(&screens_, query);
+    if (handler == nullptr)
+        return 0;
+    auto context = screen_context();
+    return handler->run(&context, handler->state);
 }
 
 void Runtime::play_movie(frontend::State&, std::string_view filename) {
@@ -242,18 +246,22 @@ void Runtime::cd_volume(uint32_t value) {
 }
 
 uint32_t Runtime::nickname_override_enabled() {
-    return 0;
-}
-
-std::string Runtime::nickname_override() {
-    return {};
-}
-
-std::string Runtime::game_name_override() {
+    // The first of the preferences load's three overrides asks the extension
+    // once for the load; the values are copied at once.
     FrontendEntry entry{};
     if (extension_.frontend_entry != nullptr)
         extension_.frontend_entry(extension_.context, entry);
-    return entry.game_name != nullptr ? entry.game_name : "";
+    entry_nickname_ = entry.nickname != nullptr ? entry.nickname : "";
+    entry_game_name_ = entry.game_name != nullptr ? entry.game_name : "";
+    return entry_nickname_.empty() ? 0 : 1;
+}
+
+std::string Runtime::nickname_override() {
+    return entry_nickname_;
+}
+
+std::string Runtime::game_name_override() {
+    return entry_game_name_;
 }
 
 std::optional<std::string> Runtime::user_name() {

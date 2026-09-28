@@ -35,6 +35,7 @@
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/team_panels.hpp"
+#include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
@@ -246,8 +247,9 @@ class Runtime final : public menu::Host,
     /// as the archives hold it, and no AudioCD or multiplayer settings are
     /// written.
     ///
-    /// @return the exit status: 0, the campaign run's result or the one an
-    ///     extension run phase set
+    /// @return the exit status: 0, the campaign run's result, the one an
+    ///     extension run phase set, or, after the application loop, the one
+    ///     ScreenServices::quit asked for
     int run();
 
     /// Hands the runtime a video capture started before it, so that the capture's sound
@@ -303,11 +305,9 @@ class Runtime final : public menu::Host,
 
     /// Tells whether the running match goes on this frame.
     ///
-    /// It does on the match screen. A match shared with other players'
-    /// machines (extension_state::shared_match) also goes on beneath the
-    /// preferences its in-game menu opens (the options screen and its
-    /// tabs), as it does beneath its menus; a match played on this machine
-    /// alone does not.
+    /// It does on the match screen, which also shows the match's menus and
+    /// the preferences its in-game menu opens (PREFS.GUI in the side column);
+    /// the pages opened over the match (load, save, briefing) leave it.
     ///
     /// @return false without a running match
     [[nodiscard]] bool match_running() const;
@@ -321,7 +321,9 @@ class Runtime final : public menu::Host,
     /// a match the extension's pump, the pointer's pick of the unit under it
     /// (pick_cursor_unit), the ticks the clock is worth, the outcome, the
     /// render (which rebuilds the on-screen list) and the film step, each
-    /// charged to the frame's profile window.
+    /// charged to the frame's profile window. When the extension's pump asks
+    /// to end the run (ScreenServices::quit), the run ends after it and the
+    /// frame stops there.
     /// The F2 and Ctrl+F9 screenshot keys reach the hotkey handlers as SDL key
     /// events. 3.1c also takes a request to re-initialise the display here;
     /// the engine has no such request.
@@ -370,10 +372,11 @@ class Runtime final : public menu::Host,
     /// Marks the application as closing so no further frame runs, shows the reason when there is
     /// one, and ends the loop.
     ///
-    /// The reason shows in a message box under the window's title. The desktop
-    /// display mode returns when the display host destroys the window.
+    /// The reason shows in a message box under the window's title, or goes to
+    /// standard error without a window. The desktop display mode returns when
+    /// the display host destroys the window.
     ///
-    /// @param message reason to show; null for none
+    /// @param message reason to show; null or empty for none
     void quit_application(const char* message);
 
     /// Prints the developer memory report after benchmark and headless match runs; nothing when it
@@ -531,13 +534,23 @@ class Runtime final : public menu::Host,
     /// @param report_directory directory the frames are written to
     void check_dialogs(const fs::path& report_directory);
 
-    /// Checks HELP.GUI opened from the pause menu of a live match and presented through SDL.
+    /// Checks the dialogs and menus of a live match presented through SDL.
     ///
-    /// Read back from the renderer: the layered presenter stays in use, the panel
-    /// is centred right of the drawn side column, the options panel under it is
-    /// darkened, every other pixel matches the paused frame, and OK at its
-    /// presented position closes it. Throws std::runtime_error on a failure.
-    /// Then runs check_in_game_briefing().
+    /// HELP.GUI from the pause menu, read back from the renderer: the layered
+    /// presenter stays in use, the panel is centred right of the drawn side
+    /// column, the options panel under it is darkened, every other pixel
+    /// matches the paused frame, and OK at its presented position closes it;
+    /// then check_in_game_briefing(). Over a new skirmish: the window's close
+    /// request and a held Escape; the preferences the in-game menu opens,
+    /// PREFS.GUI in the side column with the OPTIONS lightbar sweeping over
+    /// it and the battlefield beside it, each tab's sub-panel (SOUNDSRT,
+    /// SPEEDSRT, VISUALRT, MUSICRT) merged beside the tabs, the FXVOL and GAME
+    /// sliders, Cancel, Enter, Escape, the quick keys and F2, and a close
+    /// request over them whose CHOICE2 returns to the in-game menu; a unit's
+    /// speech with its order's caption; a launcher's label in the exit menus
+    /// and on ENDMSN.GUI, whose MAIN MENU then leaves the pointer's picture as
+    /// it is; and the system's quit, whose CHOICE1 surrenders and ends the
+    /// run. Throws std::runtime_error on a failure.
     void check_match_dialogs();
 
     /// Checks BRIEFING.GUI opened by MISSION on the pause menu of a campaign mission.
@@ -836,10 +849,32 @@ class Runtime final : public menu::Host,
     /// Draws the current screen's package, then the overlays over it.
     void draw_screen_packages();
 
-    /// Shows the screen a package requested, if any.
+    /// Shows the screen a package requested, if any, then runs the frontend
+    /// pass a package asked for (ScreenServices::run_frontend); when a package
+    /// asked to end the run, ends it instead (finish_quit_request).
+    ///
+    /// The pass is the one a pointer press runs: the unit header step, then
+    /// the dispatcher, and a screen the pass requested is shown after it.
+    /// Requests since the last call make one pass; none runs while a match
+    /// is on screen, and the request is dropped.
     void apply_screen_request();
+
+    /// Ends the run a package asked to end (ScreenServices::quit), once the
+    /// event or frame that asked has been handled: a running match is left
+    /// first, then the reason shows and the main loop stops. Nothing when no
+    /// package asked.
+    ///
+    /// apply_screen_request calls it before anything else, and the frame calls
+    /// it after the extension's pump.
+    void finish_quit_request();
     ScreenRegistry screens_{};
     std::optional<ScreenId> pending_screen_;
+    // A package asked for a frontend pass (ScreenServices::run_frontend).
+    bool frontend_pass_requested_{};
+    // A package asked to end the run (ScreenServices::quit), with this reason
+    // (empty for none); finish_quit_request ends it.
+    bool quit_requested_{};
+    std::string quit_reason_{};
 
     /// Returns the viewed player's side prefix for side-specific art.
     ///
@@ -1028,24 +1063,29 @@ class Runtime final : public menu::Host,
 
     /// Resumes a paused match and shows the order panel for the selection; nothing once the match
     /// is finished.
+    ///
+    /// The preferences a match opens are left first, keeping what they set,
+    /// as their OK leaves them.
     void resume_match_pause();
 
     /// Answers a request to close the window during a running match: opens the surrender
     /// confirmation (YESORNO) unless it is already up.
     void request_match_close();
 
-    /// Brings a page opened over a running match (the options pages, the load and save
-    /// pages, the in-game briefing) back to the match's menu, so that a close request asks
-    /// there.
+    /// Brings a page opened over a running match (the load and save pages, the in-game
+    /// briefing) back to the match's menu, so that a close request asks there.
     ///
     /// @return true when the match is on screen again; false when no such page is open
     bool return_to_match_for_close();
 
     /// Answers Escape over a paused match: the surrender confirmation takes it as CHOICE2,
-    /// any other menu resumes the match.
+    /// the preferences as their Escape default (OK), any other menu resumes the match.
     void escape_match_menu();
 
-    /// Steps and draws the lightbar sweep of the in-game OPTIONS panel while it runs.
+    /// Steps and draws the lightbar sweep of the preferences a match opens while it runs.
+    ///
+    /// Called as the match frame draws its menus; the sweep steps once a frame
+    /// and is drawn over the side column and the battlefield beside it.
     void draw_options_lightbar();
 
     /// Binds the running match's speech with its own captions to the offline services.
@@ -1157,7 +1197,9 @@ class Runtime final : public menu::Host,
     ///
     /// A multi-stage button steps first. The action may open the save, briefing,
     /// game settings, help, exit or restart panels, restart the mission, return
-    /// to the main menu or leave the game.
+    /// to the main menu or leave the game. Over the preferences the options
+    /// handlers take the click: a slider's knob moves to the pointer, a tab
+    /// merges its sub-panel into PREFS.GUI, OK and Cancel close them.
     ///
     /// @param name control name in the loaded panel
     void activate_pause_gadget(std::string_view name);
@@ -1199,11 +1241,13 @@ class Runtime final : public menu::Host,
 
     /// Shows the pause menu's own panels over the battlefield.
     ///
-    /// EXITMENU, YESORNO, RESTART, GAMEOPTIONS and the team panels lie over the
-    /// battlefield; they render into the HUD source with the side panels, and
-    /// the battlefield pass shows them: RESTART.GUI and GAMEOPTIONS.GUI whole
-    /// over their art, the team panels whole over the side panel's tile, the
-    /// others (which have no art here) control by control.
+    /// EXITMENU, YESORNO, RESTART, GAMEOPTIONS, the team panels and the
+    /// preferences' sub-panels lie over the battlefield; they render into the
+    /// HUD source with the side panels, and the battlefield pass shows them:
+    /// RESTART.GUI and GAMEOPTIONS.GUI whole over their art, the team panels
+    /// whole over the side panel's tile, PREFS.GUI's part beside the side column
+    /// at the side column's scale, the others (which have no art here) control
+    /// by control.
     void draw_battlefield_panel();
 
     /// Tells whether the running game is a multiplayer game (extension_state::multiplayer).
@@ -1307,6 +1351,30 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error at the first failure.
     void check_pause_key();
 
+    /// Checks the services and hooks the screens and the extension reach the
+    /// runtime through, on the main menu.
+    ///
+    /// Probe hooks stand in for the extension's and are put back afterwards:
+    /// a close request the extension answers leaves the run going and one it
+    /// declines, or a null hook, ends it at once; quit ends the run with its
+    /// exit status once its callback has returned; stop_sounds silences everything and play_sound_alternate
+    /// plays nothing headless; a frontend pass runs once for two requests; a
+    /// query binding answers
+    /// Runtime::query; the preferences load takes the launch's nickname and
+    /// game name. Throws std::runtime_error at the first failure.
+    void check_screen_services();
+
+    /// Checks the launcher's label and quit in a match, over a new skirmish,
+    /// which it leaves for the skirmish menu.
+    ///
+    /// Probe hooks answer that a launcher started the game and name it: the
+    /// match start keeps both, a long label is cut to kServiceLabelBytes - 1
+    /// characters, a frontend pass requested in the match does not run, and
+    /// quit, once its callback has returned, leaves the match first
+    /// (MatchEvent::left) and closes the preferences open over it. Throws
+    /// std::runtime_error at the first failure.
+    void check_launch_services();
+
     /// Checks the rules of a match shared with other players' machines and
     /// the team panels, over the running skirmish taken as one.
     ///
@@ -1322,8 +1390,37 @@ class Runtime final : public menu::Host,
     /// Leaves the options screens for the screen they were opened from.
     ///
     /// The preferences are saved. Opened from a match, the match takes the
-    /// options back and shows the paused options menu again.
+    /// options back and shows the paused options menu again; the preferences a
+    /// match opens (PREFS.GUI) close to the in-game menu they were opened over.
     void leave_options_screen();
+
+    /// Tells whether the preferences a match opens (PREFS.GUI in the side
+    /// column) are up.
+    ///
+    /// @return true while they are open over the running match
+    [[nodiscard]] bool match_preferences_open() const;
+
+    /// Tells whether the preferences a match opens show their MUSIC tab
+    /// (MUSICRT.GUI beside the tabs), which the music counts as its panel.
+    ///
+    /// @return true while that tab is open over the running match
+    [[nodiscard]] bool match_music_panel_open() const;
+
+    /// Closes the preferences a match opened as the match goes, without
+    /// showing the in-game menu: what they set is saved, their lightbar and
+    /// pictures are freed and the next match opens with none. Nothing when
+    /// none are open.
+    void forget_match_preferences();
+
+    /// Tells whether a paused menu's panel is on the HUD in place of the
+    /// unit's pages: the in-game menu and what it opens, the team panels, the
+    /// exit confirmation.
+    ///
+    /// The finished match is held without one; a menu open as it finished
+    /// stays on the HUD.
+    ///
+    /// @return true while such a panel is shown
+    [[nodiscard]] bool pause_menu_shown() const;
 
     /// Shows the VISUALS toggles' stages from the saved graphics word: SHADING, ANTI and BSHADOWS.
     void sync_visual_option_widgets();
@@ -1347,12 +1444,17 @@ class Runtime final : public menu::Host,
 
     /// Binds the options handlers' services over this runtime's preferences, sound and display.
     ///
-    /// The native options screens are the full-screen frontend panels even when
-    /// opened from a match, so the in-game (*RT) variants are not selected; a
-    /// watcher's game speed slider is locked.
+    /// Opened from a running match, the options are PREFS.GUI in the side
+    /// column with the in-game (*RT) sub-panels, and the GAME slider sets the
+    /// running game's speed; elsewhere they are the full-screen frontend panels.
+    /// A watcher's game speed slider is locked.
     void bind_options_context();
 
-    /// Opens OPTIONS: the lightbar takes the frame below, then STARTOPT.GUI loads as the tab panel.
+    /// Opens OPTIONS: the lightbar takes the panel below, then the tab panel loads.
+    ///
+    /// Outside a match that is STARTOPT.GUI, full screen. From a running match
+    /// it is PREFS.GUI in the in-game menu's place in the side column, over the
+    /// match, showing the match's own option fields and speed.
     void enter_options_panel();
 
     /// Clicks the hovered gadget of the new-campaign or any-mission screen.
@@ -4315,6 +4417,14 @@ class Runtime final : public menu::Host,
     /// @return the console, or null without a match
     oa::ui::console::Console* match_console();
 
+    /// Asks the extension, as each match starts, whether a launcher started
+    /// the game and for that launcher's label.
+    ///
+    /// Keeps the answers for the match's in-game menus and end-of-game
+    /// screen: service_launch_, and in service_label_ up to
+    /// kServiceLabelBytes - 1 characters of the label, empty for none.
+    void take_launcher_label();
+
     /// Returns what kind of session the running match is (the map context's object state); a replay
     /// plays back the multiplayer game it recorded.
     ///
@@ -5332,6 +5442,17 @@ class Runtime final : public menu::Host,
     /// @param sound ALLSOUND name
     void play_menu_voice(std::string_view sound);
 
+    /// Plays an ALLSOUND sound on the alternate route, looping it as the menu
+    /// music plays, in place of whatever that route plays.
+    ///
+    /// Nothing plays when muted, headless or for a name the registry does not
+    /// hold; a failure is reported on stderr. Once it plays, the menu music
+    /// counts as playing, so play_menu_voice starts no second loop.
+    ///
+    /// @param sound ALLSOUND name, compared case-insensitively
+    /// @return true when the sound started
+    bool play_alternate_sound(std::string_view sound);
+
     /// Stops the menu music loop and puts the CD music into its match mode.
     void stop_menu_music();
 
@@ -5409,7 +5530,8 @@ class Runtime final : public menu::Host,
     /// CDNEXT/CDPREV and RESTORE, each followed by the track display refresh
     /// (refresh_music_panel). UNDO and panel buttons go through the options tab
     /// handler, and leaving the panel (no selection) through step_music's
-    /// music_panel_leave.
+    /// music_panel_leave, once neither the Music screen nor the MUSIC tab of
+    /// the preferences a match opens shows.
     ///
     /// @param[in,out] panel music panel
     /// @param context options screen context
@@ -5579,20 +5701,26 @@ class Runtime final : public menu::Host,
     /// @param value CDAudioVolume setting
     void cd_volume(uint32_t value) override;
 
-    /// Reports whether a nickname override is active; none is.
+    /// Asks the extension for the frontend's launch values and reports whether they name a
+    /// nickname.
     ///
-    /// @return 0
+    /// The preferences load calls it first of the three overrides, once per
+    /// load: the extension's frontend_entry is asked here, and its nickname
+    /// and game name are kept for nickname_override and game_name_override.
+    ///
+    /// @return 1 when the extension gave a nickname that is not empty, else 0
     uint32_t nickname_override_enabled() override;
 
-    /// Returns the nickname override; there is none.
+    /// Returns the nickname the extension gave at the last preferences load; the preferences
+    /// load prefers it to the stored one.
     ///
-    /// @return empty
+    /// @return the nickname, or empty
     std::string nickname_override() override;
 
-    /// Returns the game name a launch switch gave (-h); the preferences load prefers it to the
-    /// stored one.
+    /// Returns the game name the extension gave at the last preferences load (a launch
+    /// switch's -h, say); the preferences load prefers it to the stored one.
     ///
-    /// @return the extension's game name, or empty
+    /// @return the game name, or empty
     std::string game_name_override() override;
 
     /// Returns the operating-system user name from USER or USERNAME.
@@ -5639,6 +5767,9 @@ class Runtime final : public menu::Host,
     uint32_t cd_audio_volume() override;
 
     /// Reports whether a launcher the extension recognises started the game.
+    ///
+    /// Asked when the preferences are written, and as each match starts
+    /// (take_launcher_label).
     ///
     /// @return 1 when the extension says so, else 0
     uint8_t launched_by_service() override;
@@ -6653,11 +6784,15 @@ class Runtime final : public menu::Host,
     std::optional<std::size_t> hovered_;
     int32_t selected_ = -1;
     bool exit_requested_ = false;
+    // The status run() returns after the application loop (ScreenServices::quit).
+    int exit_status_{};
     bool application_active_ = true;
     uint32_t last_stream_sweep_ms_ = 0;
     oa::platform::MemoryStatusReport memory_report_{};
     bool match_paused_ = false;
     bool match_finished_ = false;
+    // A paused menu was on the HUD as the match finished (pause_menu_shown).
+    bool outcome_over_menu_ = false;
     // The last match frame drawn was of the finished match, its outcome title included.
     bool outcome_frame_drawn_ = false;
     bool campaign_mission_ = false;
@@ -6743,6 +6878,15 @@ class Runtime final : public menu::Host,
     // What the team panels tell the other players' machines, filled by the
     // extension (Extension::team_panel_host) as each match starts.
     oa::ui::hud::TeamPanelHost team_panel_host_{};
+    // Whether a launcher the extension recognises started the game, and its
+    // label, zero-terminated; asked as each match starts (take_launcher_label)
+    // for its in-game menus and end-of-game screen.
+    bool service_launch_{};
+    std::array<char, oa::ui::frontend::kServiceLabelBytes> service_label_{};
+    // The nickname and game name the extension gave at the last preferences
+    // load (Extension::frontend_entry); empty for none.
+    std::string entry_nickname_{};
+    std::string entry_game_name_{};
     // Model light direction once "Light" set it; later matches keep it.
     std::optional<std::array<float, 3>> model_light_;
     // Per-channel table of the display gamma for the RGB layers.

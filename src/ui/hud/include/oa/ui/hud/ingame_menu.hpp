@@ -89,8 +89,9 @@ inline constexpr uint8_t kGuiFlagsTabMenu = 0x20u;
 ///
 /// @param[in,out] world World whose Game.gui_flags change.
 /// @param session_kind CampaignFile.kind of the session.
-/// @param control_offered Whether this machine hosts the game
-///        (hosts_multiplayer_game), which lets it control the other players.
+/// @param control_offered Whether this machine may control the other players:
+///        it hosts the game and the game is not a tournament game
+///        (control_offered in team_panels.hpp).
 /// @param loader Loads and closes the menu panel.
 /// @param controls Named controls of the loaded menu; set_active shows and
 ///        hides ALLIES, SHARE and CONTROL.

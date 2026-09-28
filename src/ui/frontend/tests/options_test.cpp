@@ -270,8 +270,167 @@ OA_GAME_DATA_TEST(visuals_in_game_hides_mode_controls) {
     OA_CHECK(context.realtime_panels);
     OA_CHECK(panel_control(panel, "VIDSLDR")->active == 0);
     OA_CHECK(panel_control(panel, "VIDVAL")->active == 0);
-    OA_CHECK(panel_find(panel, "PANEL") > 0);
     OA_CHECK(panel_control(panel, "SHADING")->active == 1);
+    // The widening belongs to PREFS.GUI's preparation, not to the sub-panel's set-up.
+    OA_CHECK(panel_find(panel, "PANEL") == -1);
+}
+
+// PREFS.GUI with the tab's in-game sub-panel merged into it, as a tab in a
+// match opens it; false without the installed game's data.
+bool realtime_panel(Panel& panel, const char* sub, OptionsContext& context) {
+    const auto base = load_gui("prefs.gui");
+    const auto extra = load_gui(sub);
+    if (!base || !extra)
+        return false;
+    panel_load_layout(panel, *base);
+    Panel loaded;
+    panel_load_layout(loaded, *extra);
+    options_prepare_realtime_panel(panel, context);
+    options_merge_realtime_panel(panel, loaded);
+    return true;
+}
+
+// PREFS.GUI in a match: a tab widens it once, by 150 pixels, and adds the
+// PANEL filler beside the tabs, into which SOUNDSRT.GUI is centred.
+OA_GAME_DATA_TEST(realtime_sound_panel_merges_into_prefs) {
+    const auto base = load_gui("prefs.gui");
+    const auto extra = load_gui("soundsrt.gui");
+    if (!base || !extra)
+        return;
+    Panel panel;
+    panel_load_layout(panel, *base);
+    Panel sub;
+    panel_load_layout(sub, *extra);
+    const auto tabs = panel.count;
+    OA_CHECK(panel.controls[0].width == 128 && panel.controls[0].height == 354);
+    OA_CHECK(sub.controls[0].width == 150 && sub.controls[0].height == 352);
+    prefs::Preferences preferences{};
+    preferences.fx_volume = 32;
+    preferences.sound_flags = 1;
+    Recorder recorder;
+    auto context = make_context(preferences, recorder);
+    context.in_game = true;
+    options_prepare_realtime_panel(panel, context);
+    OA_CHECK(context.realtime_panels && context.hold_game);
+    OA_CHECK(panel.controls[0].width == 278 && panel.controls[0].height == 354);
+    const auto* filler = panel_control(panel, "PANEL");
+    OA_CHECK(
+        filler != nullptr && filler->type == ControlType::filler && filler->x == 128 &&
+        filler->y == 0 && filler->width == 150 && filler->height == 354 && filler->active == 1
+    );
+    OA_CHECK(panel.count == tabs + 1);
+
+    options_merge_realtime_panel(panel, sub);
+    OA_CHECK(panel.count == tabs + 1 + sub.count);
+    OA_CHECK(panel_control(panel, "PANEL")->active == 0);
+    // 128 + (150 - 150) / 2 across and 0 + (354 - 352) / 2 down.
+    const auto* volume = panel_control(panel, "FXVOL");
+    OA_CHECK(volume != nullptr && volume->x == 140 && volume->y == 69);
+    const auto* image = panel_control(panel, "SOUNDSRT");
+    OA_CHECK(
+        image != nullptr && image->type == ControlType::frame && image->x == 128 && image->y == 1
+    );
+    // The tabs stay where PREFS.GUI has them.
+    const auto* sound_tab = panel_control(panel, "SOUND");
+    OA_CHECK(sound_tab != nullptr && sound_tab->x == 13 && sound_tab->y == 24);
+
+    // The sub-panel's set-up widens nothing more and adds no second filler.
+    options_enter_sound(panel, context);
+    OA_CHECK(panel.controls[0].width == 278);
+    OA_CHECK(panel.count == tabs + 1 + sub.count);
+    OA_CHECK(panel_control(panel, "SOUND")->group_value == 1);
+    OA_CHECK(panel_control(panel, "FXVOL")->slider.maximum == 0x40);
+    OA_CHECK(panel_stage(panel, "MODE") == 1);
+}
+
+// Each tab's in-game sub-panel merges beside the tabs; VISUALRT.GUI offers no
+// display mode, so none is scanned.
+OA_GAME_DATA_TEST(realtime_sub_panels_merge_beside_the_tabs) {
+    for (const char* sub : {"musicrt.gui", "speedsrt.gui", "visualrt.gui"}) {
+        Panel panel;
+        prefs::Preferences preferences{};
+        preferences.game_speed = 10;
+        Recorder recorder;
+        recorder.modes = {{800, 600, 0}};
+        auto context = make_context(preferences, recorder);
+        context.in_game = true;
+        if (!realtime_panel(panel, sub, context))
+            return;
+        OA_CHECK(panel.controls[0].width == 278);
+        const auto* undo = panel_control(panel, "UNDO");
+        OA_CHECK(undo != nullptr && undo->x == 128 + 13 && undo->y == 1 + 304);
+    }
+    Panel panel;
+    prefs::Preferences preferences{};
+    Recorder recorder;
+    recorder.modes = {{800, 600, 0}};
+    auto context = make_context(preferences, recorder);
+    context.in_game = true;
+    if (!realtime_panel(panel, "visualrt.gui", context))
+        return;
+    options_enter_visuals(panel, context, false);
+    OA_CHECK(panel_find(panel, "VIDSLDR") == -1);
+    OA_CHECK(context.display_modes.count == 0 && !context.display_modes_ready);
+    OA_CHECK(panel_control(panel, "VISUALS")->group_value == 1);
+    OA_CHECK(panel_control(panel, "GAMMA")->slider.maximum == 0x14);
+    OA_CHECK(panel.controls[0].width == 278);
+}
+
+// Outside a match the sub-panels are the full-screen ones, merged by the
+// application: their set-up neither widens the panel nor adds a filler.
+OA_GAME_DATA_TEST(frontend_sub_panels_are_not_widened) {
+    for (const char* sub : {"sounds.gui", "music.gui", "speeds.gui", "visuals.gui"}) {
+        Panel panel;
+        if (!options_panel(panel, sub))
+            return;
+        const auto width = panel.controls[0].width;
+        const auto count = panel.count;
+        prefs::Preferences preferences{};
+        preferences.game_speed = 10;
+        Recorder recorder;
+        auto context = make_context(preferences, recorder);
+        options_enter_sound(panel, context);
+        options_enter_music(panel, context);
+        options_enter_speeds(panel, context);
+        options_enter_visuals(panel, context, false);
+        OA_CHECK(!context.realtime_panels);
+        OA_CHECK(panel.controls[0].width == width && panel.count == count);
+        OA_CHECK(panel_find(panel, "PANEL") == -1);
+    }
+}
+
+// Without a PANEL record the sub-panel's records move by its root's own
+// position; the centring in PANEL halves the difference toward zero.
+OA_TEST(realtime_merge_places_records_by_the_filler_or_the_root) {
+    Panel sub;
+    sub.controls[0].x = 128;
+    sub.controls[0].y = 128;
+    sub.controls[0].width = 150;
+    sub.controls[0].height = 352;
+    auto* button = panel_append(sub, ControlType::button, "RESTORE");
+    OA_CHECK(button != nullptr);
+    button->x = 13;
+    button->y = 269;
+
+    Panel bare;
+    bare.controls[0].width = 128;
+    bare.controls[0].height = 354;
+    options_merge_realtime_panel(bare, sub);
+    const auto* moved = panel_control(bare, "RESTORE");
+    OA_CHECK(bare.count == 1 && moved != nullptr && moved->x == 141 && moved->y == 397);
+
+    Panel narrow;
+    auto* filler = panel_append(narrow, ControlType::filler, "PANEL");
+    OA_CHECK(filler != nullptr);
+    filler->x = 10;
+    filler->y = 5;
+    filler->width = 100;  // 50 narrower: moves 25 left
+    filler->height = 351; // one row shorter: 0, not -1
+    filler->active = 1;
+    options_merge_realtime_panel(narrow, sub);
+    const auto* centred = panel_control(narrow, "RESTORE");
+    OA_CHECK(narrow.count == 2 && centred != nullptr && centred->x == -2 && centred->y == 274);
+    OA_CHECK(panel_control(narrow, "PANEL")->active == 0);
 }
 
 OA_GAME_DATA_TEST(speeds_panel_setup_and_clicks) {

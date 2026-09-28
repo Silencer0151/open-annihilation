@@ -3,7 +3,8 @@
 
 // The WAV player's one stream on SDL's dummy device, which plays in real
 // time: it waits out its delay, plays once, stops at once, and a new stream
-// takes the place of the one playing.
+// takes the place of the one playing; and stop_all, which silences every
+// effect, the loop and the stream at once.
 #include "audio_test_support.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/formats/hpi.hpp"
@@ -104,6 +105,28 @@ int main() {
             "a missing sound starts no stream and says why"
         );
         require(!player.stream_busy(), "a failed stream is not busy");
+
+        // stop_all silences an effect, the loop and the stream together.
+        require(!player.playing(), "nothing plays before the effects start");
+        require(player.play_resource("sounds/long.wav", error), "an effect starts");
+        require(player.playing(), "a started effect plays");
+        player.stop_all();
+        require(!player.playing(), "stop_all ends a playing effect");
+        require(player.start_loop_resource("sounds/short.wav", error), "a loop starts");
+        require(player.play_stream("sounds/long.wav", 0, error), "a stream starts beside it");
+        require(player.play_resource("sounds/long.wav", error), "an effect starts beside them");
+        require(player.playing() && player.stream_busy(), "the effect, loop and stream play");
+        player.stop_all();
+        require(!player.playing(), "stop_all ends the effect and the loop");
+        require(!player.stream_busy(), "stop_all ends the stream");
+        player.stop_all();
+        require(!player.playing(), "stop_all with nothing playing changes nothing");
+        // The player plays on afterwards; the sounds outlast the checks.
+        require(player.play_resource("sounds/long.wav", error), "an effect starts after stop_all");
+        require(player.playing(), "an effect after stop_all plays");
+        require(player.play_stream("sounds/long.wav", 0, error), "a stream starts after stop_all");
+        require(player.stream_busy(), "a stream after stop_all plays");
+        player.stop_all();
     }
     std::filesystem::remove_all(root);
     SDL_Quit();

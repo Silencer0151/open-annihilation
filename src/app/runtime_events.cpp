@@ -23,8 +23,14 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         // running match asks whether to surrender first, as in 3.1c; every
         // other screen ends the run at once.
         const bool asked = event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || sdl_.window != nullptr;
-        // A page opened over the running match (its options, load and save
-        // pages, its briefing) goes back to the match to ask there.
+        // The extension answers first; one that declines leaves the request
+        // to the engine.
+        if (asked && extension_.close_requested != nullptr &&
+            extension_.close_requested(extension_.context, *this))
+            return;
+        // A page opened over the running match (its load and save pages, its
+        // briefing) goes back to the match to ask there; the preferences a
+        // match opens stay on it.
         if (asked && match_ && !match_finished_ &&
             (screen_ == Screen::match || return_to_match_for_close())) {
             request_match_close();
@@ -312,20 +318,26 @@ void Runtime::start_menu_music() {
 }
 
 void Runtime::play_menu_voice(std::string_view sound) {
-    if (options_.mute || options_.headless_check || menu_music_playing_)
+    if (menu_music_playing_)
         return;
+    (void)play_alternate_sound(sound);
+}
+
+bool Runtime::play_alternate_sound(std::string_view sound) {
+    if (options_.mute || options_.headless_check)
+        return false;
     const auto selection = oa::audio::game_audio::select_alternate(
         audio_registry_, sound, false, sound_playback_state()
     );
     if (selection.status != oa::audio::game_audio::SelectionStatus::selected ||
         selection.sound == nullptr)
-        return;
+        return false;
+    // The route's loop stops as the new one starts, whether or not it does.
     std::string error;
-    if (!audio_player_.start_loop_resource(selection.sound->resource, error)) {
+    menu_music_playing_ = audio_player_.start_loop_resource(selection.sound->resource, error);
+    if (!menu_music_playing_)
         std::cerr << "menu BGM unavailable: " << error << '\n';
-        return;
-    }
-    menu_music_playing_ = true;
+    return menu_music_playing_;
 }
 
 void Runtime::stop_menu_music() {

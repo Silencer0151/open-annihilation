@@ -10,6 +10,7 @@
 #include "oa/ui/frontend/options.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/audio/unit_announcements.hpp"
+#include "oa/sim/speed.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstddef>
@@ -19,6 +20,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -115,6 +117,24 @@ constexpr const char* kBriefingGui = "guis/briefing.gui";
 constexpr const char* kBriefingBitmap = "bitmaps/igmbrief.pcx";
 // The ARM campaign's third mission, whose briefing runs to a second page.
 constexpr std::size_t kBriefingCheckMission = 2;
+// The preferences a match opens, in the in-game menu's place.
+constexpr std::string_view kPreferencesLayout = "guis/PREFS.GUI";
+constexpr std::string_view kInGameMenuLayout = "guis/ARMOPT.GUI";
+// Frames the OPTIONS lightbar check draws: the sweep's thirteen steps and
+// three held frames.
+constexpr int kSweepFrames = 16;
+// The pointer's picture ENDMSN's MAIN MENU selects outside a launched game.
+constexpr uint8_t kLeavingPanelCursor = 0x14;
+// Ticks a skirmish swept of its opponents is given to end in victory.
+constexpr uint32_t kVictoryTicks = 600;
+
+/// Returns the label the launcher probe answers (Extension::service_label).
+///
+/// @return the label, kept for the whole run
+const char*& probe_launcher_label() {
+    static const char* label = nullptr;
+    return label;
+}
 
 /// Checks a panel drawn over `frame` with a bitmap as its backdrop.
 ///
@@ -453,42 +473,119 @@ void Runtime::check_match_dialogs() {
         "CHOICE2 after the save page did not return to the in-game menu"
     );
 
-    // PREFS sweeps the in-game menu away with the lightbar: its picture folds
-    // onto column 127, turns over and opens out to column 277, playing
-    // "Options" once as it ends.
+    // PREFS opens the preferences over the match, in the side column in the
+    // in-game menu's place: PREFS.GUI, while the lightbar sweeps the menu's
+    // picture away. It folds onto column 127, turns over and opens out over
+    // the battlefield to column 277, playing "Options" once as it ends.
+    const auto hud_gadget = [this](std::string_view name) -> const oa::ui::gui_layout::Gadget* {
+        if (!match_hud_)
+            return nullptr;
+        for (const auto& gadget : match_hud_->layout.gadgets)
+            if (gadget.common.name == name)
+                return &gadget;
+        return nullptr;
+    };
+    const auto showing = [this](std::string_view layout) {
+        return screen_ == Screen::match && match_paused_ && match_hud_ &&
+               match_hud_panel_ == layout;
+    };
+    // The match frame as the layers compose it, without the pointer.
+    const auto composed = [this] {
+        render();
+        renderer::Surface frame;
+        compose_match_layers(frame);
+        return frame;
+    };
+    // The canvas rectangle over 640x480 source pixels, as the chrome places them.
+    const auto canvas_rect = [this](int32_t x, int32_t y, int32_t width, int32_t height) {
+        const auto from = oa::ui::display_layout::source_to_canvas(match_layout_, x, y);
+        const auto to =
+            oa::ui::display_layout::source_to_canvas(match_layout_, x + width, y + height);
+        return Rect{from.x, from.y, to.x - from.x, to.y - from.y};
+    };
+    // Clicks a control of the panel loaded as the match HUD where the pointer
+    // would: `percent` of its width in, halfway down.
+    const auto click_control = [&](std::string_view name, int32_t percent) {
+        const auto* gadget = hud_gadget(name);
+        require(
+            gadget != nullptr && gadget->common.active != 0,
+            std::string(name) + " does not show on " + match_hud_panel_
+        );
+        const auto at = oa::ui::display_layout::source_to_canvas(
+            match_layout_,
+            gadget->common.x + gadget->common.width * percent / 100,
+            gadget->common.y + gadget->common.height / 2
+        );
+        update_pointer(static_cast<float>(at.x), static_cast<float>(at.y));
+        require(
+            hovered_ && match_hud_->layout.gadgets[*hovered_].common.name == name,
+            "the pointer over " + std::string(name) + " is not over it"
+        );
+        activate_match_hud(*hovered_);
+    };
+    const auto key = [](SDL_Keycode code, SDL_Scancode scancode) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = code;
+        event.key.scancode = scancode;
+        event.key.down = true;
+        return event;
+    };
+    require(showing(kInGameMenuLayout), "the in-game menu is not open for PREFS");
+    if (const auto viewer = match_view_player(); viewer < OA_PLAYER_COUNT) {
+        auto& game = match_->state().game;
+        for (int step = 0; step < kReadoutSettleSteps; ++step)
+            oa::ui::hud::update_resource_readout(
+                game.resource_readout, game.players[viewer], game.tick
+            );
+    }
+    update_pointer(
+        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
+    );
     const auto menu = match_hud_->layout.gadgets.front().common;
-    update_pointer(static_cast<float>(surface_.width - 1), static_cast<float>(surface_.height - 1));
-    render();
+    auto in_game_menu = composed();
     const auto sounds = options_lightbar_sounds_;
     activate_pause_gadget("PREFS");
-    require(screen_ == Screen::options, "PREFS did not open the preferences");
+    require(showing(kPreferencesLayout), "PREFS did not open PREFS.GUI over the match");
+    const auto prefs = match_hud_->layout.gadgets.front().common;
+    require(
+        prefs.x == 0 && prefs.y == 126 && prefs.width == 128 && prefs.height == 354,
+        "PREFS.GUI is not the side column's 128x354 panel at 0,126"
+    );
+    const auto* picture = hud_gadget("IGOPT");
+    require(
+        picture != nullptr && picture->common.x == 0 && picture->common.y == 128,
+        "PREFS.GUI's IGOPT picture is not at 0,128"
+    );
     require(
         options_flip_.width == static_cast<uint32_t>(menu.width) &&
             options_flip_.height == static_cast<uint32_t>(menu.height),
         "the lightbar did not take the in-game menu's picture"
     );
-    const Rect swept{
-        0, menu.y - 40, oa::ui::frontend::kLightbarScrollEnd + 1, kCanvasHeight - (menu.y - 40)
-    };
-    constexpr int kSweepFrames = 16;
+    // The fold's lift reaches six steps above the menu's top.
+    const auto lift = 6 * oa::ui::frontend::kLightbarVelocityStep;
+    const auto swept = canvas_rect(
+        0, menu.y - lift, oa::ui::frontend::kLightbarScrollEnd + 1, kCanvasHeight - menu.y + lift
+    );
     // The frame the preferences opened on took the first step.
-    std::vector<renderer::Surface> frames{surface_};
+    std::vector<renderer::Surface> frames{composed()};
     for (int frame = 1; frame < kSweepFrames; ++frame) {
         tick_screen_packages();
-        render();
-        frames.push_back(surface_);
+        frames.push_back(composed());
     }
-    const auto reach = cursor_reach(pointer_x_, pointer_y_);
     std::size_t moving = 0;
-    for (int frame = 1; frame < kSweepFrames; ++frame)
-        if (differing_pixels_outside(frames[frame - 1], frames[frame], {reach}) != 0 &&
-            differing_pixels(frames[frame - 1], frames[frame], swept) != 0)
+    for (int frame = 1; frame < kSweepFrames; ++frame) {
+        require(
+            differing_pixels_outside(frames[frame - 1], frames[frame], {swept}) == 0,
+            "frame " + std::to_string(frame) + " of the lightbar changed outside columns 0 to 277"
+        );
+        if (differing_pixels(frames[frame - 1], frames[frame], swept) != 0)
             ++moving;
-    // The first step came as the preferences opened; twelve more move the
-    // sweep, which then holds at its end.
+    }
+    // Twelve more steps move the sweep, which then holds at its end.
     require(moving == 12, "the lightbar moved on " + std::to_string(moving) + " frames, not 12");
     require(
-        differing_pixels_outside(frames[kSweepFrames - 2], frames[kSweepFrames - 1], {reach}) == 0,
+        differing_pixels(frames[kSweepFrames - 2], frames[kSweepFrames - 1], swept) == 0,
         "the lightbar still moved after it reached its end"
     );
     require(
@@ -496,13 +593,160 @@ void Runtime::check_match_dialogs() {
         "the lightbar played \"Options\" " + std::to_string(options_lightbar_sounds_ - sounds) +
             " times"
     );
+    // Held at its end, the turned-over picture covers the battlefield beside
+    // the side column; the rest of the match shows as the menu left it.
+    const auto beside = canvas_rect(kBattlefieldLeft + 2, 150, 146, 280);
+    const auto beside_area =
+        static_cast<std::size_t>(beside.width) * static_cast<std::size_t>(beside.height);
+    require(
+        differing_pixels(in_game_menu, frames.back(), beside) > beside_area / 2,
+        "the lightbar's picture does not show over the battlefield beside the side column"
+    );
+    require(
+        differing_pixels_outside(in_game_menu, frames.back(), {swept}) == 0,
+        "the preferences changed the match right of column 277"
+    );
     write_ppm(report_directory / "native-match-options-lightbar.ppm", frames[6]);
+    write_ppm(report_directory / "native-match-options-lightbar-end.ppm", frames.back());
+
+    // A tab frees the lightbar. SOUND widens PREFS.GUI to 278 pixels and
+    // merges SOUNDSRT.GUI into its PANEL filler, beside the side column over
+    // the battlefield; right of it the match shows as before.
+    click_control("SOUND", 50);
+    require(
+        showing(kPreferencesLayout) && options_flip_.rgb.empty(), "SOUND did not free the lightbar"
+    );
+    require(
+        match_hud_->layout.gadgets.front().common.width == 278,
+        "SOUND did not widen PREFS.GUI to 278 pixels"
+    );
+    const auto* filler = hud_gadget("PANEL");
+    require(filler != nullptr && filler->common.active == 0, "PREFS.GUI has no hidden PANEL");
+    const auto* volume = hud_gadget("FXVOL");
+    require(
+        volume != nullptr && volume->common.x == 140 && volume->common.y == 126 + 69,
+        "SOUNDSRT.GUI's FXVOL is not at 140,195"
+    );
+    const auto* sound_picture = hud_gadget("SOUNDSRT");
+    require(
+        sound_picture != nullptr && sound_picture->common.x == 128 &&
+            sound_picture->common.y == 127,
+        "SOUNDSRT.GUI's picture is not at 128,127"
+    );
+    auto sound = composed();
+    tick_screen_packages();
+    auto after_tab = composed();
+    require(
+        differing_pixels_outside(sound, after_tab, {}) == 0, "the lightbar still moved after a tab"
+    );
+    require(
+        differing_pixels(in_game_menu, sound, beside) > beside_area / 2,
+        "SOUNDSRT.GUI does not show beside the side column"
+    );
+    require(
+        differing_pixels_outside(in_game_menu, sound, {swept}) == 0,
+        "SOUNDSRT.GUI changed the match right of column 277"
+    );
+    write_ppm(report_directory / "native-match-preferences-sound.ppm", sound);
+
+    // A click on a slider's track moves its knob there and applies it at
+    // once; Cancel puts back what the preferences opened with.
+    const auto entry_volume = preferences_.fx_volume;
+    if ((preferences_.sound_flags & init::preference_flags::sound_mode) == 0)
+        click_control("MODE", 50);
+    click_control("FXVOL", 20);
+    const auto quiet = preferences_.fx_volume;
+    click_control("FXVOL", 80);
+    const auto loud = preferences_.fx_volume;
+    require(
+        loud > quiet && (quiet != entry_volume || loud != entry_volume),
+        "FXVOL's track did not set the effects volume (" + std::to_string(quiet) + ", then " +
+            std::to_string(loud) + ")"
+    );
+    click_control("CANCEL", 50);
+    require(showing(kInGameMenuLayout), "Cancel did not return to the in-game menu");
+    require(
+        preferences_.fx_volume == entry_volume,
+        "Cancel did not put the effects volume back to " + std::to_string(entry_volume)
+    );
+
+    // INTERFACE's GAME slider sets the running game's speed; Enter answers as
+    // OK, which keeps it.
+    auto& game = match_->state().game;
+    const auto speed = game.requested_speed;
+    activate_pause_gadget("PREFS");
+    click_control("SPEEDS", 50);
+    require(hud_gadget("GAME") != nullptr, "INTERFACE did not merge SPEEDSRT.GUI");
+    click_control("GAME", 98);
+    require(
+        game.requested_speed == oa::sim::speed::fastest &&
+            match_timing_.requested_rate == oa::sim::speed::fastest,
+        "GAME did not set the running game's speed to " + std::to_string(oa::sim::speed::fastest)
+    );
+    require(send(key(SDLK_RETURN, SDL_SCANCODE_RETURN)), "Enter ended the run");
+    require(
+        showing(kInGameMenuLayout) && game.requested_speed == oa::sim::speed::fastest &&
+            preferences_.game_speed == oa::sim::speed::fastest,
+        "Enter did not leave the preferences as OK does"
+    );
+    (void)oa::sim::speed::set_speed(match_->state(), speed, message_hooks());
+    match_timing_.requested_rate = game.requested_speed;
+    match_timing_.actual_rate = game.current_speed;
+    preferences_.game_speed = game.requested_speed;
+    preferences_.current_game_speed = game.current_speed;
+
+    // VISUALS merges VISUALRT.GUI, which offers no display mode, and MUSIC
+    // MUSICRT.GUI.
+    activate_pause_gadget("PREFS");
+    click_control("VISUALS", 50);
+    require(
+        hud_gadget("GAMMA") != nullptr && hud_gadget("VISUALSRT") != nullptr &&
+            hud_gadget("VIDSLDR") == nullptr,
+        "VISUALS did not merge VISUALRT.GUI"
+    );
+    click_control("MUSIC", 50);
+    require(
+        hud_gadget("CDPLAY") != nullptr && hud_gadget("MUSICRT") != nullptr &&
+            hud_gadget("GAMMA") == nullptr && match_music_panel_open(),
+        "MUSIC did not merge MUSICRT.GUI"
+    );
+    // The buttons' quick keys press them: 's' is SOUND, 'c' Cancel. Leaving
+    // the MUSIC tab leaves the music's panel.
+    require(send(key(SDLK_S, SDL_SCANCODE_S)), "'s' ended the run");
+    require(hud_gadget("FXVOL") != nullptr, "'s' did not open SOUND");
+    require(!match_music_panel_open(), "SOUND left the MUSIC tab counted as the music's panel");
+    require(send(key(SDLK_C, SDL_SCANCODE_C)), "'c' ended the run");
+    require(showing(kInGameMenuLayout), "'c' did not cancel the preferences");
+    // Escape answers as OK.
+    activate_pause_gadget("PREFS");
     require(send(escape(false)), "Escape ended the run");
     require(
-        screen_ == Screen::match && match_paused_,
+        showing(kInGameMenuLayout) && options_flip_.rgb.empty(),
         "Escape did not leave the preferences for the in-game menu"
     );
+    // F2 closes the menus over the match, the preferences among them.
+    activate_pause_gadget("PREFS");
+    require(send(key(SDLK_F2, SDL_SCANCODE_F2)), "F2 ended the run");
+    require(
+        screen_ == Screen::match && !match_paused_ && match_hud_panel_ != kPreferencesLayout,
+        "F2 did not close the preferences with the in-game menu"
+    );
+    show_match_pause_menu();
+    // Closing the window over the preferences asks over the in-game menu,
+    // and CHOICE2 returns to that menu.
+    activate_pause_gadget("PREFS");
+    require(
+        send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && !exit_requested_ && confirming(),
+        "closing the window over the preferences did not ask to surrender"
+    );
+    activate_pause_gadget("CHOICE2");
+    require(
+        showing(kInGameMenuLayout),
+        "CHOICE2 over the preferences did not return to the in-game menu"
+    );
     resume_match_pause();
+    std::cout << "match preferences check: PREFS.GUI in the side column, the lightbar over "
+              << moving << " frames, SOUNDSRT, SPEEDSRT, VISUALRT and MUSICRT beside it\n";
 
     // An order's own caption reaches its owner's message log: the commander
     // told to capture the other commander says it cannot.
@@ -551,6 +795,88 @@ void Runtime::check_match_dialogs() {
         "another player's unit spoke in the viewer's log"
     );
 
+    // A game a launcher started takes the launcher's label: the exit
+    // confirmation returns to the launcher, and so does the end-of-game
+    // screen's MAIN MENU, which leaves the pointer's picture as it is.
+    const auto kept_extension = extension_;
+    try {
+        probe_launcher_label() = "Launcher";
+        extension_.launched_by_service = [](void*) { return true; };
+        extension_.service_label = [](void*) { return probe_launcher_label(); };
+        load(Screen::main_menu);
+        start_benchmark_skirmish();
+        require(
+            screen_ == Screen::match && match_ && service_launch_ &&
+                std::string_view(service_label_.data()) == "Launcher",
+            "the launched skirmish did not keep the launcher's label"
+        );
+        const auto ask_main_menu = [&] {
+            show_match_pause_menu();
+            activate_pause_gadget("EXIT");
+            require(showing("guis/EXITMENU.GUI"), "EXIT did not open EXITMENU.GUI");
+            activate_pause_gadget("MAINMENU");
+            require(showing(confirm), "MAINMENU did not ask to surrender");
+            const auto title = hud_label("TITLE");
+            activate_pause_gadget("CHOICE2");
+            return title;
+        };
+        require(
+            ask_main_menu() == "Surrender this battle and return to Launcher?",
+            "the confirmation does not return to the launcher"
+        );
+        // A label longer than nine characters leaves the wording as it is.
+        probe_launcher_label() = "LauncherXY";
+        take_launcher_label();
+        require(
+            ask_main_menu() == "Surrender this battle and return to main menu?",
+            "a ten-character label changed the confirmation"
+        );
+        probe_launcher_label() = "Launcher";
+        take_launcher_label();
+        resume_match_pause();
+        for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player)
+            if (player != match_local_player_ &&
+                match_->state().game.players[player].unit_count != 0)
+                match_->destroy_player_units(player);
+        for (uint32_t step = 0; step < kVictoryTicks && !match_finished_; ++step) {
+            ++match_timing_.tick;
+            match_->simulation().tick = match_timing_.tick;
+            match_->tick();
+            present_match_outcome();
+        }
+        require(match_finished_, "the launched skirmish swept of its opponents did not end");
+        finish_match_outcome();
+        require(
+            screen_ == Screen::campaign_end && step_end_screen_to_panel().panel,
+            "the launched skirmish did not end on ENDMSN.GUI"
+        );
+        const auto* main_menu = widget("MainMenu");
+        const auto* caption =
+            main_menu != nullptr ? std::get_if<oa::ui::gui_layout::ButtonFields>(&main_menu->fields)
+                                 : nullptr;
+        require(
+            caption != nullptr && caption->text == "Launcher",
+            "ENDMSN.GUI's MAIN MENU does not read the launcher's label"
+        );
+        const auto cursor = cursor_index_;
+        click_end_panel(static_cast<std::size_t>(main_menu - resources_.layout.gadgets.data()));
+        require(
+            screen_ == Screen::main_menu, "ENDMSN.GUI's MAIN MENU did not leave for the main menu"
+        );
+        require(
+            cursor_index_ == cursor && cursor_index_ != kLeavingPanelCursor,
+            "ENDMSN.GUI's MAIN MENU changed the pointer's picture after a launch"
+        );
+    } catch (...) {
+        extension_ = kept_extension;
+        throw;
+    }
+    extension_ = kept_extension;
+    std::cout << "launcher label check: the exit confirmation and ENDMSN.GUI name the launcher\n";
+    start_benchmark_skirmish();
+    if (match_paused_)
+        resume_match_pause();
+
     // The system's quit asks too; CHOICE1 surrenders and ends the run.
     require(send(close_request(SDL_EVENT_QUIT)) && confirming(), "the system's quit did not ask");
     activate_pause_gadget("CHOICE1");
@@ -563,7 +889,7 @@ void Runtime::check_match_dialogs() {
         "closing the window on the main menu did not end the run"
     );
     std::cout << "match close check: YESORNO.GUI on close, OPTIONS lightbar over " << moving
-              << " frames, captioned speech\n";
+              << " frames, captioned speech, the launcher's label\n";
 }
 
 void Runtime::check_in_game_briefing(const fs::path& report_directory) {

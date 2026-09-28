@@ -83,8 +83,12 @@ bool Runtime::keeps_running_inactive() const {
 
 void Runtime::quit_application(const char* message) {
     exit_requested_ = true;
-    if (message != nullptr && sdl_.window != nullptr)
+    if (message == nullptr || *message == '\0')
+        return;
+    if (sdl_.window != nullptr)
         (void)SDL_ShowSimpleMessageBox(0, SDL_GetWindowTitle(sdl_.window), message, sdl_.window);
+    else
+        std::fprintf(stderr, "%s\n", message);
 }
 
 void Runtime::print_memory_status() {

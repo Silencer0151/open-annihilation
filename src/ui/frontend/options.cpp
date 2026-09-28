@@ -32,7 +32,7 @@ constexpr int32_t kTextScrollMaximum = 0x28;
 constexpr uint8_t kChatVolumeStep = 5; // chat bytes are stage * 5
 constexpr int16_t kGamePanelExtraWidth = 0x96;
 constexpr int16_t kGamePanelFillerX = 0x80;
-constexpr ControlType kFillerType = static_cast<ControlType>(0x0b);
+constexpr std::string_view kFillerName = "PANEL";
 constexpr uint8_t kSoundModeMask = 7;
 constexpr uint8_t kSoundModeOff = 0;
 constexpr uint8_t kSoundModeTest = 1;
@@ -462,14 +462,14 @@ void options_enter_tabs(Panel& panel, OptionsContext& context) noexcept {
 }
 
 void options_extend_panel_for_game(Panel& panel, const OptionsContext& context) noexcept {
-    const auto existing = panel_find(panel, "PANEL");
+    const auto existing = panel_find(panel, kFillerName);
     if (!context.realtime_panels)
         return;
     auto& root = panel.controls[0];
     root.width = static_cast<int16_t>(root.width + kGamePanelExtraWidth);
     if (existing != -1)
         return;
-    auto* filler = panel_append(panel, kFillerType, "PANEL");
+    auto* filler = panel_append(panel, ControlType::filler, kFillerName);
     if (filler == nullptr)
         return;
     filler->x = kGamePanelFillerX;
@@ -477,6 +477,34 @@ void options_extend_panel_for_game(Panel& panel, const OptionsContext& context) 
     filler->width = static_cast<int16_t>(root.width - filler->x);
     filler->height = root.height;
     filler->active = 1;
+}
+
+void options_prepare_realtime_panel(Panel& panel, OptionsContext& context) noexcept {
+    options_enter_tabs(panel, context);
+    options_extend_panel_for_game(panel, context);
+}
+
+void options_merge_realtime_panel(Panel& panel, const Panel& sub) noexcept {
+    const auto& sub_root = sub.controls[0];
+    int32_t dx = sub_root.x;
+    int32_t dy = sub_root.y;
+    if (auto* filler = panel_control(panel, kFillerName)) {
+        // Halved toward zero, so a sub-panel wider than PANEL moves left.
+        dx = filler->x + (filler->width - sub_root.width) / 2;
+        dy = filler->y + (filler->height - sub_root.height) / 2;
+        filler->active = 0;
+    }
+    for (int32_t index = 1; index <= sub.count && index < static_cast<int32_t>(kPanelControls);
+         ++index) {
+        const auto& record = sub.controls[static_cast<std::size_t>(index)];
+        auto* merged = panel_append(panel, record.type, control_name(record));
+        if (merged == nullptr)
+            break;
+        *merged = record;
+        merged->x = static_cast<int16_t>(record.x + dx);
+        merged->y = static_cast<int16_t>(record.y + dy);
+    }
+    panel.dirty = true;
 }
 
 OptionsAction options_on_tab_click(Panel& panel, OptionsContext& context) noexcept {
@@ -533,7 +561,6 @@ void options_update_sound_state(Panel& panel, const OptionsContext& context) noe
 
 void options_enter_sound(Panel& panel, OptionsContext& context) noexcept {
     options_enter_tabs(panel, context);
-    options_extend_panel_for_game(panel, context);
     panel_set_group_value(panel, "SOUND", 1);
     if (auto* fx = panel_control(panel, "FXVOL")) {
         fx->slider.maximum = kFxVolumeMaximum;
@@ -659,10 +686,8 @@ void options_on_gamma_slider(Panel& panel, OptionsContext& context) noexcept {
 }
 
 void options_enter_visuals(Panel& panel, OptionsContext& context, bool select_mode) noexcept {
-    if (!select_mode) {
+    if (!select_mode)
         options_enter_tabs(panel, context);
-        options_extend_panel_for_game(panel, context);
-    }
     if (!context.realtime_panels) {
         context.display_modes = DisplayModeList{};
         context.display_modes_ready = true;
@@ -832,7 +857,6 @@ void options_run_slider_callbacks(Panel& panel, OptionsContext& context) noexcep
 
 void options_enter_speeds(Panel& panel, OptionsContext& context) noexcept {
     options_enter_tabs(panel, context);
-    options_extend_panel_for_game(panel, context);
     auto& preferences = *context.preferences;
     const bool has_game = panel_find(panel, "GAME") != -1;
     panel_set_group_value(panel, "SPEEDS", 1);
@@ -909,7 +933,6 @@ OptionsAction options_on_speeds_click(Panel& panel, OptionsContext& context) noe
 
 void options_enter_music(Panel& panel, OptionsContext& context) noexcept {
     options_enter_tabs(panel, context);
-    options_extend_panel_for_game(panel, context);
     panel_set_group_value(panel, "MUSIC", 1);
     if (auto* music = panel_control(panel, "MUSICVOL")) {
         music->slider.maximum = kFxVolumeMaximum;
