@@ -18,8 +18,8 @@ int16_t high_word(uint32_t n) {
 }
 
 void engage(AttackOrderState& state, AttackOrderHost& host) {
-    host.enable_weapon(0);
-    host.enable_weapon(2);
+    host.release_weapon_targets(0);
+    host.release_weapon_targets(2);
     host.assign_target(*state.target, state.weapon_slot);
 }
 } // namespace
@@ -46,7 +46,7 @@ uint32_t air_to_ground(
     if (order.phase == 0) {
         if (!unit.object_present || !(unit.type->flags & 0x800u))
             return 7;
-        host.announce();
+        host.announce("Attacking");
         if (!state.weapon_slot)
             state.weapon_slot = host.selected_weapon();
         return 1;

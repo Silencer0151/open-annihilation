@@ -25,6 +25,13 @@ features on plots a load hides under the map's edges, which do not come back.
 The digest follows the order of the feature type names, so it matches across
 a load only on a map whose schema names no feature type beyond the map's own,
 as the map this check plays does.
+
+Two campaign missions then check carried units across a save and a load: one
+where an Atlas starts with a unit aboard, one where Bears and transport ships
+start loaded. Each is saved at CARRIED_SAVE_TICK and loaded back, and must
+come back with the same unit digest, which covers each unit's carrier, its
+piece (none for a unit in the hold, which is not drawn) and its attacker, and
+the same orders, BeCarried among them.
 """
 import argparse
 import os
@@ -57,6 +64,13 @@ FEATURES = re.compile(
 SAVED_MISSIONS = {"MobileBuild", "BuildingBuild", "Patrol", "Follow_Ground", "Move_Ground"}
 # Missions that still run after the resumed ticks.
 RESUMED_MISSIONS = {"BuildingBuild", "Patrol", "Follow_Ground"}
+# Campaign missions whose units start aboard transports, by campaign name
+# (as its file names it) and mission index, and what carries them.
+CARRIED_MISSIONS = (
+    ("Core Campaign", 22, "an Atlas"),
+    ("Arm Campaign - Core Contingency ", 11, "Bears and transport ships"),
+)
+CARRIED_SAVE_TICK = 20
 
 
 def run(native, game_dir, profile, cwd, *extra):
@@ -135,6 +149,29 @@ def main():
               f"{saved[3]} orders and features {saved[5][6]} ({saved[5][2]} animating) matches "
               f"after load; resumed to tick {resumed[0]} with {resumed[1]} units and "
               f"{resumed[3]} orders")
+        for campaign, mission, carriers in CARRIED_MISSIONS:
+            carried_save = Path(temporary) / "savegame" / f"carried{mission}.sav"
+            carried = run(native, game_dir, profile, temporary, "--campaign", campaign,
+                          "--mission", str(mission), "--match-ticks", str(CARRIED_SAVE_TICK),
+                          "--save-after", str(CARRIED_SAVE_TICK), "--save-file", str(carried_save))
+            if carried[0] != CARRIED_SAVE_TICK or not carried_save.is_file():
+                raise SystemExit(f"{campaign.strip()} mission {mission} did not save")
+            aboard = int(carried[4].get("BeCarried", 0))
+            if aboard == 0:
+                raise SystemExit(f"{campaign.strip()} mission {mission} saved no units aboard "
+                                 f"{carriers}")
+            reloaded = run(native, game_dir, profile, temporary, "--load", str(carried_save),
+                           "--match-ticks", "0")
+            # The features section's digest follows the feature type names,
+            # which a campaign schema can extend, so only the units and their
+            # orders are compared here.
+            if reloaded[:5] != carried[:5]:
+                raise SystemExit(
+                    f"{campaign.strip()} mission {mission} with units aboard {carriers} differs "
+                    f"after load: saved digest {carried[2]} orders {carried[4]}, loaded digest "
+                    f"{reloaded[2]} orders {reloaded[4]}")
+            print(f"saveload check: {aboard} units aboard {carriers} ({campaign.strip()} mission "
+                  f"{mission}) match after load, digest {carried[2]}")
     return 0
 
 

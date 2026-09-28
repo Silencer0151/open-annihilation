@@ -182,7 +182,8 @@ void Runtime::check_factory_orders() {
                               uint8_t taken,
                               std::string_view how) {
         const auto point = match_world_point(x, y);
-        if (!point || !pick_match_units(x, y).empty())
+        update_pointer(x, y);
+        if (!point || hovered_match_unit_ != 0)
             fail("found no open ground for the point", how);
         click_gadget(button);
         if (match_command_ != armed)

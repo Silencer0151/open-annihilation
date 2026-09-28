@@ -20,10 +20,6 @@ int16_t high_word(uint32_t value) {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(value >> 16));
 }
 
-int32_t bits(uint32_t value) {
-    return std::bit_cast<int32_t>(value);
-}
-
 int32_t signed_word(uint32_t value) {
     return std::bit_cast<int32_t>(value);
 }
@@ -293,50 +289,33 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
         const auto* weapon = match.weapons_[from.unit_index].definitions.at(weapon_slot);
         if (!weapon)
             throw std::logic_error("target range requires initialized weapon definition");
-        const auto sea = static_cast<int32_t>(match.simulation_.sea_level);
-        const auto from_height = static_cast<int32_t>(high_word(from.unit->position[1]));
-        const auto to_height = static_cast<int32_t>(high_word(to.unit->position[1]));
-        const auto top = [this](const sim::unit_spawn::Slot& unit) {
-            const auto height = match_unit_def(match, unit.record).model_height;
-            return static_cast<int32_t>(high_word(static_cast<uint32_t>(height)));
+        const sim::ballistics::WeaponReachParameters reach{
+            weapon->flags,
+            weapon->range_world_units,
+            {weapon->projectile_velocity,
+             weapon->minimum_barrel_angle_radians,
+             match.state().game.gravity}
         };
-        const auto from_model = top(from);
-        const auto to_model = top(to);
-        if (!(weapon->flags & sim::combat_state::weapon_water_flag)) {
-            if (sea >= from_model + from_height || sea >= to_model + to_height)
-                return false;
-            if ((weapon->flags & sim::combat_state::weapon_to_air_flag) &&
-                (to.unit->flags & 3) != 2)
-                return false;
-            if (weapon->flags & sim::combat_state::weapon_ballistic_flag) {
-                sim::ballistics::BallisticParameters ballistic{
-                    weapon->projectile_velocity,
-                    weapon->minimum_barrel_angle_radians,
-                    match.state().game.gravity
-                };
-                if (!sim::ballistics::ballistic_feasible(
-                        ballistic, from.unit->position, to.unit->position
-                    ))
-                    return false;
-            }
-        } else {
-            const auto flags = to.unit->type->flags;
-            if (!(flags & 0x80000u) && to_height > sea)
-                return false;
-            if ((flags & 0x1000u) && to_height + (to_model >> 1) > sea)
-                return false;
-        }
-        const auto square_high = [](int32_t value) {
-            return static_cast<uint32_t>(
-                (static_cast<uint64_t>(static_cast<int64_t>(value) * value)) >> 32
-            );
-        };
-        const auto distance = bits(
-            square_high(bits(to.unit->position[0] - from.unit->position[0])) +
-            square_high(bits(to.unit->position[2] - from.unit->position[2]))
+        return sim::ballistics::weapon_can_reach(
+            reach, reach_geometry(from), reach_geometry(to), match.simulation_.sea_level
         );
-        const auto range = static_cast<uint32_t>(weapon->range_world_units);
-        return distance <= bits(range * range);
+    }
+
+  private:
+
+    /// Returns what the reach test reads of a unit: its position, the whole
+    /// world units of its type's model top, its flags and its type's flags.
+    ///
+    /// @param unit unit slot
+    /// @return the unit's reach geometry
+    sim::ballistics::ReachUnitGeometry reach_geometry(const sim::unit_spawn::Slot& unit) {
+        const auto height = match_unit_def(match, unit.record).model_height;
+        return {
+            unit.unit->position,
+            high_word(static_cast<uint32_t>(height)),
+            unit.unit->flags,
+            unit.unit->type->flags
+        };
     }
 };
 

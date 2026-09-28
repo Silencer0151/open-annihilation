@@ -265,117 +265,21 @@ void test_flight_step() {
     CHECK(movement.velocity[1] == 75);
 }
 
-void test_move_order() {
-    Fixture f;
-    Unit& plane = f.unit(1);
-    plane.position = {world(100), world(10), world(100)};
-    plane.footprint_x = 2;
-    plane.footprint_z = 2;
-    air_driver_init_local(&f.drivers[1], &plane);
-    OrderFixture o(&plane);
-    o.order.destination = {world(333), 0, world(250)};
-    o.order.flags = order_announce;
-    CHECK(air_move(&o.order, f.host, 0) == AirStep::next);
-    // Took off: air layer, half-cruise climb goal installed on the driver.
-    CHECK(f.layers[1] == layer_air);
-    CHECK(f.drivers[1].goal == &o.goal);
-    CHECK(o.goal.point.y == world(10 + 40));
-    CHECK(o.order.wait_events == wait_for_goal);
-    CHECK((plane.state_flags & OA_UNIT_STATE_ACTIVE) != 0);
-    o.order.phase = 1;
-    o.events = event_arrived;
-    CHECK(air_move(&o.order, f.host, 0) == AirStep::next);
-    CHECK(o.events == 0);
-    CHECK(
-        f.speeches == 1 && f.last_speech == speech_order && (o.order.flags & order_announce) == 0
-    );
-    CHECK(f.weapon_resets == 1);
-    // Destination snapped onto the footprint cell centre.
-    CHECK(o.order.destination.x == world(336) && o.order.destination.z == world(256));
-    CHECK(o.goal.point.x == world(336));
-    o.order.phase = 2;
-    CHECK(air_move(&o.order, f.host, event_arrived) == AirStep::done);
-    CHECK(f.last_speech == speech_order_done);
-    Unit& tank = f.unit(2);
-    tank.def = oa_ref_from_index(1);
-    OrderFixture ground(&tank);
-    CHECK(air_move(&ground.order, f.host, 0) == AirStep::fail);
-}
-
-void test_standby_order() {
+// An aircraft off the map heads 50 units back toward the map's middle,
+// arriving within 128.
+void test_return_to_map() {
     Fixture f;
     Unit& plane = f.unit(1);
     plane.position = {world(300), world(90), world(400)};
     air_driver_init_local(&f.drivers[1], &plane);
     OrderFixture o(&plane);
-    CHECK(air_standby(&o.order, f.host, 0) == AirStep::next);
-    CHECK(o.order.anchor_x == 300 && o.order.anchor_z == 400);
-    CHECK(o.order.wait_events == (event_weapons | event_timer) && o.order.wake_tick == 101);
-    o.order.phase = 2;
-    // Landed: wait 30 + random(30).
-    plane.flags = layer_ground;
-    f.randoms({7});
-    CHECK(air_standby(&o.order, f.host, 0) == AirStep::stay);
-    CHECK(o.order.phase == 1 && o.order.wake_tick == 100 + 30 + 7);
-    // Airborne with nothing attached: queue VTOL_LANDIFCAN.
-    plane.flags = layer_air;
-    o.order.phase = 2;
-    CHECK(air_standby(&o.order, f.host, 0) == AirStep::done);
-    CHECK(std::strcmp(f.pushed, "VTOL_LANDIFCAN") == 0);
-    // Carrying a unit: loiter 8..40 units round the anchor.
-    plane.attach_first_child = oa_unit_ref_from_slot(2);
-    o.order.phase = 2;
-    f.randoms({0, 0, 3});
-    CHECK(air_standby(&o.order, f.host, 0) == AirStep::stay);
-    CHECK(o.goal.kind == AirGoalKind::target);
-    CHECK(o.goal.point.x == world(300) - sim::unit_movement::sine_scaled(0, world(8)));
-    CHECK(o.goal.point.z == world(400) - sim::unit_movement::cosine_scaled(0, world(8)));
-    CHECK(o.goal.point.y == world(10 + 80));
-    CHECK(f.random_limits[0] == 0x10000 && f.random_limits[1] == 0x20 && f.random_limits[2] == 0xf);
-    CHECK(o.order.wake_tick == 100 + 30 + 3);
-}
-
-void test_land_if_can() {
-    Fixture f;
-    Unit& plane = f.unit(1);
-    plane.position = {world(300), world(90), world(400)};
-    plane.footprint_x = 2;
-    plane.footprint_z = 2;
-    f.layers[1] = layer_air;
-    air_driver_init_local(&f.drivers[1], &plane);
-    OrderFixture o(&plane);
-    f.randoms({0x1235});
-    CHECK(air_land_if_can(&o.order, f.host, 0) == AirStep::next);
-    CHECK(
-        o.order.destination.x == plane.position.x && o.order.parameter == 0x1235 &&
-        o.order.parameter_2 == 1
-    );
-    o.order.phase = 1;
-    CHECK(air_land_if_can(&o.order, f.host, 0) == AirStep::next);
-    CHECK(f.scripts == 1);
-    CHECK(o.order.wait_events == wait_for_goal);
-    // Terrain (10) above sea (5): the goal is at surface height + 0.
-    CHECK(o.goal.point.y == world(10));
-    CHECK((plane.state_flags & OA_UNIT_STATE_ACTIVE) == 0);
-    o.order.phase = 2;
-    CHECK(air_land_if_can(&o.order, f.host, 0) == AirStep::finished);
-    CHECK(air_land_if_can(&o.order, f.host, event_arrived) == AirStep::done);
-    CHECK(f.layers[1] == layer_ground);
-    // Nowhere to land: 12 probes, then circle 160 units out.
-    f.can_land = false;
-    o.order.phase = 1;
-    o.order.parameter = 0x5555;
-    f.randoms({});
-    CHECK(air_land_if_can(&o.order, f.host, event_goal_replaced) == AirStep::stay);
-    CHECK(f.random_next == 24);
-    CHECK(o.order.parameter == 0);
-    CHECK((o.goal.flags & goal_arrival_radius) != 0 && o.goal.arrival_radius == 0x40);
-    CHECK(o.goal.point.z == o.order.destination.z - world(160));
-    // Off the map: head back toward the middle first.
+    CHECK(!air_return_to_map(&o.order, f.host));
+    CHECK(o.order.wait_events == 0);
     f.outside = true;
-    CHECK(air_land_if_can(&o.order, f.host, 0) == AirStep::stay);
-    CHECK(o.goal.arrival_radius == 0x80);
-    CHECK(air_land_if_can(&o.order, f.host, event_path_failed) == AirStep::done);
+    CHECK(air_return_to_map(&o.order, f.host));
+    CHECK(o.order.wait_events == wait_for_goal);
+    CHECK((o.goal.flags & goal_arrival_radius) != 0 && o.goal.arrival_radius == 0x80);
+    CHECK(o.goal.point.y == plane.position.y);
 }
 
 void test_repair_pad_search() {
@@ -410,9 +314,7 @@ int main() {
     test_attitude();
     test_driver();
     test_flight_step();
-    test_move_order();
-    test_standby_order();
-    test_land_if_can();
+    test_return_to_map();
     test_repair_pad_search();
     return finish("air");
 }

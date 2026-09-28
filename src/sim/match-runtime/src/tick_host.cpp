@@ -151,6 +151,17 @@ void TickHost::play_sound(sim::simulation_state::Unit& u, uint32_t category) {
     after_callback();
 }
 
+void TickHost::play_sound(sim::simulation_state::Unit& u, uint32_t category, const char* caption) {
+    const auto& hooks = match.speech_hooks_;
+    if (caption == nullptr || hooks.speak == nullptr) {
+        play_sound(u, category);
+        return;
+    }
+    before_callback();
+    hooks.speak(hooks.context, slot(u), category, caption);
+    after_callback();
+}
+
 sim::simulation_state::Unit* TickHost::find_target(sim::simulation_state::Unit& unit) {
     return match.find_automatic_target(unit);
 }

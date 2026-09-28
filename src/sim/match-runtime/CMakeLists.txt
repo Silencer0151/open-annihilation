@@ -145,8 +145,10 @@ if(BUILD_TESTING)
 endif()
 if(BUILD_TESTING)
  add_executable(oa-match-naval-test tests/naval_test.cpp)
- target_link_libraries(oa-match-naval-test PRIVATE oa-sim-match-runtime)
+ target_link_libraries(oa-match-naval-test PRIVATE oa-sim-match-runtime oa-formats-hpi oa-test-game-data)
  add_test(NAME match-naval COMMAND oa-match-naval-test)
+ # The installed game's ships, submarines, amphibians and shipyard.
+ oa_add_game_data_test(match-naval-data oa-match-naval-test --data)
  add_executable(oa-match-transports-test tests/transports_test.cpp)
  target_link_libraries(oa-match-transports-test PRIVATE oa-sim-match-runtime oa-sim-gameplay-input oa-formats-hpi
    oa-test-game-data)

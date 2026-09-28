@@ -133,11 +133,12 @@ bool refresh_wind(Game& game, WindRandomHost& random);
 /// @param random rand() and shared random streams
 void initialize_wind(Game& game, WindRandomHost& random);
 
-// Script hook of the sea occupy update: runs the unit script's setSFXoccupy
-// with the new code.
+/// Script hook of the sea occupy update.
 struct SeaOccupyHost {
-    void* context;
-    void (*set_sfx_occupy)(void* context, Unit& unit, int32_t occupy_code);
+    void* context{};
+    /// Runs the unit script's setSFXoccupy with the new code; null runs
+    /// nothing, and the code is still kept.
+    void (*set_sfx_occupy)(void* context, Unit& unit, int32_t occupy_code){};
 };
 
 /// Returns the last occupy code sent to the unit's script (Unit.last_occupy_code).

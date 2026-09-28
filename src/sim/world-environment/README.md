@@ -14,7 +14,8 @@ float, and changed flag behavior.
 `refresh_wind(Game&, ...)` and `initialize_wind(Game&, ...)` run the same
 scheduler over the canonical `Game` wind fields. `update_sea_occupy` reads the
 canonical `Unit`/`UnitDef` and keeps the occupy code in
-`Unit.last_occupy_code`.
+`Unit.last_occupy_code`; the match's movement tick runs it for every unit it
+moves, and its hook runs the unit script's `setSFXoccupy`.
 
 `meteor.hpp` runs mission meteor showers. The strike schedule, target and
 origin draws use the `rand()` stream as the game does; projectiles are

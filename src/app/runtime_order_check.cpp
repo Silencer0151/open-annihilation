@@ -543,9 +543,12 @@ void Runtime::check_unit_damage_bar(uint16_t peewee) {
             row.push_back(colour_at(x, bar.y));
         return row;
     };
+    // The unit panel shows the unit under the cursor (Game.cursor_unit_id),
+    // which the pointer's pick sets.
     const auto show = [&](uint16_t id) {
         clear_local_selection();
         selected_match_unit_ = 0;
+        game.cursor_unit_id = id;
         hovered_match_unit_ = id;
         render_match_surface();
         return bar_row();
@@ -592,6 +595,7 @@ void Runtime::check_unit_damage_bar(uint16_t peewee) {
         owned != nothing && owned.front() == palette_colour(game.ui_colors[10]),
         "the commander's owner does not see its damage bar"
     );
+    game.cursor_unit_id = 0;
     hovered_match_unit_ = 0;
 }
 

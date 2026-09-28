@@ -13,7 +13,7 @@ namespace {
 constexpr uint32_t timer_event = 1, weapon_event = 0x10000;
 constexpr uint8_t secondary_flag = 4, detached_flag = 1, retry_flag = 0x80;
 constexpr uint32_t height_dirty = OA_UNIT_FLAG_POSITION_DIRTY,
-                   waterline_type = OA_UNIT_DEF_FLAG_CAN_HOVER;
+                   can_hover_type = OA_UNIT_DEF_FLAG_CAN_HOVER;
 constexpr uint8_t live_multiplayer_game = 1, periodic_enabled = 2;
 
 void spend(std::size_t& budget) {
@@ -269,14 +269,14 @@ void secondary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::si
 void update_height(oa::World& w, oa::Unit& u, Host& h) {
     const auto flags = u.flags;
     const auto& t = type(w, u);
-    if (!(flags & height_dirty) && !(t.flags & waterline_type))
+    if (!(flags & height_dirty) && !(t.flags & can_hover_type))
         return;
     u.flags &= ~height_dirty;
     if (!u.movement || (flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != 1)
         return;
     if (t.flags & OA_UNIT_DEF_FLAG_UPRIGHT) {
         int32_t height;
-        if (!(t.flags & waterline_type))
+        if (!(t.flags & can_hover_type))
             height = h.terrain_height_under(u);
         else {
             height = static_cast<int32_t>(w.game.sea_level) - static_cast<int32_t>(waterline(t));
@@ -313,7 +313,7 @@ void update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
         if (w.environment_enabled && w.environment_damage && w.game.tick % 30 == 0 &&
             std::bit_cast<int16_t>(static_cast<uint16_t>(position_word(u.position.y) >> 16)) <=
                 w.game.sea_level &&
-            !(type(w, u).flags & waterline_type))
+            !(type(w, u).flags & can_hover_type))
             h.apply_scaled_damage(u, w.environment_damage, 11);
         if (type(w, u).heal_time &&
             static_cast<uint32_t>(static_cast<int32_t>(u.health)) < type(w, u).max_damage &&

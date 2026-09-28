@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/weapon_execution/interceptor.hpp"
+#include "oa/sim/ballistics.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 #include "oa/data/unit_definitions.hpp"
@@ -42,6 +43,7 @@ constexpr uint8_t laser_weapon = 4;
 constexpr uint8_t torpedo_weapon = 5;
 constexpr uint8_t probe_weapon = 6;
 constexpr uint8_t disintegrator_weapon = 22;
+constexpr uint8_t depth_charge_weapon = 7;
 
 constexpr std::string_view weapon_tdf = R"([AMD_ROCKET]
 {
@@ -74,6 +76,13 @@ explosiongaf=fx; explosionart=explode1; waterexplosiongaf=fx; waterexplosionart=
 [TORPEDO]
 {
 ID=5; lineofsight=1; waterweapon=1; range=400; reloadtime=1; weaponvelocity=200; areaofeffect=16;
+explosiongaf=fx; explosionart=explode1; waterexplosiongaf=fx; waterexplosionart=h2oboom2;
+[DAMAGE] { default=40; }
+}
+[DEPTHCHARGE]
+{
+ID=7; lineofsight=1; waterweapon=1; selfprop=1; burnblow=1; range=410; reloadtime=3;
+weapontimer=3; weaponvelocity=110; startvelocity=100; weaponacceleration=15; areaofeffect=16;
 explosiongaf=fx; explosionart=explode1; waterexplosiongaf=fx; waterexplosionart=h2oboom2;
 [DAMAGE] { default=40; }
 }
@@ -313,6 +322,42 @@ void water_contact(sim::match_runtime::Match& match) {
     CHECK(above.sprite.sequence == &art.h2oboom1);
     CHECK(match.projectiles().empty());
     std::cout << "water contact passed\n";
+}
+
+// A self-propelled water weapon launched above the sea, as a depth charge
+// dropped over the side, only falls while it is above the surface: level
+// (pitch 0) and at its launch speed. Once under the surface it accelerates.
+void water_weapon_drops_into_the_sea(sim::match_runtime::Match& match) {
+    auto& game = match.state().game;
+    const auto gravity = game.gravity;
+    game.gravity = sim::ballistics::default_simulation_gravity;
+    auto& shot = launch(
+        match,
+        depth_charge_weapon,
+        {fx(shore_cell * 16 + 40), fx(sea_level + 30), fx(100)},
+        {fx(1), 0, 0},
+        1
+    );
+    shot.heading = 0x4000;
+    shot.pitch = 0x1000;
+    shot.speed = fx(1);
+    const auto launched = shot.speed;
+    auto height = shot.position.y;
+    int32_t ticks = 0;
+    while (shot.position.y >= fx(sea_level) && ticks++ < 100) {
+        ++game.tick;
+        match.update_projectiles();
+        CHECK(shot.pitch == 0 && shot.speed == launched && shot.velocity.x == fx(1));
+        CHECK(shot.position.y < height);
+        height = shot.position.y;
+    }
+    CHECK(ticks < 100 && ticks > 1);
+    ++game.tick;
+    match.update_projectiles();
+    CHECK(shot.speed > launched);
+    sim::weapon_execution::retire_projectile(match.state(), shot);
+    game.gravity = gravity;
+    std::cout << "water weapon drop passed\n";
 }
 
 void feature_contact(sim::match_runtime::Match& match) {
@@ -775,7 +820,7 @@ int main() {
     const auto parsed = data::unit_definitions::parse_tdf(weapon_tdf);
     CHECK(parsed);
     sim::combat_state::WeaponRegistry weapons;
-    CHECK(sim::combat_state::install_weapon_tdf(weapons, parsed.value) == 7);
+    CHECK(sim::combat_state::install_weapon_tdf(weapons, parsed.value) == 8);
     CHECK(weapons.find("AMD_ROCKET")->coverage == 2000);
     const auto collision_plots = terrain_plots();
     // Sprite rocks keep their damage in the plot's record word.
@@ -818,6 +863,7 @@ int main() {
 
     ground_contact(match);
     water_contact(match);
+    water_weapon_drops_into_the_sea(match);
     feature_contact(match);
 
     auto* antinuke = match.create({0, 1, {70u << 16, ground_height << 16, 60u << 16}, true, 1, 0});

@@ -485,8 +485,9 @@ OA_TEST(options_open_sets_up_the_lightbar_then_the_panel) {
     );
     OA_CHECK(
         context.lightbar.flip == 3 && context.lightbar.backup == 4 &&
-        context.lightbar.last_column == 639 && context.lightbar.panel_y == 12 &&
-        context.lightbar.active == 1 && context.lightbar.scroll == 0
+        context.lightbar.last_column == 639 && context.lightbar.last_row == 479 &&
+        context.lightbar.panel_y == 12 && context.lightbar.active == 1 &&
+        context.lightbar.scroll == 0
     );
     OA_CHECK(recorder.sounds.empty() && panel.dirty);
 
@@ -497,6 +498,72 @@ OA_TEST(options_open_sets_up_the_lightbar_then_the_panel) {
     OA_CHECK(
         recorder.sounds.size() == 1 && recorder.sounds[0] == "Panel" && context.realtime_panels
     );
+}
+
+// The lightbar over the in-game menu's 128x352 panel at y 128: six 21-pixel
+// steps fold the picture onto column 127 while the lift grows, the seventh
+// passes the last column, stamps LIGHTBAR and turns the picture over, and the
+// sweep then gains a column a frame more until it stops at 277 with
+// "Options".
+OA_TEST(options_lightbar_sweeps_the_in_game_menu) {
+    OptionsLightbar lightbar;
+    const auto idle = options_lightbar_step(lightbar);
+    OA_CHECK(!idle.drawn && !idle.stamp_lightbar && !idle.play_options_sound);
+    OA_CHECK(lightbar.scroll == 0 && lightbar.velocity == 0);
+
+    lightbar.active = 1;
+    lightbar.last_column = 127;
+    lightbar.last_row = 351;
+    lightbar.panel_y = 128;
+    const std::array<LightbarPoint, 4> source{
+        LightbarPoint{1, 1}, LightbarPoint{127, 1}, LightbarPoint{127, 351}, LightbarPoint{1, 351}
+    };
+    for (int32_t step = 1; step <= 6; ++step) {
+        const auto frame = options_lightbar_step(lightbar);
+        OA_CHECK(frame.drawn && !frame.stamp_lightbar && !frame.play_options_sound);
+        OA_CHECK(lightbar.scroll == 21 * step && lightbar.velocity == 6 * step);
+        OA_CHECK(frame.source == source);
+        const std::array<LightbarPoint, 4> folded{
+            LightbarPoint{21 * step, 128 - 6 * step},
+            LightbarPoint{127, 128},
+            LightbarPoint{127, 479},
+            LightbarPoint{21 * step, 479}
+        };
+        OA_CHECK(frame.destination == folded);
+    }
+    const auto turned = options_lightbar_step(lightbar);
+    OA_CHECK(turned.stamp_lightbar && !turned.play_options_sound);
+    OA_CHECK(lightbar.scroll == 148 && lightbar.velocity == 30);
+    const std::array<LightbarPoint, 4> over{
+        LightbarPoint{127, 128},
+        LightbarPoint{148, 98},
+        LightbarPoint{148, 479},
+        LightbarPoint{127, 479}
+    };
+    OA_CHECK(turned.destination == over);
+    const std::array<int32_t, 5> scrolls{170, 192, 214, 236, 258};
+    const std::array<int32_t, 5> lifts{24, 18, 12, 6, 0};
+    for (std::size_t index = 0; index < scrolls.size(); ++index) {
+        const auto frame = options_lightbar_step(lightbar);
+        OA_CHECK(!frame.stamp_lightbar && !frame.play_options_sound);
+        OA_CHECK(lightbar.scroll == scrolls[index] && lightbar.velocity == lifts[index]);
+        OA_CHECK(frame.destination[1] == (LightbarPoint{scrolls[index], 128 - lifts[index]}));
+    }
+    const auto end = options_lightbar_step(lightbar);
+    OA_CHECK(end.play_options_sound && !end.stamp_lightbar);
+    OA_CHECK(lightbar.scroll == 277 && lightbar.velocity == 0);
+    const std::array<LightbarPoint, 4> open{
+        LightbarPoint{127, 128},
+        LightbarPoint{277, 128},
+        LightbarPoint{277, 479},
+        LightbarPoint{127, 479}
+    };
+    OA_CHECK(end.destination == open);
+    for (int frame = 0; frame < 3; ++frame) {
+        const auto held = options_lightbar_step(lightbar);
+        OA_CHECK(held.drawn && !held.play_options_sound && !held.stamp_lightbar);
+        OA_CHECK(lightbar.scroll == 277 && lightbar.velocity == 0 && held.destination == open);
+    }
 }
 
 } // namespace

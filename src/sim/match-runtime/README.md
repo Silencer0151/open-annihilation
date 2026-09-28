@@ -65,7 +65,11 @@ map's metal without it.
 Unit creation shares nothing while the run flag (`Game.session_flags` bit 0)
 is clear; with it set the match needs its `multiplayer` hooks or it stops.
 `OfflineServices` supplies command and activation sounds, attachment and UI
-callbacks, effects and map-update operations.
+callbacks, effects and map-update operations. A unit whose order speaks with
+its own caption, as a transport's "Unit is too heavy to transport" or a
+builder's "Starting construction", reaches the application through
+`SpeechHooks` (`Match::set_speech_hooks`); without them the speech plays its
+category through `command_sound` and the category's own caption.
 
 ## Sharing with the other players
 

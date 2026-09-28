@@ -285,7 +285,6 @@ uint8_t Runtime::pick_match_cursor() {
         return static_cast<uint8_t>(input::OrderCursor::normal);
     auto& world = match_->state();
     world.game.local_player_index = match_local_player_;
-    world.game.cursor_unit_id = hovered_match_unit_;
     input::set_pointer_command(world.game, armed_order(match_command_));
     refresh_pointer_area();
     if (const auto ground = match_world_point(pointer_x_, pointer_y_)) {

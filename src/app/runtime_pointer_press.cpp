@@ -50,9 +50,7 @@ void Runtime::record_pointer_event(const SDL_Event& event) {
         keys |= input::pointer_key_shift;
     if ((mods & SDL_KMOD_CTRL) != 0)
         keys |= input::pointer_key_control;
-    const auto source = oa::ui::display_layout::canvas_to_source(
-        match_layout_, static_cast<int>(pointer_x_), static_cast<int>(pointer_y_)
-    );
+    const auto source = game_screen_point(pointer_x_, pointer_y_);
     game.pointer_state[0] = static_cast<uint32_t>(source.x);
     game.pointer_state[1] = static_cast<uint32_t>(source.y);
     game.pointer_state[2] = keys;
@@ -109,7 +107,7 @@ void Runtime::drive_mouse_look(bool begin) {
     };
     sink.set_position = [](void* user, int32_t x, int32_t y) {
         auto* self = static_cast<Runtime*>(user);
-        const auto canvas = oa::ui::display_layout::source_to_canvas(self->match_layout_, x, y);
+        const auto canvas = self->game_screen_canvas(x, y);
         self->pointer_x_ = self->match_pointer_x_ = static_cast<float>(canvas.x);
         self->pointer_y_ = self->match_pointer_y_ = static_cast<float>(canvas.y);
         auto& state = self->match_->state().game;
@@ -159,8 +157,9 @@ void Runtime::handle_match_right_press(float x, float y) {
     if (!match_)
         return;
     auto& world = match_->state();
-    // The frame's pointer pass: the armed command, the pointer area, the unit
-    // and the ground under the pointer.
+    // The frame's pointer pass: the unit under the pointer, the armed
+    // command, the pointer area and the ground under it.
+    update_pointer(x, y);
     (void)pick_match_cursor();
     switch (input::right_press(world.game)) {
     case input::RightPress::none:
@@ -186,7 +185,7 @@ void Runtime::handle_match_right_press(float x, float y) {
     }
     // The selection's orders resolve from the default order, the unit under
     // the pointer (a radar blip over the radar) and the ground under it.
-    const auto target = radar_contains(x, y) ? pick_radar_unit(x, y) : hovered_match_unit_;
+    const auto target = hovered_match_unit_;
     const auto ground = match_world_point(x, y);
     if (target == 0 && !ground)
         return;
@@ -202,7 +201,6 @@ void Runtime::issue_pointer_ground_orders(float x, float y, bool queue) {
     const auto ground = match_world_point(x, y);
     if (!ground)
         return;
-    hovered_match_unit_ = 0;
     const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
     auto& world = match_->state();
     const auto command = input::pointer_command(world.game);
@@ -233,7 +231,18 @@ std::string_view Runtime::issue_selection_orders(
         return {};
     auto& world = match_->state();
     world.game.local_player_index = match_local_player_;
+    // The order table reads the unit under the pointer from the Game block;
+    // the pointer's own pick is put back once the orders are given.
+    const auto picked = world.game.cursor_unit_id;
     world.game.cursor_unit_id = target;
+
+    struct RestorePick {
+        oa::Game& game;
+        uint16_t unit{};
+
+        ~RestorePick() { game.cursor_unit_id = unit; }
+    } restore_pick{world.game, picked};
+
     if (ground)
         input::set_pointer_position(world.game, fixed_point(*ground));
     const uint16_t bound =
@@ -341,6 +350,16 @@ std::string_view Runtime::issue_selection_orders(
                     (void)match_->issue_unload(source, *ground, queue);
                     issued = "Unload";
                 }
+                break;
+            case input::UnitOrder::vtol_landing:
+                // An aircraft sent onto an allied air pad lands on it; a loaded
+                // transport hands its cargo to the pad.
+                if (bound == 0)
+                    break;
+                (void)match_->issue_order(
+                    source, oa::sim::ground_orders::vtol_landing_kind, queue, bound, nullptr, 0, 0
+                );
+                issued = "Land";
                 break;
             case input::UnitOrder::move_ground:
             case input::UnitOrder::vtol_move:

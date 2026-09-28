@@ -122,11 +122,11 @@ void Runtime::check_pause_key() {
     const auto resumed_ticks = ticks_in_one_second();
     require(resumed_ticks > 0, "Pause again did not resume the skirmish");
 
-    // Escape still opens the options menu, which holds a skirmish.
+    // F2 opens the options menu, which holds a skirmish; Escape opens no menu.
     key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
-    require(
-        match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "Escape did not open ARMOPT.GUI"
-    );
+    require(!match_paused_, "Escape opened a menu");
+    key(SDLK_F2, SDL_SCANCODE_F2);
+    require(match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "F2 did not open ARMOPT.GUI");
     require(
         !match_clock_steps() && ticks_in_one_second() == 0,
         "the options menu did not hold the skirmish"
@@ -356,9 +356,9 @@ void Runtime::check_team_panels() {
         // The options menu of a shared match holds nothing and shows no
         // paused title.
         auto before = title_pixels();
-        key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
+        key(SDLK_F2, SDL_SCANCODE_F2);
         require(
-            match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "Escape did not open ARMOPT.GUI"
+            match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "F2 did not open ARMOPT.GUI"
         );
         const auto menu_title = changed_pixels(before, title_pixels());
         require(

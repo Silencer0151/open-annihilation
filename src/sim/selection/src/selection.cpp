@@ -125,6 +125,16 @@ void collect_visible_units(World& world, const VisibleLists& lists, const Hooks&
     world.game.hot_unit_count = count;
 }
 
+bool unit_listed(const World& world, const VisibleLists& lists, uint16_t unit) noexcept {
+    if (lists.units == nullptr || world.game.hot_unit_count <= 0)
+        return false;
+    const auto count = static_cast<uint32_t>(world.game.hot_unit_count);
+    for (uint32_t i = 0; i < count && i < lists.unit_capacity; ++i)
+        if (lists.units[i] == unit)
+            return true;
+    return false;
+}
+
 void clear_selection(World& world, const Hooks& hooks) {
     for (uint32_t slot = 0; slot < world.unit_slot_count; ++slot)
         world.units[slot].flags &= selection_clear_keep;

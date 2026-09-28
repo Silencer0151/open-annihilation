@@ -264,7 +264,7 @@ bool can_unload_at(
     int32_t world_x,
     int32_t world_z,
     bool player_sees_cell,
-    bool hover_over_water,
+    bool flies_not_amphibious,
     const World& world
 ) {
     if (!valid(world))
@@ -286,7 +286,7 @@ bool can_unload_at(
     if (!player_sees_cell)
         return true;
     auto floor = static_cast<int32_t>(world.sea_level) - static_cast<int32_t>(unit.max_water_depth);
-    if (hover_over_water && floor < static_cast<int32_t>(world.sea_level))
+    if (flies_not_amphibious && floor < static_cast<int32_t>(world.sea_level))
         floor = static_cast<int32_t>(world.sea_level);
     const auto ceiling =
         static_cast<int32_t>(world.sea_level) - static_cast<int32_t>(unit.min_water_depth);

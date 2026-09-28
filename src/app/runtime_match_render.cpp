@@ -443,6 +443,10 @@ void Runtime::render_match_surface() {
     match_camera_z_ = static_cast<int32_t>(camera_y);
     ensure_radar_surfaces();
     bind_match_view();
+    // The frame's on-screen list, after the ticks and before the drawing: the
+    // pointer and the under-attack notice test the list the frame drawn last
+    // built.
+    rebuild_on_screen_units();
     track_match_drag();
     auto viewport = live_viewport(camera_x, camera_y);
     match_use_layers_ = sdl_.renderer != nullptr && !options_.headless_check;
@@ -1226,33 +1230,19 @@ void Runtime::render_match_surface() {
             draw_match_label(bar_x - 4, bar_y - 12, std::to_string(count), 1);
     }
     paint_on(PaintLayer::hud);
-    const auto info_unit = hovered_match_unit_ != 0 ? hovered_match_unit_ : selected_match_unit_;
-    if (info_unit != 0) {
-        const auto& slot = match_->world().slots[info_unit];
-        if (slot.unit != nullptr) {
-            const auto name = unit_info_name(info_unit);
-            draw_hud_label_centered(
-                side_hud_.unit_name.x, side_hud_.unit_name.y, name.empty() ? "unit" : name, 255
-            );
-            draw_unit_damage_bar(slot.record);
-            // The unit readout shows the rates on the viewer's own units, or on any
-            // unit while the debug keys are on.
-            if (slot.record.owner_index == match_view_player() ||
-                (match_->state().game.outcome_flags & oa::ui::console::outcome_flag::debug_keys) !=
-                    0)
-                draw_unit_rates(slot.record);
-        }
-    }
+    // The unit panel shows the unit under the cursor alone, never the
+    // selection.
+    draw_unit_panel();
     draw_resource_readout();
     draw_build_captions();
     if (extension_.draw_match_hud != nullptr)
         extension_.draw_match_hud(extension_.context, *this);
-    draw_unit_info_overlay();
     draw_chat_entry();
     paint_on(PaintLayer::battlefield);
     draw_match_kill_board();
     draw_chat_overlay();
     draw_extension_overlay();
+    draw_unit_info_panel();
     draw_profile_bars();
     // The outcome, the paused title (a menu's hold or the pause bit) and the
     // menus over the battlefield.

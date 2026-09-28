@@ -506,6 +506,16 @@ class TickHost final : public sim::simulation_state::Host,
 
     void play_sound(sim::simulation_state::Unit& u, uint32_t category) override;
 
+    /// Plays a unit's speech captioned with its order's own text.
+    ///
+    /// Without a caption, or without the application's speak hook, the
+    /// category plays alone as play_sound(u, category) does.
+    ///
+    /// @param u Speaking unit.
+    /// @param category Speech category.
+    /// @param caption The order's caption, or null for the category's own.
+    void play_sound(sim::simulation_state::Unit& u, uint32_t category, const char* caption);
+
     sim::simulation_state::Unit* find_target(sim::simulation_state::Unit& unit) override;
 
     bool issue_attack(sim::simulation_state::Unit& from, sim::simulation_state::Unit& to) override;
@@ -577,7 +587,7 @@ class TickHost::AttackAdapter final : public AttackOrderHost {
     AttackAdapter(TickHost& h, sim::unit_spawn::Slot& s, Match::RuntimeOrder& r)
         : host(h), source(s), record(r) {}
 
-    void announce() override;
+    void announce(const char* caption) override;
 
     /// Returns the weapon slot an attack uses when the order names none.
     ///
@@ -585,7 +595,7 @@ class TickHost::AttackAdapter final : public AttackOrderHost {
     ///     enabled bit itself, 2 when set and 0 when no slot is enabled.
     uint8_t selected_weapon() override;
 
-    void enable_weapon(uint32_t i) override;
+    void release_weapon_targets(uint32_t i) override;
 
     void assign_target(sim::simulation_state::Unit& target, int32_t index) override;
 

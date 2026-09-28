@@ -13,14 +13,14 @@ struct Host : sim::match_runtime::AttackOrderHost {
     sim::match_runtime::AttackPoint goal{};
     int32_t outer{};
 
-    void announce() override { calls.push_back(1); }
+    void announce(const char*) override { calls.push_back(1); }
 
     uint8_t selected_weapon() override {
         calls.push_back(2);
         return 2;
     }
 
-    void enable_weapon(uint32_t i) override { calls.push_back(10 + static_cast<int>(i)); }
+    void release_weapon_targets(uint32_t i) override { calls.push_back(10 + static_cast<int>(i)); }
 
     void assign_target(sim::simulation_state::Unit&, int32_t i) override {
         calls.push_back(20 + i);

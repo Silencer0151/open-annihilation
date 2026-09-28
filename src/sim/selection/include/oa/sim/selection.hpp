@@ -97,6 +97,18 @@ struct VisibleLists {
 /// @param hooks sight, sound and panel services
 void collect_visible_units(World& world, const VisibleLists& lists, const Hooks& hooks);
 
+/// Tests whether a unit is on screen: listed by the last collect_visible_units().
+///
+/// Only the first Game.hot_unit_count ids are read, and never more than the
+/// buffer holds.
+///
+/// @param world game record holding the list's count
+/// @param lists visible-unit list
+/// @param unit unit id
+/// @return true when the id is among the listed ones
+[[nodiscard]] bool
+unit_listed(const World& world, const VisibleLists& lists, uint16_t unit) noexcept;
+
 /// Drops the selection and select-next marks of every unit, then lets the order panel rebuild.
 ///
 /// @param[in,out] world units, players and game fields

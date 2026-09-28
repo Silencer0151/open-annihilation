@@ -37,6 +37,7 @@ constexpr uint8_t vtol_move = 55;
 constexpr uint8_t vtol_unload = 65;
 constexpr uint8_t wait = 66;
 constexpr uint8_t wait_for_attack = 67;
+constexpr uint8_t be_carried = 11;
 
 // The preserve, command and order flags after the insert: the descriptor
 // bytes, preserve flags bit 0, the command flags' point and target bits kept
@@ -429,6 +430,31 @@ void empty_schema_and_inactive_player() {
 
 } // namespace
 
+// A campaign unit's "i <name>" boards it into the named unit, in its hold
+// (no piece) with its movement layer 0, with no check of the carrier's size or
+// capacity: the Valkyrie here can carry nothing, yet takes both.
+void boarding_ignores_the_carrier_capacity() {
+    Fixture f;
+    const std::array schema{
+        entry("CORVALK", "TRANSPORT5", nullptr, 1500, 256),
+        entry("CORREAP", nullptr, "i TRANSPORT5", 1400, 256),
+        entry("CORAK", nullptr, "i TRANSPORT5", 1300, 256)
+    };
+    sim::match_runtime::create_mission_units(*f.match, schema.data(), 3);
+    const auto& carrier = f.unit(corvalk);
+    for (const auto type : {correap, corak}) {
+        const auto& aboard = f.unit(type);
+        CHECK(oa::oa_unit_slot_from_ref(aboard.attach_parent) == carrier.id);
+        CHECK(static_cast<int8_t>(aboard.attach_piece) == -1);
+        const auto* movement = f.match->ground_runtime(aboard.id);
+        CHECK(movement && (movement->movement.flags & 3) == 0);
+        const auto queue = f.queue(aboard);
+        CHECK(!queue.empty() && queue[0].kind == be_carried);
+    }
+    CHECK(f.match->loaded_child_count(carrier.id) == 2);
+    std::cout << "boarding ignores the carrier capacity passed\n";
+}
+
 int main() {
     try {
         ac01_patrols_reuse_the_last_point();
@@ -438,6 +464,7 @@ int main() {
         factory_orders_follow_the_movement_object();
         placement_fields();
         empty_schema_and_inactive_player();
+        boarding_ignores_the_carrier_capacity();
     } catch (const std::exception& error) {
         std::cerr << "match-mission-units: " << error.what() << '\n';
         return 1;

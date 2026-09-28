@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace oa;
@@ -31,9 +32,20 @@ constexpr uint8_t qpatrol_kind = 31;
 
 struct Services : sim::match_runtime::OfflineServices {
     std::vector<uint32_t> speech;
+    std::vector<std::string> captions; // one per speech; empty for none
+    std::vector<std::string> taken;    // the captions of the last take()
 
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
         speech.push_back(category);
+        captions.emplace_back();
+    }
+
+    /// The match's speech hook: a speech with its order's caption.
+    static void
+    speak(void* context, sim::unit_spawn::Slot&, uint32_t category, const char* caption) {
+        auto& services = *static_cast<Services*>(context);
+        services.speech.push_back(category);
+        services.captions.emplace_back(caption);
     }
 
     void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
@@ -59,6 +71,8 @@ struct Services : sim::match_runtime::OfflineServices {
     std::vector<uint32_t> take() {
         auto spoken = speech;
         speech.clear();
+        taken = std::move(captions);
+        captions.clear();
         return spoken;
     }
 };
@@ -231,6 +245,7 @@ struct Fixture {
             {}
         };
         match = std::make_unique<sim::match_runtime::Match>(input, services);
+        match->set_speech_hooks({&services, &Services::speak});
         match->configure_strategic_environment({0, 0.5F, 0});
         for (uint8_t p = 0; p < 2; ++p) {
             match->simulation().players[p].present = true;
@@ -633,6 +648,7 @@ void construction_orders() {
     // Phase 1 places the frame, speaks 9 and hands it a GetBuilt order.
     CHECK(step(*f.match, builder, build) == 1);
     CHECK(f.services.take() == std::vector<uint32_t>{9});
+    CHECK(f.services.taken == std::vector<std::string>{"Starting construction"});
     sim::unit_spawn::Slot* frame = nullptr;
     for (auto& slot : f.match->world().slots)
         if (slot.unit && slot.record.type_index == factory_type)
@@ -657,6 +673,7 @@ void construction_orders() {
     CHECK(frame->record.build_remaining == 0.0F && build.phase == 4);
     CHECK(step(*f.match, builder, build) == 5);
     CHECK(f.services.take() == std::vector<uint32_t>{8});
+    CHECK(f.services.taken == std::vector<std::string>{"Building complete"});
 
     // GetBuilt of the finished structure ends there: it has no movement
     // object to park.
@@ -669,6 +686,7 @@ void construction_orders() {
     auto& lost = f.match->issue_mobile_build(id, factory_type, point(60, 60), false);
     CHECK(step(*f.match, builder, lost, 8) == 8);
     CHECK(f.services.take() == std::vector<uint32_t>{7});
+    CHECK(f.services.taken == std::vector<std::string>{"Construction terminated"});
     CHECK(step(*f.match, builder, lost, 2) == 5);
     f.match->stop_orders(id);
 
@@ -711,6 +729,7 @@ void factory_orders() {
     CHECK(step(*f.match, factory, order) == 1);
     CHECK(step(*f.match, factory, order) == 1);
     CHECK(f.services.take() == std::vector<uint32_t>{9});
+    CHECK(f.services.taken == std::vector<std::string>{"Starting construction"});
     sim::unit_spawn::Slot* frame = nullptr;
     for (auto& slot : f.match->world().slots)
         if (slot.unit && slot.record.type_index == tank_type)
@@ -732,7 +751,9 @@ void factory_orders() {
     CHECK(order.phase == 4);
     // Phase 4 counts the product off and starts over.
     CHECK(step(*f.match, factory, order) == 0);
+    // A factory's finished product is announced with the category's own text.
     CHECK(f.services.take() == std::vector<uint32_t>{8});
+    CHECK(f.services.taken == std::vector<std::string>{""});
     CHECK(f.match->queued_build_count(id, tank_type) == 1);
 
     // With no moves queued on the factory, a finished tank's GetBuilt parks it.
@@ -1159,6 +1180,52 @@ void reclaim_and_capture() {
 }
 } // namespace
 
+// A factory that dies with a unit on its build pad takes the unit with it.
+// The dying factory's orders go first, so a half-built frame its
+// BuildingBuild still works on is cancelled by that order (kind 9), which
+// lets it go. A unit hanging from the pad with no order working on it, as
+// the factory attaches what it builds, dies as cargo (kind 6), the way cargo
+// dies with its transport.
+void factory_death_kills_the_unit_on_its_pad() {
+    constexpr auto weapon = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
+    constexpr auto cargo = static_cast<uint8_t>(sim::match_runtime::DeathKind::cargo);
+    constexpr auto cancelled = static_cast<uint8_t>(sim::match_runtime::DeathKind::cancelled);
+    for (const bool building : {true, false}) {
+        Fixture f;
+        std::array<uint8_t, 10> allies{};
+        allies[0] = 1;
+        f.match->configure_outcomes(0, allies, false);
+        auto& factory = f.spawn(0, factory_type, 100, 100);
+        const auto id = factory.unit_index;
+        sim::unit_spawn::Slot* frame = nullptr;
+        if (building) {
+            auto& order = f.match->issue_building_build(id, tank_type, 1, false);
+            CHECK(step(*f.match, factory, order) == 1);
+            CHECK(step(*f.match, factory, order) == 2);
+            f.match->tick_scripts(1);
+            CHECK(step(*f.match, factory, order) == 1);
+            CHECK(step(*f.match, factory, order) == 1);
+            for (auto& slot : f.match->world().slots)
+                if (slot.unit && slot.record.type_index == tank_type)
+                    frame = &slot;
+            CHECK(frame && frame->record.build_remaining != 0.0F);
+        } else {
+            frame = &f.spawn(0, tank_type, 100, 100);
+            f.match->set_carry_link(frame->unit_index, id, -1, 1);
+        }
+        CHECK(sim::match_runtime::link_parent(frame->record) == id);
+        f.match->apply_damage_event(factory, nullptr, 30000, weapon, 0);
+        uint8_t dealt = 0;
+        for (int tick = 0; tick < 120 && frame->record.type_index != 0; ++tick) {
+            ++f.match->state().game.tick;
+            f.match->tick();
+            if (dealt == 0)
+                dealt = frame->record.damage_kind;
+        }
+        CHECK(frame->record.type_index == 0 && dealt == (building ? cancelled : cargo));
+    }
+}
+
 int main() {
     try {
         stop_and_state_orders();
@@ -1173,6 +1240,7 @@ int main() {
         factory_move_hands_off();
         repair_orders();
         reclaim_and_capture();
+        factory_death_kills_the_unit_on_its_pad();
     } catch (const std::exception& error) {
         std::cerr << "orders: " << error.what() << '\n';
         return 1;

@@ -39,12 +39,18 @@ struct SideLayout {
     Rect unit_metal_use{350, 468, 0, 8};
     Rect unit_energy_make{400, 458, 0, 8};
     Rect unit_energy_use{400, 468, 0, 8};
+    Rect logo2{132, 455, 21, 21};       // the cursor unit owner's logo
+    Rect mission_text{385, 449, 16, 2}; // head order's status text, centred on x
+    Rect unit_name2{555, 452, 1, 9};    // second unit's name, centred on x
+    Rect damage_bar2{510, 463, 91, 3};  // second unit's damage or stockpile bar
+    Rect name{132, 452, 11, 9};         // build button or feature line
+    Rect description{132, 465, 11, 8};  // build button's unit description
 };
 
 /// Reads the SIDE<index> section of SIDEDATA.TDF text over a side layout.
 ///
-/// Keys the file omits keep their current values; a bar or damage bar without
-/// width and a unit name at row 0 are ignored.
+/// Keys the file omits keep their current values; a bar, damage bar or logo
+/// without width and a unit name at row 0 are ignored.
 ///
 /// @param sidedata Text of gamedata/SIDEDATA.TDF.
 /// @param side Side index, the digit of the section name.

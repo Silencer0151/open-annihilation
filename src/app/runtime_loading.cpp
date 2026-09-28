@@ -225,6 +225,7 @@ void Runtime::teardown_match() {
     forget_team_panel();
     offline_effects_.unbind();
     offline_services_.clear_match();
+    offline_services_.set_on_screen_test(nullptr, nullptr);
     effect_boundary_.clock = nullptr;
     match_.reset();
     // Its models and radar are keyed by address; a later match can reuse the
@@ -237,6 +238,8 @@ void Runtime::teardown_match() {
     radar_state_.release();
     selected_match_unit_ = 0;
     hovered_match_unit_ = 0;
+    on_screen_units_.clear();
+    unit_info_panel_.reset();
     stop_match_tracking();
     match_hud_.reset();
     match_tick_blocked_ = false;
@@ -251,7 +254,7 @@ void Runtime::leave_match() {
     campaign_mission_ = false;
     stop_match_tracking();
     radar_explored_.clear();
-    show_unit_info_ = false;
+    unit_info_panel_.reset();
     chat_composing_ = false;
     chat_buffer_.clear();
     match_zoom_ = kDefaultBattlefieldZoom;

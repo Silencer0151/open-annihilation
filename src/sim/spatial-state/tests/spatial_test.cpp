@@ -393,6 +393,30 @@ int main() {
             "can_unload_at rejected a blocking feature"
         );
         movement.plots[2 * 8 + 2].blocking_feature = false;
+        // A seaplane (amphibious, 255 deep) may set down on water 12 deep; an
+        // aircraft that is not amphibious may not, whatever its depths.
+        {
+            auto sea = movement;
+            sea.plots[2 * 8 + 2].low_height = 8;
+            sea.plots[2 * 8 + 2].high_height = 9;
+            auto seaplane = mover;
+            seaplane.max_water_depth = 255;
+            check(
+                spatial::can_unload_at(seaplane, 0x200000, 0x200000, true, false, sea),
+                "can_unload_at refused an amphibious aircraft on water"
+            );
+            check(
+                !spatial::can_unload_at(seaplane, 0x200000, 0x200000, true, true, sea),
+                "can_unload_at let an aircraft that is not amphibious set down on water"
+            );
+            auto land = movement;
+            land.plots[2 * 8 + 2].low_height = 22;
+            land.plots[2 * 8 + 2].high_height = 23;
+            check(
+                spatial::can_unload_at(mover, 0x200000, 0x200000, true, true, land),
+                "can_unload_at refused an aircraft that is not amphibious on dry land"
+            );
+        }
         movement.plots[2 * 8 + 2].blocking_feature = true;
         check(
             spatial::can_occupy(mover, 0, {2, 2}, 1, movement) == false, "blocking feature ignored"

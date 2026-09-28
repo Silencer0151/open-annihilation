@@ -286,6 +286,7 @@ struct OptionsLightbar {
     oa_ref32 backup = 0; // BKUPSURFACE
     int32_t scroll = 0;
     int32_t last_column = 0; // flip width - 1
+    int32_t last_row = 0;    // flip height - 1
     int32_t panel_y = 0;     // the panel below's y
     int32_t active = 0;      // 1 while the lightbar runs
     int32_t velocity = 0;
@@ -293,6 +294,37 @@ struct OptionsLightbar {
 
 inline constexpr int32_t kLightbarBackupWidth = 300;
 inline constexpr int32_t kLightbarBackupHeight = 480;
+// The sweep: the scroll grows by kLightbarScrollStep a frame up to
+// kLightbarScrollEnd, one column a frame once past the flip picture's last
+// column, and the fold's lift by kLightbarVelocityStep a frame.
+inline constexpr int32_t kLightbarScrollStep = 21;
+inline constexpr int32_t kLightbarScrollEnd = 277;
+inline constexpr int32_t kLightbarVelocityStep = 6;
+// The fixed edge the picture folds on before the scroll passes the last
+// column, and the frame's last row, which every quad reaches.
+inline constexpr int32_t kLightbarFoldColumn = 127;
+inline constexpr int32_t kLightbarBottomRow = 479;
+// Frame of the COMMONGUI LIGHTBAR entry stamped onto the flip picture.
+inline constexpr int32_t kLightbarStampFrame = 2;
+
+/// A corner of the lightbar's blit, in pixels.
+struct LightbarPoint {
+    int32_t x = 0;
+    int32_t y = 0;
+    bool operator==(const LightbarPoint&) const = default;
+};
+
+/// What one HUD frame of the OPTIONS lightbar sweep does.
+struct OptionsLightbarStep {
+    bool drawn = false;              // the lightbar is running: the blit below is drawn
+    bool stamp_lightbar = false;     // LIGHTBAR frame 2 goes onto the flip picture first
+    bool play_options_sound = false; // the sweep reached its end: "Options" plays
+    // Corners of the flip picture, inset by one pixel, clockwise from the
+    // top-left.
+    std::array<LightbarPoint, 4> source{};
+    // The frame corners the source corners map to, in the same order.
+    std::array<LightbarPoint, 4> destination{};
+};
 
 // Application state the options handlers read and write.
 struct OptionsContext {
@@ -350,7 +382,8 @@ enum class OptionsAction : uint8_t {
 /// Opens OPTIONS over the panel below.
 ///
 /// Outside a match the current frame is cleared and presented first. The
-/// lightbar copies the panel below (FLIPSURFACE) and gets a 300x480
+/// lightbar copies the panel below (FLIPSURFACE), takes its last column,
+/// last row and y, and gets a 300x480
 /// BKUPSURFACE; the tab panel then loads and is set up (options_enter_tabs),
 /// options4x becomes the background outside a match, and the entry snapshot
 /// is captured. In a match the "Panel" sound plays.
@@ -358,6 +391,24 @@ enum class OptionsAction : uint8_t {
 /// @param[out] panel Receives the loaded tab panel.
 /// @param[in,out] context Preferences, flags, host and lightbar state.
 void options_open(Panel& panel, OptionsContext& context) noexcept;
+
+/// Advances the OPTIONS lightbar by one HUD frame.
+///
+/// While the scroll is under kLightbarScrollEnd it grows by
+/// kLightbarScrollStep, stopping at the end, where "Options" plays. The step
+/// that first takes the scroll past the flip picture's last column stamps
+/// LIGHTBAR frame 2 onto the picture; past that column the scroll then gains
+/// one more column a frame up to the end. The lift grows by
+/// kLightbarVelocityStep while the scroll is under the last column and
+/// falls by as much, down to 0, once it is not. Before the last column the
+/// picture folds from the scroll onto kLightbarFoldColumn; past it the
+/// picture turns over, from the last column out to the scroll. The moving
+/// edge's top is lifted by the lift, and both edges reach
+/// kLightbarBottomRow. A lightbar that is not active does nothing.
+///
+/// @param[in,out] lightbar The running lightbar; its scroll and lift change.
+/// @return What to stamp, play and draw this frame.
+[[nodiscard]] OptionsLightbarStep options_lightbar_step(OptionsLightbar& lightbar) noexcept;
 
 /// Sets up the options tab panel.
 ///

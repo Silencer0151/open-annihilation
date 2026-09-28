@@ -90,6 +90,11 @@ struct HostDisplay {
     void initialize(const Options& options) {
         if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1"))
             throw std::runtime_error("SDL mouse focus click-through hint was rejected");
+        // Closing the window reaches the game as a close request, which a
+        // running match answers with its surrender confirmation, rather than
+        // as a quit SDL adds on its own.
+        if (!SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0"))
+            throw std::runtime_error("SDL last-window quit hint was rejected");
         // A capture takes the game's sound for itself before SDL starts it.
         if (!options.capture_video.empty())
             prepare_capture_audio(options.capture_video);

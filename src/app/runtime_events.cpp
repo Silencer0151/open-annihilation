@@ -19,6 +19,17 @@ namespace oa::app {
 
 void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        // Closing the window, or the system's quit while there is one, in a
+        // running match asks whether to surrender first, as in 3.1c; every
+        // other screen ends the run at once.
+        const bool asked = event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || sdl_.window != nullptr;
+        // A page opened over the running match (its options, load and save
+        // pages, its briefing) goes back to the match to ask there.
+        if (asked && match_ && !match_finished_ &&
+            (screen_ == Screen::match || return_to_match_for_close())) {
+            request_match_close();
+            return;
+        }
         running = false;
         return;
     }
@@ -58,13 +69,11 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         } else if (screen_ == Screen::map_selection)
             close_map_modal();
         else if (screen_ == Screen::match) {
-            // A finished match leaves for the end screen on its own.
-            if (match_finished_)
-                return;
-            if (match_paused_)
-                resume_match_pause();
-            else
-                show_match_pause_menu();
+            // A finished match leaves for the end screen on its own. Escape
+            // closes an open menu; it never opens one (F2 and MENU do), and a
+            // held key's repeats do nothing more.
+            if (!match_finished_ && match_paused_)
+                escape_match_menu();
         } else if (
             screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
             screen_ == Screen::speeds || screen_ == Screen::music

@@ -104,6 +104,24 @@ struct OfflineServices : Effects, sim::spatial_state::Host {
     virtual void refresh_selected_unit(sim::unit_spawn::Slot& slot) = 0;
 };
 
+/// What a match asks its application for when a unit speaks with its order's
+/// own caption.
+struct SpeechHooks {
+    void* context{};
+    /// Queues a unit's speech of a category, captioned with the order's own
+    /// text in place of the category's; null plays the category through
+    /// OfflineServices::command_sound, without the order's caption.
+    ///
+    /// @param context The hooks' context.
+    /// @param slot Speaking unit.
+    /// @param category Speech category (5 order, 7 failed, 8 complete, ...).
+    /// @param caption The caption, in the game's English wording, which the
+    ///     application translates.
+    void (*speak)(
+        void* context, sim::unit_spawn::Slot& slot, uint32_t category, const char* caption
+    ){};
+};
+
 struct RuntimeTypeFields {
     const data::unit_definitions::UnitDefinition* definition{};
     std::span<const uint8_t> yard_mask;
@@ -494,6 +512,12 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Returns the computer players' difficulty (OA_DIFFICULTY_*).
     [[nodiscard]] int32_t difficulty() const noexcept { return state().game.difficulty; }
+
+    /// Sets what the match asks when a unit speaks with its order's own
+    /// caption; without it every speech plays its category alone.
+    ///
+    /// @param hooks The application's speech hooks.
+    void set_speech_hooks(const SpeechHooks& hooks) noexcept { speech_hooks_ = hooks; }
 
     /// Counts the children whose parent link points at this unit.
     ///
@@ -2568,6 +2592,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     );
     OfflineInputs input_;
     OfflineServices& services_;
+    SpeechHooks speech_hooks_{};
 
     // Canonical World, its tables, the native side tables indexed by unit slot or
     // player, and the legacy views bound over them. Addresses are stable.
@@ -2851,13 +2876,20 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param slot New mobile unit; an unresolved movement class throws.
     /// @return Handle of the movement object.
     sim::unit_spawn::AssetHandle create_movement(sim::unit_spawn::Slot& slot) override;
-    /// Settles a new unit's height: on the terrain or waterline for a
-    /// terrain-height type, at the waterline for a floater, else through the
-    /// movement object's ground fit (hovercraft stay at or above the sea).
+    /// Settles a new unit's height when it stands in the ground layer: on
+    /// the terrain, or the higher of the terrain and the waterline for a
+    /// hovering one, for an upright type; at the waterline for a floater;
+    /// else through the movement object's ground fit, which also sets the
+    /// pitch and bank from the slope under the model's ground plate. Aircraft
+    /// take the ground fit like any other type.
     ///
-    /// A floating ground fit without the platform clock throws.
+    /// A hovering ground fit without the platform clock throws.
     ///
     /// @param slot New unit.
+    /// @quirk A hovercraft's fit takes the higher of the terrain and the sea
+    ///        at each corner plus its bob, and nothing lifts the result back
+    ///        to the surface: one created in the first 60 ticks, while its
+    ///        bob has not yet faded, can start just under the sea.
     void fit_spawn_height(sim::unit_spawn::Slot& slot) override;
     /// Registers a unit's footprint and bucket on the map; collision can
     /// change flags on units inserted before.

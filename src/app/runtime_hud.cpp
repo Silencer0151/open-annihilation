@@ -10,6 +10,8 @@
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/ui/hud/unit_panel.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -360,6 +362,12 @@ void Runtime::load_side_hud() {
         side_hud_.unit_metal_use = rect(layout.unit_metal_use);
         side_hud_.unit_energy_make = rect(layout.unit_energy_make);
         side_hud_.unit_energy_use = rect(layout.unit_energy_use);
+        side_hud_.logo2 = rect(layout.logo2);
+        side_hud_.mission_text = rect(layout.mission_text);
+        side_hud_.unit_name2 = rect(layout.unit_name2);
+        side_hud_.damage_bar2 = rect(layout.damage_bar2);
+        side_hud_.name = rect(layout.name);
+        side_hud_.description = rect(layout.description);
     } catch (const std::exception& error) {
         std::cerr << "sidedata HUD unavailable: " << error.what() << '\n';
     }
@@ -595,22 +603,232 @@ void Runtime::draw_unit_rates(const oa::Unit& unit) {
     rate(side_hud_.unit_metal_use, unit.economy.metal.last_requested, true, false);
 }
 
-void Runtime::draw_unit_damage_bar(const oa::Unit& unit) {
-    const auto& world = match_->state();
-    const auto* def = oa::world_unit_def_of(&world, &unit);
-    const auto& bar = side_hud_.damage_bar;
-    if (def == nullptr || bar.width <= 0 || bar.height <= 0 ||
-        !oa::ui::hud::panel_shows_damage(world, unit, *def))
+namespace {
+
+namespace hud = oa::ui::hud;
+
+// The unit panel's view of a unit's order queues: the primary queue's
+// records, and the secondary queue's with the stockpile build's progress
+// (its third word, which saved orders carry).
+struct PanelQueues {
+    oa::sim::match_runtime::Match* match{};
+    std::vector<hud::OrderOverlay> primary{};
+    std::vector<hud::OrderOverlay> secondary{};
+};
+
+// Bit of an order's flags that puts it on the secondary queue.
+constexpr uint8_t kSecondaryQueueOrder = 0x04;
+// Records of a primary queue read before the head: only the head is shown.
+constexpr std::size_t kPanelQueueHead = 1;
+
+/// Returns a unit's head order (primary) or its secondary queue as the panel
+/// reads them, rebuilt into the PanelQueues `user` holds.
+hud::OrderOverlay* panel_orders(void* user, const oa::Unit& unit, bool secondary) {
+    auto& queues = *static_cast<PanelQueues*>(user);
+    auto& world = queues.match->state();
+    auto& nodes = secondary ? queues.secondary : queues.primary;
+    nodes.clear();
+    if (!secondary) {
+        std::array<oa::sim::match_runtime::Match::OrderRecordView, kPanelQueueHead> records{};
+        const auto count =
+            queues.match->queue_records(unit.id, false, records.data(), records.size());
+        for (std::size_t index = 0; index < count; ++index) {
+            auto& node = nodes.emplace_back();
+            node.mission = records[index].kind;
+            node.unit = oa::world_unit_at(&world, unit.id);
+            node.target = records[index].target != 0
+                              ? oa::world_unit_at(&world, records[index].target)
+                              : nullptr;
+            node.parameter = static_cast<uint32_t>(records[index].parameter_1);
+            node.state = records[index].flags;
+        }
+    } else {
+        struct Walk {
+            std::vector<hud::OrderOverlay>* nodes{};
+            oa::World* world{};
+            uint16_t unit{};
+        } walk{&nodes, &world, unit.id};
+
+        queues.match->visit_saved_orders(
+            unit.id,
+            [](void* context,
+               const oa::data::persist::SavedOrder* order,
+               const oa::data::persist::SavedGoal*) {
+                auto& walk = *static_cast<Walk*>(context);
+                if (order == nullptr || (order->flags & kSecondaryQueueOrder) == 0)
+                    return;
+                auto& node = walk.nodes->emplace_back();
+                node.mission = order->kind;
+                node.unit = oa::world_unit_at(walk.world, walk.unit);
+                node.target = order->target_id != 0
+                                  ? oa::world_unit_at(walk.world, order->target_id)
+                                  : nullptr;
+                node.parameter = static_cast<uint32_t>(order->parameter_1);
+                node.progress = order->parameter_3;
+                node.state = order->flags;
+            },
+            &walk
+        );
+    }
+    for (std::size_t index = 0; index < nodes.size(); ++index)
+        nodes[index].next = index + 1 < nodes.size() ? &nodes[index + 1] : nullptr;
+    return nodes.empty() ? nullptr : nodes.data();
+}
+
+} // namespace
+
+const char* Runtime::hovered_gadget_name() const {
+    if (screen_ != Screen::match || !hovered_ || !match_hud_ ||
+        *hovered_ >= match_hud_->layout.gadgets.size())
+        return nullptr;
+    return match_hud_->layout.gadgets[*hovered_].common.name.c_str();
+}
+
+void Runtime::draw_unit_panel() {
+    if (!match_)
         return;
-    oa::present::world_renderer::overlay_meter_bar(
-        source_overlay_raster(),
-        nullptr,
-        unit.health,
-        static_cast<int32_t>(def->max_damage),
-        {bar.x, bar.y, bar.x + bar.width - 1, bar.y + bar.height - 1},
-        world.game.ui_colors,
-        0
+    auto& world = match_->state();
+    const bool debug_keys =
+        (world.game.outcome_flags & oa::ui::console::outcome_flag::debug_keys) != 0;
+    constexpr uint8_t text_color = 255;
+    const auto text_at = [this](const HudRect& at, std::string_view text) {
+        draw_hud_label(at.x, at.y, text, text_color);
+    };
+    const auto meter = [this, &world](const HudRect& at, int32_t value, int32_t maximum) {
+        if (at.width <= 0 || at.height <= 0)
+            return;
+        oa::present::world_renderer::overlay_meter_bar(
+            source_overlay_raster(),
+            nullptr,
+            value,
+            maximum,
+            {at.x, at.y, at.x + at.width - 1, at.y + at.height - 1},
+            world.game.ui_colors,
+            0
+        );
+    };
+    // A gadget under the pointer: a build button shows its unit's cost line
+    // and description, any other gadget nothing.
+    if (const char* button = hovered_gadget_name()) {
+        char line[hud::kPanelLineBytes];
+        const char* description = nullptr;
+        if (hud::build_button_readout(world, button, line, sizeof line, &description)) {
+            text_at(side_hud_.name, line);
+            if (description != nullptr)
+                text_at(
+                    side_hud_.description,
+                    std::string_view(
+                        description, strnlen(description, sizeof(UnitDef::description))
+                    )
+                );
+        }
+        return;
+    }
+    // The panel's words in the player's language; each is copied or drawn
+    // before the next is looked up.
+    const hud::Localize localize = [](void* context, const char* text) -> const char* {
+        auto& self = *static_cast<Runtime*>(context);
+        self.unit_panel_word_ = self.translate_ui(text);
+        return self.unit_panel_word_.c_str();
+    };
+    const auto cursor = world.game.cursor_unit_id;
+    if (cursor == 0) {
+        char line[hud::kPanelLineBytes];
+        if (hud::feature_readout(world, debug_keys, localize, this, line, sizeof line))
+            text_at(side_hud_.name, line);
+        return;
+    }
+    PanelQueues queues{match_.get()};
+    hud::OverlayContext overlay{};
+    overlay.world = &world;
+    overlay.missions = hud::kMissionOverlays;
+    overlay.sink.user = &queues;
+    overlay.sink.orders = &panel_orders;
+    hud::UnitPanelHooks hooks{};
+    hooks.context = this;
+    hooks.can_see = [](void* context, const oa::Player& viewer, const oa::Unit& unit) {
+        auto& self = *static_cast<Runtime*>(context);
+        try {
+            return self.match_->unit_visible(viewer.index, unit.id);
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+    hooks.localize = localize;
+    const auto panel = hud::unit_panel_snapshot(
+        world, cursor, debug_keys, static_cast<int32_t>(match_session_kind()), overlay, hooks
     );
+    if (panel.unit == 0)
+        return;
+    draw_hud_label_centered(side_hud_.unit_name.x, side_hud_.unit_name.y, panel.name, text_color);
+    if (panel.unidentified)
+        return;
+    const auto* unit = oa::world_unit_at(&world, panel.unit);
+    const auto* def = unit != nullptr ? oa::world_unit_def_of(&world, unit) : nullptr;
+    if (unit == nullptr || def == nullptr)
+        return;
+    if (panel.show_damage)
+        meter(side_hud_.damage_bar, unit->health, static_cast<int32_t>(def->max_damage));
+    if (panel.logo_player < OA_PLAYER_COUNT) {
+        if (const auto logo = player_logo_frame(world.game.players[panel.logo_player]);
+            logo && logo->width > 0 && logo->height > 0) {
+            // The logo is fitted to the LOGO2 rectangle.
+            const auto& at = side_hud_.logo2;
+            const auto width = std::max(1, at.width);
+            const auto height = std::max(1, at.height);
+            for (int row = 0; row < height; ++row)
+                for (int column = 0; column < width; ++column) {
+                    const auto source =
+                        static_cast<std::size_t>(row * static_cast<int>(logo->height) / height) *
+                            logo->width +
+                        static_cast<std::size_t>(column * static_cast<int>(logo->width) / width);
+                    if (source < logo->coverage.size() && logo->coverage[source] != 0)
+                        fill_source_rect(at.x + column, at.y + row, 1, 1, logo->pixels[source]);
+                }
+        }
+    }
+    if (panel.show_rates)
+        draw_unit_rates(*unit);
+    if (panel.show_kills)
+        draw_hud_label(
+            side_hud_.damage_bar.x,
+            side_hud_.damage_bar.y + side_hud_.damage_bar.height - 1 + 2,
+            panel.kills,
+            hud::readout_color(world.game, hud::kReadoutTextColor)
+        );
+    if (panel.mission_text[0] != '\0')
+        draw_hud_label_centered(
+            side_hud_.mission_text.x, side_hud_.mission_text.y, panel.mission_text, text_color
+        );
+    if (panel.second == hud::PanelSecondUnit::stockpile) {
+        draw_hud_label_centered(
+            side_hud_.unit_name2.x,
+            side_hud_.unit_name2.y,
+            hud::panel_stockpile_label(localize, this),
+            text_color
+        );
+        meter(side_hud_.damage_bar2, panel.stockpile_percent, hud::kStockpileBarFull);
+    } else if (panel.second == hud::PanelSecondUnit::target) {
+        const auto* target = oa::world_unit_at(&world, panel.second_unit);
+        const auto* target_def =
+            target != nullptr ? oa::world_unit_def_of(&world, target) : nullptr;
+        if (target_def != nullptr) {
+            draw_hud_label_centered(
+                side_hud_.unit_name2.x,
+                side_hud_.unit_name2.y,
+                std::string_view(
+                    target_def->name, strnlen(target_def->name, sizeof target_def->name)
+                ),
+                text_color
+            );
+            if (panel.second_damage)
+                meter(
+                    side_hud_.damage_bar2,
+                    target->health,
+                    static_cast<int32_t>(target_def->max_damage)
+                );
+        }
+    }
 }
 
 oa::present::world_renderer::OverlayRaster Runtime::source_overlay_raster() {

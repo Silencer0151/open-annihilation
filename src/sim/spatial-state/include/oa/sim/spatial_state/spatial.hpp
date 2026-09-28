@@ -409,7 +409,7 @@ void bucket_push_front(Bucket& chain, Unit& unit) noexcept;
 /// @param world_x signed 16.16 world X of the footprint centre
 /// @param world_z signed 16.16 world Z of the footprint centre
 /// @param player_sees_cell whether the unloading player can see the cell; when false the plots are not walked
-/// @param hover_over_water the type can fly (OA_UNIT_DEF_FLAG_CAN_FLY) and is not amphibious
+/// @param flies_not_amphibious the type can fly (OA_UNIT_DEF_FLAG_CAN_FLY) and is not amphibious
 ///        (OA_UNIT_DEF_FLAG_AMPHIBIOUS); raises the depth floor to sea level
 /// @param world world holding the plots
 /// @return true when the unit fits, false off the map or on any failed cell
@@ -419,7 +419,7 @@ void bucket_push_front(Bucket& chain, Unit& unit) noexcept;
     int32_t world_x,
     int32_t world_z,
     bool player_sees_cell,
-    bool hover_over_water,
+    bool flies_not_amphibious,
     const World& world
 );
 /// Returns the height a building of this footprint and yard map stands at on a cell.

@@ -630,16 +630,14 @@ void Match::fit_spawn_height(sim::unit_spawn::Slot& slot) {
     auto& unit = *slot.unit;
     const auto flags = unit.flags;
     const auto& type = *unit.type;
-    constexpr uint32_t dirty = 0x10000, waterline = 0x1000, terrain_height = 0x100000,
-                       floating = 0x80000;
-    if (!(flags & dirty) && !(type.flags & waterline))
+    if (!(flags & OA_UNIT_FLAG_POSITION_DIRTY) && !(type.flags & OA_UNIT_DEF_FLAG_CAN_HOVER))
         return;
-    unit.flags &= ~dirty;
-    if (!unit.object_present || (flags & 3) != 1)
+    unit.flags &= ~OA_UNIT_FLAG_POSITION_DIRTY;
+    if (!unit.object_present || (flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != 1)
         return;
-    if (type.flags & terrain_height) {
+    if (type.flags & OA_UNIT_DEF_FLAG_UPRIGHT) {
         int32_t height;
-        if (!(type.flags & waterline))
+        if (!(type.flags & OA_UNIT_DEF_FLAG_CAN_HOVER))
             height = sample_terrain_height(unit.position[0], unit.position[2]);
         else {
             height = static_cast<int32_t>(simulation_.sea_level) - type.waterline_offset;
@@ -647,10 +645,13 @@ void Match::fit_spawn_height(sim::unit_spawn::Slot& slot) {
                 height = sample_terrain_height(unit.position[0], unit.position[2]);
         }
         unit.position[1] = static_cast<uint32_t>(height) << 16;
-    } else if (type.flags & floating)
+    } else if (type.flags & OA_UNIT_DEF_FLAG_FLOATER)
         unit.position[1] =
             (static_cast<uint32_t>(type.waterline_offset) * 0xffffu + simulation_.sea_level) << 16;
     else {
+        // Every other type, aircraft included, takes the ground fit over its
+        // model's ground plate; nothing lifts a hovercraft the fit leaves
+        // under the surface back to it.
         auto& runtime = movement_.at(slot.unit_index);
         if (!runtime)
             throw std::logic_error("ground fit has no movement object");
@@ -659,7 +660,7 @@ void Match::fit_spawn_height(sim::unit_spawn::Slot& slot) {
             throw std::logic_error("ground fit has no model object");
         sim::unit_movement::GroundClock clock;
         clock.simulation_tick = simulation_.tick;
-        if (type.flags & waterline) {
+        if (type.flags & OA_UNIT_DEF_FLAG_CAN_HOVER) {
             if (!input_.uptime_milliseconds)
                 throw std::logic_error("floating ground fit requires platform clock");
             for (auto& tick : clock.bob_ticks)
@@ -667,21 +668,7 @@ void Match::fit_spawn_height(sim::unit_spawn::Slot& slot) {
                     input_.uptime_milliseconds(), static_cast<uint32_t>(input_.clock_scale)
                 );
         }
-        constexpr uint32_t can_fly = 0x800u, can_hover = 0x1000u;
-        if (type.flags & can_fly) {
-            if (runtime && (runtime->movement.flags & 3) == 2)
-                return;
-            unit.position[1] =
-                static_cast<uint32_t>(sample_terrain_height(unit.position[0], unit.position[2]))
-                << 16;
-            return;
-        }
         (void)runtime->fit_height(terrain_, object->model().model(), clock);
-        if ((type.flags & can_hover) != 0) {
-            const auto sea = static_cast<uint32_t>(simulation_.sea_level) << 16;
-            if (unit.position[1] < sea)
-                unit.position[1] = sea;
-        }
     }
 }
 

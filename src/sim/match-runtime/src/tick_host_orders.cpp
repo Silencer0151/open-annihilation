@@ -16,6 +16,9 @@ constexpr uint32_t goal_events = sim::ground_orders::arrived_event |
                                  sim::ground_orders::goal_replaced_event;
 // Weapon event; the queue re-checks every weapon slot when it wakes an order.
 constexpr uint32_t weapon_wake_event = 0x10000;
+// Speech category VTOL_GetRepaired announces once the aircraft is repaired;
+// its other announcement is the failure of a lost pad.
+constexpr uint32_t vtol_get_repaired_repaired_speech = 10;
 } // namespace
 
 void TickHost::take_off(sim::unit_spawn::Slot& s, sim::simulation_state::Order& order) {
@@ -88,7 +91,12 @@ uint32_t TickHost::dispatch_mission(
             u.type ? u.type->maximum_health : 0
         );
         if (step.announce != 0)
-            play_sound(u, step.announce);
+            play_sound(
+                u,
+                step.announce,
+                step.announce == vtol_get_repaired_repaired_speech ? "Unit repaired"
+                                                                   : "Repair aborted."
+            );
         if (step.wait) {
             order.wait_events |= 1;
             order.wake_tick = world.tick + 0x1e;

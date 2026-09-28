@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -20,7 +21,17 @@ struct Services : sim::match_runtime::OfflineServices {
 
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
         speech.push_back(category);
+        caption.clear();
     }
+
+    /// The match's speech hook: a speech with its order's caption.
+    static void speak(void* context, sim::unit_spawn::Slot&, uint32_t category, const char* text) {
+        auto& services = *static_cast<Services*>(context);
+        services.speech.push_back(category);
+        services.caption = text;
+    }
+
+    std::string caption; // the last speech's caption; empty for none
 
     void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
 
@@ -154,6 +165,7 @@ int main() {
         0,   30,     1,     &scenario, {},      collision_plots, {},    0, 0, 0.0F, feature_defs
     };
     sim::match_runtime::Match match(input, services);
+    match.set_speech_hooks({&services, &Services::speak});
     match.reload_unit_defs();
     for (uint8_t player = 0; player < 2; ++player) {
         match.simulation().players[player].present = true;
@@ -175,6 +187,7 @@ int main() {
     auto& build = match.issue_mobile_build(builder_id, structure_type, site, false);
     CHECK(build.kind == sim::match_runtime::vtol_mobile_build_kind);
     CHECK(step(match, *builder, build, 0) == 1 && services.last() == 5);
+    CHECK(services.caption == "Building");
     CHECK(step(match, *builder, build, 0) == 1);
     CHECK(build.wait_events == 0xe0);
     // The approach is an air goal reached anywhere within builddistance.
@@ -185,6 +198,7 @@ int main() {
     CHECK(step(match, *builder, build, sim::ground_orders::path_failed_event) == 8);
     services.speech.clear();
     CHECK(step(match, *builder, build, 0) == 1 && services.last() == 9);
+    CHECK(services.caption == "Starting construction");
     sim::unit_spawn::Slot* frame = nullptr;
     for (auto& slot : match.world().slots)
         if (slot.unit && slot.record.type_index == structure_type && slot.unit_index != builder_id)
@@ -216,8 +230,10 @@ int main() {
     CHECK(step(match, *builder, build, 0) == 1 && build.phase == 4);
     CHECK(step(match, *builder, build, 0) == 1 && build.phase == 5);
     CHECK(step(match, *builder, build, 0) == 5 && services.last() == 8);
+    CHECK(services.caption == "Building complete");
     services.speech.clear();
     CHECK(step(match, *builder, build, 0x8) == 8 && services.last() == 7);
+    CHECK(services.caption == "Construction terminated");
     CHECK(step(match, *builder, build, 0x2) == 5);
 
     // HelpBuild needs a build list, then hovers and adds worker time.
@@ -251,9 +267,11 @@ int main() {
     CHECK(step(match, *builder, repair, 0) == 1 && repair.phase == 3);
     services.speech.clear();
     CHECK(step(match, *builder, repair, 0) == 5 && services.last() == 10);
+    CHECK(services.caption == "Unit repaired");
     frame->record.flags = (frame->record.flags & ~3u) | 2u;
     services.speech.clear();
     CHECK(step(match, *builder, repair, 0) == 5 && services.last() == 7);
+    CHECK(services.caption == "Repairs unsuccessful.");
     frame->record.flags = (frame->record.flags & ~3u) | 1u;
 
     // ReclaimUnit on an enemy: approach, then bite while in build range.
@@ -264,6 +282,7 @@ int main() {
     CHECK(step(match, *builder, reclaim, 0) == 1);
     services.speech.clear();
     CHECK(step(match, *builder, reclaim, 0) == 1 && services.last() == 11);
+    CHECK(services.caption.empty());
     // A plain point goal: no radius, altitude or bearing.
     CHECK(match.air_driver(builder_id)->goal->flags == sim::air::goal_terrain_altitude);
     CHECK((reclaim.wait_events & 0x100e8) == 0x100e8);
@@ -277,6 +296,7 @@ int main() {
     auto& bare = match.insert_ground_order(builder_id, sim::match_runtime::vtol_reclaim_kind, site);
     services.speech.clear();
     CHECK(step(match, *builder, bare, 0) == 8 && services.last() == 7);
+    CHECK(services.caption == "Reclamation failed");
 
     // RepairPatrol queues its return leg, then sends the aircraft to repair
     // a damaged ally in sight.

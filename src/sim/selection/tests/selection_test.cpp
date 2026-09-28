@@ -140,6 +140,33 @@ int main() {
         world_destroy(w);
     }
     {
+        // The on-screen test reads the ids the last collection listed, up to
+        // the count and never past the buffer.
+        World* w = make_world();
+        uint16_t listed[2]{};
+        const VisibleLists pair{listed, 2, nullptr, 0};
+        CHECK(!unit_listed(*w, pair, 1));
+        const Hooks blind = [&] {
+            Hooks copy = h;
+            copy.player_sees_unit = nullptr;
+            return copy;
+        }();
+        collect_visible_units(*w, lists, blind);
+        CHECK(w->game.hot_unit_count == 3);
+        CHECK(unit_listed(*w, lists, 1) && unit_listed(*w, lists, 3));
+        CHECK(!unit_listed(*w, lists, 4) && !unit_listed(*w, lists, 0));
+        listed[0] = 2;
+        listed[1] = 5;
+        CHECK(unit_listed(*w, pair, 5));
+        CHECK(!unit_listed(*w, pair, 3));
+        w->game.hot_unit_count = 1;
+        CHECK(unit_listed(*w, pair, 2) && !unit_listed(*w, pair, 5));
+        w->game.hot_unit_count = 0;
+        CHECK(!unit_listed(*w, pair, 2));
+        CHECK(!unit_listed(*w, VisibleLists{}, 2));
+        world_destroy(w);
+    }
+    {
         World* w = make_world();
         w->units[2].capture_cooldown = 5;
         select_all(*w, h);

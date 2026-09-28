@@ -375,6 +375,7 @@ void options_open(Panel& panel, OptionsContext& context) noexcept {
         host.copy_top_panel != nullptr ? host.copy_top_panel(host.context, &width, &height, &y) : 0;
     lightbar.scroll = 0;
     lightbar.last_column = width - 1;
+    lightbar.last_row = height - 1;
     lightbar.panel_y = y;
     lightbar.active = 1;
     lightbar.backup =
@@ -393,6 +394,58 @@ void options_open(Panel& panel, OptionsContext& context) noexcept {
     panel.dirty = true;
     if (context.in_game)
         play(context, "Panel");
+}
+
+OptionsLightbarStep options_lightbar_step(OptionsLightbar& lightbar) noexcept {
+    OptionsLightbarStep step;
+    if (lightbar.active == 0)
+        return step;
+    step.drawn = true;
+    const auto limit = lightbar.last_column;
+    if (lightbar.scroll < kLightbarScrollEnd) {
+        const auto before = lightbar.scroll;
+        lightbar.scroll += kLightbarScrollStep;
+        if (lightbar.scroll >= kLightbarScrollEnd) {
+            step.play_options_sound = true;
+            lightbar.scroll = kLightbarScrollEnd;
+        }
+        step.stamp_lightbar = lightbar.scroll > limit && before < limit;
+    }
+    if (lightbar.scroll < limit)
+        lightbar.velocity += kLightbarVelocityStep;
+    else {
+        lightbar.velocity -= kLightbarVelocityStep;
+        if (lightbar.velocity < 0)
+            lightbar.velocity = 0;
+    }
+    const auto top = lightbar.panel_y;
+    const auto lifted = top - lightbar.velocity;
+    if (lightbar.scroll > limit) {
+        if (lightbar.scroll < kLightbarScrollEnd)
+            ++lightbar.scroll;
+        const auto edge = lightbar.scroll;
+        step.destination = {
+            LightbarPoint{limit, top},
+            LightbarPoint{edge, lifted},
+            LightbarPoint{edge, kLightbarBottomRow},
+            LightbarPoint{limit, kLightbarBottomRow}
+        };
+    } else {
+        const auto edge = lightbar.scroll;
+        step.destination = {
+            LightbarPoint{edge, lifted},
+            LightbarPoint{kLightbarFoldColumn, top},
+            LightbarPoint{kLightbarFoldColumn, kLightbarBottomRow},
+            LightbarPoint{edge, kLightbarBottomRow}
+        };
+    }
+    step.source = {
+        LightbarPoint{1, 1},
+        LightbarPoint{lightbar.last_column, 1},
+        LightbarPoint{lightbar.last_column, lightbar.last_row},
+        LightbarPoint{1, lightbar.last_row}
+    };
+    return step;
 }
 
 void options_capture_entry(OptionsContext& context) noexcept {

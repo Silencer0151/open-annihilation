@@ -113,6 +113,14 @@ bool parse_side_layout(std::string_view sidedata, int32_t side, SideLayout& layo
     read_point(s, "UNITMETALUSE", layout.unit_metal_use);
     read_point(s, "UNITENERGYMAKE", layout.unit_energy_make);
     read_point(s, "UNITENERGYUSE", layout.unit_energy_use);
+    if (const auto logo = tdf_rect(s, "LOGO2"); logo.width > 0)
+        layout.logo2 = logo;
+    read_point(s, "MISSIONTEXT", layout.mission_text);
+    read_point(s, "UNITNAME2", layout.unit_name2);
+    if (const auto damage = tdf_rect(s, "DAMAGEBAR2"); damage.width > 0)
+        layout.damage_bar2 = damage;
+    read_point(s, "NAME", layout.name);
+    read_point(s, "DESCRIPTION", layout.description);
     return true;
 }
 

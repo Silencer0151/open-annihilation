@@ -351,6 +351,21 @@ void Runtime::seat_campaign_players(oa::World& world) {
         info->color = 1;
 }
 
+void Runtime::bind_match_speech() {
+    // Captions come in the game's English wording and are shown in the
+    // player's language; the queue keeps its own copy.
+    oa::sim::match_runtime::SpeechHooks hooks;
+    hooks.context = this;
+    hooks.speak =
+        [](void* context, oa::sim::unit_spawn::Slot& slot, uint32_t category, const char* caption) {
+            auto& self = *static_cast<Runtime*>(context);
+            self.offline_services_.command_speech(
+                slot, category, self.translate_ui(caption != nullptr ? caption : "")
+            );
+        };
+    match_->set_speech_hooks(hooks);
+}
+
 void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // A new Start attempt owns a new world.  Do not let a failed bootstrap
     // expose commanders, timing state, or a renderable match from an older
@@ -796,6 +811,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         append_gaf_file(match_fx_, "anims/FX.GAF");
     try {
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
+        bind_match_speech();
         match_->set_difficulty(static_cast<int32_t>(preferences_.difficulty));
         // The mission starts with the top bar's shown stores and the space-bar
         // strip cleared; the strip's LIGHTBAR picture is bound again.

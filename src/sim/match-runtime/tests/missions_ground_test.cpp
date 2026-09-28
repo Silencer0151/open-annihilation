@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace oa;
@@ -32,7 +33,17 @@ struct Services : sim::match_runtime::OfflineServices {
 
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
         speech.push_back(category);
+        caption.clear();
     }
+
+    /// The match's speech hook: a speech with its order's caption.
+    static void speak(void* context, sim::unit_spawn::Slot&, uint32_t category, const char* text) {
+        auto& services = *static_cast<Services*>(context);
+        services.speech.push_back(category);
+        services.caption = text;
+    }
+
+    std::string caption; // the last speech's caption; empty for none
 
     void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
 
@@ -206,6 +217,7 @@ int main() {
         0,   30,     1,     &scenario, {},      collision_plots, {},    0,  0,  0.0F, features
     };
     sim::match_runtime::Match match(input, services);
+    match.set_speech_hooks({&services, &Services::speak});
     match.state().unit_defs[1].abilities =
         OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_REPAIR |
         OA_UNIT_DEF_ABILITY_CAN_RECLAMATE | OA_UNIT_DEF_ABILITY_CAN_RESURRECT;
@@ -261,6 +273,7 @@ int main() {
         // The rock is gone: the order reports the failure and ends.
         services.speech.clear();
         CHECK(step(match, *builder, order) == 8 && services.speech == std::vector<uint32_t>{7});
+        CHECK(services.caption == "Reclamation failed");
         match.stop_orders(builder_id);
     }
 
@@ -288,6 +301,7 @@ int main() {
         CHECK(raised->record.position.x == cell_point(20, 20)[0]);
         services.speech.clear();
         CHECK(step(match, *builder, order) == 5 && services.speech == std::vector<uint32_t>{8});
+        CHECK(services.caption == "Resurrection complete");
         auto* head = match.orders(builder_id).primary;
         CHECK(head && head->kind == repair_unit_kind);
         match.stop_orders(builder_id);

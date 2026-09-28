@@ -166,6 +166,11 @@ void Runtime::initialize_sdl() {
     if (sdl_.window == nullptr || sdl_.renderer == nullptr) {
         if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1"))
             throw std::runtime_error("SDL mouse focus click-through hint was rejected");
+        // Closing the window reaches the game as a close request, which a
+        // running match answers with its surrender confirmation, rather than
+        // as a quit SDL adds on its own.
+        if (!SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0"))
+            throw std::runtime_error("SDL last-window quit hint was rejected");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         sdl_.window = SDL_CreateWindow(

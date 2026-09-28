@@ -5,6 +5,8 @@
 #include "oa/app/runtime.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/hud/unit_info.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -30,9 +32,17 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // F4 pins the kills board out (Game.graphics_flags 0x80).
     if (key.key == SDLK_F4 || key.scancode == SDL_SCANCODE_F4)
         return handle_console_hotkey(key);
+    // F1 opens the unit info panel; Shift+F1 pins the unit under the cursor
+    // instead (Game.pinned_unit_a), or unpins without one.
     if (key.key == SDLK_F1 || key.scancode == SDL_SCANCODE_F1) {
-        show_unit_info_ = !show_unit_info_;
-        status_ = show_unit_info_ ? "Unit info" : "";
+        auto& game = match_->state().game;
+        if ((SDL_GetModState() & SDL_KMOD_SHIFT) != 0) {
+            game.pinned_unit_a_valid = game.cursor_unit_id != 0 ? 1U : 0U;
+            if (game.cursor_unit_id != 0)
+                game.pinned_unit_a = game.cursor_unit_id;
+            return true;
+        }
+        (void)open_unit_info();
         return true;
     }
     if (key.key == SDLK_F2 || key.scancode == SDL_SCANCODE_F2) {
@@ -78,21 +88,33 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         }
         return true;
     }
+    // The unit info panel's Enter and Escape defaults are both DONE.
+    if (unit_info_panel_ &&
+        (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER || key.key == SDLK_ESCAPE)) {
+        press_unit_info_done();
+        return true;
+    }
     if (handle_console_hotkey(key))
         return true;
+    // Escape takes back an armed command and keeps the selection; with none
+    // armed it drops the selection. It never opens the in-game menu (F2 and
+    // MENU do); with the menu open, the event handler closes it.
     if (key.key == SDLK_ESCAPE) {
         if (match_paused_)
             return false;
-        if (has_local_selection() || match_command_ != MatchCommand::none ||
-            pending_build_type_ != 0) {
-            clear_local_selection();
+        if (match_command_ != MatchCommand::none || pending_build_type_ != 0) {
             reset_match_command();
             pending_build_type_ = 0;
+            oa::sim::gameplay_input::set_pointer_command(
+                match_->state().game, oa::sim::gameplay_input::OrderCommand::default_order
+            );
             apply_match_hud_for_selection();
-            status_ = "Selection cleared";
+            status_ = "Command cancelled";
             return true;
         }
-        show_match_pause_menu();
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        status_ = "Selection cleared";
         return true;
     }
     if (match_paused_)
@@ -153,19 +175,13 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             });
             return true;
         }
+        // Ctrl+S selects the local units of the on-screen list: those whose
+        // box overlaps the view.
         if (sym == SDLK_S) {
-            const auto viewport = live_viewport(
-                static_cast<uint32_t>(std::max(0, match_camera_x_)),
-                static_cast<uint32_t>(std::max(0, match_camera_z_))
-            );
-            select_units_matching([&](const oa::sim::unit_spawn::Slot& slot) {
-                if (!slot.unit)
-                    return false;
-                const auto screen = project_match_point(viewport, slot.unit->position);
-                return screen.x >= match_layout_.left && screen.y >= match_layout_.top &&
-                       screen.x < match_layout_.left + match_layout_.battlefield_width() &&
-                       screen.y < match_layout_.top + match_layout_.battlefield_height();
-            });
+            auto& world = match_->state();
+            world.game.local_player_index = match_local_player_;
+            oa::sim::selection::select_visible_units(world, on_screen_lists(), selection_hooks());
+            adopt_selected_units();
             return true;
         }
         if (sym == SDLK_Z && selected_match_unit_ != 0) {
@@ -201,8 +217,14 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // it does nothing.
     if (sym == SDLK_H)
         return true;
+    // 'n' centres the view on the next local unit not yet visited and marks
+    // the local units then on screen visited; it selects nothing.
     if (sym == SDLK_N) {
-        select_next_offscreen_unit();
+        auto& world = match_->state();
+        world.game.local_player_index = match_local_player_;
+        oa::sim::selection::cycle_next_unit(world, on_screen_lists(), selection_hooks());
+        if (const auto next = world.game.cycle_unit_id; next != 0)
+            status_ = "Next " + unit_info_name(next);
         return true;
     }
     // A multiplayer game's watcher changes no speed.
@@ -252,39 +274,35 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
 void Runtime::select_match_unit(float x, float y, int32_t clicks) {
     if (!match_)
         return;
-    const auto hits = pick_match_units(x, y);
-    const auto id = first_local_hit(hits);
-    const bool add = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
-    if (add) {
-        if (id == 0)
-            return;
-        adopt_selection(id);
-        selected_match_unit_ = id;
-        apply_match_hud_for_selection();
-        status_ = unit_info_name(id);
+    update_pointer(x, y);
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    const auto id = hovered_match_unit_;
+    const bool toggle = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    // The unit under the cursor, when it is a selectable local unit, is
+    // selected in place of the others, or toggled with shift; the local
+    // units on screen are then visited for 'n'.
+    oa::sim::selection::select_cursor_unit(world, on_screen_lists(), toggle, selection_hooks());
+    const auto* unit = id != 0 ? oa::world_unit_at(&world, id) : nullptr;
+    if (unit == nullptr || (unit->flags & OA_UNIT_FLAG_SELECTED) == 0) {
+        adopt_selected_units();
         return;
     }
-    clear_local_selection();
-    if (id == 0) {
-        apply_match_hud_for_selection();
-        status_ = "No unit selected";
-        return;
-    }
-    adopt_selection(id);
-    selected_match_unit_ = id;
     int count = 1;
-    if (clicks >= 2) {
-        const auto type = match_->world().slots[id].unit->type_index;
+    if (!toggle && clicks >= 2) {
+        const auto type = unit->type_index;
         for (auto& slot : match_->world().slots) {
             if (slot.unit_index == 0 || slot.unit == nullptr || slot.unit_index == id ||
                 slot.owner_index != match_local_player_ || slot.unit->type_index != type ||
                 !match_->selectable(slot.unit_index))
                 continue;
-            adopt_selection(slot.unit_index);
+            slot.unit->flags |= OA_UNIT_FLAG_SELECTED;
             ++count;
         }
     }
-    apply_match_hud_for_selection();
+    if (!toggle)
+        selected_match_unit_ = id;
+    adopt_selected_units();
     const auto maximum = match_->world().slots[id].unit->type
                              ? match_->world().slots[id].unit->type->maximum_health
                              : 0;
@@ -294,36 +312,62 @@ void Runtime::select_match_unit(float x, float y, int32_t clicks) {
                               std::to_string(maximum);
 }
 
+void Runtime::adopt_selected_units() {
+    if (!match_)
+        return;
+    uint16_t first = 0;
+    bool primary_kept = false;
+    for (auto& slot : match_->world().slots) {
+        if (slot.unit_index == 0 || slot.unit == nullptr ||
+            slot.owner_index != match_local_player_ ||
+            (slot.unit->flags & OA_UNIT_FLAG_SELECTED) == 0)
+            continue;
+        offline_services_.refresh_selected_unit(slot);
+        if (first == 0)
+            first = slot.unit_index;
+        if (slot.unit_index == selected_match_unit_)
+            primary_kept = true;
+    }
+    if (!primary_kept)
+        selected_match_unit_ = first;
+    apply_match_hud_for_selection();
+}
+
 void Runtime::box_select_units(int x0, int y0, int x1, int y1, bool add) {
     if (!match_)
         return;
-    if (x0 > x1)
-        std::swap(x0, x1);
-    if (y0 > y1)
-        std::swap(y0, y1);
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    // The corners are the drag's ends on the canvas, projected from the
+    // camera the view has now; the box goes back to Game.drag_start and
+    // drag_end as map points at height 0.
+    const auto zoom = match_zoom() == 0.0F ? 1.0 : static_cast<double>(match_zoom());
+    const auto map_point = [&](int x, int y) {
+        return std::array<int32_t, 3>{
+            match_camera_x_ + static_cast<int32_t>(
+                                  std::llround(static_cast<double>(x - match_layout_.left) / zoom)
+                              ),
+            0,
+            match_camera_z_ + static_cast<int32_t>(
+                                  std::llround(static_cast<double>(y - match_layout_.top) / zoom)
+                              )
+        };
+    };
+    const auto start = map_point(x0, y0);
+    const auto end = map_point(x1, y1);
+    std::copy(start.begin(), start.end(), world.game.drag_start);
+    std::copy(end.begin(), end.end(), world.game.drag_end);
     if (!add)
-        clear_local_selection();
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
-    uint16_t first = selected_match_unit_;
+        selected_match_unit_ = 0;
+    const bool any =
+        oa::sim::selection::select_units_in_box(world, on_screen_lists(), add, selection_hooks());
+    adopt_selected_units();
     int count = 0;
-    for (auto& slot : match_->world().slots) {
-        if (slot.unit_index == 0 || slot.unit == nullptr ||
-            slot.owner_index != match_local_player_ || !match_->selectable(slot.unit_index))
-            continue;
-        const auto screen = project_match_point(viewport, slot.unit->position);
-        if (screen.x < x0 || screen.x > x1 || screen.y < y0 || screen.y > y1)
-            continue;
-        adopt_selection(slot.unit_index);
-        if (first == 0)
-            first = slot.unit_index;
-        ++count;
-    }
-    selected_match_unit_ = first;
-    apply_match_hud_for_selection();
-    status_ = count == 0 ? "No units" : std::to_string(count) + " selected";
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit != nullptr && slot.owner_index == match_local_player_ &&
+            (slot.unit->flags & OA_UNIT_FLAG_SELECTED) != 0)
+            ++count;
+    status_ = !any ? "No units" : std::to_string(count) + " selected";
 }
 
 void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view kind) {
@@ -369,50 +413,6 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
     status_ = std::string(kind) + " " + std::to_string(count);
 }
 
-void Runtime::select_next_offscreen_unit() {
-    if (!match_)
-        return;
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
-    const int left = match_layout_.left, top = match_layout_.top;
-    const int right = left + match_layout_.battlefield_width();
-    const int bottom = top + match_layout_.battlefield_height();
-    uint16_t first = 0;
-    bool passed = selected_match_unit_ == 0;
-    for (auto& slot : match_->world().slots) {
-        if (slot.unit_index == 0 || slot.unit == nullptr ||
-            slot.owner_index != match_local_player_ || !match_->selectable(slot.unit_index))
-            continue;
-        const auto screen = project_match_point(viewport, slot.unit->position);
-        if (screen.x >= left && screen.y >= top && screen.x < right && screen.y < bottom)
-            continue;
-        if (first == 0)
-            first = slot.unit_index;
-        if (!passed) {
-            if (slot.unit_index == selected_match_unit_)
-                passed = true;
-            continue;
-        }
-        clear_local_selection();
-        adopt_selection(slot.unit_index);
-        selected_match_unit_ = slot.unit_index;
-        center_camera_on_unit(slot.unit_index);
-        apply_match_hud_for_selection();
-        status_ = "Next " + unit_info_name(slot.unit_index);
-        return;
-    }
-    if (first != 0) {
-        clear_local_selection();
-        adopt_selection(first);
-        selected_match_unit_ = first;
-        center_camera_on_unit(first);
-        apply_match_hud_for_selection();
-        status_ = "Next " + unit_info_name(first);
-    }
-}
-
 void Runtime::adjust_game_speed(int delta) {
     auto& world = match_->state();
     const auto hooks = message_hooks();
@@ -425,32 +425,265 @@ void Runtime::adjust_game_speed(int delta) {
     preferences_.current_game_speed = world.game.current_speed;
 }
 
-void Runtime::draw_unit_info_overlay() {
-    if (!show_unit_info_ || selected_match_unit_ == 0 || !match_)
-        return;
-    const auto& slot = match_->world().slots[selected_match_unit_];
-    if (slot.unit == nullptr)
-        return;
-    fill_source_rect(4, 132, 120, 160, 10);
-    const auto* def = definition_for(selected_match_unit_);
-    int y = 136;
-    draw_hud_label(8, y, unit_info_name(selected_match_unit_), 255);
-    y += 12;
-    draw_hud_label(
-        8,
-        y,
-        "HP " + std::to_string(slot.unit->health) + "/" +
-            std::to_string(slot.unit->type ? slot.unit->type->maximum_health : 0),
-        255
+namespace {
+
+// The panel control that shows the unit's picture, and the one that closes it.
+constexpr const char* kUnitInfoPicture = "HOTR";
+constexpr const char* kUnitInfoDone = "DONE";
+// Height of a statistic label the panel adds: one line of the GUI font.
+constexpr int16_t kUnitInfoLabelHeight = 12;
+
+} // namespace
+
+bool Runtime::open_unit_info() {
+    namespace hud = oa::ui::hud;
+    if (!match_)
+        return false;
+    auto& world = match_->state();
+    if ((world.game.frame_flags & hud::kFrameUnitInfoOpen) != 0)
+        return false;
+    const auto type = hud::unit_info_subject(
+        world,
+        hovered_gadget_name(),
+        [](void* user, const char* name) -> uint16_t {
+            return oa::sim::unit_spawn::find_type_index(
+                static_cast<Runtime*>(user)->spawn_type_names_, name
+            );
+        },
+        [](void* user, const oa::Player& viewer, const oa::Unit& unit) {
+            try {
+                return static_cast<Runtime*>(user)->match_->unit_visible(viewer.index, unit.id);
+            } catch (const std::exception&) {
+                return false;
+            }
+        },
+        this
     );
-    y += 12;
-    if (def != nullptr) {
-        draw_hud_label(8, y, "M " + std::to_string(def->build_cost_metal), 255);
-        y += 12;
-        draw_hud_label(8, y, "E " + std::to_string(def->build_cost_energy), 255);
-        y += 12;
-        draw_hud_label(8, y, "Build " + std::to_string(def->build_time), 255);
+    if (type == 0)
+        return false;
+    hud::PanelLoader loader{};
+    loader.user = this;
+    loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
+        auto& self = *static_cast<Runtime*>(user);
+        const auto prefix = self.match_side_prefix();
+        const auto chrome = prefix == "cor" ? "anims/CORINT.GAF" : "anims/ARMINT.GAF";
+        UnitInfoPanel panel;
+        try {
+            panel.screen = renderer::load_screen(
+                self.assets_,
+                {std::string("guis/") + name,
+                 "",
+                 "palettes/guipal.pal",
+                 "anims/commongui.gaf",
+                 chrome}
+            );
+        } catch (const std::exception& error) {
+            std::cerr << "unit info panel unavailable: " << error.what() << '\n';
+            return false;
+        }
+        auto& gadgets = panel.screen->layout.gadgets;
+        if (gadgets.empty())
+            return false;
+        // The controls lie in the panel, which the file places on the screen.
+        panel.root = gadgets.front().common;
+        for (std::size_t index = 1; index < gadgets.size(); ++index) {
+            gadgets[index].common.x = static_cast<int16_t>(gadgets[index].common.x + panel.root.x);
+            gadgets[index].common.y = static_cast<int16_t>(gadgets[index].common.y + panel.root.y);
+        }
+        // The panel has no picture of its own; it is drawn over black in
+        // the game palette.
+        auto& background = panel.screen->background;
+        background.width = static_cast<uint32_t>(kCanvasWidth);
+        background.height = static_cast<uint32_t>(kCanvasHeight);
+        background.rgb.assign(static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3), 0);
+        if (std::any_of(self.match_palette_.begin(), self.match_palette_.end(), [](uint8_t b) {
+                return b != 0;
+            }))
+            background.palette = self.match_palette_;
+        self.unit_info_panel_ = std::move(panel);
+        self.match_->state().game.frame_flags =
+            static_cast<uint16_t>(self.match_->state().game.frame_flags | hud::kFrameUnitInfoOpen);
+        return true;
+    };
+    hud::PanelControls controls{};
+    controls.user = this;
+    controls.find = [](void* user, const char* name) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (!self.unit_info_panel_ || !self.unit_info_panel_->screen)
+            return int32_t{-1};
+        const auto& gadgets = self.unit_info_panel_->screen->layout.gadgets;
+        for (std::size_t index = 0; index < gadgets.size(); ++index)
+            if (gadgets[index].common.name == name)
+                return static_cast<int32_t>(index);
+        return int32_t{-1};
+    };
+    controls.set_text = [](void* user, int32_t index, const char* text) {
+        auto& self = *static_cast<Runtime*>(user);
+        auto& gadgets = self.unit_info_panel_->screen->layout.gadgets;
+        if (index < 0 || static_cast<std::size_t>(index) >= gadgets.size())
+            return;
+        if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(
+                &gadgets[static_cast<std::size_t>(index)].fields
+            ))
+            label->text = text;
+    };
+    hud::UnitInfoHost host{};
+    host.user = this;
+    host.add_label = [](void* user, const char* text, int16_t x, int16_t y, uint32_t) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (!self.unit_info_panel_ || !self.unit_info_panel_->screen)
+            return;
+        const auto& root = self.unit_info_panel_->root;
+        oa::ui::gui_layout::Gadget label;
+        label.common.type = oa::ui::gui_layout::GadgetType::label;
+        label.common.x = static_cast<int16_t>(root.x + x);
+        label.common.y = static_cast<int16_t>(root.y + y);
+        label.common.width = static_cast<int16_t>(std::max(1, root.width - x));
+        label.common.height = kUnitInfoLabelHeight;
+        label.common.active = 1;
+        oa::ui::gui_layout::LabelFields fields;
+        fields.text = text;
+        label.fields = std::move(fields);
+        self.unit_info_panel_->screen->layout.gadgets.push_back(std::move(label));
+    };
+    host.set_picture = [](void* user, const char* path) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (self.unit_info_panel_)
+            self.unit_info_panel_->picture_path = path;
+    };
+    host.free_picture = [](void* user) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (self.unit_info_panel_)
+            self.unit_info_panel_->picture_path.clear();
+    };
+    if (!hud::open_unit_info_panel(
+            world,
+            type,
+            static_cast<int32_t>(oa::sim::messages::ticks_per_second),
+            loader,
+            controls,
+            host
+        )) {
+        unit_info_panel_.reset();
+        return false;
     }
+    // The panel is drawn once, its picture copied at HOTR at its own size.
+    auto& panel = *unit_info_panel_;
+    try {
+        panel.frame = renderer::render_screen(*panel.screen);
+    } catch (const std::exception& error) {
+        std::cerr << "unit info panel: " << error.what() << '\n';
+        panel.frame = {};
+    }
+    const oa::ui::gui_layout::Gadget* picture_area = nullptr;
+    for (const auto& gadget : panel.screen->layout.gadgets)
+        if (gadget.common.name == kUnitInfoPicture)
+            picture_area = &gadget;
+    if (picture_area != nullptr && !panel.picture_path.empty() && !panel.frame.rgb.empty()) {
+        auto path = panel.picture_path;
+        std::replace(path.begin(), path.end(), '\\', '/');
+        try {
+            const auto picture = oa::decode_pcx(assets_.read(path).bytes);
+            const auto& palette = panel.screen->background.palette;
+            for (uint32_t row = 0; row < picture.height; ++row)
+                for (uint32_t column = 0; column < picture.width; ++column) {
+                    const auto x = picture_area->common.x + static_cast<int>(column);
+                    const auto y = picture_area->common.y + static_cast<int>(row);
+                    if (x < 0 || y < 0 || x >= static_cast<int>(panel.frame.width) ||
+                        y >= static_cast<int>(panel.frame.height))
+                        continue;
+                    const auto at = static_cast<std::size_t>(row) * picture.width + column;
+                    auto* out =
+                        panel.frame.rgb.data() + (static_cast<std::size_t>(y) * panel.frame.width +
+                                                  static_cast<std::size_t>(x)) *
+                                                     3U;
+                    // The picture's colour indices are the game palette's.
+                    if (palette && at < picture.indices.size()) {
+                        const auto entry = static_cast<std::size_t>(picture.indices[at]) * 4U;
+                        out[0] = (*palette)[entry];
+                        out[1] = (*palette)[entry + 1];
+                        out[2] = (*palette)[entry + 2];
+                    } else if (at * 3U + 2U < picture.rgb.size()) {
+                        out[0] = picture.rgb[at * 3U];
+                        out[1] = picture.rgb[at * 3U + 1];
+                        out[2] = picture.rgb[at * 3U + 2];
+                    }
+                }
+        } catch (const std::exception& error) {
+            std::cerr << "unit info picture " << path << " unavailable: " << error.what() << '\n';
+        }
+    }
+    status_ = "Unit info";
+    return true;
+}
+
+void Runtime::close_unit_info() {
+    if (!unit_info_panel_)
+        return;
+    oa::ui::hud::UnitInfoHost host{};
+    host.user = this;
+    host.free_picture = [](void* user) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (self.unit_info_panel_)
+            self.unit_info_panel_->picture_path.clear();
+    };
+    if (match_)
+        (void)oa::ui::hud::unit_info_panel_click(match_->state().game, nullptr, host, {});
+    unit_info_panel_.reset();
+}
+
+void Runtime::press_unit_info_done() {
+    if (!unit_info_panel_ || !match_)
+        return;
+    oa::ui::hud::HudEvents events{};
+    events.user = this;
+    events.play_sound = [](void* user, const char* name) {
+        static_cast<Runtime*>(user)->play_ui_sound(name, 0);
+    };
+    if (oa::ui::hud::unit_info_panel_click(match_->state().game, kUnitInfoDone, {}, events) ==
+        oa::ui::hud::UnitInfoClick::done)
+        close_unit_info();
+}
+
+bool Runtime::click_unit_info(float x, float y) {
+    if (!unit_info_panel_ || !unit_info_panel_->screen)
+        return false;
+    const auto point = oa::ui::display_layout::canvas_to_source(
+        match_layout_, static_cast<int>(x), static_cast<int>(y)
+    );
+    const auto& root = unit_info_panel_->root;
+    if (point.x < root.x || point.y < root.y || point.x >= root.x + root.width ||
+        point.y >= root.y + root.height)
+        return false;
+    for (const auto& gadget : unit_info_panel_->screen->layout.gadgets) {
+        const auto& area = gadget.common;
+        if (area.name == kUnitInfoDone && point.x >= area.x && point.y >= area.y &&
+            point.x < area.x + area.width && point.y < area.y + area.height) {
+            press_unit_info_done();
+            break;
+        }
+    }
+    return true;
+}
+
+void Runtime::draw_unit_info_panel() {
+    if (!unit_info_panel_ || unit_info_panel_->frame.rgb.empty())
+        return;
+    const auto& root = unit_info_panel_->root;
+    const auto top_left = hud_canvas(root.x, root.y);
+    const auto bottom_right = hud_canvas(root.x + root.width, root.y + root.height);
+    scale_blit(
+        paint_target(),
+        unit_info_panel_->frame,
+        top_left.x,
+        top_left.y,
+        std::max(1, bottom_right.x - top_left.x),
+        std::max(1, bottom_right.y - top_left.y),
+        root.x,
+        root.y,
+        root.width,
+        root.height
+    );
 }
 
 void Runtime::draw_chat_overlay() {

@@ -35,8 +35,8 @@ constexpr uint32_t pickup_wait = goal_events | target_lost_event | weapon_wake_e
 constexpr uint32_t speech_order = 5;
 constexpr uint32_t speech_order_done = 6;
 constexpr uint32_t speech_failed = 7;
-constexpr uint32_t speech_cargo_loaded = 0x0c;   // ?
-constexpr uint32_t speech_cargo_unloaded = 0x0d; // ?
+constexpr uint32_t speech_cargo_loaded = 0x0c;   // the load chatter
+constexpr uint32_t speech_cargo_unloaded = 0x0d; // the unload chatter
 
 // Command flags bits a new order sets when it carries a target or a point.
 constexpr uint8_t order_has_target = 0x02;
@@ -163,12 +163,26 @@ class TickHost::VtolMissions {
         return unit && unit->record.type_index ? unit : nullptr;
     }
 
+    /// Plays a speech category for the unit.
+    ///
+    /// @param category Speech category (see the vtol::speech_* values).
     void speak(uint32_t category) { host.play_sound(*s.unit, category); }
 
-    void announce() {
+    /// Plays a speech category for the unit, captioned with the order's text.
+    ///
+    /// @param category Speech category (see the vtol::speech_* values).
+    /// @param caption The order's caption in place of the category's own.
+    void speak(uint32_t category, const char* caption) {
+        host.play_sound(*s.unit, category, caption);
+    }
+
+    /// Plays the order's acknowledgement once, clearing its announce bit.
+    ///
+    /// @param caption The order's caption, or null for none.
+    void announce(const char* caption = nullptr) {
         if (record.extra.command_flags & vtol::order_announce) {
             record.extra.command_flags &= static_cast<uint8_t>(~vtol::order_announce);
-            speak(vtol::speech_order);
+            speak(vtol::speech_order, caption);
         }
     }
 
@@ -376,15 +390,6 @@ class TickHost::VtolMissions {
         return vtol::no_piece;
     }
 
-    sim::ground_orders::Point query_point(sim::simulation_state::Unit& unit, int32_t piece) {
-        const auto at = match().piece_world_position(host.slot(unit), static_cast<uint32_t>(piece));
-        return {
-            std::bit_cast<int32_t>(at[0]),
-            std::bit_cast<int32_t>(at[1]),
-            std::bit_cast<int32_t>(at[2])
-        };
-    }
-
     /// Tells whether the unit may set down with its footprint centred on a
     /// point; a cell its owner has not seen always passes.
     ///
@@ -396,7 +401,9 @@ class TickHost::VtolMissions {
         const auto* definition = match().fields(s).definition;
         const auto type_flags =
             definition ? oa::data::unit_definitions::pack_unit_flags(*definition) : 0u;
-        const bool hover = (type_flags & 0x800u) != 0 && (type_flags & 0x200000u) == 0;
+        // An aircraft that is not amphibious may not set down under the sea.
+        const bool flies_not_amphibious = (type_flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0 &&
+                                          (type_flags & OA_UNIT_DEF_FLAG_AMPHIBIOUS) == 0;
         const auto footprint_x = static_cast<int32_t>(projected.footprint[0]);
         const auto cell_x = static_cast<int32_t>(
             static_cast<uint32_t>(world_x + footprint_x * -0x80000 + 0x80000) >> 20
@@ -417,7 +424,7 @@ class TickHost::VtolMissions {
             seen = (bits[static_cast<size_t>(index)] & (1u << (owner & 31))) != 0;
         }
         return sim::spatial_state::can_unload_at(
-            projected, world_x, world_z, seen, hover, match().spatial()
+            projected, world_x, world_z, seen, flies_not_amphibious, match().spatial()
         );
     }
 
@@ -641,7 +648,7 @@ class TickHost::VtolMissions {
                 return 7;
             PatrolAdapter patrol(host, s, record);
             patrol.clone_patrol();
-            announce();
+            announce("Patrolling");
             host.take_off(s, order);
             reset_weapons();
             return 1;
@@ -693,7 +700,7 @@ class TickHost::VtolMissions {
         case 0:
             if (!ready_to_fly())
                 return 7;
-            announce();
+            announce("Guarding");
             host.take_off(s, order);
             record.extra.tolerance = static_cast<int32_t>(host.random(vtol::heading_range));
             record.attack.retry = record.extra.tolerance & 1;
@@ -730,6 +737,30 @@ class TickHost::VtolMissions {
 
     int16_t cruise_altitude() { return def_of(s.record).cruise_alt; }
 
+    /// Returns a goal over one of a pad's pieces that follows the pad and
+    /// matches its heading.
+    ///
+    /// @param pad The pad.
+    /// @param piece COB piece of the pad; -1 is the pad's own position.
+    /// @return The goal, not yet installed.
+    sim::air::AirGoal pad_goal(sim::simulation_state::Unit& pad, int32_t piece) {
+        return sim::air::air_goal_over_unit(
+            &order.raised_events, &s.record, &pad.record, static_cast<int16_t>(piece)
+        );
+    }
+
+    /// Installs a goal over one of a pad's pieces that arrives within a
+    /// radius.
+    ///
+    /// @param pad The pad.
+    /// @param piece COB piece of the pad; -1 is the pad's own position.
+    /// @param arrival Arrival radius in world units.
+    void approach_pad(sim::simulation_state::Unit& pad, int32_t piece, int16_t arrival) {
+        auto goal = pad_goal(pad, piece);
+        sim::air::air_goal_set_arrival_radius(&goal, arrival);
+        host.install_air_goal(s, order, &goal);
+    }
+
     /// Returns the offset of one of this unit's pieces from its origin at the
     /// unit's attitude.
     ///
@@ -761,7 +792,7 @@ class TickHost::VtolMissions {
         if (!cargo || (events & vtol::pickup_abort_events) ||
             vtol::add_fixed(def_of(cargo->record).model_height, cargo->record.position.y) <=
                 sea_level) {
-            speak(vtol::speech_failed);
+            speak(vtol::speech_failed, "Transport mission failed");
             return 8;
         }
         if (s.record.attach_first_child)
@@ -772,10 +803,10 @@ class TickHost::VtolMissions {
                 return 7;
             const auto size = static_cast<uint8_t>(def_of(s.record).transport_size);
             if (cargo->record.footprint_x > int16_t{size}) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Unit is too heavy to transport");
                 return 8;
             }
-            announce();
+            announce("Loading");
             host.take_off(s, order);
             return 1;
         }
@@ -789,7 +820,9 @@ class TickHost::VtolMissions {
             return 1;
         }
         case 2:
-            announce();
+            // Never heard: phase 0's acknowledgement already cleared the
+            // announce bit, as in 3.1c.
+            announce("Preparing for transport");
             record.extra.tolerance = vtol::no_piece;
             if (auto* instance = match().instance(s.unit_index); instance && instance->script()) {
                 std::array<int32_t, 4> query{vtol::no_piece, 0, 0, 0};
@@ -913,7 +946,7 @@ class TickHost::VtolMissions {
         case 0: {
             if (!ready_to_fly())
                 return 7;
-            announce();
+            announce("Unloading");
             set_target(unit_at(carried));
             auto goal = sim::air::air_goal_at_point(&order.raised_events, &s.record, destination());
             sim::air::air_goal_set_arrival_radius(&goal, vtol::unload_arrival);
@@ -926,7 +959,7 @@ class TickHost::VtolMissions {
             if (!cargo)
                 unsupported("VTOL_Unload without a cargo target");
             if (!cargo_fits_at_destination(*cargo)) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Unable to unload unit");
                 return 9;
             }
             const auto& carried_def = def_of(match_unit(match(), carried));
@@ -944,7 +977,7 @@ class TickHost::VtolMissions {
             if (!cargo)
                 unsupported("VTOL_Unload without a cargo target");
             if (!cargo_fits_at_destination(*cargo)) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Unable to unload unit");
                 return 9;
             }
             run_script("EndTransport", false);
@@ -974,7 +1007,7 @@ class TickHost::VtolMissions {
     uint32_t landing() {
         auto* pad = target();
         if (!pad) {
-            speak(vtol::speech_failed);
+            speak(vtol::speech_failed, "Landing aborted");
             return 8;
         }
         auto& piece = record.extra.tolerance;
@@ -982,7 +1015,7 @@ class TickHost::VtolMissions {
         case 0:
             if (!ready_to_fly())
                 return 7;
-            announce();
+            announce("Landing");
             host.take_off(s, order);
             piece = static_cast<int32_t>(host.random(vtol::heading_range));
             return 1;
@@ -1001,39 +1034,51 @@ class TickHost::VtolMissions {
             return 2;
         }
         case 2:
-            goal_at(vtol::position_of(pad->record), vtol::pad_approach_arrival);
+            // The approach and the descent follow the pad (a carrier's deck
+            // moves) and take its heading.
+            approach_pad(*pad, vtol::no_piece, vtol::pad_approach_arrival);
             order.wait_events = vtol::goal_events | vtol::target_lost_event;
             return 1;
         case 3:
             piece = free_pad_piece(*pad, vtol::no_piece);
             if (piece == vtol::no_piece) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Landing failed");
                 return 0;
             }
-            goal_at(query_point(*pad, piece), vtol::pad_arrival);
+            approach_pad(*pad, piece, vtol::pad_arrival);
             order.wait_events = vtol::goal_events | vtol::target_lost_event;
             return 1;
         case 4:
             return 1;
-        case 5:
+        case 5: {
             if (events & vtol::arrived_event)
                 return 1;
             piece = free_pad_piece(*pad, piece);
             if (piece == vtol::no_piece) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Landing aborted: all pads are occupied");
                 return 0;
             }
+            // Settle on the piece with the pad's heading, a loaded transport
+            // holding its cargo's height above it.
+            auto goal = pad_goal(*pad, piece);
+            const auto carried = link_first_child(s.record);
+            const auto altitude =
+                carried
+                    ? static_cast<int16_t>(def_of(match_unit(match(), carried)).model_height >> 16)
+                    : int16_t{0};
+            sim::air::air_goal_set_altitude(&goal, host.air_host(), altitude);
             run_script("EndTransport", true);
-            goal_at(query_point(*pad, piece), vtol::point_arrival);
+            host.install_air_goal(s, order, &goal);
             wait_ticks(vtol::pad_settle_wait);
             order.wait_events |= vtol::goal_events | vtol::target_lost_event;
             order.phase = 5;
             return 2;
+        }
         case 6: {
             if (events & vtol::path_failed_event)
                 return 8;
             if (!pad_piece_free(pad->record, piece)) {
-                speak(vtol::speech_failed);
+                speak(vtol::speech_failed, "Landing aborted: no pads available");
                 return 0;
             }
             const auto pad_slot = host.slot(*pad).unit_index;

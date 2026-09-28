@@ -50,7 +50,7 @@ bool finished(const oa::Unit& unit) {
 
 uint32_t TickHost::GroundMissions::mobile_build() {
     if (events & ground::target_lost_event) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Construction terminated");
         refresh_selection();
         return ground::mission_failed;
     }
@@ -83,30 +83,30 @@ uint32_t TickHost::GroundMissions::mobile_build() {
         if ((events & ground::path_failed_event) &&
             build_gap(site, built.footprint_x, built.footprint_z) >
                 static_cast<int32_t>(static_cast<uint16_t>(def().build_distance))) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "I can't reach the construction site");
             return ground::mission_failed;
         }
         if (!builder.site_clear()) {
             if (blocked == 0)
-                speak(ground::speech_failed);
+                speak(ground::speech_failed, "Waiting for target area to clear");
             else if (blocked > build::blocked_site_retries) {
-                speak(ground::speech_failed);
+                speak(ground::speech_failed, "Target area was blocked");
                 return ground::mission_failed;
             }
             ++blocked;
             wait_ticks(build::site_blocked_wait);
             return ground::keep_waiting;
         }
-        AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
         builder.snap_build_height();
         auto* frame = builder.spawn_nanoframe();
         set_target(frame);
         if (!frame) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "Unable to create any more units");
             wait_ticks(build::no_slot_wait);
             return ground::keep_waiting;
         }
-        speak(ground::speech_build);
+        speak(ground::speech_build, "Starting construction");
         refresh_selection();
         builder.issue_get_built(*frame);
         start_building_toward(ground::position_of(frame->record));
@@ -129,7 +129,7 @@ uint32_t TickHost::GroundMissions::mobile_build() {
         return ground::keep_waiting;
     }
     case 4:
-        speak(ground::speech_complete);
+        speak(ground::speech_complete, "Building complete");
         return ground::mission_done;
     default:
         return ground::mission_invalid;
@@ -143,7 +143,7 @@ uint32_t TickHost::GroundMissions::help_build() {
     }
     auto* frame = target();
     if (!frame) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Construction terminated");
         return ground::mission_failed;
     }
     switch (order.phase) {
@@ -164,12 +164,12 @@ uint32_t TickHost::GroundMissions::help_build() {
     }
     case 1:
         if (events & ground::path_failed_event) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "I can't get there");
             return ground::mission_failed;
         }
         if (build::finished(frame->record))
             return ground::mission_done;
-        AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
         start_building_toward(ground::position_of(frame->record));
         refresh_selection();
         return ground::next_phase;
@@ -185,7 +185,7 @@ uint32_t TickHost::GroundMissions::help_build() {
         }
         return ground::next_phase;
     case 4:
-        speak(ground::speech_complete);
+        speak(ground::speech_complete, "Building complete");
         order.wait_events |= ground::cancel_event;
         return ground::mission_done;
     default:
@@ -196,7 +196,7 @@ uint32_t TickHost::GroundMissions::help_build() {
 uint32_t TickHost::GroundMissions::capture() {
     auto* prize = target();
     if (!prize || (events & ground::target_lost_events)) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Capture failed");
         return ground::mission_failed;
     }
     auto& sprayed = record.construction.type_index;
@@ -206,12 +206,15 @@ uint32_t TickHost::GroundMissions::capture() {
         if (!s.record.movement || !(def().abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE))
             return ground::mission_invalid;
         const auto& prize_def = def_of(prize->record);
-        if ((prize_def.abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) ||
-            !build::finished(prize->record)) {
-            speak(ground::speech_failed);
+        if (prize_def.abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) {
+            speak(ground::speech_failed, "That unit cannot be captured");
             return ground::mission_failed;
         }
-        announce();
+        if (!build::finished(prize->record)) {
+            speak(ground::speech_failed, "That unit is a cloud of vapor and cannot be captured");
+            return ground::mission_failed;
+        }
+        announce("Capturing");
         const double scale = build::capture_cost_scale;
         const auto costs = ground::truncate_word(
             static_cast<double>(prize_def.build_cost_energy) * scale *
@@ -229,7 +232,7 @@ uint32_t TickHost::GroundMissions::capture() {
             build::capture_veteran_base
         );
         needed = static_cast<int32_t>(veterancy * scaled * 10u) / 100;
-        AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
         outline_goal(
             {prize->record.cell_x, prize->record.cell_z},
             {prize->record.footprint_x, prize->record.footprint_z}
@@ -282,14 +285,14 @@ uint32_t TickHost::GroundMissions::reclaim_unit() {
         uint32_t result = ground::mission_invalid;
         if (s.record.movement && (def().abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE)) {
             if (can_reclaim(victim->record)) {
-                announce();
-                AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+                announce("Reclaiming");
+                AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
                 return ground::next_phase;
             }
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "That unit cannot be reclaimed");
             result = ground::mission_failed;
         }
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Reclamation failed");
         return result;
     }
     case 1:
@@ -344,7 +347,7 @@ uint32_t TickHost::GroundMissions::reclaim_unit() {
 uint32_t TickHost::GroundMissions::repair_unit() {
     auto* patient = target();
     if (!patient) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Repairs unsuccessful.");
         return ground::mission_done;
     }
     if (record.attack.leash != 0) {
@@ -356,7 +359,7 @@ uint32_t TickHost::GroundMissions::repair_unit() {
             return ground::mission_done;
     }
     if ((patient->record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != ground::occupancy_ground) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Repairs unsuccessful.");
         return ground::mission_done;
     }
     switch (order.phase) {
@@ -364,13 +367,13 @@ uint32_t TickHost::GroundMissions::repair_unit() {
         if (!s.record.movement || !(def().flags & OA_UNIT_DEF_FLAG_BUILDER) ||
             !build::finished(patient->record))
             return ground::mission_invalid;
-        announce();
+        announce("Repairing");
         return ground::next_phase;
     case 1:
         if (events & ground::path_failed_event)
             return ground::mission_failed;
         if (within_build_distance(patient->record)) {
-            AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+            AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
             start_building_toward(ground::position_of(patient->record));
             return ground::next_phase;
         }
@@ -398,7 +401,7 @@ uint32_t TickHost::GroundMissions::repair_unit() {
         order.wait_events |= ground::repair_step_event;
         return ground::keep_waiting;
     case 4:
-        speak(ground::speech_repaired);
+        speak(ground::speech_repaired, "Unit repaired");
         return ground::mission_done;
     default:
         return ground::mission_invalid;
@@ -408,7 +411,7 @@ uint32_t TickHost::GroundMissions::repair_unit() {
 uint32_t TickHost::GroundMissions::repair_unit_no_move() {
     auto* patient = target();
     if (!patient) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Repairs unsuccessful.");
         return ground::mission_done;
     }
     switch (order.phase) {
@@ -417,7 +420,7 @@ uint32_t TickHost::GroundMissions::repair_unit_no_move() {
             return ground::mission_invalid;
         if (!build::finished(patient->record) || !(s.record.state_flags & OA_UNIT_STATE_ACTIVE))
             return ground::mission_failed;
-        AttackAdapter(host, s, record).enable_weapon(build::all_weapons);
+        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
         return ground::next_phase;
     case 1:
         if (static_cast<uint32_t>(static_cast<int32_t>(patient->record.health)) <
@@ -431,7 +434,7 @@ uint32_t TickHost::GroundMissions::repair_unit_no_move() {
         }
         return ground::next_phase;
     case 2:
-        speak(ground::speech_repaired);
+        speak(ground::speech_repaired, "Unit repaired");
         return ground::mission_done;
     default:
         return ground::mission_invalid;

@@ -96,8 +96,8 @@
    "tier-virtual": 3
   },
   "src/sim/match-runtime": {
-   "doc-block": 167,
-   "flags-raw-mask": 85,
+   "doc-block": 166,
+   "flags-raw-mask": 81,
    "member-initializer": 4,
    "tier-heap-container": 65,
    "tier-throw": 124,
@@ -188,7 +188,7 @@
    "tier-virtual": 12
   },
   "src/sim/world-environment": {
-   "member-initializer": 11,
+   "member-initializer": 9,
    "tier-throw": 2,
    "tier-virtual": 3
   },

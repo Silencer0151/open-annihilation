@@ -5,6 +5,7 @@
 
 #include "oa/sim/air/flight.hpp"
 #include "oa/sim/air/host.hpp"
+#include "oa/sim/world_environment/wind.hpp"
 
 #include <cstdint>
 
@@ -29,6 +30,19 @@ sim::air::AirHost TickHost::air_host() {
             return false;
         const auto& projected = m.spatial_units_[unit->id];
         return projected.bucket_linked && !projected.bucket;
+    };
+    // A goal over one of a unit's pieces (a landing pad's) follows that
+    // piece; -1 is the unit's own position.
+    host.query_point = [](void* context, const oa::Unit* unit, int16_t index) {
+        auto& m = *static_cast<Match*>(context);
+        if (index < 0 || unit->id >= m.slots_.size() || !m.instance(unit->id))
+            return unit->position;
+        const auto at = m.piece_world_position(m.slots_[unit->id], static_cast<uint32_t>(index));
+        return oa::FixedVec3{
+            std::bit_cast<int32_t>(at[0]),
+            std::bit_cast<int32_t>(at[1]),
+            std::bit_cast<int32_t>(at[2])
+        };
     };
     host.terrain_height = [](void* context, oa::oa_fixed x, oa::oa_fixed z) {
         return static_cast<Match*>(context)->sample_terrain_height(
@@ -220,30 +234,18 @@ void TickHost::movement_tick(oa::Unit& record) {
     g.write_slot();
     write_flags(s, flags);
     signal_move_rate(s, g.movement);
-    auto& runtime = match.runtime_state(s.unit_index);
-    auto occupancy = runtime.sfx_occupancy;
-    const auto height = static_cast<int32_t>(signed_half(u.position[1] >> 16));
-    const auto sea = static_cast<int32_t>(match.simulation_.sea_level);
-    if ((u.flags & 3) == 1 || (u.flags & 3) == 2) {
-        if (sea < height)
-            occupancy = 4;
-        else {
-            if (-5 < height - sea)
-                occupancy = 1;
-            if (static_cast<int32_t>(u.type->waterline_offset) + height == sea)
-                occupancy = 2;
-            const auto top = static_cast<uint32_t>(match_unit_def(match, s.record).model_height);
-            if (static_cast<int32_t>(signed_half(top >> 16)) + height < sea)
-                occupancy = 3;
-        }
-    } else
-        occupancy = 0;
-    if (occupancy != runtime.sfx_occupancy) {
-        auto* object = match.instance(s.unit_index);
+    // The sea occupy code the script last heard lives in Unit.last_occupy_code;
+    // setSFXoccupy runs only when it changes.
+    sim::world_environment::SeaOccupyHost sea_host{};
+    sea_host.context = &match;
+    sea_host.set_sfx_occupy = [](void* context, oa::Unit& unit, int32_t occupy_code) {
+        auto* object = static_cast<Match*>(context)->instance(unit.id);
         if (object && object->script())
-            object->script()->call("setSFXoccupy", std::span(&occupancy, 1), true);
-        runtime.sfx_occupancy = occupancy;
-    }
+            object->script()->call("setSFXoccupy", std::span(&occupy_code, 1), true);
+    };
+    sim::world_environment::update_sea_occupy(
+        s.record, match_unit_def(match, s.record), match.simulation_.sea_level, sea_host
+    );
 }
 
 void TickHost::signal_move_rate(

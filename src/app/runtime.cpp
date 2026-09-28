@@ -345,6 +345,10 @@ void Runtime::idle_tick() {
         mark_profile(OA_PROFILE_SYNC);
     if (extension_.frame != nullptr)
         extension_.frame(extension_.context, *this, FrameStage::after_pump);
+    // The frame's pointer pass picks the unit under the still pointer too,
+    // before the ticks, so a unit that moves under it becomes the cursor unit.
+    if (screen_ == Screen::match && match_ && !match_paused_ && !match_finished_)
+        pick_cursor_unit(false);
     if (match_clock_steps())
         advance_match_clock(clock_milliseconds());
     if (screen_ == Screen::match && match_)

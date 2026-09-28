@@ -8,7 +8,7 @@ namespace oa::sim::match_runtime {
 uint32_t TickHost::GroundMissions::reclaim() {
     const auto site = feature_site(record.extra.destination);
     if (!site) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Reclamation failed");
         return ground::mission_failed;
     }
     if (!reclaimable(*site))
@@ -60,7 +60,7 @@ uint32_t TickHost::GroundMissions::resurrect() {
     if (order.phase <= 5) {
         site = feature_site(record.extra.destination);
         if (!site) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "Resurrection failed");
             return ground::mission_failed;
         }
         if (!reclaimable(*site))
@@ -93,7 +93,8 @@ uint32_t TickHost::GroundMissions::resurrect() {
         }
         type = find_loaded_type(host.match.input_, name);
         if (type == 0) {
-            speak(ground::speech_failed);
+            // The game's own spelling.
+            speak(ground::speech_failed, "Ressurection failed");
             return ground::mission_failed;
         }
         const auto& raised = world().unit_defs[static_cast<size_t>(type)];
@@ -117,7 +118,7 @@ uint32_t TickHost::GroundMissions::resurrect() {
         auto* raised = ConstructionAdapter(host, s, record).spawn_nanoframe();
         set_target(raised);
         if (!raised) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "Unable to create any more units");
             wait_ticks(ground::resurrect_no_slot_wait);
             return ground::keep_waiting;
         }
@@ -151,7 +152,7 @@ uint32_t TickHost::GroundMissions::resurrect() {
         return ground::next_phase;
     }
     case 6: {
-        speak(ground::speech_complete);
+        speak(ground::speech_complete, "Resurrection complete");
         auto* raised = target();
         if (raised) {
             if (const auto kind = repair_command_kind(*raised))
@@ -242,7 +243,7 @@ uint32_t TickHost::GroundMissions::guard_no_move() {
         auto* aimed = target();
         if (aimed && (aimed->record.flags & OA_UNIT_FLAG_LIVE)) {
             record.extra.destination = ground::position_of(aimed->record);
-            weapons.enable_weapon(0);
+            weapons.release_weapon_targets(0);
             weapons.assign_target(*aimed, 0);
             shots = 0;
             patience = static_cast<int32_t>(random(3) + 3);
@@ -462,7 +463,7 @@ uint32_t TickHost::GroundMissions::park() {
 uint32_t TickHost::GroundMissions::pickup() {
     auto* cargo = target();
     if (!cargo || (events & ground::target_lost_event)) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Transport mission failed");
         return ground::mission_failed;
     }
     auto& attempts = record.extra.tolerance;
@@ -471,10 +472,10 @@ uint32_t TickHost::GroundMissions::pickup() {
         if (!s.record.movement || !can_load())
             return ground::mission_invalid;
         if (cargo->record.footprint_x > int16_t{static_cast<uint8_t>(def().transport_size)}) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "Unit is too large to transport");
             return ground::mission_failed;
         }
-        announce();
+        announce("Loading unit");
         return ground::next_phase;
     case 1:
     case 3:
@@ -503,7 +504,7 @@ uint32_t TickHost::GroundMissions::pickup() {
 
 uint32_t TickHost::GroundMissions::unload() {
     if (events & ground::target_lost_event) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Unloading process is proceeding non-optimally");
         return ground::mission_failed;
     }
     auto& attempts = record.extra.tolerance;
@@ -515,7 +516,7 @@ uint32_t TickHost::GroundMissions::unload() {
         auto* cargo = target();
         if (!cargo)
             return ground::mission_done;
-        announce();
+        announce("Unloading");
         // TransportDrop reads the point as X and Z whole units in one word.
         const auto& to = record.extra.destination;
         const auto packed = std::bit_cast<int32_t>(

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "fixture.hpp"
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -342,5 +343,50 @@ int main() {
     CHECK(grids.step_x == -5);
     CHECK(grids.phase_x == 3);
     CHECK(h.calls[2] == "random4294967291");
+
+    // On a map whose water does damage, every 30 ticks each unit the local
+    // machine simulates at or under the sea takes the map's water damage as
+    // kind 11: a submarine on the floor and a ship on the water do, and a
+    // hovercraft does not.
+    {
+        constexpr uint32_t water_damage_kind = 11;
+        TestWorld sea(4, 4);
+        auto& world = *sea;
+        world.game.sea_level = 20;
+        world.environment_enabled = 1;
+        world.environment_damage = 7;
+        auto& owner = sea.player(0);
+        owner.in_use = 1;
+        owner.status = 1;
+        sea.range(0, 1, 3);
+        std::array<OrderQueue, 4> queues{};
+        const std::array<std::pair<uint32_t, int32_t>, 3> kinds{
+            {{OA_UNIT_DEF_FLAG_UPRIGHT, 5},
+             {OA_UNIT_DEF_FLAG_FLOATER, 17},
+             {OA_UNIT_DEF_FLAG_CAN_HOVER, 20}}
+        };
+        for (std::size_t index = 0; index < kinds.size(); ++index) {
+            auto& def = sea.defs[index + 1];
+            def.flags = kinds[index].first;
+            def.max_damage = 100;
+            auto& unit = sea.units[index + 1];
+            unit.type_index = static_cast<int16_t>(index + 1);
+            unit.def = oa::oa_ref_from_index(static_cast<uint32_t>(index + 1));
+            unit.owner = oa::oa_ref_from_index(0);
+            unit.health = 100;
+            unit.position.y = kinds[index].second * 65536;
+        }
+        Fixture host;
+        for (const uint32_t tick : {59u, 60u, 61u, 90u}) {
+            world.game.tick = tick;
+            for (std::size_t slot = 1; slot < 4; ++slot)
+                update_unit(world, queues[slot], sea.units[slot], host);
+        }
+        CHECK(host.damaged.size() == 4);
+        for (const auto& hit : host.damaged)
+            CHECK(
+                (hit.unit == 1 || hit.unit == 2) && hit.amount == 7 && hit.kind == water_damage_kind
+            );
+    }
     std::cout << "simulation state tests passed\n";
 }

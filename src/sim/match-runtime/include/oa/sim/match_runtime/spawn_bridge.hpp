@@ -15,7 +15,6 @@ struct SlotRuntime {
     // model is set up. The draw state keeps the image itself, so nothing
     // reads this word.
     uint32_t cached_image_word{};
-    int32_t sfx_occupancy{};
     // Instances made for the slot so far. It tells one spawn's instance from
     // the next, which the address cannot: a unit made after a death can get
     // the freed instance's memory. Draw state is kept per generation; the

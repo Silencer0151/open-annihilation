@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Ships, submarines, hovercraft and a shipyard on a map with deep water, a
-// shallow shelf and land, driven through the full match tick.
+// shallow shelf and land, driven through the full match tick. Run with --data,
+// the installed game's own ships, submarines, amphibians and shipyard do the
+// same on such a map.
 #include "../src/tick_internal.hpp"
+#include "installed_units.hpp"
+#include "oa/sim/weapon_execution/interceptor.hpp"
+#include "oa/sim/weapon_execution/projectile_pool.hpp"
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
@@ -31,9 +36,27 @@ constexpr uint8_t deep_floor = 40;
 constexpr uint8_t shelf_floor = 92;
 constexpr uint8_t land_height = 120;
 
-enum Type : uint16_t { ship = 1, submarine, hovercraft, shipyard, picket, tender, type_count };
+enum Type : uint16_t {
+    ship = 1,
+    submarine,
+    hovercraft,
+    shipyard,
+    picket,
+    tender,
+    plane,
+    walker,
+    type_count
+};
 
 constexpr int8_t ship_waterline = 3;
+// A shell whose blast spreads 32 units round the burst.
+constexpr uint8_t blast_weapon = 3;
+constexpr std::string_view blast_tdf = R"([BLASTSHELL]
+{
+ID=3; ballistic=1; range=600; reloadtime=2; weaponvelocity=300; areaofeffect=64;
+[DAMAGE] { default=100; }
+}
+)";
 constexpr int8_t submarine_waterline = 20;
 
 struct Services : sim::match_runtime::OfflineServices {
@@ -85,6 +108,10 @@ struct Fixture {
     std::shared_ptr<formats::cob::CobProgram> script = std::make_shared<formats::cob::CobProgram>();
     std::shared_ptr<formats::cob::CobProgram> yard_script =
         std::make_shared<formats::cob::CobProgram>();
+    // The hovercraft's setSFXoccupy keeps its code in static 0, which its
+    // Statics query answers.
+    std::shared_ptr<formats::cob::CobProgram> hover_script =
+        std::make_shared<formats::cob::CobProgram>();
     std::array<sim::unit_spawn::LoadedType, type_count> loaded;
     std::array<sim::unit_spawn::Type, type_count> types;
     std::array<data::unit_definitions::UnitDefinition, type_count> defs;
@@ -98,7 +125,10 @@ struct Fixture {
     Scenario scenario;
     std::unique_ptr<sim::match_runtime::Match> match;
 
-    Fixture() {
+    /// Builds the match.
+    ///
+    /// @param uptime_ms the platform uptime the hovercraft's bob is timed by
+    explicit Fixture(uint32_t uptime_ms = 1000) {
         map.attribute_width = map_cells;
         map.attribute_height = map_rows;
         map.sea_level = sea_level;
@@ -152,10 +182,33 @@ struct Fixture {
         yard_script->scripts = {{"Create", 0}, {"Activate", 1}};
         yard_script->entry_points = {0, 1};
         yard_script->piece_names = {"root"};
+        hover_script->code = {
+            opcode::return_,
+            opcode::push_local,
+            0,
+            opcode::pop_static,
+            0,
+            opcode::push_constant,
+            0,
+            opcode::return_,
+            opcode::push_static,
+            0,
+            opcode::pop_local,
+            0,
+            opcode::push_constant,
+            0,
+            opcode::return_
+        };
+        hover_script->scripts = {{"Create", 0}, {"setSFXoccupy", 1}, {"Statics", 8}};
+        hover_script->entry_points = {0, 1, 8};
+        hover_script->header.static_variable_count = 1;
+        hover_script->piece_names = {"root"};
 
         for (size_t i = 1; i < type_count; ++i) {
             loaded[i].model = model;
-            loaded[i].script = i == shipyard ? yard_script : script;
+            loaded[i].script = i == shipyard     ? yard_script
+                               : i == hovercraft ? hover_script
+                                                 : script;
             types[i].simulation.maximum_health = 100;
             types[i].footprint_x = types[i].footprint_z = 2;
             types[i].bm_code = 1;
@@ -203,6 +256,11 @@ struct Fixture {
         defs[tender].builder = true;
         defs[tender].worker_time = 300;
         defs[tender].build_distance = 96;
+        // An aircraft and a walker on the ground's plain movement class.
+        water_class(plane, 0, -10000, OA_UNIT_DEF_FLAG_CAN_FLY, 1);
+        defs[plane].can_fly = true;
+        defs[plane].cruise_altitude = 60;
+        water_class(walker, 0, -10000, 0, 1);
         metadata[hovercraft].max_slope = metadata[hovercraft].bad_slope = 12;
         metadata[hovercraft].max_water_slope = metadata[hovercraft].bad_water_slope = 255;
 
@@ -222,12 +280,20 @@ struct Fixture {
         fields[shipyard].yard_mask = yard_cells;
         for (size_t i = 1; i < type_count; ++i)
             loaded[i].type = types[i];
+        const auto blast = data::unit_definitions::parse_tdf(blast_tdf);
+        CHECK(blast && sim::combat_state::install_weapon_tdf(weapons, blast.value) == 1);
 
-        sim::match_runtime::OfflineInputs input{
-            map,  loaded, types, fields, weapons,   terrain_values,       masks, 16, 24, 4,
-            2,    0,      30,    1,      &scenario, [] { return 1000u; }, plots, {}, 0,  0,
-            0.0F, {}
-        };
+        sim::match_runtime::OfflineInputs input{map,       loaded,
+                                                types,     fields,
+                                                weapons,   terrain_values,
+                                                masks,     16,
+                                                24,        4,
+                                                2,         0,
+                                                30,        1,
+                                                &scenario, [uptime_ms] { return uptime_ms; },
+                                                plots,     {},
+                                                0,         0,
+                                                0.0F,      {}};
         match = std::make_unique<sim::match_runtime::Match>(input, services);
         match->configure_strategic_environment({0, 0.5f, 0});
         for (uint8_t p = 0; p < 2; ++p) {
@@ -243,7 +309,7 @@ struct Fixture {
         local_allies[0] = 1;
         match->configure_outcomes(0, local_allies, false);
         constexpr uint32_t mobile = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_STOP;
-        for (auto type : {ship, submarine, hovercraft, picket, tender})
+        for (auto type : {ship, submarine, hovercraft, picket, tender, plane, walker})
             match->state().unit_defs[type].abilities = mobile;
     }
 
@@ -368,18 +434,98 @@ void hovercraft_crosses_the_shore() {
 
 // setSFXoccupy sees the height the previous tick's ground fit
 // left, so a hovercraft at the bottom of its bob, just under the surface,
-// reports occupancy 1; nothing lifts it back to the surface first.
+// reports occupancy 1; nothing lifts it back to the surface first. The code
+// the script last heard is the unit's Unit.last_occupy_code.
 void hovercraft_dips_under_the_surface() {
     Fixture f;
     auto& hover = f.spawn(0, hovercraft, 8, 12);
     f.match->issue_ground_move(hover.unit_index, point(12, 12), false);
     bool dipped = false;
     bool reported = false;
+    bool heard = true;
     f.run(300, [&] {
         dipped = dipped || f.height(hover) < sea_level;
-        reported = reported || f.match->runtime_state(hover.unit_index).sfx_occupancy == 1;
+        const auto code = sim::world_environment::sea_occupy(hover.record);
+        reported = reported || code == sim::world_environment::sea_occupy_surface;
+        std::array<int32_t, 4> statics{};
+        CHECK(f.match->instance(hover.unit_index)->script()->query("Statics", statics));
+        heard = heard && statics[0] == code;
     });
-    CHECK(dipped && reported);
+    CHECK(dipped && reported && heard);
+}
+
+// A hovercraft is created where its ground fit leaves it: over the sea each
+// corner takes the surface plus its bob, and nothing lifts the result back
+// to the surface, so one created while its bob has not faded (the first 60
+// ticks) can start just under it. From tick 60 on the bob has faded and the
+// fit is the surface itself.
+void hovercraft_starts_where_its_fit_leaves_it() {
+    bool under = false;
+    for (uint32_t uptime = 0; uptime < 4000 && !under; uptime += 37) {
+        Fixture f(uptime);
+        auto& hover = f.spawn(0, hovercraft, 8, 12);
+        CHECK(std::abs(f.height(hover) - sea_level) <= 2);
+        under = f.height(hover) < sea_level;
+    }
+    CHECK(under);
+    Fixture f;
+    f.match->state().game.tick = 100;
+    auto& hover = f.spawn(0, hovercraft, 8, 12);
+    CHECK(hover.unit->position[1] == static_cast<uint32_t>(sea_level) << 16);
+}
+
+// An aircraft created on the ground takes the same ground fit as any unit:
+// its height from its ground plate's corners, and its pitch and bank from the
+// slope under them. One created in the air is left as it is.
+void aircraft_are_fitted_to_the_ground_they_start_on() {
+    Fixture f;
+    // Across the step from the shelf up to the land.
+    const uint32_t x = static_cast<uint32_t>(land_column * 16) << 16;
+    auto* aircraft = f.match->create({0, plane, {x, 0, world(6)}, true, 1, 0});
+    auto* ground = f.match->create({0, walker, {x, 0, world(12)}, true, 1, 0});
+    CHECK(aircraft && ground);
+    CHECK(aircraft->record.position.y == ground->record.position.y);
+    CHECK(aircraft->record.pitch == ground->record.pitch);
+    CHECK(aircraft->record.bank == ground->record.bank);
+    CHECK(aircraft->record.bank != 0);
+    CHECK(f.height(*aircraft) > shelf_floor && f.height(*aircraft) < land_height);
+    constexpr uint32_t aloft = 200u << 16;
+    auto* flying = f.match->create({0, plane, {x, aloft, world(18)}, true, 2, 0});
+    CHECK(flying && flying->record.position.y == static_cast<int32_t>(aloft));
+    CHECK(flying->record.pitch == 0 && flying->record.bank == 0);
+}
+
+// A shell bursting on the surface reaches a submarine just under it: the
+// blast's area damage measures the distance to the hull's box and knows
+// nothing of the sea.
+void surface_burst_reaches_a_shallow_submarine() {
+    Fixture f;
+    auto& sub = f.spawn(1, submarine, 8, 8);
+    f.run(1);
+    // Just under the surface, its top 3 below it.
+    sub.record.position.y = static_cast<int32_t>(static_cast<uint32_t>(sea_level - 15) << 16);
+    CHECK(f.height(sub) + (f.match->state().unit_defs[submarine].model_height >> 16) < sea_level);
+    const auto health = sub.record.health;
+    auto& world = f.match->state();
+    auto* shot = sim::weapon_execution::allocate_projectile(world);
+    CHECK(shot != nullptr);
+    const oa::FixedVec3 from{
+        sub.record.position.x,
+        static_cast<int32_t>(static_cast<uint32_t>(sea_level + 6) << 16),
+        sub.record.position.z
+    };
+    sim::weapon_execution::init_projectile_record(
+        world, *shot, oa_ref_from_index(blast_weapon), from, &from, world.game.tick, nullptr, 0
+    );
+    shot->owner_index = 0;
+    shot->velocity = {0, -(2 << 16), 0};
+    shot->lifetime_tick = world.game.tick + 100;
+    for (int tick = 0; tick < 20 && !f.match->projectiles().empty(); ++tick) {
+        ++world.game.tick;
+        f.match->update_projectiles();
+    }
+    CHECK(f.match->projectiles().empty());
+    CHECK(sub.record.health < health);
 }
 
 void shipyard_builds_a_ship_on_water() {
@@ -626,9 +772,258 @@ void shared_radar_and_watchers() {
     f.match->scan_contacts();
     CHECK(contacts(sub) == (radar_seen | sonar_seen));
 }
+
+// ---------------------------------------------------------------------------
+// The installed game's naval units, on a map of open sea 60 deep, a shelf 8
+// deep and land.
+
+constexpr int32_t installed_shelf_column = 40;
+constexpr int32_t installed_land_column = 46;
+
+struct InstalledFixture {
+    test::InstalledUnits& units;
+    test::Seascape sea{
+        64,
+        64,
+        sea_level,
+        installed_shelf_column,
+        installed_land_column,
+        deep_floor,
+        shelf_floor,
+        land_height
+    };
+    Services services;
+    Scenario scenario;
+    std::unique_ptr<sim::match_runtime::Match> match;
+
+    /// Builds a match over the loaded types.
+    ///
+    /// @param loaded the installed types; each fixture's match uses them in turn
+    explicit InstalledFixture(test::InstalledUnits& loaded) : units(loaded) {
+        sim::match_runtime::OfflineInputs input{
+            sea.map,
+            units.loaded,
+            units.types,
+            units.fields,
+            units.weapons,
+            sea.terrain_values,
+            sea.masks,
+            32,
+            32,
+            32,
+            2,
+            0,
+            30,
+            1,
+            &scenario,
+            [] { return 1000u; },
+            sea.plots,
+            {},
+            0,
+            0,
+            0.0F,
+            units.features.defs
+        };
+        match = std::make_unique<sim::match_runtime::Match>(input, services);
+        match->configure_strategic_environment({0, 0.5f, 0});
+        for (uint8_t p = 0; p < 2; ++p) {
+            match->simulation().players[p].present = true;
+            match->simulation().players[p].status = p == 0 ? 1 : 2;
+            std::array<uint8_t, 10> allies{};
+            allies[p] = 1;
+            match->configure_player_alliances(p, allies);
+            auto& player = match->state().game.players[p];
+            player.energy = player.metal = 900.0F;
+        }
+        std::array<uint8_t, 10> local_allies{};
+        local_allies[0] = 1;
+        match->configure_outcomes(0, local_allies, false);
+    }
+
+    sim::unit_spawn::Slot&
+    spawn(uint8_t player, std::string_view name, int32_t cell_x, int32_t cell_z) {
+        auto* slot = match->create(
+            {player, units.type(name), {world(cell_x), 0, world(cell_z)}, true, 1, 0}
+        );
+        CHECK(slot && slot->unit);
+        return *slot;
+    }
+
+    void run(uint32_t ticks, const std::function<void()>& each = {}) {
+        for (uint32_t i = 0; i < ticks; ++i) {
+            ++match->state().game.tick;
+            match->tick();
+            if (each)
+                each();
+        }
+    }
+
+    int32_t height(const sim::unit_spawn::Slot& slot) const {
+        return std::bit_cast<int32_t>(slot.unit->position[1]) >> 16;
+    }
+
+    /// Runs until the unit's slot is empty, for at most 120 ticks.
+    ///
+    /// @param slot the dying unit
+    /// @return whether it died
+    bool run_until_dead(const sim::unit_spawn::Slot& slot) {
+        for (uint32_t tick = 0; tick < 120 && slot.record.type_index != 0; ++tick)
+            run(1);
+        return slot.record.type_index == 0;
+    }
+
+    int32_t top(const sim::unit_spawn::Slot& slot) const {
+        return height(slot) + (match->state().unit_defs[slot.record.type_index].model_height >> 16);
+    }
+};
+
+bool aims_at(const sim::unit_spawn::Slot& shooter, uint16_t target) {
+    for (const auto& weapon : shooter.record.weapons)
+        if (weapon.target_b == OA_UNIT_TARGET_IS_UNIT &&
+            weapon.target_a == static_cast<int16_t>(target))
+            return true;
+    return false;
+}
+
+// The movement classes decide the water depths, whatever the FBI says: the
+// Lurker's BOATD3 gives it 15, and the Albatross, which names no class,
+// keeps the later of its two maxwaterdepth keys.
+void installed_depths_come_from_the_movement_classes(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    CHECK(f.units.metadata[f.units.type("ARMSUB")].min_water_depth == 15);
+    CHECK(f.units.metadata[f.units.type("ARMSEAP")].max_water_depth == 255);
+}
+
+// Submarines run on the sea floor with their tops under the surface, at half
+// their speed.
+void installed_submarines_run_on_the_floor_at_half_speed(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    for (const auto* name : {"ARMSUB", "CORSUB"}) {
+        auto& sub = f.spawn(1, name, 6, 4);
+        f.run(2);
+        CHECK(f.height(sub) == deep_floor && f.top(sub) < sea_level);
+        f.match->issue_ground_move(sub.unit_index, point(6, 18), false);
+        int32_t fastest = 0;
+        bool on_floor = true;
+        f.run(150, [&] {
+            fastest = std::max(fastest, f.match->ground_runtime(sub.unit_index)->movement.speed);
+            on_floor = on_floor && f.height(sub) == deep_floor;
+        });
+        const auto maximum = f.units.definitions[sub.record.type_index].max_velocity_fixed;
+        CHECK(on_floor && fastest > 0 && fastest <= maximum / 2);
+        f.match->stop_orders(sub.unit_index);
+    }
+}
+
+// Only a water weapon reaches a submerged hull: the Crusader's depth charge
+// does, its gun and the Millenium's guns do not, and the Crusader, whose
+// sonar finds the Lurker, attacks it with the depth charge.
+void installed_depth_charges_find_submarines(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& sub = f.spawn(1, "ARMSUB", 12, 10);
+    auto& roy = f.spawn(0, "ARMROY", 6, 14);
+    auto& bats = f.spawn(0, "ARMBATS", 20, 6);
+    roy.record.state_flags |= OA_UNIT_STATE_ACTIVE;
+    // The Lurker holds its fire, so the ships stay afloat.
+    sub.record.flags &= ~OA_UNIT_FLAG_FIRE_ORDER_MASK;
+    f.run(2);
+    CHECK(f.top(sub) < sea_level);
+    CHECK(!f.match->weapon_can_reach(roy.unit_index, sub.unit_index, 0));
+    CHECK(f.match->weapon_can_reach(roy.unit_index, sub.unit_index, 1));
+    CHECK(!f.match->weapon_can_reach(bats.unit_index, sub.unit_index, 0));
+    CHECK(!f.match->weapon_can_reach(bats.unit_index, sub.unit_index, 1));
+    const auto full = sub.record.health;
+    bool bats_aimed = false;
+    f.run(300, [&] { bats_aimed = bats_aimed || aims_at(bats, sub.unit_index); });
+    CHECK(!bats_aimed && roy.record.type_index != 0);
+    CHECK(sub.record.type_index == 0 || sub.record.health < full);
+}
+
+// A torpedo reaches a ship on the water but not a hovercraft over it.
+void installed_torpedoes_miss_hovercraft(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& sub = f.spawn(0, "ARMSUB", 8, 20);
+    auto& boat = f.spawn(1, "ARMPT", 12, 20);
+    auto& hover = f.spawn(1, "ARMAH", 8, 16);
+    f.run(2);
+    CHECK(f.match->weapon_can_reach(sub.unit_index, boat.unit_index, 0));
+    CHECK(!f.match->weapon_can_reach(sub.unit_index, hover.unit_index, 0));
+}
+
+// The Pelican, an upright hovercraft, runs 9 under the surface.
+void installed_amphibian_runs_under_the_surface(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& pelican = f.spawn(0, "ARMAMPH", 28, 4);
+    f.match->issue_ground_move(pelican.unit_index, point(28, 18), false);
+    bool held = true;
+    f.run(120, [&] { held = held && f.height(pelican) == sea_level - 9; });
+    CHECK(held);
+}
+
+// A ship killed at sea leaves a wreck that sinks at the constant sink speed
+// and settles on the sea floor.
+void installed_wrecks_sink_to_the_floor(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    constexpr auto weapon = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
+    auto& boat = f.spawn(1, "ARMPT", 30, 12);
+    f.run(2);
+    const auto wrecks = f.match->wrecks().size();
+    // A light last blow: its Killed script leaves the plain corpse.
+    boat.record.health = 2;
+    f.match->apply_damage_event(boat, nullptr, 10, weapon, 0);
+    CHECK(f.run_until_dead(boat));
+    CHECK(f.match->wrecks().size() == wrecks + 1);
+    const auto& wreck = f.match->wrecks().back();
+    auto& world = f.match->state();
+    const auto plot =
+        static_cast<std::size_t>(wreck.cell_z) * static_cast<std::size_t>(world.game.map_width) +
+        static_cast<std::size_t>(wreck.cell_x);
+    const auto* sinking =
+        sim::feature_runtime::feature_record(world, world.plots[plot].feature_record);
+    CHECK(sinking != nullptr);
+    CHECK(sinking->model.velocity.y == sim::feature_runtime::wreck_sink_speed);
+    f.run(900);
+    const auto* settled =
+        sim::feature_runtime::feature_record(world, world.plots[plot].feature_record);
+    CHECK(settled != nullptr && (settled->model.position.y >> 16) == deep_floor);
+}
+
+// A shipyard stands only where each of its cells is at least 30 deep.
+void installed_shipyard_needs_deep_water(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    const auto yard = f.units.type("ARMSY");
+    CHECK(f.match->building_site_clear(yard, 4, 24, 0));
+    CHECK(!f.match->building_site_clear(yard, installed_shelf_column - 2, 24, 0));
+    CHECK(!f.match->building_site_clear(yard, installed_land_column + 2, 24, 0));
+}
+
+void installed_naval(const AssetStore& store) {
+    test::InstalledUnits units(
+        store,
+        {"ARMSUB", "CORSUB", "ARMROY", "ARMBATS", "ARMAH", "ARMAMPH", "ARMSY", "ARMSEAP", "ARMPT"}
+    );
+    installed_depths_come_from_the_movement_classes(units);
+    installed_submarines_run_on_the_floor_at_half_speed(units);
+    installed_shipyard_needs_deep_water(units);
+    installed_torpedoes_miss_hovercraft(units);
+    installed_amphibian_runs_under_the_surface(units);
+    installed_depth_charges_find_submarines(units);
+    installed_wrecks_sink_to_the_floor(units);
+}
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (test::game_data_requested(argc, argv)) {
+        const auto assets = test::require_game_assets("the installed naval units");
+        try {
+            installed_naval(assets);
+        } catch (const std::exception& error) {
+            std::cerr << "installed naval: " << error.what() << '\n';
+            return 1;
+        }
+        std::cout << "installed naval passed\n";
+        return 0;
+    }
     try {
         ship_crosses_open_water();
         idle_ship_leaves_its_berth();
@@ -637,6 +1032,9 @@ int main() {
         sonar_finds_the_submarine();
         hovercraft_crosses_the_shore();
         hovercraft_dips_under_the_surface();
+        hovercraft_starts_where_its_fit_leaves_it();
+        surface_burst_reaches_a_shallow_submarine();
+        aircraft_are_fitted_to_the_ground_they_start_on();
         shipyard_builds_a_ship_on_water();
         stopped_shipyard_cancels_the_nanoframe();
         tender_floats_a_shipyard();

@@ -24,16 +24,20 @@ struct AttackOrderHost {
     virtual ~AttackOrderHost() = default;
     /// Plays the order's acknowledgement once: only while the order still
     /// carries its announce bit (command flags bit 0x20), which it clears.
-    virtual void announce() = 0;
+    ///
+    /// @param caption The order's caption, or null for none.
+    virtual void announce(const char* caption) = 0;
     /// Returns the weapon slot an attack uses when the order names none.
     ///
     /// @return The first enabled slot, 0 or 1; otherwise the third slot's
     ///     enabled bit itself, 2 when set and 0 when no slot is enabled.
     virtual uint8_t selected_weapon() = 0;
-    /// Brings a stood-down weapon slot back, dropping its target.
+    /// Releases the target an order gave a weapon slot: an enabled slot
+    /// carrying the stand-down bit loses it and its target, and the slot is
+    /// free for the automatic target scan again.
     ///
     /// @param slot Weapon slot 0..2, or 3 for all three.
-    virtual void enable_weapon(uint32_t slot) = 0;
+    virtual void release_weapon_targets(uint32_t slot) = 0;
     /// Aims a weapon slot at a unit.
     ///
     /// @param target Unit to attack.

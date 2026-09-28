@@ -46,15 +46,10 @@ uint16_t Runtime::pick_radar_unit(float x, float y) {
     if (!match_ || !radar_contains(x, y) || radar_state_.built_for != &match_->state())
         return 0;
     auto& world = match_->state();
-    const auto pointer = oa::ui::display_layout::canvas_to_source(
-        match_layout_, static_cast<int>(x), static_cast<int>(y)
-    );
+    const auto pointer = game_screen_point(x, y);
     world.game.pointer_state[0] = static_cast<uint32_t>(pointer.x);
     world.game.pointer_state[1] = static_cast<uint32_t>(pointer.y);
-    oa::sim::selection::VisibleLists lists{};
-    lists.radar = radar_state_.hot_units.data();
-    lists.radar_capacity = static_cast<uint32_t>(radar_state_.hot_units.size());
-    return oa::sim::selection::unit_under_pointer(world, lists, {});
+    return oa::sim::selection::unit_under_pointer(world, on_screen_lists(), selection_hooks());
 }
 
 void Runtime::bind_match_view() {
@@ -70,11 +65,13 @@ void Runtime::bind_match_view() {
     game.offscreen_width = static_cast<uint32_t>(layout::kSourceLeft + visible_map_width());
     game.offscreen_height =
         static_cast<uint32_t>(layout::kSourceTop + visible_map_height() + layout::kSourceBottom);
+    // The game view on the game's screen (game_screen_point): the visible map
+    // from (128, 32), which is the 640x480 screen's view unzoomed.
     game.battlefield_rect = oa::Rect32{
         layout::kSourceLeft,
         layout::kSourceTop,
-        layout::kSourceWidth - 1,
-        layout::kSourceBottomBarY - 1
+        layout::kSourceLeft + visible_map_width() - 1,
+        layout::kSourceTop + visible_map_height() - 1
     };
     oa::Rect32 view{};
     if (wr::radar_view_rect(game, view) &&

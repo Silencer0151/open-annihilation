@@ -19,20 +19,52 @@
 
 namespace oa::app {
 
+namespace {
+
+namespace input = oa::sim::gameplay_input;
+
+/// Returns the order-table command an armed button gives.
+input::OrderCommand armed_command(MatchCommand command) {
+    switch (command) {
+    case MatchCommand::attack:
+        return input::OrderCommand::attack;
+    case MatchCommand::reclaim:
+        return input::OrderCommand::reclaim;
+    case MatchCommand::capture:
+        return input::OrderCommand::capture;
+    case MatchCommand::load:
+        return input::OrderCommand::load;
+    case MatchCommand::unload:
+        return input::OrderCommand::unload;
+    default:
+        return input::OrderCommand::default_order;
+    }
+}
+
+} // namespace
+
 void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
-    namespace input = oa::sim::gameplay_input;
+    // The frame's pick at the click: the unit under the pointer is the
+    // cursor unit (Game.cursor_unit_id).
+    update_pointer(x, y);
+    if (click_unit_info(x, y))
+        return;
     if (radar_contains(x, y)) {
         if (selected_match_unit_ != 0 && issue_radar_orders(x, y))
             return;
         pan_camera_from_radar(x, y);
         return;
     }
+    // Off the radar and the battlefield a click gives nothing.
+    if (!battlefield_contains(x, y))
+        return;
+    const uint16_t target = hovered_match_unit_;
     if (match_command_ == MatchCommand::build) {
         place_pending_build(x, y);
         return;
     }
     if (match_command_ == MatchCommand::dgun) {
-        if (pointer_unit_hit(pick_match_units(x, y)) != 0)
+        if (target != 0)
             (void)issue_pointer_unit_orders(x, y, clicks, queueing());
         else
             issue_pointer_ground_blast(x, y, queueing());
@@ -50,7 +82,7 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
         if (match_command_ == MatchCommand::none) {
             // A unit whose cursor takes no click keeps the selection; open
             // ground goes through its cursor too.
-            if (pointer_unit_hit(pick_match_units(x, y)) == 0)
+            if (target == 0)
                 issue_pointer_ground_orders(x, y, queueing());
             return;
         }
@@ -65,159 +97,36 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
         finish_issued_command();
         return;
     }
-    if (match_command_ == MatchCommand::reclaim) {
-        const auto hits = pick_match_units(x, y);
-        uint16_t id = first_local_hit(hits);
-        if (id == 0)
-            id = first_enemy_hit(hits);
-        if (id != 0) {
-            try {
-                const auto ground = match_world_point(x, y);
-                for_each_selected([&](uint16_t source) {
-                    if (source != id &&
-                        !cancels_queued_command(
-                            source, input::OrderCommand::reclaim, id, ground, queueing()
-                        ))
-                        (void)match_->issue_reclaim(source, id, queueing());
-                });
-                finish_issued_command();
-                status_ = "Reclaim";
-            } catch (const std::exception& error) {
-                status_ = std::string("reclaim command: ") + error.what();
-                std::cerr << "unsupported operation: " << status_ << '\n';
-            }
-        } else if (!try_reclaim_feature_at(x, y))
-            status_ = "Nothing to reclaim.";
-        return;
-    }
-    if (match_command_ == MatchCommand::capture) {
-        const auto hits = pick_match_units(x, y);
-        if (const auto enemy = first_enemy_hit(hits); enemy != 0) {
-            try {
-                const auto ground = match_world_point(x, y);
-                for_each_selected([&](uint16_t source) {
-                    if (!cancels_queued_command(
-                            source, input::OrderCommand::capture, enemy, ground, queueing()
-                        ))
-                        (void)match_->issue_capture(source, enemy, queueing());
-                });
-                finish_issued_command();
-                status_ = "Capture";
-            } catch (const std::exception& error) {
-                status_ = std::string("capture command: ") + error.what();
-                std::cerr << "unsupported operation: " << status_ << '\n';
-            }
-        }
-        return;
-    }
-    if (match_command_ == MatchCommand::load) {
-        const auto hits = pick_match_units(x, y);
-        uint16_t id = first_local_hit(hits);
-        if (id == 0)
-            id = first_enemy_hit(hits);
-        if (id != 0) {
-            try {
-                const auto ground = match_world_point(x, y);
-                for_each_selected([&](uint16_t source) {
-                    if (source != id &&
-                        !cancels_queued_command(
-                            source, input::OrderCommand::load, id, ground, queueing()
-                        ))
-                        (void)match_->issue_load(source, id, queueing());
-                });
-                finish_issued_command();
-                status_ = "Load";
-            } catch (const std::exception& error) {
-                status_ = std::string("load command: ") + error.what();
-                std::cerr << "unsupported operation: " << status_ << '\n';
-            }
-        }
-        return;
-    }
-    if (match_command_ == MatchCommand::unload) {
-        if (selected_tnt_) {
-            const auto viewport = live_viewport(
-                static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-            );
-            const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-                viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}
-            );
-            if (screen_map) {
-                const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
-                const auto target = oa::sim::gameplay_input::terrain_intersection(
-                    terrain,
-                    static_cast<int32_t>(screen_map->x),
-                    static_cast<int32_t>(screen_map->y),
-                    static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
-                    static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
-                );
-                try {
-                    const oa::sim::ground_orders::Point point{target.x, target.y, target.z};
-                    for_each_selected([&](uint16_t source) {
-                        if (!cancels_queued_command(
-                                source, input::OrderCommand::unload, 0, point, queueing()
-                            ))
-                            (void)match_->issue_unload(source, point, queueing());
-                    });
-                    finish_issued_command();
-                    status_ = "Unload";
-                } catch (const std::exception& error) {
-                    status_ = std::string("unload command: ") + error.what();
-                    std::cerr << "unsupported operation: " << status_ << '\n';
-                }
-            }
-        }
-        return;
-    }
     if (force_attack && selected_match_unit_ != 0) {
         if (issue_force_attack(x, y))
             return;
     }
-    if (match_command_ == MatchCommand::attack) {
-        const auto hits = pick_match_units(x, y);
-        if (const auto enemy = first_enemy_hit(hits); enemy != 0) {
-            try {
-                const auto ground = match_world_point(x, y);
-                for_each_selected([&](uint16_t source) {
-                    if (!cancels_queued_command(
-                            source, input::OrderCommand::attack, enemy, ground, queueing()
-                        ))
-                        (void)match_->issue_attack(source, enemy, queueing());
-                });
-                status_ = "Attack";
-                finish_issued_command();
-            } catch (const std::exception& error) {
-                status_ = std::string("attack command: ") + error.what();
-                std::cerr << "unsupported operation: " << status_ << '\n';
-            }
-        } else if (const auto ground = match_world_point(x, y)) {
-            try {
-                for_each_selected([&](uint16_t source) {
-                    if (!cancels_queued_command(
-                            source, input::OrderCommand::attack, 0, ground, queueing()
-                        ))
-                        (void)match_->issue_attack_ground(source, *ground, queueing());
-                });
-                status_ = "Attack ground";
-                finish_issued_command();
-            } catch (const std::exception& error) {
-                status_ = std::string("attack ground command: ") + error.what();
-                std::cerr << "unsupported operation: " << status_ << '\n';
-            }
-        }
+    // ATTACK, RECLAIM, CAPTURE, LOAD and UNLOAD give each selected unit the
+    // order the order table resolves for it over the cursor unit and the
+    // ground; a click that gives nothing leaves the command armed.
+    if (match_command_ == MatchCommand::attack || match_command_ == MatchCommand::reclaim ||
+        match_command_ == MatchCommand::capture || match_command_ == MatchCommand::load ||
+        match_command_ == MatchCommand::unload) {
+        const auto issued = issue_selection_orders(
+            armed_command(match_command_), target, match_world_point(x, y), queueing()
+        );
+        if (!issued.empty()) {
+            status_ = std::string(issued);
+            finish_issued_command();
+        } else if (match_command_ == MatchCommand::reclaim)
+            status_ = "Nothing to reclaim.";
         return;
     }
     select_match_unit(x, y, clicks);
 }
 
 bool Runtime::issue_pointer_unit_orders(float x, float y, int32_t clicks, bool queue) {
-    namespace input = oa::sim::gameplay_input;
     if (!match_)
         return false;
-    const auto target = pointer_unit_hit(pick_match_units(x, y));
-    if (target == 0)
+    update_pointer(x, y);
+    const auto target = hovered_match_unit_;
+    if (target == 0 || !battlefield_contains(x, y))
         return false;
-    hovered_match_unit_ = target;
     const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
     auto& world = match_->state();
     const auto command = input::pointer_command(world.game);
@@ -242,11 +151,9 @@ bool Runtime::issue_pointer_unit_orders(float x, float y, int32_t clicks, bool q
 }
 
 void Runtime::issue_pointer_ground_blast(float x, float y, bool queue) {
-    namespace input = oa::sim::gameplay_input;
     const auto ground = match_world_point(x, y);
     if (!match_ || !ground)
         return;
-    hovered_match_unit_ = 0;
     const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
     auto& world = match_->state();
     const auto command = input::pointer_command(world.game);
@@ -410,10 +317,8 @@ std::optional<oa::sim::ground_orders::Point> Runtime::match_world_point(float x,
 bool Runtime::issue_force_attack(float x, float y) {
     if (!match_ || selected_match_unit_ == 0)
         return false;
-    const auto hits = pick_match_units(x, y);
-    for (auto id : hits) {
-        if (id == 0 || id == selected_match_unit_)
-            continue;
+    update_pointer(x, y);
+    if (const auto id = hovered_match_unit_; id != 0 && id != selected_match_unit_) {
         try {
             for_each_selected([&](uint16_t source) {
                 (void)match_->issue_attack(source, id, true);

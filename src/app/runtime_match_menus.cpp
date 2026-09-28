@@ -15,6 +15,7 @@
 #include "oa/platform/preferences.hpp"
 #include "oa/ui/screen_registry.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
 #include <algorithm>
 #include <cctype>
@@ -51,6 +52,17 @@ struct MatchMenuSession {
     IngamePanel ingame_panel = IngamePanel::options;
     const void* options_bound = nullptr; // layout the panel mirrors
     bool options_open = false;           // entry snapshot captured
+    // The exit confirmation answers a request to close the window; CHOICE2
+    // goes back to what was on screen before it.
+    bool close_confirm = false;
+    bool close_confirm_from_menu = false; // the in-game menu was open then
+    // Steps and draws the OPTIONS lightbar on the frame; set where the options
+    // context is bound.
+    void (*draw_lightbar)(void* runtime) = nullptr;
+    // The lightbar steps once a frame: on the first draw after the options
+    // open, then on the first draw after each frame's tick.
+    bool lightbar_due = false;
+    ui::OptionsLightbarStep lightbar_step{}; // the step the frame draws
 };
 
 /// Returns the options and in-game menu state, created on first use.
@@ -523,11 +535,148 @@ void load_overlay_draw(ScreenContext* ctx, void*) {
         );
 }
 
+/// Lets the OPTIONS lightbar take its next step on the frame's draw.
+void options_lightbar_tick(ScreenContext*, void*) {
+    match_menu_session().lightbar_due = true;
+}
+
+/// Steps and draws the OPTIONS lightbar over the preferences a match opened.
+///
+/// @param ctx screen context; its host is the runtime
+void options_lightbar_draw(ScreenContext* ctx, void*) {
+    const auto& session = match_menu_session();
+    if (session.draw_lightbar != nullptr)
+        session.draw_lightbar(ctx->host);
+}
+
+/// Copies `rect` of an RGB image into a new picture of the rect's size;
+/// pixels outside the image stay black.
+///
+/// @param source image copied from
+/// @param x left column
+/// @param y top row
+/// @param width picture width
+/// @param height picture height
+/// @return the picture
+renderer::Surface
+copy_picture(const renderer::Surface& source, int32_t x, int32_t y, int32_t width, int32_t height) {
+    renderer::Surface picture{
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        std::vector<uint8_t>(
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3U
+        )
+    };
+    for (int32_t row = 0; row < height; ++row) {
+        const auto from_y = y + row;
+        if (from_y < 0 || from_y >= static_cast<int32_t>(source.height))
+            continue;
+        for (int32_t column = 0; column < width; ++column) {
+            const auto from_x = x + column;
+            if (from_x < 0 || from_x >= static_cast<int32_t>(source.width))
+                continue;
+            const auto from = (static_cast<std::size_t>(from_y) * source.width +
+                               static_cast<std::size_t>(from_x)) *
+                              3U;
+            const auto to = (static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                             static_cast<std::size_t>(column)) *
+                            3U;
+            std::copy_n(
+                source.rgb.begin() + static_cast<std::ptrdiff_t>(from),
+                3,
+                picture.rgb.begin() + static_cast<std::ptrdiff_t>(to)
+            );
+        }
+    }
+    return picture;
+}
+
+/// Maps a picture's source quad onto a destination quad with two upright
+/// edges, column by column: the top of each column lies on the line between
+/// the two top corners, and the picture's columns and rows spread evenly
+/// across the quad.
+///
+/// @param[in,out] frame RGB frame drawn on
+/// @param picture RGB picture read
+/// @param step the lightbar step's source and destination corners
+void blit_lightbar(
+    renderer::Surface& frame, const renderer::Surface& picture, const ui::OptionsLightbarStep& step
+) {
+    const auto& to = step.destination;
+    const auto& from = step.source;
+    // Corners 0 and 3 share one upright edge, 1 and 2 the other.
+    const auto left = std::min(to[0].x, to[1].x);
+    const auto right = std::max(to[0].x, to[1].x);
+    const bool mirrored = to[0].x > to[1].x;
+    const auto span = std::max(1, right - left);
+    const auto source_width = std::max(1, from[1].x - from[0].x);
+    const auto source_height = std::max(1, from[3].y - from[0].y);
+    for (int32_t x = left; x <= right; ++x) {
+        if (x < 0 || x >= static_cast<int32_t>(frame.width))
+            continue;
+        const auto along = mirrored ? right - x : x - left;
+        const auto top_left = mirrored ? to[1].y : to[0].y;
+        const auto top_right = mirrored ? to[0].y : to[1].y;
+        const auto top = top_left + (top_right - top_left) * along / span;
+        const auto bottom = to[2].y;
+        const auto height = std::max(1, bottom - top);
+        const auto source_x = from[0].x + source_width * along / span;
+        if (source_x < 0 || source_x >= static_cast<int32_t>(picture.width))
+            continue;
+        for (int32_t y = std::max(top, 0); y <= bottom && y < static_cast<int32_t>(frame.height);
+             ++y) {
+            const auto source_y = from[0].y + source_height * (y - top) / height;
+            if (source_y < 0 || source_y >= static_cast<int32_t>(picture.height))
+                continue;
+            const auto read = (static_cast<std::size_t>(source_y) * picture.width +
+                               static_cast<std::size_t>(source_x)) *
+                              3U;
+            const auto write =
+                (static_cast<std::size_t>(y) * frame.width + static_cast<std::size_t>(x)) * 3U;
+            std::copy_n(
+                picture.rgb.begin() + static_cast<std::ptrdiff_t>(read),
+                3,
+                frame.rgb.begin() + static_cast<std::ptrdiff_t>(write)
+            );
+        }
+    }
+}
+
+/// Stamps a GAF frame onto a picture's top-left.
+///
+/// @param source frame drawn; its covered pixels are stamped
+/// @param palette 4 bytes per colour
+/// @param[in,out] picture RGB picture stamped
+void stamp_frame(
+    const oa::formats::gaf::Frame& source,
+    const oa::PaletteBytes& palette,
+    renderer::Surface& picture
+) {
+    const auto rendered = oa::formats::gaf::render_normal(source);
+    if (!rendered.ok())
+        return;
+    const auto& frame = *rendered.frame;
+    for (std::size_t row = 0; row < frame.height && row < picture.height; ++row)
+        for (std::size_t column = 0; column < frame.width && column < picture.width; ++column) {
+            const auto at = row * frame.width + column;
+            if (at >= frame.coverage.size() || frame.coverage[at] == 0)
+                continue;
+            const auto colour = static_cast<std::size_t>(frame.pixels[at]) * 4U;
+            if (colour + 2 >= palette.size())
+                continue;
+            const auto to = (row * picture.width + column) * 3U;
+            picture.rgb[to] = palette[colour];
+            picture.rgb[to + 1] = palette[colour + 1];
+            picture.rgb[to + 2] = palette[colour + 2];
+        }
+}
+
 } // namespace
 
-/// Registers the load-game overlay, which lists the saves and fills the load and save dialogs.
+/// Registers the load-game overlay, which lists the saves and fills the load and save dialogs,
+/// and the OPTIONS lightbar the preferences opened from a match draw.
 ///
-/// @param[in,out] registry registry receiving the overlay
+/// @param[in,out] registry registry receiving the overlays
 void register_load_game_screens(ScreenRegistry* registry) {
     OverlayDesc load_game{};
     load_game.name = "load_game_list";
@@ -537,6 +686,13 @@ void register_load_game_screens(ScreenRegistry* registry) {
     load_game.tick = load_overlay_tick;
     load_game.draw = load_overlay_draw;
     (void)overlay_register(registry, &load_game);
+    OverlayDesc lightbar{};
+    lightbar.name = "options_lightbar";
+    lightbar.screen = screen_id(Screen::options);
+    lightbar.z = 0;
+    lightbar.tick = options_lightbar_tick;
+    lightbar.draw = options_lightbar_draw;
+    (void)overlay_register(registry, &lightbar);
 }
 
 void Runtime::open_save_dialog(Screen parent) {
@@ -754,6 +910,7 @@ void Runtime::show_match_orders_page() {
 void Runtime::show_match_pause_menu() {
     if (match_finished_)
         return;
+    match_menu_session().close_confirm = false;
     forget_team_panel();
     match_paused_ = true;
     match_command_ = MatchCommand::none;
@@ -782,6 +939,8 @@ void Runtime::show_match_pause_menu() {
 void Runtime::resume_match_pause() {
     if (match_finished_)
         return;
+    match_menu_session().close_confirm = false;
+    match_menu_session().ingame_panel = IngamePanel::options;
     forget_team_panel();
     match_paused_ = false;
     if (selected_match_unit_ != 0)
@@ -1247,7 +1406,12 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         }
         return;
     case ui::IngameAction::closed:
-        back_to_options();
+        // A close request's confirmation goes back to the running match, or
+        // to the menu it was asked over.
+        if (session.close_confirm && !session.close_confirm_from_menu)
+            resume_match_pause();
+        else
+            back_to_options();
         return;
     case ui::IngameAction::open_options:
         options_parent_ = Screen::match;
@@ -1299,17 +1463,79 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         leave_match();
         load(Screen::main_menu);
         return;
-    case ui::IngameAction::leave_game: {
+    case ui::IngameAction::leave_game:
+        // The run ends here rather than through a quit event, which a match
+        // would answer with this confirmation again.
         session.ingame_panel = IngamePanel::options;
+        session.close_confirm = false;
         leave_match();
-        SDL_Event quit{};
-        quit.type = SDL_EVENT_QUIT;
-        SDL_PushEvent(&quit);
+        quit_application(nullptr);
         return;
-    }
     default:
         return;
     }
+}
+
+bool Runtime::return_to_match_for_close() {
+    if (!match_ || match_finished_)
+        return false;
+    const bool over_match_page =
+        options_parent_ == Screen::match &&
+        (screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
+         screen_ == Screen::speeds || screen_ == Screen::music || screen_ == Screen::load_game);
+    if (over_match_page) {
+        if (save_dialog_open())
+            close_save_dialog();
+        else
+            leave_options_screen();
+    } else if (screen_ == Screen::briefing && briefing_from_pause_)
+        click_briefing_gadget("OK");
+    else
+        return false;
+    return screen_ == Screen::match;
+}
+
+void Runtime::escape_match_menu() {
+    const auto& session = match_menu_session();
+    if (session.close_confirm && session.ingame_panel == IngamePanel::exit_confirm) {
+        activate_pause_gadget("CHOICE2");
+        return;
+    }
+    resume_match_pause();
+}
+
+void Runtime::request_match_close() {
+    if (match_finished_ || !match_)
+        return;
+    auto& session = match_menu_session();
+    if (match_paused_ && session.close_confirm)
+        return;
+    const bool from_menu = match_paused_;
+    forget_team_panel();
+    match_paused_ = true;
+    match_command_ = MatchCommand::none;
+    pending_build_type_ = 0;
+    if (!load_match_hud_layout("guis/YESORNO.GUI")) {
+        // Without the confirmation the request is answered as a plain quit.
+        std::cerr << "YESORNO.GUI unavailable; closing without confirmation\n";
+        leave_match();
+        quit_application(nullptr);
+        return;
+    }
+    session.ingame_panel = IngamePanel::exit_confirm;
+    session.close_confirm = true;
+    session.close_confirm_from_menu = from_menu;
+    auto& context = session.ingame;
+    context.host = {};
+    context.session = ingame_session(
+        campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
+    );
+    context.in_game = true;
+    panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
+    ui::ingame_open_leave_confirm(session.panel, context);
+    panel_to_widgets(session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_);
+    status_ = "Exit";
+    render_match_surface();
 }
 
 void Runtime::open_restart_dialog() {
@@ -1549,9 +1775,43 @@ void Runtime::restart_match() {
     std::cerr << status_ << '\n';
 }
 
+void Runtime::draw_options_lightbar() {
+    // Only the preferences a match opened sweep the in-game menu away.
+    auto& session = match_menu_session();
+    if (options_parent_ != Screen::match || !match_ || options_flip_.rgb.empty() ||
+        surface_.rgb.empty())
+        return;
+    if (session.lightbar_due) {
+        session.lightbar_due = false;
+        session.lightbar_step = ui::options_lightbar_step(session.options.lightbar);
+        const auto& step = session.lightbar_step;
+        const auto stamp = static_cast<std::size_t>(ui::kLightbarStampFrame);
+        if (step.stamp_lightbar && match_hud_)
+            if (const auto* bar = gaf_sequence(match_hud_->shared_sprites, "LIGHTBAR");
+                bar != nullptr && bar->frames.size() > stamp)
+                stamp_frame(
+                    bar->frames[stamp],
+                    match_hud_->background.palette ? *match_hud_->background.palette
+                                                   : match_hud_->gui_palette,
+                    options_flip_
+                );
+        if (step.play_options_sound) {
+            play_ui_sound("Options", 0);
+            ++options_lightbar_sounds_;
+        }
+        // The radar picture is drawn again with the frame.
+        match_->state().game.radar_blink_flags = static_cast<uint16_t>(
+            match_->state().game.radar_blink_flags | oa::present::world_renderer::radar_flag_redraw
+        );
+    }
+    if (session.lightbar_step.drawn)
+        blit_lightbar(surface_, options_flip_, session.lightbar_step);
+}
+
 void Runtime::leave_options_screen() {
     flush_preferences();
     match_menu_session().options_bound = nullptr;
+    match_menu_session().options.lightbar.active = 0;
     if (options_parent_ == Screen::match && match_) {
         leave_load_game();
         seed_match_options(match_->state().game);
@@ -1651,17 +1911,33 @@ void Runtime::bind_options_context() {
         return true;
     };
 
-    // The OPTIONS lightbar: the frame below as FLIPSURFACE.
+    // The OPTIONS lightbar: the top panel's own picture as FLIPSURFACE. Over
+    // a match that is the in-game menu beside the battlefield, from the HUD
+    // image; elsewhere the frontend panel, from the frame.
     context.host.copy_top_panel =
         [](void* host, int32_t* width, int32_t* height, int32_t* y) -> oa_ref32 {
         auto& runtime = *static_cast<Runtime*>(host);
-        runtime.options_flip_ = runtime.surface_;
-        *width = static_cast<int32_t>(runtime.surface_.width);
-        *height = static_cast<int32_t>(runtime.surface_.height);
-        *y = runtime.resources_.layout.gadgets.empty()
-                 ? 0
-                 : runtime.resources_.layout.gadgets.front().common.y;
-        return runtime.options_flip_.rgb.empty() ? 0 : kOptionsFlipSurface;
+        const bool over_match = runtime.screen_ == Screen::match && runtime.match_hud_ &&
+                                !runtime.match_hud_cpu_.rgb.empty();
+        const auto& picture = over_match ? runtime.match_hud_cpu_ : runtime.surface_;
+        const auto& gadgets =
+            over_match ? runtime.match_hud_->layout.gadgets : runtime.resources_.layout.gadgets;
+        *width = 0;
+        *height = 0;
+        *y = 0;
+        runtime.options_flip_ = {};
+        if (gadgets.empty() || picture.rgb.empty())
+            return 0;
+        const auto& root = gadgets.front().common;
+        if (root.width <= 0 || root.height <= 0)
+            return 0;
+        runtime.options_flip_ = copy_picture(picture, root.x, root.y, root.width, root.height);
+        match_menu_session().lightbar_due = true;
+        match_menu_session().lightbar_step = {};
+        *width = root.width;
+        *height = root.height;
+        *y = root.y;
+        return kOptionsFlipSurface;
     };
     context.host.create_surface =
         [](void* host, const char*, int32_t width, int32_t height) -> oa_ref32 {
@@ -1675,6 +1951,9 @@ void Runtime::bind_options_context() {
         auto& runtime = *static_cast<Runtime*>(host);
         runtime.options_flip_ = {};
         runtime.options_backup_.clear();
+    };
+    match_menu_session().draw_lightbar = [](void* host) {
+        static_cast<Runtime*>(host)->draw_options_lightbar();
     };
     context.host.load_panel = [](void* host, ui::Panel& panel) {
         auto& runtime = *static_cast<Runtime*>(host);

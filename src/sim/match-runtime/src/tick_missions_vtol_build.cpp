@@ -148,13 +148,15 @@ class TickHost::VtolBuildMissions {
 
     uint16_t build_distance() { return static_cast<uint16_t>(def().build_distance); }
 
-    // Order acknowledgement, spoken once per issued command.
-    void acknowledge() {
+    /// Plays the order's acknowledgement once per issued command.
+    ///
+    /// @param caption The order's caption.
+    void acknowledge(const char* caption) {
         if ((record.extra.command_flags & sim::ground_orders::order_announce_flag) == 0)
             return;
         record.extra.command_flags &=
             static_cast<uint8_t>(~sim::ground_orders::order_announce_flag);
-        speak(speech_acknowledge);
+        speak(speech_acknowledge, caption);
     }
 
     /// Plays a speech category for the unit.
@@ -162,6 +164,14 @@ class TickHost::VtolBuildMissions {
     /// @param category Speech category (5 acknowledge, 7 failed, 8 complete,
     ///     9 started, 10 repaired, 11 reclaiming).
     void speak(uint32_t category) { host.play_sound(*s.unit, category); }
+
+    /// Plays a speech category for the unit, captioned with the order's text.
+    ///
+    /// @param category Speech category, as speak(category) takes.
+    /// @param caption The order's caption in place of the category's own.
+    void speak(uint32_t category, const char* caption) {
+        host.play_sound(*s.unit, category, caption);
+    }
 
     /// Flags the build panel for a redraw when the viewpoint player has the
     /// unit selected.
@@ -622,7 +632,7 @@ class TickHost::VtolBuildMissions {
             return 5;
         }
         if (events & target_lost_event) {
-            speak(speech_failed);
+            speak(speech_failed, "Construction terminated");
             refresh_selection();
             return 8;
         }
@@ -630,7 +640,7 @@ class TickHost::VtolBuildMissions {
         case 0:
             if (!flight_ready())
                 return 7;
-            acknowledge();
+            acknowledge("Building");
             host.take_off(s, order);
             return 1;
         case 1: {
@@ -649,11 +659,11 @@ class TickHost::VtolBuildMissions {
             ConstructionAdapter adapter(host, s, record);
             if (!adapter.site_clear()) {
                 if (record.construction.blocked_retries == 0)
-                    speak(speech_failed);
+                    speak(speech_failed, "Waiting for target area to clear");
                 else if (
                     record.construction.blocked_retries > static_cast<int32_t>(blocked_site_retries)
                 ) {
-                    speak(speech_failed);
+                    speak(speech_failed, "Target area was blocked");
                     return 8;
                 }
                 ++record.construction.blocked_retries;
@@ -664,10 +674,10 @@ class TickHost::VtolBuildMissions {
             auto* frame = adapter.spawn_nanoframe();
             record.construction.target = frame;
             if (!frame) {
-                speak(speech_failed);
+                speak(speech_failed, "Unable to create any more units");
                 return 8;
             }
-            speak(speech_started);
+            speak(speech_started, "Starting construction");
             adapter.issue_get_built(*frame);
             adapter.start_building(
                 static_cast<int16_t>(bearing_from(frame->record) - unit.heading)
@@ -692,7 +702,7 @@ class TickHost::VtolBuildMissions {
             return 2;
         }
         case 5:
-            speak(speech_complete);
+            speak(speech_complete, "Building complete");
             return 5;
         default:
             return 7;
@@ -711,7 +721,7 @@ class TickHost::VtolBuildMissions {
     uint32_t help_build(uint32_t events) {
         auto* frame = target();
         if (!frame || (events & target_lost_event)) {
-            speak(speech_failed);
+            speak(speech_failed, "Construction terminated by hostile action");
             refresh_selection();
             return 8;
         }
@@ -723,7 +733,7 @@ class TickHost::VtolBuildMissions {
         case 0:
             if (!flight_ready() || def().build_ids == 0)
                 return 7;
-            acknowledge();
+            acknowledge("Building");
             host.take_off(s, order);
             return 1;
         case 1:
@@ -770,7 +780,7 @@ class TickHost::VtolBuildMissions {
     uint32_t repair_unit(uint32_t events) {
         auto* patient = target();
         if (!patient) {
-            speak(speech_failed);
+            speak(speech_failed, "Repairs unsuccessful.");
             return 8;
         }
         if (record.attack.leash != 0) {
@@ -783,7 +793,7 @@ class TickHost::VtolBuildMissions {
         }
         auto& patient_record = patient->record;
         if ((patient_record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != 1) {
-            speak(speech_failed);
+            speak(speech_failed, "Repairs unsuccessful.");
             return 5;
         }
         record.extra.destination = point_of(patient_record.position);
@@ -792,10 +802,10 @@ class TickHost::VtolBuildMissions {
             if (!flight_ready())
                 return 7;
             if (!can_assist(patient_record)) {
-                speak(speech_failed);
+                speak(speech_failed, "Repair mission failed");
                 return 8;
             }
-            acknowledge();
+            acknowledge("Repairing");
             host.take_off(s, order);
             return 1;
         case 1:
@@ -822,7 +832,7 @@ class TickHost::VtolBuildMissions {
             return 2;
         }
         case 3:
-            speak(speech_repaired);
+            speak(speech_repaired, "Unit repaired");
             return 5;
         default:
             return 7;
@@ -846,14 +856,14 @@ class TickHost::VtolBuildMissions {
             if (!flight_ready())
                 return 7;
             if ((def().abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) == 0) {
-                speak(speech_failed);
+                speak(speech_failed, "Reclamation failed");
                 return 7;
             }
             if (!can_reclaim(victim->record)) {
-                speak(speech_failed);
+                speak(speech_failed, "That unit cannot be reclaimed");
                 return 8;
             }
-            acknowledge();
+            acknowledge("Reclaiming");
             host.take_off(s, order);
             return 1;
         case 1:
@@ -901,7 +911,7 @@ class TickHost::VtolBuildMissions {
         int16_t cell_x = 0, cell_z = 0;
         const auto word = match.feature_word_under(record.extra.destination, &cell_x, &cell_z);
         if (word == sim::spatial_state::no_feature) {
-            speak(speech_failed);
+            speak(speech_failed, "Reclamation failed");
             return 8;
         }
         const auto* feature = feature_def(word);
@@ -911,7 +921,7 @@ class TickHost::VtolBuildMissions {
         case 0:
             if (!flight_ready() || (def().abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) == 0)
                 return 7;
-            acknowledge();
+            acknowledge("Reclaiming");
             host.take_off(s, order);
             return 1;
         case 1:
@@ -964,7 +974,7 @@ class TickHost::VtolBuildMissions {
             if (auto* followed = target())
                 record.extra.destination = point_of(followed->record.position);
             clone_patrol_leg();
-            acknowledge();
+            acknowledge("Patrolling");
             host.take_off(s, order);
             return 1;
         }

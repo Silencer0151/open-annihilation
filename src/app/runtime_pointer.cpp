@@ -3,6 +3,7 @@
 
 // Pointer tracking, menu activation and match unit picking.
 #include "oa/app/runtime.hpp"
+#include "oa/sim/spatial_state/spatial.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
 #include <algorithm>
 #include <array>
@@ -32,7 +33,6 @@ void Runtime::update_pointer(float x, float y) {
         match_pointer_x_ = x;
         match_pointer_y_ = y;
         hovered_.reset();
-        hovered_match_unit_ = 0;
         const auto hud_point = oa::ui::display_layout::canvas_to_source(
             match_layout_, static_cast<int>(x), static_cast<int>(y)
         );
@@ -51,8 +51,7 @@ void Runtime::update_pointer(float x, float y) {
                     hovered_.reset();
             }
         }
-        if (!hovered_)
-            hovered_match_unit_ = pointer_unit_hit(pick_match_units(x, y));
+        pick_cursor_unit();
         if (options_.trace_input)
             std::cerr << "input match pointer x=" << x << " y=" << y
                       << " hud=" << (hovered_ ? std::to_string(*hovered_) : "none") << '\n';
@@ -201,152 +200,186 @@ void Runtime::step_released_button_stage() {
         set_button_stage(gadget.common.name, next);
 }
 
-oa::sim::gameplay_input::ScreenPoint Runtime::project_pick_point(
-    const oa::formats::objects3d::FixedVector3& local,
-    const oa::formats::objects3d::FixedVector3& world,
-    const oa::present::world_renderer::BattlefieldViewport& viewport
-) const {
-    const auto x = static_cast<int32_t>(
-        static_cast<uint32_t>(local.x) + static_cast<uint32_t>(world.x) - (viewport.source_x << 16)
-    );
-    const auto z = static_cast<int32_t>(
-        static_cast<uint32_t>(world.z) - static_cast<uint32_t>(local.z) - (viewport.source_y << 16)
-    );
-    const auto y =
-        static_cast<int32_t>(static_cast<uint32_t>(local.y) + static_cast<uint32_t>(world.y));
-    const auto px = static_cast<int16_t>(static_cast<uint32_t>(x) >> 16);
-    const auto pz = static_cast<int16_t>(static_cast<uint32_t>(z) >> 16);
-    const auto py = static_cast<int16_t>(static_cast<uint32_t>(y) >> 16);
-    const auto scale = viewport.scale == 0.0F ? 1.0 : static_cast<double>(viewport.scale);
+oa::ui::display_layout::Point Runtime::game_screen_point(float x, float y) const {
+    namespace layout = oa::ui::display_layout;
+    const auto column = static_cast<int>(x);
+    const auto row = static_cast<int>(y);
+    if (screen_ != Screen::match || !battlefield_contains(x, y))
+        return layout::canvas_to_source(match_layout_, column, row);
+    const auto zoom = match_zoom() == 0.0F ? 1.0 : static_cast<double>(match_zoom());
+    // As the battlefield maps a canvas pixel to its map pixel
+    // (world_renderer::screen_to_map_pixel).
     return {
-        viewport.destination_x + static_cast<int32_t>(std::lround(static_cast<double>(px) * scale)),
-        viewport.destination_y +
-            static_cast<int32_t>(std::lround(static_cast<double>(pz - (py / 2)) * scale))
+        layout::kSourceLeft +
+            static_cast<int>(std::llround(static_cast<double>(column - match_layout_.left) / zoom)),
+        layout::kSourceTop +
+            static_cast<int>(std::llround(static_cast<double>(row - match_layout_.top) / zoom))
     };
 }
 
-bool Runtime::hits_projected_bounds(
-    const oa::sim::gameplay_input::PickUnit& unit, oa::sim::gameplay_input::ScreenPoint point
-) const {
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
-    if (!unit.model)
-        return false;
-    oa::formats::objects3d::FixedVector3 minimum{
-        std::numeric_limits<int32_t>::max(),
-        std::numeric_limits<int32_t>::max(),
-        std::numeric_limits<int32_t>::max()
+oa::ui::display_layout::Point Runtime::game_screen_canvas(int32_t x, int32_t y) const {
+    namespace layout = oa::ui::display_layout;
+    const bool in_view = x >= layout::kSourceLeft && y >= layout::kSourceTop &&
+                         x < layout::kSourceLeft + visible_map_width() &&
+                         y < layout::kSourceTop + visible_map_height();
+    if (screen_ != Screen::match || !in_view)
+        return layout::source_to_canvas(match_layout_, x, y);
+    const auto zoom = match_zoom() == 0.0F ? 1.0 : static_cast<double>(match_zoom());
+    return {
+        match_layout_.left +
+            static_cast<int>(std::lround(static_cast<double>(x - layout::kSourceLeft) * zoom)),
+        match_layout_.top +
+            static_cast<int>(std::lround(static_cast<double>(y - layout::kSourceTop) * zoom))
     };
-    oa::formats::objects3d::FixedVector3 maximum{
-        std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::min()
+}
+
+oa::sim::selection::VisibleLists Runtime::on_screen_lists() {
+    oa::sim::selection::VisibleLists lists{};
+    lists.units = on_screen_units_.data();
+    lists.unit_capacity = static_cast<uint32_t>(on_screen_units_.size());
+    lists.radar = radar_state_.hot_units.data();
+    lists.radar_capacity = static_cast<uint32_t>(radar_state_.hot_units.size());
+    return lists;
+}
+
+oa::sim::selection::Hooks Runtime::selection_hooks() {
+    oa::sim::selection::Hooks hooks{};
+    hooks.context = this;
+    hooks.player_sees_unit =
+        [](void* context, const World&, const Player& player, const Unit& unit) {
+            auto& self = *static_cast<Runtime*>(context);
+            try {
+                return self.match_ != nullptr && self.match_->unit_visible(player.index, unit.id);
+            } catch (const std::exception&) {
+                return false;
+            }
+        };
+    hooks.pointer_hits_unit =
+        [](void* context, const World& world, const Unit& unit, int32_t x, int32_t y) {
+            auto& self = *static_cast<Runtime*>(context);
+            auto* instance = self.match_ != nullptr ? self.match_->instance(unit.id) : nullptr;
+            if (instance == nullptr)
+                return false;
+            oa::sim::gameplay_input::PickUnit candidate;
+            candidate.id = unit.id;
+            candidate.position = {unit.position.x, unit.position.y, unit.position.z};
+            candidate.rotation = {unit.bank, static_cast<int16_t>(unit.heading), unit.pitch};
+            candidate.model = &instance->model().model();
+            // A unit without a root object has no box to pick.
+            if (candidate.model->objects.empty())
+                return false;
+            const oa::sim::gameplay_input::Camera camera{
+                static_cast<int32_t>(world.game.camera_x), static_cast<int32_t>(world.game.camera_y)
+            };
+            return oa::sim::gameplay_input::hits_root_bounds(candidate, camera, {x, y});
+        };
+    hooks.play_sound = [](void* context, const char* name) {
+        static_cast<Runtime*>(context)->play_match_interface_sound(name);
     };
-    bool any = false;
-    for (const auto& object : unit.model->objects) {
-        for (const auto& vertex : object.vertices) {
-            minimum.x = std::min(minimum.x, vertex.x);
-            minimum.y = std::min(minimum.y, vertex.y);
-            minimum.z = std::min(minimum.z, vertex.z);
-            maximum.x = std::max(maximum.x, vertex.x);
-            maximum.y = std::max(maximum.y, vertex.y);
-            maximum.z = std::max(maximum.z, vertex.z);
-            any = true;
+    // A unit selected alone speaks its selection line to its owner.
+    hooks.speak = [](void* context, const Unit& unit, uint32_t category) {
+        auto& self = *static_cast<Runtime*>(context);
+        if (self.match_ == nullptr || unit.id >= self.match_->world().slots.size())
+            return;
+        auto& slot = self.match_->world().slots[unit.id];
+        if (slot.unit == nullptr)
+            return;
+        try {
+            self.offline_services_.command_sound(slot, category);
+        } catch (const std::exception&) {
+            // Without the announcement runtime, or for a type outside its
+            // catalog, the selection stays silent.
         }
-    }
-    if (!any)
-        return false;
-    const std::array<oa::formats::objects3d::FixedVector3, 8> corners{
-        {{minimum.x, minimum.y, minimum.z},
-         {maximum.x, minimum.y, minimum.z},
-         {minimum.x, maximum.y, minimum.z},
-         {maximum.x, maximum.y, minimum.z},
-         {minimum.x, minimum.y, maximum.z},
-         {maximum.x, minimum.y, maximum.z},
-         {minimum.x, maximum.y, maximum.z},
-         {maximum.x, maximum.y, maximum.z}}
     };
-    int32_t left = std::numeric_limits<int32_t>::max();
-    int32_t top = std::numeric_limits<int32_t>::max();
-    int32_t right = std::numeric_limits<int32_t>::min();
-    int32_t bottom = std::numeric_limits<int32_t>::min();
-    for (const auto& corner : corners) {
-        const auto projected = project_pick_point(corner, unit.position, viewport);
-        left = std::min(left, projected.x);
-        top = std::min(top, projected.y);
-        right = std::max(right, projected.x);
-        bottom = std::max(bottom, projected.y);
-    }
-    return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+    hooks.reset_command = [](void* context) {
+        auto& self = *static_cast<Runtime*>(context);
+        self.reset_match_command();
+        self.pending_build_type_ = 0;
+    };
+    hooks.selection_cleared = [](void* context) {
+        static_cast<Runtime*>(context)->selected_match_unit_ = 0;
+    };
+    hooks.center_camera = [](void* context, const FixedVec3& position, bool) {
+        auto& self = *static_cast<Runtime*>(context);
+        self.set_camera_position(
+            static_cast<int32_t>(static_cast<int16_t>(static_cast<uint32_t>(position.x) >> 16)) -
+                self.visible_map_width() / 2,
+            static_cast<int32_t>(static_cast<int16_t>(static_cast<uint32_t>(position.z) >> 16)) -
+                self.visible_map_height() / 2,
+            0
+        );
+        self.render_match_surface();
+    };
+    hooks.stop_follow = [](void* context) {
+        static_cast<Runtime*>(context)->stop_match_tracking();
+    };
+    return hooks;
 }
 
-std::vector<uint16_t> Runtime::pick_match_units(float x, float y) {
+void Runtime::rebuild_on_screen_units() {
     if (!match_)
-        return {};
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
+        return;
+    auto& world = match_->state();
+    if (on_screen_units_.size() != world.unit_slot_count) {
+        // A new match: nothing is under the cursor yet.
+        on_screen_units_.assign(world.unit_slot_count, 0);
+        world.game.cursor_unit_id = 0;
+        world.game.cursor_feature = oa::sim::spatial_state::no_feature;
+    }
+    offline_services_.set_on_screen_test(
+        [](const void* context, uint16_t unit) {
+            auto& self = *static_cast<Runtime*>(const_cast<void*>(context));
+            return self.match_ != nullptr && oa::sim::selection::unit_listed(
+                                                 self.match_->state(), self.on_screen_lists(), unit
+                                             );
+        },
+        this
     );
-    const oa::sim::gameplay_input::ScreenPoint point{
-        static_cast<int32_t>(x), static_cast<int32_t>(y)
-    };
-    if (!oa::present::world_renderer::screen_to_map_pixel(viewport, {point.x, point.y}))
-        return {};
-    std::vector<uint16_t> hits;
-    for (auto& slot : match_->world().slots) {
-        if (slot.unit_index == 0 || slot.unit == nullptr || slot.record.type_index == 0)
-            continue;
-        auto* instance = match_->instance(slot.unit_index);
-        if (instance == nullptr)
-            continue;
-        oa::sim::gameplay_input::PickUnit candidate;
-        candidate.id = slot.unit_index;
-        candidate.position = {
-            std::bit_cast<int32_t>(slot.unit->position[0]),
-            std::bit_cast<int32_t>(slot.unit->position[1]),
-            std::bit_cast<int32_t>(slot.unit->position[2])
-        };
-        candidate.rotation = {
-            std::bit_cast<int16_t>(slot.bank),
-            std::bit_cast<int16_t>(slot.yaw),
-            std::bit_cast<int16_t>(slot.pitch)
-        };
-        candidate.model = &instance->model().model();
-        if (hits_projected_bounds(candidate, point))
-            hits.push_back(slot.unit_index);
-    }
-    return hits;
+    oa::sim::selection::collect_visible_units(world, on_screen_lists(), selection_hooks());
 }
 
-uint16_t Runtime::first_local_hit(const std::vector<uint16_t>& hits) {
-    for (auto id : hits) {
-        auto& slot = match_->world().slots[id];
-        if (slot.unit != nullptr && slot.unit->type_index &&
-            slot.owner_index == match_local_player_ && match_->selectable(id))
-            return id;
-    }
-    return 0;
+void Runtime::refresh_on_screen_view() {
+    if (!match_ || !selected_tnt_)
+        return;
+    // The view a frame would show: the camera held on the map, bound to the
+    // Game block, and the units on screen in it.
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    match_camera_x_ = std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width()));
+    match_camera_z_ =
+        std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()));
+    bind_match_view();
+    rebuild_on_screen_units();
 }
 
-uint16_t Runtime::first_enemy_hit(const std::vector<uint16_t>& hits) {
-    for (auto id : hits) {
-        auto& slot = match_->world().slots[id];
-        if (slot.unit != nullptr && slot.unit->type_index &&
-            slot.owner_index != match_local_player_)
-            return id;
+void Runtime::pick_cursor_unit(bool refresh_view) {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || screen_ != Screen::match)
+        return;
+    if (refresh_view)
+        refresh_on_screen_view();
+    auto& game = match_->state().game;
+    const auto point = game_screen_point(pointer_x_, pointer_y_);
+    game.pointer_state[0] = static_cast<uint32_t>(point.x);
+    game.pointer_state[1] = static_cast<uint32_t>(point.y);
+    refresh_pointer_area();
+    // The ground under the pointer, its cell and the feature on it, which
+    // the unit panel shows when no unit is under the cursor.
+    if (const auto ground = match_world_point(pointer_x_, pointer_y_)) {
+        input::set_pointer_position(game, {(*ground)[0], (*ground)[1], (*ground)[2]});
+        store_cursor_cell(*ground);
     }
-    return 0;
-}
-
-uint16_t Runtime::pointer_unit_hit(const std::vector<uint16_t>& hits) {
-    for (auto id : hits) {
-        const auto& slot = match_->world().slots[id];
-        if (slot.unit != nullptr && slot.record.type_index != 0 &&
-            slot.record.owner_index == match_local_player_)
-            return id;
-    }
-    return first_enemy_hit(hits);
+    const auto flags = input::pointer_flags(game);
+    // Placing a building tests its site over the view instead; off the view
+    // and the radar the unit picked last stays.
+    const bool placing =
+        (flags & input::pointer_over_view) != 0 && match_command_ == MatchCommand::build;
+    if (!placing && (flags & (input::pointer_over_view | input::pointer_over_radar)) != 0 &&
+        on_screen_units_.size() == match_->state().unit_slot_count)
+        game.cursor_unit_id = oa::sim::selection::unit_under_pointer(
+            match_->state(), on_screen_lists(), selection_hooks()
+        );
+    hovered_match_unit_ = game.cursor_unit_id;
 }
 
 oa::sim::gameplay_input::OrderCursorHooks Runtime::order_cursor_hooks() {

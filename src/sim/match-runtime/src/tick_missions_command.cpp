@@ -104,7 +104,7 @@ uint32_t TickHost::GroundMissions::attack_no_move() {
         announce();
         return ground::next_phase;
     case 1:
-        weapons.enable_weapon(0);
+        weapons.release_weapon_targets(0);
         weapons.assign_target(*aimed, 0);
         order.wait_events = ground::attack_no_move_wait;
         return ground::next_phase;
@@ -119,7 +119,7 @@ uint32_t TickHost::GroundMissions::attack_no_move() {
 uint32_t TickHost::GroundMissions::self_repair() {
     auto* pad = target();
     if (!pad) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Repair aborted.");
         return ground::mission_failed;
     }
     switch (order.phase) {
@@ -128,7 +128,7 @@ uint32_t TickHost::GroundMissions::self_repair() {
             return ground::mission_invalid;
         if (pad->record.build_remaining != 0.0F || !(s.record.state_flags & OA_UNIT_STATE_ACTIVE))
             return ground::mission_failed;
-        AttackAdapter(host, s, record).enable_weapon(3);
+        AttackAdapter(host, s, record).release_weapon_targets(3);
         return ground::next_phase;
     case 1:
         if (static_cast<uint32_t>(static_cast<int32_t>(s.record.health)) >= def().max_damage)
@@ -139,7 +139,7 @@ uint32_t TickHost::GroundMissions::self_repair() {
         order.wait_events |= ground::repair_step_event;
         return ground::keep_waiting;
     case 2:
-        speak(ground::speech_repaired);
+        speak(ground::speech_repaired, "Unit repaired");
         return ground::mission_done;
     default:
         return ground::mission_invalid;
@@ -167,7 +167,7 @@ uint32_t TickHost::GroundMissions::building_build() {
         return ground::mission_done;
     }
     if (events & ground::target_lost_event) {
-        speak(ground::speech_failed);
+        speak(ground::speech_failed, "Construction stopped");
         --count;
         refresh_panel();
         return ground::restart_mission;
@@ -196,12 +196,12 @@ uint32_t TickHost::GroundMissions::building_build() {
         auto* frame = yard.spawn_nanoframe();
         set_target(frame);
         if (!frame) {
-            speak(ground::speech_failed);
+            speak(ground::speech_failed, "Unable to create any more units");
             wait_ticks(command::factory_full_wait);
             order.wait_events |= ground::cancel_event;
             return ground::keep_waiting;
         }
-        speak(ground::speech_build);
+        speak(ground::speech_build, "Starting construction");
         yard.attach_child(*frame, record.construction.pad_piece, 1);
         frame->record.flags = ((frame->record.flags ^ s.record.flags) & command::inherited_orders) ^
                               frame->record.flags;
@@ -240,7 +240,7 @@ uint32_t TickHost::GroundMissions::get_built() {
     if (s.record.build_remaining != 0.0F) {
         switch (order.phase) {
         case 0:
-            AttackAdapter(host, s, record).enable_weapon(3);
+            AttackAdapter(host, s, record).release_weapon_targets(3);
             wait_ticks(command::get_built_first_wait);
             order.wait_events |= ground::get_built_wake;
             return ground::next_phase;
@@ -303,7 +303,7 @@ uint32_t TickHost::GroundMissions::be_carried() {
     if (!s.record.attach_parent)
         return ground::mission_done;
     if (order.phase == 0) {
-        AttackAdapter(host, s, record).enable_weapon(3);
+        AttackAdapter(host, s, record).release_weapon_targets(3);
         return ground::next_phase;
     }
     if (order.phase == 1) {

@@ -73,7 +73,19 @@ struct Fixture final : Host {
 
     void tick_script(Unit&, uint32_t) override { calls.push_back("script"); }
 
-    void apply_scaled_damage(Unit&, int32_t, uint32_t) override { calls.push_back("damage"); }
+    // Each unit a scaled_damage call hit, with its amount and kind.
+    struct Damage {
+        uint16_t unit{};
+        int32_t amount{};
+        uint32_t kind{};
+    };
+
+    std::vector<Damage> damaged;
+
+    void apply_scaled_damage(Unit& unit, int32_t amount, uint32_t kind) override {
+        calls.push_back("damage");
+        damaged.push_back({unit.id, amount, kind});
+    }
 
     void regenerate_health(Unit&) override { calls.push_back("recover"); }
 

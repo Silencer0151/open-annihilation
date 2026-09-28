@@ -28,8 +28,9 @@ uint8_t occupancy(const Unit& unit) noexcept {
     return static_cast<uint8_t>(unit.flags & OA_UNIT_FLAG_OCCUPANCY_MASK);
 }
 
-// Occupancy value of a unit being carried; such units cannot be targeted.
-constexpr uint8_t occupancy_carried = 2;
+// Occupancy value of a flying unit (the air layer); a unit a transport
+// carries is in layer 0.
+constexpr uint8_t occupancy_airborne = 2;
 
 bool is_local(const World& world, const Unit& unit) noexcept {
     return unit.owner_index == world.game.local_player_index;
@@ -171,7 +172,7 @@ bool can_reclaim_unit(const World& world, const Unit& actor, const Unit& target)
     if (actor_def == nullptr || target_def == nullptr)
         return false;
     return (actor_def->abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) != 0 &&
-           occupancy(target) != occupancy_carried &&
+           occupancy(target) != occupancy_airborne &&
            (target_def->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) == 0;
 }
 
@@ -181,7 +182,7 @@ bool can_repair_unit(const World& world, const Unit& actor, const Unit& target) 
     if (actor_def == nullptr || target_def == nullptr ||
         (actor_def->abilities & OA_UNIT_DEF_ABILITY_CAN_REPAIR) == 0 ||
         static_cast<int32_t>(target.health) == static_cast<int32_t>(target_def->max_damage) ||
-        occupancy(target) == occupancy_carried)
+        occupancy(target) == occupancy_airborne)
         return false;
     const int32_t sea_level = world.game.sea_level;
     const int32_t top = high_word(target_def->model_height) + high_word(target.position.y);
@@ -204,7 +205,7 @@ bool can_load_unit(const World& world, const Unit& actor, const Unit& target) no
         return false;
     const auto size = static_cast<uint8_t>(actor_def->transport_size);
     if (target_def->footprint_x > static_cast<int16_t>(size) ||
-        occupancy(target) == occupancy_carried)
+        occupancy(target) == occupancy_airborne)
         return false;
     if ((actor_def->flags & OA_UNIT_DEF_FLAG_CAN_FLY) == 0 && target_def->min_water_depth >= 0)
         return false;
@@ -581,7 +582,7 @@ UnitOrder unit_order(
                     return UnitOrder::suppress;
                 return dropped ? UnitOrder::air_strike : UnitOrder::air_to_ground;
             }
-            if (occupancy(*target) != occupancy_carried && primary_to_air)
+            if (occupancy(*target) != occupancy_airborne && primary_to_air)
                 return UnitOrder::none;
             const int32_t top = (target_def != nullptr ? high_word(target_def->model_height) : 0) +
                                 high_word(target->position.y);
@@ -589,7 +590,7 @@ UnitOrder unit_order(
             const bool primary_water =
                 primary != nullptr && (primary->flags & OA_WEAPON_FLAG_WATER_WEAPON) != 0;
             const WeaponDef* secondary = world_weapon_def(&world, actor.weapons[1].def);
-            const bool secondary_water = (actor.weapons[1].flags & 2U) != 0 &&
+            const bool secondary_water = (actor.weapons[1].flags & OA_UNIT_WEAPON_ENABLED) != 0 &&
                                          secondary != nullptr &&
                                          (secondary->flags & OA_WEAPON_FLAG_WATER_WEAPON) != 0;
             if (top < sea_level && !primary_water && !secondary_water)

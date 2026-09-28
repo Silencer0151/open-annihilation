@@ -7,7 +7,9 @@
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/ui/frontend/options.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "oa/audio/unit_announcements.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstddef>
@@ -19,6 +21,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace oa::app {
@@ -344,6 +347,223 @@ void Runtime::check_match_dialogs() {
     std::cout << "match dialog check: HELP.GUI at " << panel.x << ',' << panel.y << " on the "
               << match_layout_.width << 'x' << match_layout_.height << " match canvas\n";
     check_in_game_briefing(report_directory);
+
+    // Over a new skirmish: the window's close request, a held Escape, the
+    // OPTIONS lightbar and a unit's speech with its order's caption.
+    load(Screen::main_menu);
+    start_benchmark_skirmish();
+    const auto require = [](bool ok, const std::string& failure) {
+        if (!ok)
+            throw std::runtime_error("match dialog check: " + failure);
+    };
+    require(screen_ == Screen::match && match_ && !match_finished_, "no skirmish to close");
+    if (match_paused_)
+        resume_match_pause();
+    const auto send = [this](SDL_Event event) {
+        bool running = true;
+        dispatch_event(event, running);
+        return running;
+    };
+    const auto close_request = [this](SDL_EventType type) {
+        SDL_Event event{};
+        event.type = type;
+        if (type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+            event.window.windowID = SDL_GetWindowID(sdl_.window);
+        return event;
+    };
+    const auto escape = [](bool repeat) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = SDLK_ESCAPE;
+        event.key.scancode = SDL_SCANCODE_ESCAPE;
+        event.key.down = true;
+        event.key.repeat = repeat;
+        return event;
+    };
+    const auto hud_label = [this](std::string_view name) {
+        for (const auto& gadget : match_hud_->layout.gadgets)
+            if (gadget.common.name == name) {
+                if (const auto* label =
+                        std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
+                    return label->text;
+            }
+        return std::string();
+    };
+    constexpr std::string_view confirm = "guis/YESORNO.GUI";
+    const auto confirming = [&] {
+        return match_paused_ && match_hud_ && match_hud_panel_ == confirm &&
+               hud_label("TITLE") == "Surrender this battle and exit to Windows?";
+    };
+    // A held Escape's repeats open no menu.
+    require(send(escape(true)) && !match_paused_, "a held Escape opened the pause menu");
+    require(
+        send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && !exit_requested_,
+        "closing the window ended a running match"
+    );
+    require(confirming(), "closing the window did not ask to surrender (YESORNO.GUI)");
+    require(
+        send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(),
+        "a second close request did not leave the confirmation as it was"
+    );
+    activate_pause_gadget("CHOICE2");
+    require(
+        !match_paused_ && match_hud_panel_ != confirm && !exit_requested_,
+        "CHOICE2 did not return to the running match"
+    );
+    // Escape answers as CHOICE2 does.
+    require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no second ask");
+    require(send(escape(false)) && !match_paused_, "Escape did not close the confirmation");
+    // Asked over the in-game menu, CHOICE2 goes back to the menu.
+    show_match_pause_menu();
+    require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
+    activate_pause_gadget("CHOICE2");
+    require(
+        match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        "CHOICE2 did not return to the in-game menu it was asked over"
+    );
+    // Escape answers as CHOICE2 does over the menu too.
+    require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
+    require(
+        send(escape(false)) && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        "Escape did not return to the in-game menu the confirmation was asked over"
+    );
+    // A panel that pauses the match after an answered confirmation, as the
+    // team panels do, still gets asked.
+    resume_match_pause();
+    require(load_team_panel("SHARE.GUI") && match_paused_, "SHARE.GUI did not open");
+    require(
+        send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(),
+        "closing the window over a panel after an answered confirmation did not ask"
+    );
+    activate_pause_gadget("CHOICE2");
+    resume_match_pause();
+    // A page over the match (here the save page) goes back to the match to
+    // ask there.
+    show_match_pause_menu();
+    activate_pause_gadget("SAVEGAME");
+    require(screen_ == Screen::load_game, "SAVEGAME did not open the save page");
+    require(
+        send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && !exit_requested_ &&
+            screen_ == Screen::match && confirming(),
+        "closing the window over the save page did not ask in the match"
+    );
+    activate_pause_gadget("CHOICE2");
+    require(
+        match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        "CHOICE2 after the save page did not return to the in-game menu"
+    );
+
+    // PREFS sweeps the in-game menu away with the lightbar: its picture folds
+    // onto column 127, turns over and opens out to column 277, playing
+    // "Options" once as it ends.
+    const auto menu = match_hud_->layout.gadgets.front().common;
+    update_pointer(static_cast<float>(surface_.width - 1), static_cast<float>(surface_.height - 1));
+    render();
+    const auto sounds = options_lightbar_sounds_;
+    activate_pause_gadget("PREFS");
+    require(screen_ == Screen::options, "PREFS did not open the preferences");
+    require(
+        options_flip_.width == static_cast<uint32_t>(menu.width) &&
+            options_flip_.height == static_cast<uint32_t>(menu.height),
+        "the lightbar did not take the in-game menu's picture"
+    );
+    const Rect swept{
+        0, menu.y - 40, oa::ui::frontend::kLightbarScrollEnd + 1, kCanvasHeight - (menu.y - 40)
+    };
+    constexpr int kSweepFrames = 16;
+    // The frame the preferences opened on took the first step.
+    std::vector<renderer::Surface> frames{surface_};
+    for (int frame = 1; frame < kSweepFrames; ++frame) {
+        tick_screen_packages();
+        render();
+        frames.push_back(surface_);
+    }
+    const auto reach = cursor_reach(pointer_x_, pointer_y_);
+    std::size_t moving = 0;
+    for (int frame = 1; frame < kSweepFrames; ++frame)
+        if (differing_pixels_outside(frames[frame - 1], frames[frame], {reach}) != 0 &&
+            differing_pixels(frames[frame - 1], frames[frame], swept) != 0)
+            ++moving;
+    // The first step came as the preferences opened; twelve more move the
+    // sweep, which then holds at its end.
+    require(moving == 12, "the lightbar moved on " + std::to_string(moving) + " frames, not 12");
+    require(
+        differing_pixels_outside(frames[kSweepFrames - 2], frames[kSweepFrames - 1], {reach}) == 0,
+        "the lightbar still moved after it reached its end"
+    );
+    require(
+        options_lightbar_sounds_ == sounds + 1,
+        "the lightbar played \"Options\" " + std::to_string(options_lightbar_sounds_ - sounds) +
+            " times"
+    );
+    write_ppm(report_directory / "native-match-options-lightbar.ppm", frames[6]);
+    require(send(escape(false)), "Escape ended the run");
+    require(
+        screen_ == Screen::match && match_paused_,
+        "Escape did not leave the preferences for the in-game menu"
+    );
+    resume_match_pause();
+
+    // An order's own caption reaches its owner's message log: the commander
+    // told to capture the other commander says it cannot.
+    uint16_t commander = 0;
+    uint16_t enemy = 0;
+    for (const auto& slot : match_->world().slots) {
+        if (slot.unit == nullptr || slot.record.type_index == 0 ||
+            (slot.record.flags & OA_UNIT_FLAG_LIVE) == 0)
+            continue;
+        if (slot.record.owner_index == match_local_player_ && commander == 0)
+            commander = slot.unit_index;
+        else if (slot.record.owner_index != match_local_player_ && enemy == 0)
+            enemy = slot.unit_index;
+    }
+    require(commander != 0 && enemy != 0, "the skirmish has no two commanders");
+    (void)match_->issue_capture(commander, enemy, false);
+    ++match_timing_.tick;
+    match_->simulation().tick = match_timing_.tick;
+    match_->tick();
+    const auto* definition = definition_for(commander);
+    const std::string caption = (definition != nullptr ? definition->display_name : std::string()) +
+                                ": That unit cannot be captured";
+    bool captioned = false;
+    for (std::size_t pump = 0;
+         pump < oa::audio::game_audio::AnnouncementQueue::capacity && !captioned;
+         ++pump) {
+        present_unit_announcements();
+        const auto lines = match_message_lines();
+        captioned = std::find(lines.begin(), lines.end(), caption) != lines.end();
+    }
+    require(captioned, "\"" + caption + "\" did not reach the message log");
+    // Another player's unit speaks to its own owner only.
+    const auto before = match_message_lines().size();
+    offline_services_.command_speech(match_->world().slots[enemy], 7, "Transport mission failed");
+    for (std::size_t pump = 0; pump < oa::audio::game_audio::AnnouncementQueue::capacity; ++pump)
+        present_unit_announcements();
+    const auto after = match_message_lines();
+    require(
+        std::none_of(
+            after.begin() + static_cast<std::ptrdiff_t>(std::min(before, after.size())),
+            after.end(),
+            [](const std::string& line) {
+                return line.find("Transport mission failed") != std::string::npos;
+            }
+        ),
+        "another player's unit spoke in the viewer's log"
+    );
+
+    // The system's quit asks too; CHOICE1 surrenders and ends the run.
+    require(send(close_request(SDL_EVENT_QUIT)) && confirming(), "the system's quit did not ask");
+    activate_pause_gadget("CHOICE1");
+    require(exit_requested_ && !match_, "CHOICE1 did not leave the match and end the run");
+    // Outside a match a close request ends the run at once.
+    exit_requested_ = false;
+    load(Screen::main_menu);
+    require(
+        !send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)),
+        "closing the window on the main menu did not end the run"
+    );
+    std::cout << "match close check: YESORNO.GUI on close, OPTIONS lightbar over " << moving
+              << " frames, captioned speech\n";
 }
 
 void Runtime::check_in_game_briefing(const fs::path& report_directory) {

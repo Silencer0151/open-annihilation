@@ -27,10 +27,10 @@ void TickHost::AttackAdapter::set_goal(std::unique_ptr<sim::ground_orders::Goal>
     host.write_flags(source, flags);
 }
 
-void TickHost::AttackAdapter::announce() {
+void TickHost::AttackAdapter::announce(const char* caption) {
     if (record.extra.command_flags & 0x20) {
         record.extra.command_flags &= 0xdf;
-        host.play_sound(*source.unit, 5);
+        host.play_sound(*source.unit, 5, caption);
     }
 }
 
@@ -43,7 +43,7 @@ uint8_t TickHost::AttackAdapter::selected_weapon() {
     return flags[2] & OA_UNIT_WEAPON_ENABLED;
 }
 
-void TickHost::AttackAdapter::enable_weapon(uint32_t i) {
+void TickHost::AttackAdapter::release_weapon_targets(uint32_t i) {
     if (i > 3)
         throw std::out_of_range("attack weapon index outside slots");
     host.before_callback();

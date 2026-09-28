@@ -503,12 +503,12 @@ uint32_t TickHost::AirAttackMissions::air_strike(uint32_t events) {
     case 0:
         if (!can_fly())
             return result_fail;
-        adapter.announce();
+        adapter.announce("Attacking");
         host.take_off(s, order);
         return result_next;
     case 1: {
         adapter.reset_weapons();
-        adapter.enable_weapon(0);
+        adapter.release_weapon_targets(0);
         const auto from = here();
         if (horizontal_distance(destination[0] - from[0], destination[2] - from[2]) <
             strike_run_in_distance) {
@@ -556,7 +556,7 @@ uint32_t TickHost::AirAttackMissions::air_strike(uint32_t events) {
         return result_stay;
     }
     case 5: {
-        adapter.enable_weapon(0);
+        adapter.release_weapon_targets(0);
         adapter.assign_ground(destination, 0);
         const auto from = here();
         const auto run = static_cast<int32_t>(
@@ -595,7 +595,7 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
     if (order.phase == 0) {
         if (!can_fly())
             return result_fail;
-        adapter.announce();
+        adapter.announce("Attacking");
         host.take_off(s, order);
         wait(1);
         misaligned = 0;
@@ -607,7 +607,7 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
         return result_done; // a target lost between steps ends the order
     auto& target = target_record();
     adapter.reset_weapons();
-    adapter.enable_weapon(0);
+    adapter.release_weapon_targets(0);
     adapter.assign_target(*attack.target, 0);
     const auto goal_events = events & event_goal;
     if (goal_events && aligned_with(target)) {
@@ -660,7 +660,7 @@ uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
     if (order.phase == 0) {
         if (!can_fly())
             return result_fail;
-        adapter.announce();
+        adapter.announce("Attacking");
         host.take_off(s, order);
         return result_next;
     }
@@ -683,7 +683,7 @@ uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
         return result_next;
     }
     case 2:
-        adapter.enable_weapon(0);
+        adapter.release_weapon_targets(0);
         adapter.assign_target(*attack.target, 0);
         point_goal(target, static_cast<int16_t>(range));
         side = 0;

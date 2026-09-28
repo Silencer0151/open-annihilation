@@ -38,6 +38,7 @@
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
+#include "oa/sim/selection.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <chrono>
@@ -317,8 +318,10 @@ class Runtime final : public menu::Host,
     ///
     /// The overlay and screen packages, music mood and timers, the speech queue, then, unless the
     /// application is closing, the match camera and the active screen's frame: in
-    /// a match the extension's pump, the ticks the clock is worth, the outcome,
-    /// the render and the film step, each charged to the frame's profile window.
+    /// a match the extension's pump, the pointer's pick of the unit under it
+    /// (pick_cursor_unit), the ticks the clock is worth, the outcome, the
+    /// render (which rebuilds the on-screen list) and the film step, each
+    /// charged to the frame's profile window.
     /// The F2 and Ctrl+F9 screenshot keys reach the hotkey handlers as SDL key
     /// events. 3.1c also takes a request to re-initialise the display here;
     /// the engine has no such request.
@@ -1027,6 +1030,27 @@ class Runtime final : public menu::Host,
     /// is finished.
     void resume_match_pause();
 
+    /// Answers a request to close the window during a running match: opens the surrender
+    /// confirmation (YESORNO) unless it is already up.
+    void request_match_close();
+
+    /// Brings a page opened over a running match (the options pages, the load and save
+    /// pages, the in-game briefing) back to the match's menu, so that a close request asks
+    /// there.
+    ///
+    /// @return true when the match is on screen again; false when no such page is open
+    bool return_to_match_for_close();
+
+    /// Answers Escape over a paused match: the surrender confirmation takes it as CHOICE2,
+    /// any other menu resumes the match.
+    void escape_match_menu();
+
+    /// Steps and draws the lightbar sweep of the in-game OPTIONS panel while it runs.
+    void draw_options_lightbar();
+
+    /// Binds the running match's speech with its own captions to the offline services.
+    void bind_match_speech();
+
     /// Fills the covered pixels of a rendered GAF frame into the HUD source, one source pixel each.
     ///
     /// @param frame rendered frame; pixels without coverage are skipped
@@ -1278,7 +1302,7 @@ class Runtime final : public menu::Host,
     ///
     /// Pause sets the pause bit of Game.sim_run_flags, opens no menu, holds
     /// Game.tick over a second of frames and shows the paused title; Pause
-    /// again resumes. Escape still opens ARMOPT.GUI and holds the skirmish;
+    /// again resumes. Escape opens no menu, and F2 opens ARMOPT.GUI and holds the skirmish;
     /// 'h' opens nothing and moves no resources, and Tab opens no team menu.
     /// Throws std::runtime_error at the first failure.
     void check_pause_key();
@@ -1819,6 +1843,12 @@ class Runtime final : public menu::Host,
         HudRect unit_metal_use{350, 468, 0, 8};
         HudRect unit_energy_make{400, 458, 0, 8};
         HudRect unit_energy_use{400, 468, 0, 8};
+        HudRect logo2{132, 455, 21, 21};       // SIDEDATA LOGO2: the cursor unit owner's logo
+        HudRect mission_text{385, 449, 16, 2}; // MISSIONTEXT: head order status, centred on x
+        HudRect unit_name2{555, 452, 1, 9};    // UNITNAME2: the second unit, centred on x
+        HudRect damage_bar2{510, 463, 91, 3};  // DAMAGEBAR2: its damage or stockpile bar
+        HudRect name{132, 452, 11, 9};         // NAME: build button cost or feature line
+        HudRect description{132, 465, 11, 8};  // DESCRIPTION: build button description
     };
 
     /// Reads an integer key of a TDF section.
@@ -1979,14 +2009,6 @@ class Runtime final : public menu::Host,
     ///
     /// @param unit unit the readout shows
     void draw_unit_rates(const oa::Unit& unit);
-
-    /// Draws SIDEDATA's DAMAGEBAR for the shown unit.
-    ///
-    /// Health against max_damage in UI colours 10 and 4, hidden on another
-    /// player's unit whose type hides damage.
-    ///
-    /// @param unit unit the readout shows
-    void draw_unit_damage_bar(const oa::Unit& unit);
 
     /// Returns the overlay raster that draws rectangles and text in 640x480 source space on the
     /// HUD.
@@ -3039,55 +3061,73 @@ class Runtime final : public menu::Host,
     /// caption; other gadgets keep theirs.
     void step_released_button_stage();
 
-    /// Projects a model point of a unit onto the battlefield frame for picking.
+    /// Maps a canvas point to the game's screen, where the pointer word (Game.pointer_state) and the
+    /// on-screen list live.
     ///
-    /// @param local 16.16 point in the unit's model space
-    /// @param world 16.16 unit position
-    /// @param viewport battlefield viewport
-    /// @return frame point, raised by half the height at the view's scale
-    oa::sim::gameplay_input::ScreenPoint project_pick_point(
-        const oa::formats::objects3d::FixedVector3& local,
-        const oa::formats::objects3d::FixedVector3& world,
-        const oa::present::world_renderer::BattlefieldViewport& viewport
-    ) const;
-
-    /// Tests whether a frame point falls inside a unit's projected model bounds.
-    ///
-    /// @param unit pick candidate with its model
-    /// @param point frame point
-    /// @return false without a model or a vertex
-    bool hits_projected_bounds(
-        const oa::sim::gameplay_input::PickUnit& unit, oa::sim::gameplay_input::ScreenPoint point
-    ) const;
-
-    /// Lists the match units under a canvas point.
+    /// Over the battlefield it is the game view (Game.battlefield_rect): map
+    /// pixels from the view's corner, which sits at (128, 32) as on the
+    /// unzoomed 640x480 screen, however large the window or the zoom; elsewhere
+    /// it is the 640x480 HUD space (display_layout::canvas_to_source).
     ///
     /// @param x canvas column
     /// @param y canvas row
-    /// @return unit ids whose projected bounds hold the point; empty off the
-    ///     battlefield or without a match
-    std::vector<uint16_t> pick_match_units(float x, float y);
+    /// @return the point on the game's screen
+    [[nodiscard]] oa::ui::display_layout::Point game_screen_point(float x, float y) const;
 
-    /// Returns the first hit the local player can select: an active unit it owns.
+    /// Maps a point of the game's screen back to the canvas, the inverse of game_screen_point().
     ///
-    /// @param hits unit ids, in pick order
-    /// @return the unit id, or 0
-    uint16_t first_local_hit(const std::vector<uint16_t>& hits);
+    /// @param x column on the game's screen
+    /// @param y row on the game's screen
+    /// @return the canvas point
+    [[nodiscard]] oa::ui::display_layout::Point game_screen_canvas(int32_t x, int32_t y) const;
 
-    /// Returns the first hit on an active unit another player owns.
+    /// Returns the on-screen unit list (on_screen_units_) and the radar's hot units as the
+    /// selection module reads them.
     ///
-    /// @param hits unit ids, in pick order
-    /// @return the unit id, or 0
-    uint16_t first_enemy_hit(const std::vector<uint16_t>& hits);
+    /// @return the buffers Game.hot_unit_count and hot_radar_unit_count count into
+    [[nodiscard]] oa::sim::selection::VisibleLists on_screen_lists();
 
-    /// Returns the unit the cursor and click orders act on.
+    /// Returns the selection module's services over the running match.
     ///
-    /// The first local hit whether or not it is finished, else the first enemy
-    /// hit. Selection keeps the selectable-only pick.
+    /// Sight is Match::unit_visible; the pointer test is the unit type's root
+    /// box, turned by the unit's angles (gameplay_input::hits_root_bounds); the
+    /// armed command and the order panel are the runtime's; the camera centres
+    /// at once. A unit's select speech is not queued.
     ///
-    /// @param hits unit ids, in pick order
-    /// @return the unit id, or 0
-    uint16_t pointer_unit_hit(const std::vector<uint16_t>& hits);
+    /// @return the hooks, bound to this runtime
+    [[nodiscard]] oa::sim::selection::Hooks selection_hooks();
+
+    /// Rebuilds the on-screen unit list for the viewpoint player (Game.hot_unit_count).
+    ///
+    /// Every unit whose type box overlaps the game view and that the
+    /// viewpoint player owns or sees is listed. Each drawn frame rebuilds it
+    /// after the match's ticks, so the under-attack notice and the pointer
+    /// test the list of the frame last drawn. The buffer takes the match's
+    /// unit slot count, and the offline services' on-screen test reads it.
+    void rebuild_on_screen_units();
+
+    /// Brings the view up to date as a frame would before the pointer picks: the camera held on
+    /// the map and bound to the Game block (bind_match_view), and the on-screen list rebuilt.
+    ///
+    /// Between frames nothing else moves the view, so the list is the frame's
+    /// own; a camera moved without a frame drawn is taken as the next frame's.
+    void refresh_on_screen_view();
+
+    /// Picks the unit under the pointer into Game.cursor_unit_id, which hovered_match_unit_ mirrors.
+    ///
+    /// The pointer goes into Game.pointer_state on the game's screen. Over the
+    /// game view the smallest listed unit whose turned root box holds the
+    /// pointer wins (selection::unit_under_pointer), whoever owns it, the
+    /// earlier listed on a tie; over the radar the nearest blip within reach.
+    /// Off both, or over the game view while a building is being placed, the
+    /// unit picked last stays. Every frame picks again, so a unit that moves
+    /// under a still pointer becomes the cursor unit; that pick tests the
+    /// frame last drawn. An input event first brings the view up to date
+    /// (refresh_on_screen_view), since a check can move the camera without
+    /// drawing.
+    ///
+    /// @param refresh_view true to bring the view up to date first
+    void pick_cursor_unit(bool refresh_view = true);
 
     /// Returns the order cursor's queries over the match: point visibility, the feature at a point
     /// and weapon reach.
@@ -3619,9 +3659,11 @@ class Runtime final : public menu::Host,
     /// Gives the selection the orders a command resolves to.
     ///
     /// The group order resolves them against the unit under the pointer
-    /// (Game.cursor_unit_id) and the ground under it (Game.cursor_position), each
-    /// given through the match's issuers; a queued one that matches an order
-    /// already queued removes that order instead.
+    /// (Game.cursor_unit_id, put back to the pointer's own pick afterwards) and
+    /// the ground under it (Game.cursor_position), each given through the
+    /// match's issuers; an aircraft sent onto an allied air pad lands on it
+    /// (VTOL_Landing). A queued one that matches an order already queued
+    /// removes that order instead.
     ///
     /// @param command pointer command
     /// @param target unit under the pointer, or 0
@@ -3685,15 +3727,36 @@ class Runtime final : public menu::Host,
     /// the default order (move, guard on an own unit) with the same shift cancel,
     /// the left button scrolls with the radar. A right click on a factory build
     /// button takes that unit type off the queue even when another type was
-    /// queued after it. Throws std::runtime_error on a failure.
+    /// queued after it. The on-screen list and the pick follow
+    /// (check_pointer_picks). Throws std::runtime_error on a failure.
     void check_pointer_interfaces();
+
+    /// Checks the on-screen unit list, the pointer's pick and what they drive, over the skirmish
+    /// check_pointer_interfaces() leaves.
+    ///
+    /// The list holds the units whose box overlaps the view, never an enemy
+    /// out of sight or cloaked; the pick turns the root box by the heading,
+    /// prefers the smaller unit whoever owns it and follows a unit that moves
+    /// under a still pointer; an enemy out of sight takes no click. A unit on
+    /// screen says no under-attack notice and one off screen says it once. The
+    /// unit panel shows the cursor unit's status and target, a build button's
+    /// cost line and a radar blip's unidentified line; F1 opens the unit info
+    /// panel with the unit's picture; 'n', Ctrl+S, clicks and Escape follow
+    /// the list and the armed command; LOAD, UNLOAD and a pad go through the
+    /// order table. Throws std::runtime_error on a failure.
+    void check_pointer_picks();
 
     /// Handles a left click on the game screen.
     ///
-    /// Over the radar it gives the selection's orders there or pans the camera;
-    /// otherwise the armed command decides: build places the pending building,
-    /// the D-gun fires at a unit or the ground, and the others select, order or
-    /// box-select through the pointer's cursor.
+    /// The click first picks the unit under the pointer (the cursor unit), and
+    /// an open unit info panel takes it. Over the radar it gives the
+    /// selection's orders there or pans the camera; off the battlefield it
+    /// does nothing; otherwise the armed command decides: build places the
+    /// pending building, the D-gun fires at a unit or the ground, ATTACK,
+    /// RECLAIM, CAPTURE, LOAD and UNLOAD give the orders the order table
+    /// resolves for each selected unit over the cursor unit and the ground
+    /// (a click that gives none leaves the command armed), and the others
+    /// select, order or box-select through the pointer's cursor.
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -3870,16 +3933,23 @@ class Runtime final : public menu::Host,
     /// match shortcuts.
     ///
     /// Pause toggles the pause of a match that is not finished and opens no
-    /// menu; Escape and F2 open and close the in-game options menu. Outside a
+    /// menu; F2 opens and closes the in-game options menu. Escape takes back
+    /// an armed command, else drops the selection, and never opens the menu;
+    /// with the menu open it is left to the event handler, which closes it.
+    /// F1 opens the unit info panel, whose Enter and Escape press its DONE;
+    /// Shift+F1 pins the cursor unit. Ctrl+S selects the local units on
+    /// screen and 'n' centres on the next unvisited local unit. Outside a
     /// multiplayer game 'h' does nothing.
     ///
     /// @param key keyboard event; repeats are ignored
     /// @return true when the key was taken
     bool handle_match_hotkey(const SDL_KeyboardEvent& key);
 
-    /// Selects the local unit under a canvas point, adding it with shift.
+    /// Selects the unit under the cursor at a canvas point (selection::select_cursor_unit).
     ///
-    /// Without shift the selection is replaced, and a double click adds every
+    /// A selectable local cursor unit replaces the selection, or is toggled
+    /// with shift, and the local units on screen are visited for 'n'; any
+    /// other cursor unit, or none, changes nothing. A double click adds every
     /// other selectable local unit of the same type.
     ///
     /// @param x canvas column
@@ -3887,13 +3957,20 @@ class Runtime final : public menu::Host,
     /// @param clicks click count (2 for a double click)
     void select_match_unit(float x, float y, int32_t clicks = 1);
 
-    /// Selects the local units whose projected position lies in a canvas box.
+    /// Takes the selection the selection module left in the unit flags: each selected local unit
+    /// refreshes its order panel, the primary unit stays when it is still selected (else the first
+    /// selected unit takes its place), and the order panel shows the selection.
+    void adopt_selected_units();
+
+    /// Selects the local units whose position lies in a drag box: the canvas corners go back to
+    /// Game.drag_start and drag_end, and selection::select_units_in_box selects or, with shift,
+    /// toggles the units there and visits the local units on screen for 'n'.
     ///
     /// @param x0 one corner's column
     /// @param y0 one corner's row
     /// @param x1 the other corner's column
     /// @param y1 the other corner's row
-    /// @param add true to add to the selection
+    /// @param add true (shift) to toggle the units in the box instead of replacing the selection
     void box_select_units(int x0, int y0, int x1, int y1, bool add);
 
     /// Gives the selection an order on each unit whose projected position lies in a canvas box.
@@ -3904,9 +3981,6 @@ class Runtime final : public menu::Host,
     /// @param y1 the other corner's row
     /// @param kind "attack" (enemy units), "reclaim" (any unit) or "repair" (local units)
     void area_order_units(int x0, int y0, int x1, int y1, std::string_view kind);
-
-    /// Selects the next local unit outside the battlefield view and centres the camera on it.
-    void select_next_offscreen_unit();
 
     /// Steps the requested game speed (1..20, 10 normal) with '+' and '-'; the change is posted to
     /// the message log and the next frame steps at the new rate.
@@ -3946,8 +4020,44 @@ class Runtime final : public menu::Host,
     /// @param path capture folder
     void begin_film_capture(const char* path);
 
-    /// Draws the F1 unit info box of the selected unit: name, health and costs.
-    void draw_unit_info_overlay();
+    /// Opens the unit info panel (UNITINFOx.GUI) for F1, as open_unit_info_panel() fills it.
+    ///
+    /// Its subject is the unit type of the build button under the pointer,
+    /// else that of the cursor unit (Game.cursor_unit_id) when the viewpoint
+    /// player sees it. Nothing opens while the panel is open
+    /// (kFrameUnitInfoOpen) or without a subject.
+    ///
+    /// @return true when the panel opened
+    bool open_unit_info();
+
+    /// Closes the unit info panel through its click handler with no control, releasing its
+    /// picture; nothing when it is not open.
+    void close_unit_info();
+
+    /// Presses the unit info panel's DONE, which the panel's Enter and Escape defaults also press:
+    /// the button sound, then the panel closes.
+    void press_unit_info_done();
+
+    /// Handles a left click while the unit info panel is open: DONE closes it.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return true when the click was on the panel
+    bool click_unit_info(float x, float y);
+
+    /// Draws the unit info panel over the battlefield: its controls, the statistic labels and the
+    /// unit's picture at HOTR at the picture's own size.
+    void draw_unit_info_panel();
+
+    /// Draws the bottom bar's unit panel: the unit under the cursor, the build button under the
+    /// pointer or the feature under the cursor (ui::hud::unit_panel_snapshot).
+    void draw_unit_panel();
+
+    /// Returns the name of the match panel's gadget under the pointer: over a build button, the
+    /// unit it builds.
+    ///
+    /// @return the gadget's name, or null when the pointer is over no gadget
+    [[nodiscard]] const char* hovered_gadget_name() const;
 
     /// Draws the game clock and the message log over the battlefield.
     void draw_chat_overlay();
@@ -6367,7 +6477,9 @@ class Runtime final : public menu::Host,
     uint32_t status_panel_next_step_ms_ = 0; // the strip's step timer
     std::optional<oa::formats::gaf::RenderedFrame> status_lightbar_{};
     bool status_lightbar_loaded_ = false;
-    std::string status_label_; // last label translated for the status strip
+    std::string status_label_;           // last label translated for the status strip
+    std::string unit_panel_word_{};      // last word translated for the unit panel
+    uint32_t options_lightbar_sounds_{}; // "Options" sounds the lightbar sweeps have played
 
     /// Draws the status strip that slides up from the bottom of the battlefield while Space is
     /// held: the lightbar and the time, unit and speed readouts.
@@ -6611,7 +6723,20 @@ class Runtime final : public menu::Host,
     std::optional<MatchDragBox> match_drag_{};
     bool match_tracking_ = false;
     uint16_t tracked_match_unit_ = 0;
-    bool show_unit_info_ = false;
+    // The on-screen unit list (Game.hot_units), one id per unit slot at most;
+    // Game.hot_unit_count says how many the last drawn frame listed.
+    std::vector<uint16_t> on_screen_units_{};
+
+    // The unit info panel F1 opens: UNITINFOx.GUI, its controls moved to the
+    // screen with the added statistic labels, drawn once as it opens.
+    struct UnitInfoPanel {
+        std::optional<renderer::ScreenResources> screen{};
+        renderer::Surface frame{};               // the panel drawn over black, 640x480
+        oa::ui::gui_layout::CommonFields root{}; // the panel's rectangle on screen
+        std::string picture_path{};              // unitpics\<name>.PCX, empty once released
+    };
+
+    std::optional<UnitInfoPanel> unit_info_panel_{};
     bool chat_composing_ = false;
     std::string chat_buffer_{};
     std::shared_ptr<MatchConsole> console_;

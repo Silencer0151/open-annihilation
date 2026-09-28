@@ -36,6 +36,20 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// @param viewpoint player index compared with the speaking slot's player byte
     void set_viewpoint(uint8_t viewpoint) noexcept { viewpoint_ = viewpoint; }
 
+    /// Tests whether a unit is on screen: listed by the last frame drawn.
+    using OnScreenTest = bool (*)(const void* context, uint16_t unit);
+
+    /// Sets the test that keeps the under-attack notice of a unit on screen unsaid.
+    ///
+    /// Without a test every notice is queued.
+    ///
+    /// @param test on-screen test; null queues every notice
+    /// @param context passed back to `test`
+    void set_on_screen_test(OnScreenTest test, const void* context) noexcept {
+        on_screen_test_ = test;
+        on_screen_context_ = context;
+    }
+
     /// Binds the unit sound catalog and the match for unit announcements.
     ///
     /// Maps each type's simulation record to its definition's sound category.
@@ -76,13 +90,14 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Presents at most one queued announcement and hands over those presented since the last call.
     ///
     /// A record is pumped only while the catalog and match are bound and the
-    /// queue is not empty; its random draw comes from the match's generator.
+    /// queue is not empty; its random draw comes from the match's LCG stream
+    /// (Match::lcg_rand), the one the wind and the effect scatter draw from.
     ///
     /// @return the presented announcements, oldest first; the list starts empty again
     [[nodiscard]] std::vector<oa::audio::game_audio::UnitAnnouncement> pump_announcements() {
         if (announcement_catalog_ != nullptr && match_ != nullptr &&
             announcement_queue_.size() != 0) {
-            const auto random = static_cast<uint16_t>(match_->random_bounded(0x8000U));
+            const auto random = static_cast<uint16_t>(match_->lcg_rand());
             if (auto event = announcement_queue_.pump(
                     *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
                 ))
@@ -118,10 +133,31 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
 
     /// Queues a unit's command speech as an announcement.
     ///
+    /// The under-attack notice (category 2) of a unit the on-screen test finds
+    /// on screen is dropped: only units out of view are announced.
+    ///
     /// @param slot speaking unit
     /// @param category speech category (5 order, 7 failed, 8 complete, ...)
     void command_sound(oa::sim::unit_spawn::Slot& slot, uint32_t category) override {
+        if (category == static_cast<uint32_t>(
+                            oa::audio::game_audio::UnitAnnouncementCategory::under_attack
+                        ) &&
+            on_screen_test_ != nullptr && on_screen_test_(on_screen_context_, slot.unit_index))
+            return;
         enqueue_announcement(slot, category);
+    }
+
+    /// Queues a unit's command speech captioned with its order's own text.
+    ///
+    /// The owner reads the caption in place of the category's own; the
+    /// category still picks the sound.
+    ///
+    /// @param slot speaking unit
+    /// @param category speech category (5 order, 7 failed, 8 complete, ...)
+    /// @param caption the caption, as the application shows it
+    void
+    command_speech(oa::sim::unit_spawn::Slot& slot, uint32_t category, std::string_view caption) {
+        enqueue_announcement(slot, category, caption);
     }
 
     /// Appends a plot height range refresh to masked_registrations.
@@ -220,14 +256,20 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Queues a unit announcement for a game sound category.
     ///
     /// A category with no announcement is dropped. When the queue was full and the
-    /// record is queued, the record it evicted is presented at once. Throws
+    /// record is queued, the record it evicted is presented at once, with a draw
+    /// from the match's LCG stream. Throws
     /// std::runtime_error when nothing is bound or the unit's type is not in the
     /// catalog.
     ///
     /// @param slot speaking unit
     /// @param category_number the game's sound category, mapped through
     ///     unit_announcement_category()
-    void enqueue_announcement(oa::sim::unit_spawn::Slot& slot, uint32_t category_number) {
+    /// @param caption text shown in place of the category's own, or nothing
+    void enqueue_announcement(
+        oa::sim::unit_spawn::Slot& slot,
+        uint32_t category_number,
+        std::optional<std::string_view> caption = std::nullopt
+    ) {
         if (announcement_catalog_ == nullptr || match_ == nullptr || slot.unit == nullptr ||
             slot.unit->type == nullptr)
             throw std::runtime_error("unit announcement runtime is not bound");
@@ -249,10 +291,10 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
                  (slot.unit->flags & OA_UNIT_FLAG_DEATH_PENDING) == 0,
              // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
              (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
-             std::nullopt}
+             caption}
         );
         if (was_full && result == oa::audio::game_audio::AnnouncementEnqueueStatus::queued) {
-            const auto random = static_cast<uint16_t>(match_->random_bounded(0x8000U));
+            const auto random = static_cast<uint16_t>(match_->lcg_rand());
             if (auto event = announcement_queue_.present_evicted(
                     *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
                 ))
@@ -268,6 +310,8 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     std::unordered_map<const oa::sim::simulation_state::UnitType*, std::string> sound_categories_;
     std::vector<oa::audio::game_audio::UnitAnnouncement> presented_announcements_;
     uint8_t viewpoint_{};
+    OnScreenTest on_screen_test_{};
+    const void* on_screen_context_{};
 };
 
 class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycle,

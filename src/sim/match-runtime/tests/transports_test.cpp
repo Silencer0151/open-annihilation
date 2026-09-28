@@ -7,6 +7,7 @@
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "oa/sim/unit_script.hpp"
 #include "oa/test/game_assets.hpp"
+#include "installed_units.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -27,14 +28,18 @@ using namespace oa;
 // and sets it down at an unload point; a hover transport does the same through
 // its TransportPickup and TransportDrop scripts. Run with --data, the same
 // runs repeat with the installed game's ARMATLAS, ARMTHOVR and ARMPW models
-// and scripts.
+// and scripts, and the installed transport ships, Valkyrie, Bear and Atlas
+// load, carry and lose tanks on a map of sea, shelf and land.
 namespace {
 namespace op = sim::script_vm::opcode;
 constexpr uint8_t vtol_pickup = 57, vtol_unload = 65, be_carried = 11, ground_pickup = 20,
                   ground_unload = 21;
 constexpr uint16_t air_transport_type = 1, cargo_type = 2, heavy_type = 3, hover_transport_type = 4,
-                   gun_type = 5, flak_type = 6;
-constexpr size_t type_count = 7;
+                   gun_type = 5, flak_type = 6, pad_type = 7;
+constexpr size_t type_count = 8;
+constexpr uint8_t vtol_landing = sim::ground_orders::vtol_landing_kind;
+constexpr uint8_t move_ground = sim::ground_orders::move_ground_kind;
+constexpr uint32_t speech_acknowledged = 5;
 constexpr int32_t map_cells = 64;
 constexpr uint16_t sight_cells = 5; // 32-unit sight cells mapped around a unit
 constexpr uint32_t speech_failed = 7;
@@ -43,12 +48,35 @@ constexpr uint32_t speech_unloaded = 0x0d;
 constexpr uint8_t order_retry = 0x80; // order flags, set when a mission returns 9
 constexpr int32_t one = 1 << 16;      // one world unit, 16.16
 
+// One speech a unit made with its order's own caption.
+struct Caption {
+    uint16_t unit{};
+    uint32_t category{};
+    std::string text;
+};
+
 struct Services : sim::match_runtime::OfflineServices {
     std::vector<std::pair<uint16_t, uint32_t>> speech;
+    std::vector<Caption> captions;
     sim::match_runtime::Match* match{};
 
     void command_sound(sim::unit_spawn::Slot& slot, uint32_t category) override {
         speech.emplace_back(slot.unit_index, category);
+    }
+
+    /// The match's speech hook: records the caption and counts the speech.
+    static void
+    speak(void* context, sim::unit_spawn::Slot& slot, uint32_t category, const char* caption) {
+        auto& services = *static_cast<Services*>(context);
+        services.captions.push_back({slot.unit_index, category, caption});
+        services.speech.emplace_back(slot.unit_index, category);
+    }
+
+    size_t captioned(uint16_t unit, uint32_t category, std::string_view text) const {
+        size_t count = 0;
+        for (const auto& caption : captions)
+            count += caption.unit == unit && caption.category == category && caption.text == text;
+        return count;
     }
 
     size_t spoken(uint16_t unit, uint32_t category) const {
@@ -292,7 +320,8 @@ struct Fixture {
         std::make_shared<formats::objects3d::Model>();
     std::shared_ptr<formats::objects3d::Model> crane =
         std::make_shared<formats::objects3d::Model>();
-    std::shared_ptr<formats::cob::CobProgram> plain, carrier, loader;
+    std::shared_ptr<formats::objects3d::Model> deck = std::make_shared<formats::objects3d::Model>();
+    std::shared_ptr<formats::cob::CobProgram> plain, carrier, loader, pad;
     std::array<sim::unit_spawn::LoadedType, type_count> loaded;
     std::array<sim::unit_spawn::Type, type_count> types;
     std::array<data::unit_definitions::UnitDefinition, type_count> defs;
@@ -307,7 +336,13 @@ struct Fixture {
     std::unique_ptr<sim::match_runtime::Match> match;
     uint32_t clock = 1;
 
-    explicit Fixture(const AssetStore* installed = nullptr) {
+    /// Builds the match.
+    ///
+    /// @param installed the installed game's store for its models and
+    ///        scripts, or null for the made-up ones
+    /// @param speech_hooks whether the match's speech with captions reaches
+    ///        Services::speak rather than command_sound
+    explicit Fixture(const AssetStore* installed = nullptr, bool speech_hooks = true) {
         map.attribute_width = map.attribute_height = map_cells;
         map.attributes.resize(map_cells * map_cells);
         terrain_values.resize(map_cells * map_cells);
@@ -329,6 +364,10 @@ struct Fixture {
         // The hover transport's link hangs 40 units ahead of it.
         *crane = *model;
         crane->objects[1].offset_from_parent = {0, 0, 40 << 16};
+        // An air pad's landing piece sits on its deck, 12 units up.
+        *deck = *model;
+        deck->objects[0].vertices = {{0, 0, 0}, {0, 12 << 16, 0}};
+        deck->objects[1].offset_from_parent = {0, 12 << 16, 0};
         plain = assemble({{"Create", finish}});
         // Lift a unit within 100 units onto the link; drop it when the
         // transport stands within 80 units of the point.
@@ -368,6 +407,12 @@ struct Fixture {
             {"BeginTransport", join({{op::push_local, 0, op::pop_static, 0}, finish})},
             {"EndTransport", join({count_in_static(1), finish})},
             {"Statics", answer_statics},
+        });
+        // QueryLandingPad offers the landing piece.
+        pad = assemble({
+            {"Create", finish},
+            {"QueryLandingPad",
+             {op::push_constant, 1, op::pop_local, 0, op::push_constant, 0, op::return_}},
         });
         for (size_t i = 1; i < type_count; ++i) {
             types[i].simulation.flags = OA_UNIT_DEF_FLAG_AVAILABLE;
@@ -422,6 +467,15 @@ struct Fixture {
         weapons.install_target_fields(1, "300", "1", "0", "0", "0", "0", "10", "100", "");
         weapons.install_tdf_section(2, "TESTFLAK", "1");
         weapons.install_target_fields(2, "300", "1", "0", "0", "0", "1", "10", "100", "");
+        loaded[pad_type].model = deck;
+        loaded[pad_type].script = pad;
+        types[pad_type].model = reinterpret_cast<uintptr_t>(deck.get());
+        types[pad_type].simulation.flags |= OA_UNIT_DEF_FLAG_IS_AIRBASE;
+        defs[pad_type].is_airbase = true;
+        defs[pad_type].footprint_x = defs[pad_type].footprint_z = 4;
+        types[pad_type].footprint_x = types[pad_type].footprint_z = 4;
+        // A pad that moves, as a carrier's deck does, at half a unit a tick.
+        defs[pad_type].max_velocity_fixed = 65536 / 2;
         defs[gun_type].weapon1 = "TESTGUN";
         defs[flak_type].weapon1 = "TESTFLAK";
         for (const auto armed : {gun_type, flak_type}) {
@@ -456,6 +510,8 @@ struct Fixture {
         };
         match = std::make_unique<sim::match_runtime::Match>(input, services);
         services.match = match.get();
+        if (speech_hooks)
+            match->set_speech_hooks({&services, &Services::speak});
         match->configure_strategic_environment({0, 0.5F, 0});
         match->simulation().players[0].present = true;
         match->simulation().players[0].status = 1;
@@ -655,6 +711,7 @@ void air_transport_capacity_is_enforced(const AssetStore* installed) {
     f.run(2);
     CHECK(heavy.record.attach_parent == 0);
     CHECK(f.services.spoke(atlas.unit_index, speech_failed));
+    CHECK(f.services.captioned(atlas.unit_index, speech_failed, "Unit is too heavy to transport"));
     CHECK(atlas.unit->primary == nullptr || atlas.unit->primary->kind != vtol_pickup);
 
     auto& first = f.spawn(cargo_type, 360, 200);
@@ -750,6 +807,7 @@ void air_transport_waits_for_a_clear_unload_point() {
         }
     }
     CHECK(failures >= 400 / 60);
+    CHECK(f.services.captioned(transport, speech_failed, "Unable to unload unit") == failures);
     CHECK(lowest > 59 * one);
     CHECK(tank.record.attach_parent != 0);
     CHECK(kind_of(atlas) == vtol_unload && (atlas.unit->primary->flags & order_retry));
@@ -829,6 +887,8 @@ void hover_transport_loads_and_unloads_through_its_scripts(const AssetStore* ins
     auto& other = f.spawn(cargo_type, 500, 200);
     CHECK(!sim::gameplay_input::can_load_unit(f.match->state(), bear.record, other.record));
 
+    // The order's acknowledgement speaks once, on its first run.
+    CHECK(f.services.captioned(transport, speech_acknowledged, "Loading unit") == 1);
     auto& unload = f.match->issue_unload(transport, point(560, 560), false);
     CHECK(unload.kind == ground_unload);
     CHECK(f.run_until(2000, [&] {
@@ -857,6 +917,7 @@ void hover_transport_loads_and_unloads_through_its_scripts(const AssetStore* ins
     if (installed == nullptr)
         CHECK(setting_down.busy >= 25 && setting_down.after <= 1);
     CHECK(f.services.spoke(transport, speech_unloaded));
+    CHECK(f.services.captioned(transport, speech_acknowledged, "Unloading") == 1);
     CHECK(sim::gameplay_input::can_load_unit(f.match->state(), bear.record, other.record));
 }
 
@@ -909,6 +970,7 @@ void hover_transport_refuses_a_unit_too_large() {
     f.run(2);
     CHECK(kind_of(bear) != ground_pickup);
     CHECK(f.services.spoke(bear.unit_index, speech_failed));
+    CHECK(f.services.captioned(bear.unit_index, speech_failed, "Unit is too large to transport"));
     CHECK(!f.services.spoke(bear.unit_index, speech_loading));
     CHECK(heavy.record.attach_parent == 0);
 }
@@ -971,6 +1033,412 @@ void hover_transport_gives_up_after_three_attempts() {
         CHECK(statics_of(*f.match, transport)[1] == 3);
     }
 }
+
+// Without the application's speech hook a failure still speaks its category,
+// through command_sound and with no caption.
+void speech_without_hooks_plays_the_category() {
+    Fixture f(nullptr, false);
+    auto& atlas = f.spawn(air_transport_type, 200, 200);
+    auto& heavy = f.spawn(heavy_type, 300, 200);
+    f.match->issue_load(atlas.unit_index, heavy.unit_index, false);
+    f.run(2);
+    CHECK(f.services.spoke(atlas.unit_index, speech_failed));
+    CHECK(f.services.captions.empty());
+}
+
+// A landing aircraft's position before it attaches, and its largest height
+// change from one tick to the next.
+struct Approach {
+    oa::FixedVec3 last{};
+    uint16_t heading{};
+    int32_t steepest{};
+    uint32_t ticks{};
+};
+
+/// Runs until `done`, following the aircraft until it attaches to anything.
+///
+/// @param f the fixture
+/// @param aircraft the landing aircraft
+/// @param done condition that ends the run
+/// @return the approach, or a run past its limit through CHECK
+template <typename Done>
+Approach land(Fixture& f, const sim::unit_spawn::Slot& aircraft, Done done) {
+    Approach approach;
+    approach.last = aircraft.record.position;
+    CHECK(f.run_until(2000, [&] {
+        if (done())
+            return true;
+        if (aircraft.record.attach_parent == 0) {
+            approach.steepest =
+                std::max(approach.steepest, std::abs(aircraft.record.position.y - approach.last.y));
+            approach.last = aircraft.record.position;
+            approach.heading = aircraft.record.heading;
+        }
+        ++approach.ticks;
+        return false;
+    }));
+    return approach;
+}
+
+// VTOL_Landing settles over the pad's landing piece with the pad's heading
+// before it attaches: the descent follows the piece rather than a point at
+// cruise altitude, so the aircraft does not drop onto the pad from on high.
+void air_transport_settles_on_the_pad_piece() {
+    Fixture f;
+    auto& atlas = f.spawn(air_transport_type, 200, 200);
+    auto& pad = f.spawn(pad_type, 400, 400);
+    pad.record.heading = 0x4000;
+    f.match->issue_order(atlas.unit_index, vtol_landing, false, pad.unit_index, nullptr, 0, 0);
+    CHECK(kind_of(atlas) == vtol_landing);
+    const auto approach = land(f, atlas, [&] { return atlas.record.attach_parent != 0; });
+    CHECK(oa::oa_unit_slot_from_ref(atlas.record.attach_parent) == pad.unit_index);
+    CHECK(f.services.captioned(atlas.unit_index, speech_acknowledged, "Landing") == 1);
+    const auto piece = f.match->instance(pad.unit_index)->piece_world(1);
+    const auto seat = static_cast<int32_t>(piece[1]);
+    CHECK(planar(atlas.record, static_cast<int32_t>(piece[0]) >> 16, piece[2] >> 16) <= 0.5);
+    CHECK(approach.heading == pad.record.heading);
+    // Settled within a unit of the piece, and never more than a few units a
+    // tick on the way down from cruise altitude.
+    CHECK(std::abs(approach.last.y - seat) < one);
+    CHECK(approach.steepest < 4 * one);
+    CHECK(std::abs(atlas.record.position.y - approach.last.y) < one);
+}
+
+// A loaded transport settles its cargo's height above the piece, then hands
+// the cargo to the pad: the cargo hangs there selectable, still running the
+// BeCarried its pickup gave it (it ends only once the unit is set down), and
+// a move order it is given ends at once while it hangs.
+void loaded_air_transport_hands_its_cargo_to_the_pad() {
+    Fixture f;
+    auto& atlas = f.spawn(air_transport_type, 200, 200);
+    auto& tank = f.spawn(cargo_type, 260, 200);
+    auto& pad = f.spawn(pad_type, 400, 400);
+    pad.record.heading = 0x4000;
+    f.match->issue_load(atlas.unit_index, tank.unit_index, false);
+    CHECK(f.run_until(800, [&] { return tank.record.attach_parent != 0; }));
+    CHECK(f.run_until(60, [&] { return kind_of(atlas) != vtol_pickup; }));
+    f.match->issue_order(atlas.unit_index, vtol_landing, false, pad.unit_index, nullptr, 0, 0);
+    const auto approach = land(f, atlas, [&] {
+        return oa::oa_unit_slot_from_ref(tank.record.attach_parent) == pad.unit_index;
+    });
+    const auto seat = static_cast<int32_t>(f.match->instance(pad.unit_index)->piece_world(1)[1]);
+    CHECK(std::abs(approach.last.y - (seat + 10 * one)) < one);
+    CHECK(approach.steepest < 4 * one);
+    CHECK(atlas.record.attach_parent == 0 && !atlas.record.attach_first_child);
+    CHECK(static_cast<int8_t>(tank.record.attach_piece) == 1);
+    CHECK(f.match->selectable(tank.unit_index));
+    CHECK(kind_of(tank) == be_carried);
+    f.match->issue_ground_move(tank.unit_index, point(600, 600), false);
+    f.run(3);
+    CHECK(oa::oa_unit_slot_from_ref(tank.record.attach_parent) == pad.unit_index);
+    CHECK(kind_of(tank) != move_ground);
+}
+
+// The approach follows a pad that moves, as a carrier's deck does.
+void air_transport_follows_a_moving_pad() {
+    Fixture f;
+    auto& atlas = f.spawn(air_transport_type, 200, 200);
+    auto& pad = f.spawn(pad_type, 500, 300);
+    f.match->issue_ground_move(pad.unit_index, point(500, 1500), false);
+    f.run(30);
+    f.match->issue_order(atlas.unit_index, vtol_landing, false, pad.unit_index, nullptr, 0, 0);
+    oa::FixedVec3 piece_before_attach{};
+    oa::FixedVec3 pad_start = pad.record.position;
+    const auto approach = land(f, atlas, [&] {
+        if (atlas.record.attach_parent != 0)
+            return true;
+        const auto piece = f.match->instance(pad.unit_index)->piece_world(1);
+        piece_before_attach = {
+            static_cast<int32_t>(piece[0]),
+            static_cast<int32_t>(piece[1]),
+            static_cast<int32_t>(piece[2])
+        };
+        return false;
+    });
+    CHECK(oa::oa_unit_slot_from_ref(atlas.record.attach_parent) == pad.unit_index);
+    // The pad moved while the aircraft came in, and the aircraft settled on
+    // where its piece had gone.
+    CHECK(std::abs(pad.record.position.z - pad_start.z) > 16 * one);
+    CHECK(
+        std::hypot(
+            (approach.last.x - piece_before_attach.x) / 65536.0,
+            (approach.last.z - piece_before_attach.z) / 65536.0
+        ) <= 1.0
+    );
+}
+
+// A landing that finds its piece taken says so: in phase 3 as "Landing
+// failed", and with nothing to land on it starts over.
+void landing_says_why_it_failed() {
+    Fixture f;
+    auto& atlas = f.spawn(air_transport_type, 200, 200);
+    auto& pad = f.spawn(pad_type, 400, 400);
+    auto& squatter = f.spawn(cargo_type, 600, 600);
+    f.match->issue_order(atlas.unit_index, vtol_landing, false, pad.unit_index, nullptr, 0, 0);
+    // Phase 2 has sent it at the pad; phase 3 looks for a free piece next.
+    CHECK(f.run_until(600, [&] {
+        return kind_of(atlas) == vtol_landing && atlas.unit->primary->phase == 3;
+    }));
+    f.match->set_carry_link(squatter.unit_index, pad.unit_index, 1, 0);
+    CHECK(f.run_until(600, [&] {
+        return f.services.captioned(atlas.unit_index, speech_failed, "Landing failed") != 0;
+    }));
+    CHECK(kind_of(atlas) == vtol_landing && atlas.record.attach_parent == 0);
+    // With its pad gone the order gives up.
+    constexpr auto weapon = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
+    f.match->apply_damage_event(pad, nullptr, 30000, weapon, 0);
+    CHECK(f.run_until(600, [&] {
+        return f.services.captioned(atlas.unit_index, speech_failed, "Landing aborted") != 0;
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// The installed game's transports, with their own definitions and scripts, on
+// a map of open sea 60 deep, a shelf 8 deep from column 40 and land from 46.
+
+constexpr uint8_t installed_sea = 100;
+constexpr int32_t installed_shelf = 40;
+constexpr int32_t installed_land = 46;
+constexpr uint8_t installed_deep_floor = 40;
+constexpr uint8_t installed_shelf_floor = 92;
+constexpr uint8_t installed_land_height = 120;
+
+struct InstalledFixture {
+    test::InstalledUnits& units;
+    test::Seascape sea{
+        64,
+        64,
+        installed_sea,
+        installed_shelf,
+        installed_land,
+        installed_deep_floor,
+        installed_shelf_floor,
+        installed_land_height
+    };
+    Services services;
+    Scenario scenario;
+    std::unique_ptr<sim::match_runtime::Match> match;
+    uint32_t clock = 1;
+
+    /// Builds a match over the loaded types.
+    ///
+    /// @param loaded the installed types; each fixture's match uses them in turn
+    explicit InstalledFixture(test::InstalledUnits& loaded) : units(loaded) {
+        sim::match_runtime::OfflineInputs input{
+            sea.map,
+            units.loaded,
+            units.types,
+            units.fields,
+            units.weapons,
+            sea.terrain_values,
+            sea.masks,
+            32,
+            32,
+            32,
+            2,
+            0,
+            30,
+            1,
+            &scenario,
+            [] { return 1000u; },
+            sea.plots,
+            {},
+            0,
+            0,
+            0.0F,
+            units.features.defs
+        };
+        match = std::make_unique<sim::match_runtime::Match>(input, services);
+        services.match = match.get();
+        match->set_speech_hooks({&services, &Services::speak});
+        match->configure_strategic_environment({0, 0.5F, 0});
+        match->simulation().players[0].present = true;
+        match->simulation().players[0].status = 1;
+        std::array<uint8_t, 10> allies{};
+        allies[0] = 1;
+        match->configure_player_alliances(0, allies);
+        match->configure_outcomes(0, allies, false);
+    }
+
+    sim::unit_spawn::Slot& spawn(std::string_view name, int32_t cell_x, int32_t cell_z) {
+        auto* slot =
+            match->create({0, units.type(name), at(cell_x * 16 + 8, cell_z * 16 + 8), true, 1, 0});
+        CHECK(slot && slot->movement_object);
+        return *slot;
+    }
+
+    void run(uint32_t ticks) {
+        for (uint32_t i = 0; i < ticks; ++i) {
+            match->simulation().tick = clock++;
+            match->tick();
+        }
+    }
+
+    template <typename Done>
+    bool run_until(uint32_t limit, Done done) {
+        for (uint32_t i = 0; i < limit; ++i) {
+            if (done())
+                return true;
+            run(1);
+        }
+        return done();
+    }
+
+    bool can_load(const sim::unit_spawn::Slot& transport, const sim::unit_spawn::Slot& cargo) {
+        return sim::gameplay_input::can_load_unit(match->state(), transport.record, cargo.record);
+    }
+};
+
+bool carried_by(const sim::unit_spawn::Slot& cargo, const sim::unit_spawn::Slot& carrier) {
+    return cargo.record.attach_parent != 0 &&
+           oa::oa_unit_slot_from_ref(cargo.record.attach_parent) == carrier.unit_index;
+}
+
+// The transport ships lift a tank from the shelf into the hold with their own
+// cranes, which reach it from the ship's turret.
+void installed_ships_load_from_the_shore(test::InstalledUnits& units) {
+    for (const auto* name : {"ARMTSHIP", "CORTSHIP"}) {
+        InstalledFixture f(units);
+        auto& ship = f.spawn(name, 34, 10);
+        auto& tank = f.spawn("ARMSTUMP", 42, 10);
+        CHECK(f.can_load(ship, tank));
+        f.match->issue_load(ship.unit_index, tank.unit_index, false);
+        CHECK(f.run_until(1500, [&] { return carried_by(tank, ship); }));
+        CHECK(kind_of(tank) == be_carried);
+        // In the hold the tank hangs from no piece.
+        CHECK(f.run_until(600, [&] { return kind_of(ship) != ground_pickup; }));
+        CHECK(static_cast<int8_t>(tank.record.attach_piece) == -1);
+    }
+}
+
+// A drop where the cargo cannot stand, deep water for a tank, leaves it
+// aboard: after three tries the order waits to retry.
+void installed_ship_keeps_cargo_it_cannot_set_down(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& ship = f.spawn("ARMTSHIP", 34, 10);
+    auto& tank = f.spawn("ARMSTUMP", 42, 10);
+    f.match->set_carry_link(tank.unit_index, ship.unit_index, -1, 0);
+    f.match->issue_unload(ship.unit_index, point(32 * 16, 10 * 16), false);
+    CHECK(f.run_until(3000, [&] {
+        return ship.unit->primary && (ship.unit->primary->flags & order_retry);
+    }));
+    CHECK(kind_of(ship) == ground_unload && carried_by(tank, ship));
+}
+
+// A ship's capacity is its transportcapacity (the Envoy's 5, not the
+// transportmaxunits key the game ignores); the check is made as the order is
+// given, and queued pickups load past it.
+void installed_capacity_is_checked_as_the_order_is_given(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& ship = f.spawn("CORTSHIP", 34, 10);
+    CHECK(f.units.definitions[ship.record.type_index].transport_capacity == 5);
+    std::vector<sim::unit_spawn::Slot*> tanks;
+    for (int32_t row = 0; row < 6; ++row)
+        tanks.push_back(&f.spawn("ARMSTUMP", 42 + (row % 2) * 2, 6 + row * 2));
+    for (auto* tank : tanks)
+        CHECK(f.can_load(ship, *tank));
+    for (auto* tank : tanks)
+        f.match->issue_load(ship.unit_index, tank->unit_index, true);
+    // With five aboard a sixth could not be ordered aboard; the pickup queued
+    // before goes on.
+    bool refused_sixth = false;
+    CHECK(f.run_until(12000, [&] {
+        if (f.match->loaded_child_count(ship.unit_index) == 5 && !carried_by(*tanks[5], ship))
+            refused_sixth = refused_sixth || !f.can_load(ship, *tanks[5]);
+        return std::all_of(tanks.begin(), tanks.end(), [&](const sim::unit_spawn::Slot* tank) {
+            return carried_by(*tank, ship);
+        });
+    }));
+    CHECK(refused_sixth && f.match->loaded_child_count(ship.unit_index) == 6);
+    auto& seventh = f.spawn("ARMSTUMP", 44, 20);
+    CHECK(!f.can_load(ship, seventh));
+}
+
+// Each UNLOAD sets down one unit, the last one loaded.
+void installed_ship_sets_down_the_last_unit_loaded(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& ship = f.spawn("ARMTSHIP", 34, 10);
+    auto& first = f.spawn("ARMSTUMP", 42, 6);
+    auto& last = f.spawn("ARMSTUMP", 42, 14);
+    f.match->set_carry_link(first.unit_index, ship.unit_index, -1, 0);
+    f.match->set_carry_link(last.unit_index, ship.unit_index, -1, 0);
+    f.match->issue_unload(ship.unit_index, point(42 * 16, 10 * 16), false);
+    CHECK(f.run_until(3000, [&] { return kind_of(ship) != ground_unload; }));
+    CHECK(!carried_by(last, ship) && carried_by(first, ship));
+}
+
+// The Valkyrie carries one unit at a time.
+void installed_valkyrie_carries_one_unit(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& valkyrie = f.spawn("CORVALK", 50, 10);
+    auto& first = f.spawn("ARMSTUMP", 54, 10);
+    auto& second = f.spawn("ARMSTUMP", 50, 16);
+    f.match->issue_load(valkyrie.unit_index, first.unit_index, false);
+    CHECK(f.run_until(900, [&] { return carried_by(first, valkyrie); }));
+    CHECK(!f.can_load(valkyrie, second));
+    f.match->issue_load(valkyrie.unit_index, second.unit_index, false);
+    f.run(30);
+    CHECK(!carried_by(second, valkyrie) && carried_by(first, valkyrie));
+}
+
+// An air transport cannot lift a unit under the sea: the order is not given
+// for one, and a pickup whose cargo is under the sea, as a sunk unit is, ends
+// at once.
+void installed_air_transport_leaves_sunk_units(test::InstalledUnits& units) {
+    InstalledFixture f(units);
+    auto& atlas = f.spawn("ARMATLAS", 50, 10);
+    auto& sub = f.spawn("ARMSUB", 20, 10);
+    f.run(2);
+    CHECK(!f.can_load(atlas, sub));
+    f.match->issue_load(atlas.unit_index, sub.unit_index, false);
+    f.run(2);
+    CHECK(kind_of(atlas) != vtol_pickup && !carried_by(sub, atlas));
+    CHECK(f.services.captioned(atlas.unit_index, speech_failed, "Transport mission failed"));
+}
+
+// A carrier's death kills everything aboard as cargo (kind 6); a carrier
+// that destroys itself kills its cargo with its own kind (3).
+void installed_cargo_dies_with_its_carrier(test::InstalledUnits& units) {
+    constexpr auto weapon = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
+    constexpr auto self_destruct =
+        static_cast<uint8_t>(sim::match_runtime::DeathKind::self_destruct);
+    constexpr auto cargo = static_cast<uint8_t>(sim::match_runtime::DeathKind::cargo);
+    for (const auto kind : {weapon, self_destruct}) {
+        InstalledFixture f(units);
+        auto& ship = f.spawn("ARMTSHIP", 34, 10);
+        std::vector<sim::unit_spawn::Slot*> aboard;
+        for (int32_t row = 0; row < 3; ++row) {
+            aboard.push_back(&f.spawn("ARMSTUMP", 44, 6 + row * 4));
+            f.match->set_carry_link(aboard.back()->unit_index, ship.unit_index, -1, 0);
+        }
+        f.match->apply_damage_event(ship, kind == self_destruct ? &ship : nullptr, 30000, kind, 0);
+        // The kind each cargo unit was dealt, as its carrier's death dealt it.
+        std::vector<uint8_t> kinds(aboard.size());
+        CHECK(f.run_until(120, [&] {
+            for (std::size_t index = 0; index < aboard.size(); ++index)
+                if (kinds[index] == 0)
+                    kinds[index] = aboard[index]->record.damage_kind;
+            return std::all_of(aboard.begin(), aboard.end(), [](const sim::unit_spawn::Slot* unit) {
+                return unit->record.type_index == 0;
+            });
+        }));
+        for (const auto dealt : kinds)
+            CHECK(dealt == (kind == self_destruct ? self_destruct : cargo));
+    }
+}
+
+void installed_transports(const AssetStore& store) {
+    test::InstalledUnits units(
+        store, {"ARMTSHIP", "CORTSHIP", "CORVALK", "ARMTHOVR", "ARMATLAS", "ARMSTUMP", "ARMSUB"}
+    );
+    installed_ships_load_from_the_shore(units);
+    installed_ship_keeps_cargo_it_cannot_set_down(units);
+    installed_ship_sets_down_the_last_unit_loaded(units);
+    installed_capacity_is_checked_as_the_order_is_given(units);
+    installed_valkyrie_carries_one_unit(units);
+    installed_air_transport_leaves_sunk_units(units);
+    installed_cargo_dies_with_its_carrier(units);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -987,6 +1455,11 @@ int main(int argc, char** argv) {
             air_transport_waits_for_a_clear_unload_point();
             hover_transport_refuses_a_unit_too_large();
             hover_transport_gives_up_after_three_attempts();
+            speech_without_hooks_plays_the_category();
+            air_transport_settles_on_the_pad_piece();
+            loaded_air_transport_hands_its_cargo_to_the_pad();
+            air_transport_follows_a_moving_pad();
+            landing_says_why_it_failed();
         }
         air_transport_capacity_is_enforced(installed);
         loaded_air_transport_levels_out_while_hovering(installed);
@@ -994,6 +1467,8 @@ int main(int argc, char** argv) {
         carried_units_leave_a_dead_carrier(installed);
         hover_transport_loads_and_unloads_through_its_scripts(installed);
         hover_transport_closes_in_on_a_unit_out_of_reach(installed);
+        if (installed != nullptr)
+            installed_transports(*installed);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

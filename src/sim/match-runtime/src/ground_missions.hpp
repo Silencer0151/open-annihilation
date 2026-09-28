@@ -84,8 +84,8 @@ constexpr uint32_t speech_complete = 8;
 constexpr uint32_t speech_build = 9;
 constexpr uint32_t speech_repaired = 0x0a;
 constexpr uint32_t speech_work_started = 0x0b;   // ?
-constexpr uint32_t speech_cargo_loaded = 0x0c;   // ?
-constexpr uint32_t speech_cargo_unloaded = 0x0d; // ?
+constexpr uint32_t speech_cargo_loaded = 0x0c;   // the load chatter
+constexpr uint32_t speech_cargo_unloaded = 0x0d; // the unload chatter
 constexpr uint32_t speech_captured = 0x10;
 constexpr uint32_t speech_countdown_zero = 0x16; // count0; count1..count5 run down from 0x15
 constexpr uint32_t speech_destruct_cancelled = 0x17;
@@ -218,17 +218,27 @@ class TickHost::GroundMissions {
     /// @param category Speech category (see the ground::speech_* values).
     void speak(uint32_t category) { host.play_sound(*s.unit, category); }
 
+    /// Plays a speech category for the unit, captioned with the order's text.
+    ///
+    /// @param category Speech category (see the ground::speech_* values).
+    /// @param caption The order's caption in place of the category's own.
+    void speak(uint32_t category, const char* caption) {
+        host.play_sound(*s.unit, category, caption);
+    }
+
     // Waits `ticks` ticks for the timer event.
     void wait_ticks(uint32_t ticks) {
         order.wait_events |= ground::timer_event;
         order.wake_tick = tick() + ticks;
     }
 
-    // Plays the order's acknowledgement once, clearing its announce bit.
-    void announce() {
+    /// Plays the order's acknowledgement once, clearing its announce bit.
+    ///
+    /// @param caption The order's caption, or null for none.
+    void announce(const char* caption = nullptr) {
         if (record.extra.command_flags & ground::order_announce) {
             record.extra.command_flags &= static_cast<uint8_t>(~ground::order_announce);
-            speak(ground::speech_order);
+            speak(ground::speech_order, caption);
         }
     }
 

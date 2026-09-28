@@ -287,6 +287,139 @@ void test_transport() {
     check(!can_load_unit(*f.world, transport, cargo), "cargo refuses transport");
 }
 
+// The air layer (occupancy 2) is a flying unit's; a carried unit is in
+// layer 0. Water weapons decide targets under the sea.
+void test_airborne_and_water_targets() {
+    Fixture f;
+    const auto hooks = f.hooks();
+    Unit& gun = f.unit(1, 0, 1);
+    Unit& target = f.unit(5, 1, 2);
+    Unit& carrier = f.unit(6, 1, 3);
+    for (Unit* unit : {&gun, &target, &carrier})
+        unit->flags |= OA_UNIT_FLAG_LIVE;
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_ATTACK | OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    gun.flags |= OA_UNIT_FLAG_HAS_WEAPONS;
+    const FixedVec3 at{};
+    const auto attack = [&] {
+        return unit_order(*f.world, OrderCommand::attack, gun, &target, &at, hooks);
+    };
+    constexpr uint32_t airborne = 2;
+    target.attach_parent = world_unit_ref(f.world, &carrier);
+    check(attack() == UnitOrder::attack_chase, "a ground gun takes a carried unit");
+    gun.weapons[0].def = oa_ref_from_index(1);
+    f.world->game.weapon_defs[1].flags = OA_WEAPON_FLAG_TO_AIR_WEAPON;
+    check(attack() == UnitOrder::none, "an anti-air gun does not take a carried unit");
+    target.attach_parent = 0;
+    target.flags |= airborne;
+    check(attack() == UnitOrder::attack_chase, "an anti-air gun takes a flying unit");
+    target.flags &= ~OA_UNIT_FLAG_OCCUPANCY_MASK;
+    f.world->game.weapon_defs[1].flags = 0;
+
+    // A submarine: its top (model height plus y) is under the sea.
+    f.world->game.sea_level = 10;
+    f.def(2).model_height = 4 << 16;
+    target.position.y = 0;
+    check(attack() == UnitOrder::none, "a gun ship does not take a submerged submarine");
+    gun.weapons[1].def = oa_ref_from_index(2);
+    f.world->game.weapon_defs[2].flags = OA_WEAPON_FLAG_WATER_WEAPON;
+    check(attack() == UnitOrder::none, "a depth charge that is not enabled takes nothing");
+    gun.weapons[1].flags = OA_UNIT_WEAPON_ENABLED;
+    check(
+        attack() == UnitOrder::attack_chase, "a destroyer's enabled depth charge takes a submarine"
+    );
+
+    // A hovercraft with a water primary takes nothing at or above the sea.
+    gun.weapons[1] = {};
+    gun.weapons[0].def = oa_ref_from_index(2);
+    f.def(1).flags = OA_UNIT_DEF_FLAG_CAN_HOVER;
+    target.position.y = 6 << 16;
+    check(attack() == UnitOrder::none, "a hovercraft's water weapon misses a surface target");
+    target.position.y = 0;
+    check(
+        attack() == UnitOrder::attack_chase, "a hovercraft's water weapon takes a submerged target"
+    );
+}
+
+// The order table gives load and unload orders only where they apply.
+void test_transport_orders() {
+    Fixture f;
+    const auto hooks = f.hooks();
+    Unit& atlas = f.unit(1, 0, 1);
+    Unit& tank = f.unit(2, 0, 2);
+    Unit& pad = f.unit(3, 0, 3);
+    Unit& cargo = f.unit(5, 1, 2);
+    for (Unit* unit : {&atlas, &tank, &pad, &cargo})
+        unit->flags |= OA_UNIT_FLAG_LIVE;
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_LOAD | OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(1).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    f.def(1).transport_capacity = 1;
+    f.def(1).transport_size = 3;
+    f.def(2).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(2).footprint_x = 2;
+    f.def(2).model_height = 4 << 16;
+    f.def(3).flags = OA_UNIT_DEF_FLAG_IS_AIRBASE;
+    const FixedVec3 at{};
+    const auto order = [&](OrderCommand command, const Unit& actor, const Unit* target) {
+        return unit_order(*f.world, command, actor, target, &at, hooks);
+    };
+    check(order(OrderCommand::load, atlas, &cargo) == UnitOrder::vtol_pickup, "an Atlas loads");
+    check(order(OrderCommand::load, tank, &cargo) == UnitOrder::none, "a tank loads nothing");
+    f.def(2).abilities |= OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED;
+    check(
+        order(OrderCommand::load, atlas, &cargo) == UnitOrder::none,
+        "cantbetransported refuses the load"
+    );
+    f.def(2).abilities &= ~OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED;
+    cargo.flags |= 2U;
+    check(order(OrderCommand::load, atlas, &cargo) == UnitOrder::none, "a flying unit is refused");
+    cargo.flags &= ~OA_UNIT_FLAG_OCCUPANCY_MASK;
+    cargo.build_remaining = 0.5F;
+    check(order(OrderCommand::load, atlas, &cargo) == UnitOrder::none, "an unfinished unit");
+    cargo.build_remaining = 0.0F;
+    f.world->game.sea_level = 10;
+    check(order(OrderCommand::load, atlas, &cargo) == UnitOrder::none, "a submerged unit");
+    f.world->game.sea_level = 0;
+
+    check(
+        order(OrderCommand::unload, atlas, &pad) == UnitOrder::vtol_landing,
+        "a canload flyer's unload over an air base lands"
+    );
+    check(
+        order(OrderCommand::unload, atlas, nullptr) == UnitOrder::vtol_unload,
+        "a canload flyer's unload elsewhere drops"
+    );
+    check(order(OrderCommand::unload, tank, nullptr) == UnitOrder::none, "a tank unloads nothing");
+    check(
+        order(OrderCommand::move, atlas, &pad) == UnitOrder::vtol_landing,
+        "a flyer moved onto an allied pad lands"
+    );
+
+    // The group order binds the pointer unit for LOAD and MOVE but not for
+    // UNLOAD, which drops at the ground under the pointer.
+    atlas.flags |= OA_UNIT_FLAG_SELECTED;
+    tank.flags |= OA_UNIT_FLAG_SELECTED;
+    set_pointer_flags(f.world->game, pointer_over_view);
+    SelectionOrder orders[4];
+    f.world->game.cursor_unit_id = cargo.id;
+    uint32_t count = selection_orders(*f.world, OrderCommand::load, hooks, orders, 4);
+    check(
+        count == 1 && orders[0].actor == &atlas && orders[0].order == UnitOrder::vtol_pickup,
+        "an armed LOAD orders the Atlas alone"
+    );
+    f.world->game.cursor_unit_id = pad.id;
+    count = selection_orders(*f.world, OrderCommand::unload, hooks, orders, 4);
+    check(
+        count == 1 && orders[0].actor == &atlas && orders[0].order == UnitOrder::vtol_unload,
+        "an armed UNLOAD drops through the Atlas alone"
+    );
+    count = selection_orders(*f.world, OrderCommand::move, hooks, orders, 4);
+    check(
+        count == 2 && orders[0].order == UnitOrder::vtol_landing &&
+            orders[1].order == UnitOrder::move_ground,
+        "MOVE onto a pad lands the Atlas and moves the tank"
+    );
+}
+
 void test_repair_and_reclaim() {
     Fixture f;
     Unit& builder = f.unit(1, 0, 1);
@@ -980,6 +1113,8 @@ int main() {
     test_default_order();
     test_armed_orders();
     test_transport();
+    test_airborne_and_water_targets();
+    test_transport_orders();
     test_repair_and_reclaim();
     test_selection_cursor();
     test_unit_orders();

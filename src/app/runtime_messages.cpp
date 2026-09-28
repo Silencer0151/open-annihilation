@@ -313,6 +313,9 @@ void Runtime::check_game_speed_messages() {
             commander = slot.unit_index;
     if (commander == 0)
         throw std::runtime_error("speed check needs the local commander");
+    // Only a unit off screen says it is under attack; with no unit listed on
+    // screen the commander's notice reaches the log.
+    match_->state().game.hot_unit_count = 0;
     offline_services_.command_sound(
         match_->world().slots[commander],
         static_cast<uint32_t>(oa::audio::game_audio::UnitAnnouncementCategory::under_attack)

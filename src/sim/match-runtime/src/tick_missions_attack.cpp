@@ -109,8 +109,8 @@ uint32_t TickHost::GroundMissions::attack_chase() {
     }
     AttackAdapter weapons(host, s, record);
     const auto engage = [&] {
-        weapons.enable_weapon(0);
-        weapons.enable_weapon(2);
+        weapons.release_weapon_targets(0);
+        weapons.release_weapon_targets(2);
         weapons.assign_target(*aimed, slot);
     };
     const auto at_target = ground::position_of(aimed->record);
@@ -214,11 +214,11 @@ uint32_t TickHost::GroundMissions::suppress() {
     case 1: {
         int32_t fired = 1;
         if (record.attack.weapon_slot == attack::special_weapon_slot) {
-            weapons.enable_weapon(attack::all_weapons);
+            weapons.release_weapon_targets(attack::all_weapons);
             fired = attack::special_weapon_slot;
         } else {
-            weapons.enable_weapon(0);
-            weapons.enable_weapon(1);
+            weapons.release_weapon_targets(0);
+            weapons.release_weapon_targets(1);
             weapons.assign_ground(point, 0);
         }
         weapons.assign_ground(point, fired);
@@ -254,7 +254,7 @@ uint32_t TickHost::GroundMissions::follow() {
     auto& spacing = record.extra.tolerance;
     AttackAdapter weapons(host, s, record);
     if (order.phase == 0) {
-        announce();
+        announce("Guarding");
         weapons.reset_weapons();
         const auto cells = static_cast<int32_t>(s.record.footprint_x) +
                            attack::guard_footprint_margin +

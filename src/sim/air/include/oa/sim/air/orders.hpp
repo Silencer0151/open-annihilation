@@ -132,36 +132,4 @@ void air_take_off(AirOrder* order, const AirHost& host, uint32_t extra_events) n
 /// @return false when no pad is near
 [[nodiscard]] bool air_seek_repair_pad(AirOrder* order, const AirHost& host) noexcept;
 
-/// Runs the VTOL_Move handler: take off, fly to the destination's footprint cell, finish.
-///
-/// @param[in,out] order the order snapshot
-/// @param host air services
-/// @param events events that woke the order
-/// @return what the order tick does next
-[[nodiscard]] AirStep air_move(AirOrder* order, const AirHost& host, uint32_t events) noexcept;
-
-/// Runs the VTOL_Standby handler.
-///
-/// Holds weapons ready, attacks what comes near and loiters around the anchor;
-/// a unit carrying nothing queues a landing instead.
-///
-/// @param[in,out] order the order snapshot
-/// @param host air services
-/// @param events events that woke the order
-/// @return what the order tick does next
-[[nodiscard]] AirStep air_standby(AirOrder* order, const AirHost& host, uint32_t events) noexcept;
-
-/// Runs the VTOL_LandIfCan handler.
-///
-/// Takes off, then looks for clear ground near the unit in a widening random
-/// search; sets down there, or circles 160 world units out and tries again,
-/// finishing on touchdown.
-///
-/// @param[in,out] order the order snapshot
-/// @param host air services
-/// @param events events that woke the order
-/// @return what the order tick does next
-[[nodiscard]] AirStep
-air_land_if_can(AirOrder* order, const AirHost& host, uint32_t events) noexcept;
-
 } // namespace oa::sim::air
