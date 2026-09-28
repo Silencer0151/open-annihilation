@@ -80,6 +80,11 @@ void host_control_value(const FrontendHost* host, const char* name, int32_t valu
         host->set_control_value(host->context, name, value);
 }
 
+void host_control_y(const FrontendHost* host, const char* name, uint8_t type, int16_t y) {
+    if (host != nullptr && host->set_control_y != nullptr)
+        host->set_control_y(host->context, name, type, y);
+}
+
 void host_select_group(const FrontendHost* host, const char* name) {
     if (host != nullptr && host->select_group != nullptr)
         host->select_group(host->context, name);

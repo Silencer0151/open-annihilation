@@ -48,6 +48,7 @@ constexpr int kClockInset =
     2; // source pixels between the game clock and the side column / bottom bar
 constexpr uint8_t kConsolePlacer = 10; // placing player "Feature" records: none
 constexpr uint32_t kCellShift = 20;    // 16.16 world units to 16-pixel map cells
+static_assert(console::kMessageNoSender == oa::sim::messages::sender_none);
 
 Runtime* runtime_of(void* context) noexcept {
     return static_cast<Runtime*>(context);
@@ -91,8 +92,8 @@ void sync_effects_toggle(oa::sim::match_runtime::Match* match, const console::Co
 
 } // namespace
 
-void Runtime::console_post_message(std::string_view text, uint8_t kind) {
-    post_match_message(text, kind);
+void Runtime::console_post_message(std::string_view text, uint8_t kind, uint8_t sender) {
+    post_match_message(text, kind, 0, sender);
     status_ = std::string(text);
 }
 
@@ -130,8 +131,8 @@ console::Console* Runtime::match_console() {
                 runtime->take_match_options(runtime->match_->state().game);
             runtime->save_preferences();
         };
-        host.post_message = [](void* context, const char* text, uint8_t kind) {
-            runtime_of(context)->console_post_message(text, kind);
+        host.post_message = [](void* context, const char* text, uint8_t kind, uint8_t sender) {
+            runtime_of(context)->console_post_message(text, kind, sender);
         };
         host.compact_render_cache = [](void* context) {
             runtime_of(context)->release_model_images();

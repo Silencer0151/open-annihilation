@@ -8,6 +8,7 @@
 #include "oa/formats/hpi.hpp"
 #include "oa/core/world.h"
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/gui_layout.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/ui/screen_registry.hpp"
 
@@ -327,6 +328,23 @@ void state_tests() {
     expect(game.endgame_state == OA_ENDGAME_STAT_BARS, "state stored");
 }
 
+// A control moved through FrontendHost::set_control_y.
+struct ControlMove {
+    std::string name;
+    uint8_t type = 0;
+    int16_t y = 0;
+};
+
+// The GUI record type of a button, and the top edge of Outcome0's single
+// button housing.
+constexpr auto button_type = static_cast<uint8_t>(oa::ui::gui_layout::GadgetType::button);
+constexpr int16_t outcome0_housing_y = 416;
+
+bool moved_main_menu_only(const std::vector<ControlMove>& moves) {
+    return moves.size() == 1 && moves[0].name == "MainMenu" && moves[0].type == button_type &&
+           moves[0].y == outcome0_housing_y;
+}
+
 struct Screen {
     uint32_t now = 1;
     bool input = false;
@@ -355,6 +373,7 @@ struct Screen {
     int leaves = 0;
     std::vector<std::string> sounds;
     std::vector<std::string> controls;
+    std::vector<ControlMove> moves;
 };
 
 Screen* g_screen = nullptr;
@@ -367,6 +386,9 @@ EndgameHost host_for(Screen& s, FrontendHost& frontend) {
     frontend.set_control_value = [](void* c, const char* name, int32_t value) {
         if (value != 0)
             static_cast<Screen*>(c)->controls.emplace_back(name);
+    };
+    frontend.set_control_y = [](void* c, const char* name, uint8_t type, int16_t y) {
+        static_cast<Screen*>(c)->moves.push_back({name, type, y});
     };
     EndgameHost h{};
     h.context = &s;
@@ -477,6 +499,7 @@ void skirmish_screen_tests() {
         screen.layout.row_count == 3 && s.controls.size() == 1 && s.controls[0] == "MainMenu",
         "score rows and the Main Menu button"
     );
+    expect(moved_main_menu_only(s.moves), "Main Menu moves into Outcome0's housing");
 
     // One column every ten ticks, the score column last with its own sound.
     uint32_t kills_at = 0;
@@ -499,6 +522,39 @@ void skirmish_screen_tests() {
         "buttons take over once bars settle"
     );
     expect(screen.layout.rows[2].bars[score_total].current == 426, "score bar shows the score");
+}
+
+// update_end_mission_buttons alone, for each kind of finished game.
+void end_mission_button_tests() {
+    static oa::World world{};
+    Screen s;
+    FrontendHost frontend{};
+    (void)host_for(s, frontend);
+
+    update_end_mission_buttons(
+        session_of(oa::data::campaign::SessionKind::multiplayer), world.game, &frontend
+    );
+    expect(
+        s.controls.size() == 1 && s.controls[0] == "MainMenu" && moved_main_menu_only(s.moves),
+        "multiplayer: Main Menu alone, in Outcome0's housing"
+    );
+
+    // A lost campaign mission can be played again: every button stays where
+    // ENDMSN.GUI places it.
+    s.controls.clear();
+    s.moves.clear();
+    static oa::data::campaign::CampaignFile campaign{};
+    campaign.kind = oa::data::campaign::SessionKind::campaign;
+    world.game.victory = 0;
+    update_end_mission_buttons(&campaign, world.game, &frontend);
+    expect(s.controls.size() == 8 && s.moves.empty(), "continuing campaign: no button moves");
+
+    // Without the service the button is still shown, and a null host is ignored.
+    s.controls.clear();
+    frontend.set_control_y = nullptr;
+    update_end_mission_buttons(nullptr, world.game, &frontend);
+    expect(s.controls.size() == 1 && s.moves.empty(), "no set_control_y: Main Menu shown");
+    update_end_mission_buttons(nullptr, world.game, nullptr);
 }
 
 void skip_tests() {
@@ -926,6 +982,7 @@ int main() {
     name_tests();
     state_tests();
     skirmish_screen_tests();
+    end_mission_button_tests();
     skip_tests();
     multiplayer_screen_tests();
     campaign_screen_tests();

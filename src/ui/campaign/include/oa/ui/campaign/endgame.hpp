@@ -191,8 +191,10 @@ campaign_can_continue(oa::data::campaign::CampaignFile* campaign, const Game& ga
 
 /// Shows the ENDMSN.GUI buttons: MainMenu only, or the full campaign set.
 ///
-/// A continuing campaign shows Start, LoadGame, SaveGame, KNOB, Missions,
-/// Difficulty, AdjustDiff and MainMenu.
+/// A game that cannot continue shows MainMenu only, moved down to y 416,
+/// into the single button housing of the Outcome0 background. A continuing
+/// campaign shows Start, LoadGame, SaveGame, KNOB, Missions, Difficulty,
+/// AdjustDiff and MainMenu, each where ENDMSN.GUI places it.
 ///
 /// @param campaign Campaign object.
 /// @param game Game block of the finished game.

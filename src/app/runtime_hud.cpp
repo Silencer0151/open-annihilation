@@ -238,7 +238,17 @@ void Runtime::blit_rect(
 void Runtime::draw_match_label(
     int x, int y, std::string_view text, uint8_t palette_index, int scale
 ) {
-    const oa::formats::fnt::Font* font = match_label_font();
+    draw_match_text(match_label_font(), x, y, text, palette_index, scale);
+}
+
+void Runtime::draw_match_text(
+    const oa::formats::fnt::Font* font,
+    int x,
+    int y,
+    std::string_view text,
+    uint8_t palette_index,
+    int scale
+) {
     if (font == nullptr)
         return;
     const auto& palette = match_hud_ && match_hud_->background.palette
@@ -403,6 +413,46 @@ void Runtime::fill_hud_rect(int x, int y, int width, int height, uint8_t palette
             dest.rgb[di + 1] = color[1];
             dest.rgb[di + 2] = color[2];
         }
+}
+
+const oa::formats::fnt::Font* Runtime::overlay_font(OverlayFont font) {
+    return font == OverlayFont::message_log ? &message_font() : match_label_font();
+}
+
+void Runtime::draw_extension_overlay() {
+    if (extension_.draw_match_overlay == nullptr || !match_)
+        return;
+    MatchOverlay overlay{};
+    overlay.painter = this;
+    overlay.game = &match_->state().game;
+    const auto corner = canvas_paint(match_layout_.left, match_layout_.top);
+    overlay.left = corner.x;
+    overlay.top = corner.y;
+    overlay.bottom = canvas_paint(match_layout_.left, match_layout_.bottom_bar_y()).y;
+    overlay.scale = hud_text_scale();
+    // A font's height is the low byte of its header's first word, which the
+    // game steps from one line to the next by; the conversion keeps that byte.
+    overlay.font_height = [](void* painter, OverlayFont font) -> uint8_t {
+        const auto* face = static_cast<Runtime*>(painter)->overlay_font(font);
+        return face != nullptr ? static_cast<uint8_t>(face->nominal_height) : 0;
+    };
+    overlay.draw_text =
+        [](void* painter, OverlayFont font, int x, int y, const char* text, uint8_t palette_index) {
+            auto& runtime = *static_cast<Runtime*>(painter);
+            runtime.draw_match_text(
+                runtime.overlay_font(font),
+                x,
+                y,
+                text != nullptr ? text : "",
+                palette_index,
+                runtime.hud_text_scale()
+            );
+        };
+    overlay.fill_rect =
+        [](void* painter, int x, int y, int width, int height, uint8_t palette_index) {
+            static_cast<Runtime*>(painter)->fill_hud_rect(x, y, width, height, palette_index);
+        };
+    extension_.draw_match_overlay(extension_.context, *this, overlay);
 }
 
 oa::ui::display_layout::Point Runtime::hud_canvas(int x, int y) const {

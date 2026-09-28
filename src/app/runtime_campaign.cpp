@@ -337,6 +337,12 @@ campaign::FrontendHost Runtime::single_player_host() {
     return host;
 }
 
+void Runtime::set_widget_y(void* context, const char* name, uint8_t type, int16_t y) {
+    if (auto* gadget = static_cast<Runtime*>(context)->widget(name);
+        gadget != nullptr && static_cast<uint8_t>(gadget->common.type) == type)
+        gadget->common.y = y;
+}
+
 void Runtime::store_all_missions(bool unlocked) {
     if (unlocked)
         preferences_.campaign_unlock_flags |= init::preference_flags::all_missions;
@@ -410,11 +416,7 @@ void Runtime::enter_new_game_panel(bool any_mission) {
     host.load_background = [](void* context, const char* name) {
         (void)static_cast<Runtime*>(context)->load_named_background(name, false, false, false);
     };
-    host.set_control_y = [](void* context, const char* name, uint8_t type, int16_t y) {
-        if (auto* gadget = static_cast<Runtime*>(context)->widget(name);
-            gadget != nullptr && static_cast<uint8_t>(gadget->common.type) == type)
-            gadget->common.y = y;
-    };
+    host.set_control_y = set_widget_y;
     host.set_control_height = [](void* context, const char* name, uint8_t type, int16_t height) {
         if (auto* gadget = static_cast<Runtime*>(context)->widget(name);
             gadget != nullptr && static_cast<uint8_t>(gadget->common.type) == type)

@@ -130,6 +130,15 @@ void host_clear_selection(const FrontendHost* host);
 /// @param value New value.
 void host_control_value(const FrontendHost* host, const char* name, int32_t value);
 
+/// Moves the first control of `type` with this name to a new y; its x and
+/// size are kept.
+///
+/// @param host frontend services; may be null
+/// @param name control name
+/// @param type GUI record type of the control (oa::ui::gui_layout::GadgetType)
+/// @param y new top edge, in the panel's coordinates
+void host_control_y(const FrontendHost* host, const char* name, uint8_t type, int16_t y);
+
 /// Selects one button of a radio group.
 ///
 /// @param host Frontend services; may be null.

@@ -35,6 +35,9 @@ inline constexpr uint8_t kChatModeLocalOnly = 4;
 // Message kinds passed to ConsoleHost::post_message.
 inline constexpr uint8_t kMessageNotice = 2;
 inline constexpr uint8_t kMessageService = 4;
+// Sender passed to ConsoleHost::post_message for a line from no player: it
+// starts with no player's logo and plays no arrival sound.
+inline constexpr uint8_t kMessageNoSender = 10;
 
 // Crash-test modes of the DebugBreak command.
 enum class CrashTest : uint8_t { break_into_debugger, exhaust_heap, exhaust_tagged_heap, divide };
@@ -47,7 +50,11 @@ struct ConsoleHost {
     void* context;
     // Option persistence and presentation.
     void (*save_game_options)(void* context);
-    void (*post_message)(void* context, const char* text, uint8_t kind);
+    /// Posts `text` to the match's message log as a line of `kind` sent by
+    /// the player whose Player.index is `sender`, or by no player with
+    /// kMessageNoSender; a line with a sender starts with that player's logo
+    /// and plays the arrival sound. Null posts nothing.
+    void (*post_message)(void* context, const char* text, uint8_t kind, uint8_t sender);
     void (*compact_render_cache)(void* context);
     void (*set_gamma)(void* context, float gamma);
     void (*set_lighting)(void* context, int32_t a, int32_t b, int32_t c);
@@ -190,7 +197,7 @@ uint8_t console_submit_chat_line(
 /// @return The dispatching console, or null outside a dispatch.
 Console* console_active() noexcept;
 
-/// Posts a message through the console's ConsoleHost::post_message; nothing without one.
+/// Posts a message from no player through the console's ConsoleHost::post_message; nothing without one.
 ///
 /// @param console Console whose host receives the message.
 /// @param text Message text.

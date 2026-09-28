@@ -66,6 +66,11 @@ campaign::FrontendHost panel_host(Panel& panel) {
     host.set_stage = [](void* context, const char* name, uint8_t stage) {
         (void)panel_set_stage(*static_cast<Panel*>(context), name, stage);
     };
+    host.set_control_y = [](void* context, const char* name, uint8_t type, int16_t y) {
+        if (auto* control = panel_control(*static_cast<Panel*>(context), name);
+            control != nullptr && static_cast<uint8_t>(control->type) == type)
+            control->y = y;
+    };
     return host;
 }
 

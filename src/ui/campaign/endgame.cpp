@@ -7,6 +7,7 @@
 
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/frontend_state/dispatcher.hpp"
+#include "oa/ui/gui_layout.hpp"
 #include "oa/sim/simulation_state.hpp"
 
 #include <climits>
@@ -33,6 +34,10 @@ constexpr float kBarRateScale = 0.06666667f;
 constexpr int32_t kCdCheckContinue = 5;
 constexpr uint8_t kArmSide = 0;            // PlayerSetupInfo.side
 constexpr int32_t kGlamourSoundVolume = 0; // mixer attenuation
+// MainMenu's top edge when the game cannot continue: inside the single button
+// housing of the Outcome0 background. ENDMSN.GUI's own y, 395, fits the
+// MainMenu slot of Outcome1, the background of a continuing campaign.
+constexpr int16_t finished_main_menu_y = 416;
 
 // Truncation toward zero through 64 bits; NaN and out-of-range values give 0.
 int32_t truncate(double value) {
@@ -223,6 +228,12 @@ void update_end_mission_buttons(
 ) {
     if (!campaign_can_continue(campaign, game)) {
         host_control_value(host, "MainMenu", 1);
+        host_control_y(
+            host,
+            "MainMenu",
+            static_cast<uint8_t>(gui_layout::GadgetType::button),
+            finished_main_menu_y
+        );
     } else {
         static constexpr const char* kControls[] = {
             "Start",

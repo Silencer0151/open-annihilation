@@ -235,6 +235,36 @@ OA_GAME_DATA_TEST(end_mission_after_a_defeat_and_outside_campaigns) {
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "BY");
 }
 
+// ENDMSN.GUI places MainMenu at 460,395, 120 by 20: the MainMenu slot of
+// Outcome1, the background of a continuing campaign. A game that cannot
+// continue moves it down to y 416, into Outcome0's single button housing.
+OA_GAME_DATA_TEST(end_mission_places_main_menu_on_its_background) {
+    auto fixture = std::make_unique<Fixture>();
+    if (!fixture->load())
+        return;
+    auto& panel = fixture->panel;
+    const Control& main_menu = *panel_control(panel, "MainMenu");
+    const auto placed_at = [&main_menu](int16_t y) {
+        return main_menu.x == 460 && main_menu.y == y && main_menu.width == 120 &&
+               main_menu.height == 20;
+    };
+    OA_CHECK(main_menu.type == ControlType::button);
+    OA_CHECK(placed_at(395));
+
+    auto& context = fixture->context;
+    auto layout = std::make_unique<campaign::ScoreLayout>();
+    fixture->world->game.victory = 0;
+    end_mission_open(panel, context, *layout);
+    OA_CHECK(context.continuing && std::strcmp(context.palette, "outcome1") == 0);
+    OA_CHECK(placed_at(395));
+
+    fixture->campaign->kind = oa::data::campaign::SessionKind::skirmish;
+    end_mission_open(panel, context, *layout);
+    OA_CHECK(!context.continuing && std::strcmp(context.palette, "outcome0") == 0);
+    OA_CHECK(main_menu.active == 1);
+    OA_CHECK(placed_at(416));
+}
+
 OA_GAME_DATA_TEST(end_mission_clicks) {
     auto fixture = std::make_unique<Fixture>();
     if (!fixture->load())

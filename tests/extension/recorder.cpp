@@ -36,8 +36,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 3;
-constexpr std::size_t kHookCount = 30;
+constexpr uint32_t kExtensionApiVersionRecorded = 4;
+constexpr std::size_t kHookCount = 31;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -480,6 +480,17 @@ struct RuntimeExtension {
     static void draw_match_hud(void* /*context*/, Runtime& /*runtime*/) {
         record("draw_match_hud");
     }
+
+    /// Draws nothing over the battlefield (Extension::draw_match_overlay).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param overlay the battlefield and its painter (unused)
+    static void draw_match_overlay(
+        void* /*context*/, Runtime& /*runtime*/, const MatchOverlay& /*overlay*/
+    ) {
+        record("draw_match_overlay");
+    }
 };
 
 } // namespace oa::app
@@ -518,6 +529,7 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->check_console = RuntimeExtension::check_console;
     table->draw_loading = RuntimeExtension::draw_loading;
     table->draw_match_hud = RuntimeExtension::draw_match_hud;
+    table->draw_match_overlay = RuntimeExtension::draw_match_overlay;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs.
     uintptr_t words[1 + kHookCount]{};

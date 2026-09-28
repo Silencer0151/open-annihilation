@@ -55,7 +55,7 @@ HOOKS = [
     "frontend_game", "launched_by_service", "check_multiplayer_menu", "state", "frame",
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
-    "draw_match_hud",
+    "draw_match_hud", "draw_match_overlay",
 ]
 # Hooks only a match played with other machines reaches.
 UNREACHED = {
@@ -103,7 +103,7 @@ RUNS = {
             ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "frontend_states",
              "frontend_game", "launched_by_service", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
-             "draw_loading", "draw_match_hud", "state"],
+             "draw_loading", "draw_match_hud", "draw_match_overlay", "state"],
             game=True),
         Run("headless-navigation",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],

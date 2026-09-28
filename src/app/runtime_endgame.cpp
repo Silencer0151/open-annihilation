@@ -53,6 +53,10 @@ constexpr uint32_t kOutcomeTickLimit = 30 * 20;
 constexpr int kCursorReach = 64;
 // A darkened last frame keeps at most this share of its brightness: a tenth.
 constexpr uint64_t kDarkenedDivisor = 10;
+// Where the panel of a game that cannot continue shows Main Menu: in the
+// single button housing of the Outcome0 background.
+constexpr int16_t finished_main_menu_x = 460;
+constexpr int16_t finished_main_menu_y = 416;
 
 Runtime& runtime_of(void* context) {
     return *static_cast<Runtime*>(context);
@@ -297,6 +301,7 @@ void Runtime::start_endgame() {
         if (auto* gadget = runtime_of(context).widget(name))
             gadget->common.active = static_cast<uint8_t>(value);
     };
+    state.frontend.set_control_y = set_widget_y;
     state.host = {};
     state.host.context = this;
     state.host.now = [](void* context) { return runtime_of(context).endgame_now(); };
@@ -719,6 +724,21 @@ void Runtime::check_presented_match_end(const std::filesystem::path& report_dire
     std::cout << "match end check: the won skirmish left its " << kept.width << 'x' << kept.height
               << " VICTORY frame for the end screen, which darkened it over " << frames
               << " presented frames\n";
+    if (!step_end_screen_to_panel().panel)
+        throw std::runtime_error("match end check: the end screen reached no panel");
+    rebuild_surface();
+    write_ppm(report_directory / "native-match-end-panel.ppm", surface_);
+    const auto* main_menu = widget("MainMenu");
+    const auto* start = widget("Start");
+    if (main_menu == nullptr || main_menu->common.active == 0 ||
+        main_menu->common.x != finished_main_menu_x ||
+        main_menu->common.y != finished_main_menu_y || start == nullptr ||
+        start->common.active != 0)
+        throw std::runtime_error(
+            "match end check: the panel does not show Main Menu alone in Outcome0's button housing"
+        );
+    std::cout << "match end check: the panel shows Main Menu alone at " << main_menu->common.x
+              << ',' << main_menu->common.y << '\n';
 }
 
 bool Runtime::step_endgame_until_left() {

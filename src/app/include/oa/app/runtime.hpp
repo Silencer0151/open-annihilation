@@ -1605,6 +1605,26 @@ class Runtime final : public menu::Host,
     void
     draw_match_label(int x, int y, std::string_view text, uint8_t palette_index, int scale = 1);
 
+    /// Paints text in a palette colour with a given font.
+    ///
+    /// The palette is the HUD's, else the match palette; nothing is drawn without
+    /// a font or for an index outside the palette.
+    ///
+    /// @param font font to draw with; null draws nothing
+    /// @param x paint column of the text's left edge
+    /// @param y paint row of the glyph tops
+    /// @param text text to paint
+    /// @param palette_index palette colour
+    /// @param scale pixel repeat, 1 or more
+    void draw_match_text(
+        const oa::formats::fnt::Font* font,
+        int x,
+        int y,
+        std::string_view text,
+        uint8_t palette_index,
+        int scale
+    );
+
     /// Paints text into the paint target in one colour.
     ///
     /// Glyph tops land on y; only glyph pixels are written, each font pixel
@@ -2538,7 +2558,9 @@ class Runtime final : public menu::Host,
     /// is decided; then one frame of the main loop draws the VICTORY frame and
     /// leaves for the end screen, which keeps that frame (the software cursor
     /// aside) and shows it at the match's size, growing no brighter, until the
-    /// darkening ends. Writes native-match-end-outcome.ppm. Throws
+    /// darkening ends. The panel that follows shows Main Menu alone, in the
+    /// single button housing of the Outcome0 background. Writes
+    /// native-match-end-outcome.ppm and native-match-end-panel.ppm. Throws
     /// std::runtime_error on a failure.
     ///
     /// @param report_directory directory the frame is written to
@@ -3098,6 +3120,36 @@ class Runtime final : public menu::Host,
     /// @param y1 bottom board row
     /// @param level shade table row
     void shade_board_rect(int x0, int y0, int x1, int y1, int level);
+
+    /// Paints an 8-bit drawing over the paint target.
+    ///
+    /// `draw` paints a width x height patch into an 8-bit surface whose origin
+    /// is the patch's top-left pixel, once over each pass fill. Each pixel both
+    /// passes agree on (what `draw` painted) goes to the paint target as a
+    /// hud_text_scale() block: the patch's pixel (column, row) covers the block
+    /// at `corner` + (column, row) x scale, clipped to the target.
+    ///
+    /// @param corner paint point of the block of the patch's top-left pixel
+    /// @param width patch width
+    /// @param height patch height
+    /// @param columns patch columns painted, from the left; the rest are left out
+    /// @param draw paints the patch
+    /// @param user passed to `draw`
+    void overlay_patch(
+        oa::ui::display_layout::Point corner,
+        int width,
+        int height,
+        int columns,
+        void (*draw)(void* user, oa::Surface& surface),
+        void* user
+    );
+
+    /// Renders the frame of the logo sequence for a player's colour.
+    ///
+    /// @param player player whose PlayerSetupInfo holds the colour
+    /// @return the frame, or nothing without the player's PlayerSetupInfo, the
+    ///         logo sequence, a frame for the colour or a frame that renders
+    std::optional<oa::formats::gaf::RenderedFrame> player_logo_frame(const oa::Player& player);
 
     /// Paints part of the kills board through an 8-bit drawing.
     ///
@@ -3749,6 +3801,19 @@ class Runtime final : public menu::Host,
     /// Draws the game clock and the message log over the battlefield.
     void draw_chat_overlay();
 
+    /// Has the extension draw its readouts over the battlefield (Extension::draw_match_overlay).
+    ///
+    /// Nothing without the hook or a match. The battlefield layer is the paint
+    /// target: the hook's painter draws in its pixels, text at hud_text_scale().
+    void draw_extension_overlay();
+
+    /// Returns the font an extension's overlay text is drawn in.
+    ///
+    /// @param font which font
+    /// @return the match label font for the side panel's, the message log's
+    ///         font for the log's; null when the side panel's is not loaded
+    const oa::formats::fnt::Font* overlay_font(OverlayFont font);
+
     /// Loads TALK.GUI and talk.gaf for the chat line once; a failure is reported on stderr.
     void ensure_talk_panel();
 
@@ -3765,12 +3830,17 @@ class Runtime final : public menu::Host,
     /// radar picture in the side column, a posted message, the game clock, the
     /// paused title, the speed line '+' posts in the message log, the build
     /// outline under the pointer in build mode, and the chat line Enter opens in
-    /// the bottom bar. The message log starts empty and gets its lines back
-    /// afterwards. Throws std::runtime_error on a failure.
+    /// the bottom bar. An extension's overlay, drawn through
+    /// Extension::draw_match_overlay once per frame with the loaded fonts'
+    /// heights, must show over the battlefield: a probe's 65 by 9 bar, scaled,
+    /// holds its colour in every pixel, and its lines of text in both fonts
+    /// show. The message log starts empty and gets its lines back afterwards.
+    /// Throws std::runtime_error on a failure.
     ///
     /// @param frame_of composes the frame to test
     /// @param snapshot file the chat line's frame is written to, with the speed
-    ///     line in the log and the outline on the battlefield
+    ///     line in the log and the outline on the battlefield; the probe's frame
+    ///     is written beside it, with "-overlay" added to its name
     void check_match_overlays(
         const std::function<void(renderer::Surface&)>& frame_of, const fs::path& snapshot
     );
@@ -3977,7 +4047,9 @@ class Runtime final : public menu::Host,
     /// Returns the match's console, binding it to the running match's world on first use.
     ///
     /// Its host reaches the runtime's options, message log, units, features,
-    /// camera, files and sound.
+    /// camera, files and sound. Each match start binds it at once, so the host
+    /// is filled, the extension's part too, before the match's first tick. The
+    /// host keeps its address for as long as the runtime lives.
     ///
     /// @return the console, or null without a match
     oa::ui::console::Console* match_console();
@@ -4011,7 +4083,13 @@ class Runtime final : public menu::Host,
     ///
     /// @param text line to post
     /// @param kind message kind
-    void console_post_message(std::string_view text, uint8_t kind = oa::sim::messages::kind_status);
+    /// @param sender Player.index of the player who sent the line, whose logo
+    ///        starts it; oa::sim::messages::sender_none for none
+    void console_post_message(
+        std::string_view text,
+        uint8_t kind = oa::sim::messages::kind_status,
+        uint8_t sender = oa::sim::messages::sender_none
+    );
 
     /// Moves pending Film and FilmSpeed changes from the Game block into the preferences.
     ///
@@ -4155,12 +4233,20 @@ class Runtime final : public menu::Host,
     /// player leaving, a skirmish its forces' end, a campaign nothing.
     void bind_message_log();
 
-    /// Posts a line to the match message log with no sender.
+    /// Posts a line to the match message log.
     ///
     /// @param text line to post
     /// @param kind message kind
     /// @param value message value (a unit id for unit reports)
-    void post_match_message(std::string_view text, uint8_t kind, uint16_t value = 0);
+    /// @param sender Player.index of the player who sent the line, whose logo
+    ///        starts it and who plays the arrival sound;
+    ///        oa::sim::messages::sender_none for none
+    void post_match_message(
+        std::string_view text,
+        uint8_t kind,
+        uint16_t value = 0,
+        uint8_t sender = oa::sim::messages::sender_none
+    );
 
     /// Captions a unit's speech in the message log as chatter does: "<name>: <text>", carrying the
     /// unit id.
@@ -4184,7 +4270,9 @@ class Runtime final : public menu::Host,
     ///
     /// The log draws down from screen (0x8a, 0x34), just inside the
     /// battlefield's top-left corner. The corner scales with the chrome and the
-    /// lines grow with the HUD text scale.
+    /// lines grow with the HUD text scale. A line with a sender starts with the
+    /// logo of the sender's colour: the whole frame of the logo sequence
+    /// stretched over the square the log sets aside for it.
     void draw_match_message_log();
 
     /// Returns the canvas rectangle some log lines cover in the composed frame.
@@ -4200,8 +4288,12 @@ class Runtime final : public menu::Host,
     ///
     /// '+' and '-' arrive as key events, change how many ticks one second of
     /// frames runs and post the game's speed lines; a commander's under-attack
-    /// report reaches the log; the log draws over the battlefield. Throws
-    /// std::runtime_error on a failure.
+    /// report reaches the log; the log draws over the battlefield. A chat line
+    /// posted through the console's host with a sender is stored as another
+    /// player's chat from that sender, starts with the logo of the sender's
+    /// colour and has its text past the logo; the same line from no player
+    /// starts its text at the log's left edge. Throws std::runtime_error on a
+    /// failure.
     void check_game_speed_messages();
 
     /// Draws "Game Time : hh:mm:ss" while the console's Clock is on.
@@ -5447,6 +5539,17 @@ class Runtime final : public menu::Host,
     ///
     /// @return the services, bound to this runtime
     [[nodiscard]] oa::ui::campaign::FrontendHost single_player_host();
+
+    /// Moves a gadget of the current screen to a new y, as FrontendHost::set_control_y asks.
+    ///
+    /// Drawing and pointer tests read the new y. It lasts until the screen is loaded again, which
+    /// places every gadget where its GUI file does.
+    ///
+    /// @param context the runtime
+    /// @param name gadget name; a missing gadget, or one whose type is not `type`, is left as is
+    /// @param type GUI record type (oa::ui::gui_layout::GadgetType) the gadget must have
+    /// @param y new top edge, in the panel's coordinates
+    static void set_widget_y(void* context, const char* name, uint8_t type, int16_t y);
 
     /// Returns the TextRegion rectangle and row pitch the briefing pages are laid out in.
     ///

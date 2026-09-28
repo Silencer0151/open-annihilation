@@ -25,8 +25,8 @@
 //   "Restart failed: <message>", which stderr also receives, and a failed
 //   restart returns to the main menu. Other starts (a skirmish from the
 //   menus or a headless run, a saved skirmish a --load run loads) are not
-//   caught. frontend_game, state, match_game, match_event, draw_loading and
-//   draw_match_hud are reached there;
+//   caught. frontend_game, state, match_game, match_event, console_host,
+//   draw_loading, draw_match_hud and draw_match_overlay are reached there;
 // - a simulation tick of the main loop or of a headless run (--match-ticks,
 //   a --campaign mission, a --save-after or --load run), which reports the
 //   error as a simulation error and runs the match on: simulation_step,
@@ -51,8 +51,12 @@
 /// with the layered layout's names: this header is oa/app/extension.hpp and
 /// the types the table names are in their modules' namespaces. Version 3
 /// replaces offers_multiplayer with select_multiplayer, which MULTI calls
-/// and through which the extension may take the game over.
-#define OA_EXTENSION_API_VERSION 3
+/// and through which the extension may take the game over. Version 4 gives
+/// ConsoleHost::post_message the line's sender, calls console_host as each
+/// match starts, so that the console's host is filled before the match's
+/// first tick, and adds draw_match_overlay, which draws over the
+/// battlefield.
+#define OA_EXTENSION_API_VERSION 4
 
 namespace oa {
 struct Game;
@@ -157,6 +161,57 @@ enum class MatchEvent : uint8_t {
 // The frontend's launch values (Extension::frontend_entry).
 struct FrontendEntry {
     const char* game_name{}; // preferred to the stored game name; null for none
+};
+
+// The fonts MatchOverlay draws text in.
+enum class OverlayFont : uint8_t {
+    side_panel,  // the font of the side panel's readouts (SIDEDATA.TDF's font)
+    message_log, // the font of the message log over the battlefield
+};
+
+// The battlefield of a drawn match frame and a painter over it
+// (Extension::draw_match_overlay). Positions and sizes are in the painter's
+// pixels; `scale` of them make up one pixel of the game's 640x480 screen:
+// text is drawn `scale` times larger, and a readout the game draws n pixels
+// from an edge of the battlefield belongs n times `scale` from that edge
+// here.
+struct MatchOverlay {
+    void* painter{};        // passed back to font_height, draw_text and fill_rect
+    const oa::Game* game{}; // the drawn match's Game block
+    int left{};             // the battlefield's left edge
+    int top{};              // the battlefield's top edge
+    int bottom{};           // the battlefield's bottom edge, where the bottom bar starts
+    int scale{};            // painter pixels to one 640x480 pixel; at least 1
+    /// Returns a font's height: the step from one line of it to the next,
+    /// as the font's own header gives it.
+    ///
+    /// @param painter MatchOverlay::painter
+    /// @param font the font
+    /// @return the height in 640x480 pixels; 0 when the font is not loaded
+    uint8_t (*font_height)(void* painter, OverlayFont font){};
+    /// Draws a line of text in one palette colour, clipped to the battlefield.
+    ///
+    /// Nothing is drawn when the font is not loaded or the colour is outside
+    /// the palette.
+    ///
+    /// @param painter MatchOverlay::painter
+    /// @param font the font to draw in
+    /// @param x the text's left edge
+    /// @param y the top of its line
+    /// @param text the text; read at once
+    /// @param palette_index the colour, a palette index
+    void (*draw_text)(
+        void* painter, OverlayFont font, int x, int y, const char* text, uint8_t palette_index
+    ){};
+    /// Fills a rectangle in one palette colour, clipped to the battlefield.
+    ///
+    /// @param painter MatchOverlay::painter
+    /// @param x the rectangle's left edge
+    /// @param y its top edge
+    /// @param width its width; 0 or less fills nothing
+    /// @param height its height; 0 or less fills nothing
+    /// @param palette_index the colour, a palette index
+    void (*fill_rect)(void* painter, int x, int y, int width, int height, uint8_t palette_index){};
 };
 
 struct Extension {
@@ -506,16 +561,22 @@ struct Extension {
 
     /// Fills the extension's part of the in-game console's host.
     ///
-    /// Called when the console is first used for a match world, before the
-    /// console starts. The engine fills its own callbacks first, except those
-    /// for group missions, path search and posters, which it sets after this
-    /// hook and so keeps; the host's context is the runtime.
+    /// Called as each match starts, before its first tick, when the console
+    /// binds to the match's world and before the console starts; and again
+    /// should the console later be used for another world. The engine fills
+    /// its own callbacks first, except those for group missions, path search
+    /// and posters, which it sets after this hook and so keeps; the host's
+    /// context is the runtime. The host keeps its address for as long as the
+    /// runtime lives, so the extension may keep it and call its callbacks
+    /// while a match runs: post_message, for one, posts to the running
+    /// match's message log. An exception it throws during a match start the
+    /// file header lists abandons the start; elsewhere it ends oa-game.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
-    /// @param[in,out] host the console's host, which the runtime keeps for the
-    ///        match; functions the extension sets must accept the runtime as
-    ///        their context
+    /// @param[in,out] host the console's host, which the runtime keeps at this
+    ///        address while it lives; functions the extension sets must accept
+    ///        the runtime as their context
     void (*console_host)(void* context, Runtime& runtime, oa::ui::console::ConsoleHost& host){};
 
     /// Checks the extension's console commands in --check-navigation's console check.
@@ -555,12 +616,27 @@ struct Extension {
     ///
     /// Called each time the match HUD is drawn, after the resource readout
     /// and build captions and before the unit information and chat entry.
+    /// What it draws shows only over the side panel and the top and bottom
+    /// bars; draw_match_overlay draws over the battlefield. An exception it
+    /// throws during a match start the file header lists abandons the start;
+    /// elsewhere it ends oa-game.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    void (*draw_match_hud)(void* context, Runtime& runtime){};
+
+    /// Draws the extension's readouts over the battlefield.
+    ///
+    /// Called each time a match frame is drawn, after the HUD pass, the kills
+    /// board and the message log, and before the profile bars and the paused
+    /// or finished title; what it draws shows wherever the battlefield does.
     /// An exception it throws during a match start the file header lists
     /// abandons the start; elsewhere it ends oa-game.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
-    void (*draw_match_hud)(void* context, Runtime& runtime){};
+    /// @param overlay the battlefield and its painter; valid for this call
+    void (*draw_match_overlay)(void* context, Runtime& runtime, const MatchOverlay& overlay){};
 };
 
 } // namespace oa::app

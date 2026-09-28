@@ -19,7 +19,12 @@ inline constexpr uint8_t sender_none = 10;
 inline constexpr uint8_t kind_unit_report = 1; // a unit's speech caption
 inline constexpr uint8_t kind_status = 2;      // game speed changes, console notices
 inline constexpr uint8_t kind_elimination = 4;
+// A chat line another player sent, stored with the sender's Player.index:
+// shown under filter 3 even while ScreenChat is off, hidden under filter 2.
+inline constexpr uint8_t kind_player_chat = 8;
 inline constexpr uint8_t kind_notice = 0x10; // masks to 0 in the stored line
+// The bits of MessageLine.kind that hold the kind.
+inline constexpr uint8_t kind_mask = 0x0f;
 // Bits above the kind in a stored line: its unit was already gone to by the
 // reported-unit key, and the line is drawn highlighted (the last one gone to).
 inline constexpr uint8_t line_flag_visited = 0x10;

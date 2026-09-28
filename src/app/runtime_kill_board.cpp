@@ -20,9 +20,11 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace oa::app {
 
@@ -122,8 +124,13 @@ void Runtime::shade_board_rect(int x0, int y0, int x1, int y1, int level) {
             }
 }
 
-void Runtime::overlay_board_patch(
-    int x, int y, int width, int height, void (*draw)(void* user, oa::Surface& surface), void* user
+void Runtime::overlay_patch(
+    oa::ui::display_layout::Point corner,
+    int width,
+    int height,
+    int columns,
+    void (*draw)(void* user, oa::Surface& surface),
+    void* user
 ) {
     if (width <= 0 || height <= 0)
         return;
@@ -134,8 +141,9 @@ void Runtime::overlay_board_patch(
         std::fill(passes[pass].pixels.begin(), passes[pass].pixels.end(), kPassFill[pass]);
         draw(user, passes[pass].surface);
     }
+    auto& layer = paint_target();
     const int scale = hud_text_scale();
-    const int columns = std::min(width, oa::ui::display_layout::kSourceWidth - x);
+    columns = std::min(width, columns);
     for (int row = 0; row < height; ++row)
         for (int column = 0; column < columns; ++column) {
             const auto offset = static_cast<std::size_t>(row * width + column);
@@ -143,12 +151,46 @@ void Runtime::overlay_board_patch(
             if (index != passes[1].pixels[offset])
                 continue;
             const auto color = palette_rgb(index);
-            const auto block = board_canvas(x + column, y + row);
             for (int by = 0; by < scale; ++by)
-                for (int bx = 0; bx < scale; ++bx)
-                    if (auto* rgb = board_pixel(block.x + bx, block.y + by))
-                        std::copy(color.begin(), color.end(), rgb);
+                for (int bx = 0; bx < scale; ++bx) {
+                    const int px = corner.x + column * scale + bx;
+                    const int py = corner.y + row * scale + by;
+                    if (px < 0 || py < 0 || px >= static_cast<int>(layer.width) ||
+                        py >= static_cast<int>(layer.height))
+                        continue;
+                    const auto pixel =
+                        static_cast<std::size_t>(py) * layer.width + static_cast<std::size_t>(px);
+                    std::copy(color.begin(), color.end(), layer.rgb.data() + pixel * 3U);
+                }
         }
+}
+
+std::optional<oa::formats::gaf::RenderedFrame>
+Runtime::player_logo_frame(const oa::Player& player) {
+    if (!match_)
+        return std::nullopt;
+    const auto* info = oa::world_player_info(&match_->state(), &player);
+    const auto* logos = logo_sequence_;
+    if (info == nullptr || logos == nullptr || info->color >= logos->frames.size())
+        return std::nullopt;
+    auto rendered = oa::formats::gaf::render_normal(logos->frames[info->color]);
+    if (!rendered.ok())
+        return std::nullopt;
+    return std::move(*rendered.frame);
+}
+
+void Runtime::overlay_board_patch(
+    int x, int y, int width, int height, void (*draw)(void* user, oa::Surface& surface), void* user
+) {
+    const auto corner = board_canvas(x, y);
+    overlay_patch(
+        canvas_paint(corner.x, corner.y),
+        width,
+        height,
+        oa::ui::display_layout::kSourceWidth - x,
+        draw,
+        user
+    );
 }
 
 void Runtime::ensure_gui_font() {
@@ -216,14 +258,10 @@ void Runtime::draw_match_kill_board() {
     sink.logo =
         [](void* user, const oa::Player& player, int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
             auto& runtime = *static_cast<Runtime*>(user);
-            const auto* info = oa::world_player_info(&runtime.match_->state(), &player);
-            const auto* logos = runtime.logo_sequence_;
-            if (info == nullptr || logos == nullptr || info->color >= logos->frames.size())
+            const auto rendered = runtime.player_logo_frame(player);
+            if (!rendered)
                 return;
-            const auto rendered = oa::formats::gaf::render_normal(logos->frames[info->color]);
-            if (!rendered.ok())
-                return;
-            const auto& frame = *rendered.frame;
+            const auto& frame = *rendered;
             oa::Sprite texture{};
             texture.width = frame.width;
             texture.height = frame.height;
@@ -426,15 +464,11 @@ void Runtime::check_kill_board() {
     if (header < static_cast<std::size_t>(kHeaderWidth * scale * scale))
         throw std::runtime_error("kill board check: the Kills header is not drawn");
     const auto& local = game.players[game.local_player_index];
-    const auto* info = oa::world_player_info(&match_->state(), &local);
-    if (info == nullptr || logo_sequence_ == nullptr ||
-        info->color >= logo_sequence_->frames.size())
+    const auto logo = player_logo_frame(local);
+    if (!logo)
         throw std::runtime_error("kill board check: the local player has no colour logo");
-    const auto logo = oa::formats::gaf::render_normal(logo_sequence_->frames[info->color]);
-    if (!logo.ok())
-        throw std::runtime_error("kill board check: the colour logo does not render");
     std::unordered_map<uint32_t, bool> logo_colors;
-    for (const auto index : logo.frame->pixels)
+    for (const auto index : logo->pixels)
         logo_colors[rgb_key(palette_rgb(index).data())] = true;
     const int row_top = 0x54 + local.board_row * hud::kBoardRowHeight - 0x24;
     const auto logo_corner = board_canvas(left + 7, row_top);

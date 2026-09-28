@@ -158,7 +158,7 @@ void compact_cache() noexcept {
 /// @param kind kMessageNotice or kMessageService.
 void post(const char* text, uint8_t kind) noexcept {
     if (host().post_message != nullptr)
-        host().post_message(host().context, text, kind);
+        host().post_message(host().context, text, kind, kMessageNoSender);
 }
 
 /// Has the host reset the sight buffers; nothing without a host callback.
@@ -1459,7 +1459,7 @@ Console* console_active() noexcept {
 void console_post(Console* console, const char* text, uint8_t kind) noexcept {
     const ConsoleHost* host = console->host;
     if (host != nullptr && host->post_message != nullptr)
-        host->post_message(host->context, text, kind);
+        host->post_message(host->context, text, kind, kMessageNoSender);
 }
 
 bool console_run_debug_script(

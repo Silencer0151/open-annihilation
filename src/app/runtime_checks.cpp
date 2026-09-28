@@ -72,6 +72,65 @@ constexpr int kDragEdgeInset = 48;
 // unit is selected; the unit, drawn after its box, hides the rest.
 constexpr std::size_t kSelectionBoxMinPercent = 25;
 
+// Where the overlay check's probe draws, in 640x480 pixels: a line of text
+// 63 above the bottom bar and 1 right of the battlefield's edge, and under it
+// a 65 by 9 bar, where the game's traffic readout starts; and a line in the
+// message log's font further right.
+constexpr int kProbeInset = 1;
+constexpr int kProbeRise = 63;
+constexpr int kProbeBarWidth = 65;
+constexpr int kProbeBarHeight = 9;
+constexpr int kProbeMessageInset = 130;
+// Width of the probe's text lines, in 640x480 pixels.
+constexpr int kProbeTextWidth = 120;
+constexpr const char* kProbeText = "match overlay check";
+
+// What the overlay check's probe saw on its calls.
+struct OverlayProbe {
+    int calls{};
+    uint8_t side_panel_height{};
+    uint8_t message_log_height{};
+    uint8_t bar_color{};
+};
+
+/// Returns the overlay check's probe record.
+///
+/// @return the record, which lives until the process exits
+OverlayProbe& overlay_probe() {
+    static OverlayProbe probe;
+    return probe;
+}
+
+/// Draws the overlay check's marks (Extension::draw_match_overlay).
+///
+/// @param overlay the battlefield and its painter
+void draw_overlay_probe(void* /*context*/, Runtime& /*runtime*/, const MatchOverlay& overlay) {
+    auto& probe = overlay_probe();
+    ++probe.calls;
+    probe.side_panel_height = overlay.font_height(overlay.painter, OverlayFont::side_panel);
+    probe.message_log_height = overlay.font_height(overlay.painter, OverlayFont::message_log);
+    const int scale = overlay.scale;
+    const int x = overlay.left + kProbeInset * scale;
+    const int y = overlay.bottom - kProbeRise * scale;
+    overlay.draw_text(overlay.painter, OverlayFont::side_panel, x, y, kProbeText, probe.bar_color);
+    overlay.fill_rect(
+        overlay.painter,
+        x,
+        y + probe.side_panel_height * scale,
+        kProbeBarWidth * scale,
+        kProbeBarHeight * scale,
+        probe.bar_color
+    );
+    overlay.draw_text(
+        overlay.painter,
+        OverlayFont::message_log,
+        overlay.left + kProbeMessageInset * scale,
+        y,
+        kProbeText,
+        probe.bar_color
+    );
+}
+
 bool contains(CanvasRect rect, int x, int y) {
     return x >= rect.x && y >= rect.y && x < rect.x + rect.w && y < rect.y + rect.h;
 }
@@ -354,11 +413,76 @@ void Runtime::check_match_overlays(
     game.chat_tail = saved_tail;
     visibility = saved_visibility;
     reset_sight_presentation(false);
+    // An extension's overlay shows over the battlefield: the probe's bar
+    // holds its colour in every pixel, and its two lines of text show.
+    const int scale = hud_text_scale();
+    const auto* side_font = overlay_font(OverlayFont::side_panel);
+    const uint8_t side_height =
+        side_font != nullptr ? static_cast<uint8_t>(side_font->nominal_height) : 0;
+    const uint8_t message_height = static_cast<uint8_t>(message_font().nominal_height);
+    const int probe_x = match_layout_.left + kProbeInset * scale;
+    const int probe_y = match_layout_.bottom_bar_y() - kProbeRise * scale;
+    const CanvasRect probe_text{
+        probe_x, probe_y, kProbeTextWidth * scale, std::max<int>(side_height, 1) * scale
+    };
+    const CanvasRect probe_bar{
+        probe_x, probe_y + side_height * scale, kProbeBarWidth * scale, kProbeBarHeight * scale
+    };
+    const CanvasRect probe_message{
+        match_layout_.left + kProbeMessageInset * scale,
+        probe_y,
+        kProbeTextWidth * scale,
+        std::max<int>(message_height, 1) * scale
+    };
+    frame_of(frame);
+    const auto text_before = copy_rect(frame, probe_text);
+    const auto bar_before = copy_rect(frame, probe_bar);
+    const auto message_before = copy_rect(frame, probe_message);
+    const auto saved_overlay = extension_.draw_match_overlay;
+    auto& probe = overlay_probe();
+    probe = {};
+    probe.bar_color = game.ui_colors[oa::present::world_renderer::ui_color_traffic_bar];
+    extension_.draw_match_overlay = draw_overlay_probe;
+    frame_of(frame);
+    extension_.draw_match_overlay = saved_overlay;
+    write_ppm(
+        fs::path(snapshot).replace_filename(snapshot.stem().string() + "-overlay.ppm"), frame
+    );
+    if (probe.calls != 1 || probe.side_panel_height != side_height ||
+        probe.message_log_height != message_height || side_height == 0)
+        throw std::runtime_error(
+            "match overlay check: the overlay hook ran " + std::to_string(probe.calls) +
+            " times with font heights " + std::to_string(probe.side_panel_height) + " and " +
+            std::to_string(probe.message_log_height) + ", expected once with " +
+            std::to_string(side_height) + " and " + std::to_string(message_height)
+        );
+    const auto bar_offset = static_cast<std::size_t>(probe.bar_color) * 4U;
+    const std::array<uint8_t, 3> bar_rgb{
+        match_palette_[bar_offset], match_palette_[bar_offset + 1], match_palette_[bar_offset + 2]
+    };
+    std::size_t bar_pixels = 0;
+    for (int y = probe_bar.y; y < probe_bar.y + probe_bar.h; ++y)
+        for (int x = probe_bar.x; x < probe_bar.x + probe_bar.w; ++x)
+            bar_pixels += pixel_is(frame, x, y, bar_rgb) ? 1 : 0;
+    const auto bar_area = static_cast<std::size_t>(probe_bar.w) * probe_bar.h;
+    const auto bar_drawn = changed_pixels(bar_before, copy_rect(frame, probe_bar));
+    if (bar_pixels != bar_area || bar_drawn == 0)
+        throw std::runtime_error(
+            "match overlay check: the overlay's bar shows in " + std::to_string(bar_pixels) +
+            " of its " + std::to_string(bar_area) + " pixels at " + std::to_string(probe_bar.x) +
+            ',' + std::to_string(probe_bar.y)
+        );
+    const auto overlay_text_changed = require_change(probe_text, text_before, "the overlay's text");
+    const auto overlay_message_changed = require_change(
+        probe_message, message_before, "the overlay's text in the message log's font"
+    );
     std::cout << "match overlay check: radar " << colours.size() << " colours; message log "
               << log_changed << ", clock " << clock_changed << ", paused title " << title_changed
               << ", " << speed_key << " speed line " << speed_changed << ", build outline "
-              << outline_changed << ", chat line " << bar_changed << " pixels at "
-              << match_layout_.width << 'x' << match_layout_.height << '\n';
+              << outline_changed << ", chat line " << bar_changed << ", extension overlay bar "
+              << bar_pixels << " and text " << overlay_text_changed << " and "
+              << overlay_message_changed << " pixels at " << match_layout_.width << 'x'
+              << match_layout_.height << '\n';
 }
 
 void Runtime::check_composed_frame() {

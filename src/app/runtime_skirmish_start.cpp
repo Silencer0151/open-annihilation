@@ -4,6 +4,7 @@
 // Skirmish match bootstrap from the selected map and players.
 #include "oa/app/runtime.hpp"
 #include "oa/app/asset_files.hpp"
+#include "oa/app/match_console.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/data/defs/gamedata_tables.hpp"
 #include "oa/data/defs/unit_def_loader.hpp"
@@ -914,7 +915,13 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     match_->profile.mark = [](void* context, int32_t category) {
         static_cast<Runtime*>(context)->mark_profile(category);
     };
-    restore_console_carry();
+    // The console binds to the new match here, even over a world at the old
+    // one's address, so its host (with the extension's part) is filled before
+    // the match posts its first line; the binding restores the carried
+    // console values.
+    if (console_)
+        console_->bound_world = nullptr;
+    (void)match_console();
     effect_boundary_.clock = &match_->simulation().tick;
     set_load_progress(3, 100);
     set_load_progress(4, 70);

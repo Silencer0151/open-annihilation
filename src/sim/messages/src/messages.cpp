@@ -11,7 +11,6 @@ namespace {
 
 inline constexpr size_t player_chat_name_bytes = sizeof(Player::second_name);
 inline constexpr size_t formatted_bytes = 200;
-inline constexpr uint8_t kind_mask = 0x0f;
 
 // Bounded copy of Player.second_name, the name chat lines carry.
 void chat_name(const Player& player, char out[player_chat_name_bytes + 1]) {

@@ -46,8 +46,13 @@ void rec_save(void*) {
     ++g_rec.saves;
 }
 
-void rec_post(void*, const char* text, uint8_t kind) {
-    g_rec.messages.push_back(std::to_string(kind) + ":" + text);
+// "<kind>:<text>", with "@<sender>" after it for a line a player sent; the
+// console's own lines come from no player.
+void rec_post(void*, const char* text, uint8_t kind, uint8_t sender) {
+    std::string line = std::to_string(kind) + ":" + text;
+    if (sender != console::kMessageNoSender)
+        line += "@" + std::to_string(sender);
+    g_rec.messages.push_back(line);
 }
 
 void rec_cache(void*) {

@@ -10,6 +10,7 @@
 
 #include "oa/sim/messages.hpp"
 
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -255,14 +256,19 @@ struct LogRecorder {
     std::vector<int32_t> xs;
     std::vector<uint8_t> colors;
     int logos = 0;
+    const Player* logo_player = nullptr;  // of the last logo
+    std::array<int32_t, 4> logo_square{}; // x0, y0, x1, y1 of the last logo
 
     MessageLogSink sink() {
         MessageLogSink s{};
         s.user = this;
         s.font_height = [](void*) { return 10; };
         s.set_color = [](void* u, uint8_t c) { static_cast<LogRecorder*>(u)->colors.push_back(c); };
-        s.logo = [](void* u, const Player&, int32_t, int32_t, int32_t, int32_t) {
-            ++static_cast<LogRecorder*>(u)->logos;
+        s.logo = [](void* u, const Player& player, int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+            auto* self = static_cast<LogRecorder*>(u);
+            ++self->logos;
+            self->logo_player = &player;
+            self->logo_square = {x0, y0, x1, y1};
         };
         s.text = [](void* u, const char* t, int32_t x, int32_t) {
             static_cast<LogRecorder*>(u)->lines.emplace_back(t);
@@ -322,6 +328,44 @@ void test_message_log() {
     CHECK(log.lines.empty());
 }
 
+// A chat line another player sent shows under the session's filter even
+// with ScreenChat off, and starts with the sender's logo, 0.8 of a line high,
+// with its text 1.5 logo widths past the log's left edge. The local player's
+// own chat line has no sender: no logo, and its text at the edge.
+void test_received_chat_line() {
+    hud_test::TestWorld match;
+    Game& game = match.game();
+    constexpr uint8_t sender = 2;
+    put_line(game, 0, "older", sim::messages::kind_status, sim::messages::sender_none);
+    put_line(game, 1, "<two> hi", sim::messages::kind_player_chat, sender);
+    put_line(game, 2, "<me> hi", kMessageKindChat, sim::messages::sender_none);
+    put_line(game, 3, "Game speed", sim::messages::kind_status, sim::messages::sender_none);
+    game.chat_tail = 0;
+    game.chat_head = 4;
+    set_message_lines(game, 10);
+    game.message_filter = sim::messages::filter_session_start;
+    game.screen_chat = 0;
+    LogRecorder log;
+    draw_message_log(*match.world, log.sink());
+    // Status lines hide while ScreenChat is off.
+    CHECK(log.lines.size() == 2 && log.lines[0] == "<two> hi" && log.lines[1] == "<me> hi");
+    constexpr int32_t logo_size = 8; // 0.8 of the recorder's 10-pixel lines
+    CHECK(log.logos == 1 && log.logo_player == &game.players[sender]);
+    CHECK((
+        log.logo_square ==
+        std::array<int32_t, 4>{
+            kMessageLogLeft, kMessageLogTop, kMessageLogLeft + logo_size, kMessageLogTop + logo_size
+        }
+    ));
+    CHECK(log.xs[0] == kMessageLogLeft + logo_size * 3 / 2 && log.xs[1] == kMessageLogLeft);
+
+    // Filter 2 hides another player's chat and keeps the rest.
+    log = {};
+    game.message_filter = 2;
+    draw_message_log(*match.world, log.sink());
+    CHECK(log.logos == 0 && log.lines.size() == 3 && log.lines[0] == "older");
+}
+
 void test_logo_blit() {
     const int32_t rect[4] = {10, 20, 30, 40};
     const auto blit = player_logo_blit(rect, 16, 12, 5);
@@ -337,6 +381,7 @@ int main() {
     test_target_controls();
     test_open_panel();
     test_message_log();
+    test_received_chat_line();
     test_logo_blit();
     return 0;
 }

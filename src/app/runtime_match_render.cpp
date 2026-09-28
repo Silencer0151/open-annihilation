@@ -1249,6 +1249,7 @@ void Runtime::render_match_surface() {
     paint_on(PaintLayer::battlefield);
     draw_match_kill_board();
     draw_chat_overlay();
+    draw_extension_overlay();
     draw_profile_bars();
     if (match_finished_ || match_paused_)
         draw_end_overlay();
