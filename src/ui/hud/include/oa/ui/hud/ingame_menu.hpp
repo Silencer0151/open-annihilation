@@ -81,16 +81,19 @@ inline constexpr uint8_t kGuiFlagsTabMenu = 0x20u;
 ///
 /// Plays "SmallButton" either way. Closing keeps only the low five bits of
 /// Game.gui_flags and pops the loaded TABMENU.GUI; opening raises
-/// kGuiFlagsTabMenu. ALLIES and SHARE are live in a multiplayer game, for a
-/// local player who is not a watcher, when another slot is neither an in-use
-/// local player nor a watcher; CONTROL also needs `control_offered` and a
-/// game that is not locked.
+/// kGuiFlagsTabMenu. ALLIES and SHARE show in a multiplayer game, for a
+/// local player who is not a watcher, when another slot (an unused one
+/// included) is neither an in-use local player nor a watcher; CONTROL also
+/// needs `control_offered` and a game that is not locked. The others are
+/// hidden.
 ///
 /// @param[in,out] world World whose Game.gui_flags change.
 /// @param session_kind CampaignFile.kind of the session.
-/// @param control_offered Whether a slot awaits a controller.
+/// @param control_offered Whether this machine hosts the game
+///        (hosts_multiplayer_game), which lets it control the other players.
 /// @param loader Loads and closes the menu panel.
-/// @param controls Named controls of the loaded menu.
+/// @param controls Named controls of the loaded menu; set_active shows and
+///        hides ALLIES, SHARE and CONTROL.
 /// @param events Receives the sound.
 /// @return Whether the menu opened.
 bool toggle_tab_menu(

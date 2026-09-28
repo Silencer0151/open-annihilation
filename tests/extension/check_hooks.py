@@ -55,7 +55,7 @@ HOOKS = [
     "frontend_game", "launched_by_service", "check_multiplayer_menu", "state", "frame",
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
-    "draw_match_hud", "draw_match_overlay",
+    "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
 ]
 # Hooks only a match played with other machines reaches.
 UNREACHED = {
@@ -103,12 +103,14 @@ RUNS = {
             ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "frontend_states",
              "frontend_game", "launched_by_service", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
-             "draw_loading", "draw_match_hud", "draw_match_overlay", "state"],
+             "draw_loading", "draw_match_hud", "draw_match_overlay", "state", "load_progress",
+             "team_panel_host"],
             game=True),
         Run("headless-navigation",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],
             ["console_host", "check_console", "give_resources", "message_hooks", "simulation_step",
-             "outcome_ready", "player_gone", "match_event finished", "match_event results_released"],
+             "outcome_ready", "player_gone", "match_event finished", "match_event results_released",
+             "pause_changed on", "pause_changed off"],
             game=True),
         Run("main-menu-frames", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "30"],
             ["start_scene", "frame pump", "frame after_pump", "shutdown", "state"], game=True, dummy=True),

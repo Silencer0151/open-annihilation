@@ -122,6 +122,12 @@ void Runtime::set_load_progress(std::size_t row, uint8_t percent) {
             loading_flash_[row] = 0x1e;
         load_progress_[row] = clamped;
     }
+    // The world is built without frames; the extension keeps its own work
+    // going here.
+    if (extension_.load_progress != nullptr)
+        extension_.load_progress(
+            extension_.context, *this, load_progress_.data(), load_progress_.size()
+        );
     pump_loading_screen();
 }
 
@@ -215,6 +221,8 @@ void Runtime::draw_loading_screen() {
 void Runtime::teardown_match() {
     if (extension_.match_event != nullptr)
         extension_.match_event(extension_.context, *this, MatchEvent::torn_down);
+    // A team panel open as the match ended goes with it.
+    forget_team_panel();
     offline_effects_.unbind();
     offline_services_.clear_match();
     effect_boundary_.clock = nullptr;

@@ -219,6 +219,15 @@ void remove_area_coverage(const SightStamp& stamp, SightContext& context) noexce
 /// @param[in,out] context sight grid and tables
 /// @quirk The standard stamp takes its mask from the sight distance, not from the stored band.
 void map_area(const SightStamp& stamp, SightContext& context) noexcept;
+/// Gives one player every cell another has mapped, as sharing a map does:
+/// the receiver's mapped bit is set in each cell where the sharer's is.
+///
+/// A new bit for the viewpoint player marks the fog and radar stale.
+///
+/// @param[in,out] grid sight grid whose mapped words change
+/// @param from player whose mapped cells are shared, 0..15
+/// @param to player receiving them, 0..15
+void share_mapped_cells(PlayerSightGrid& grid, uint8_t from, uint8_t to) noexcept;
 /// Moves a stamp to its descriptor's position when the cell or band changed.
 ///
 /// The stamp is removed and added again under the line-of-sight rule, then

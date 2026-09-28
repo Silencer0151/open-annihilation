@@ -74,6 +74,25 @@ void Match::configure_player_alliances(uint8_t player, const std::array<uint8_t,
         outcome_view_->local_allies = allies;
 }
 
+void Match::follow_player_alliances(uint8_t player) {
+    if (player >= player_alliances_.size() || !player_alliances_[player])
+        return;
+    auto row = *player_alliances_[player];
+    const auto& record = state().game.players[player].alliance;
+    for (std::size_t other = 0; other < row.size(); ++other)
+        if (other != player)
+            row[other] = record[other];
+    player_alliances_[player] = row;
+    if (outcome_view_ && outcome_view_->local_player == player)
+        outcome_view_->local_allies = row;
+}
+
+void Match::share_mapped_area(uint8_t from, uint8_t to) {
+    if (from >= OA_PLAYER_COUNT || to >= OA_PLAYER_COUNT)
+        return;
+    sim::visibility_state::share_mapped_cells(sight_, from, to);
+}
+
 void Match::configure_outcomes(
     uint8_t local,
     const std::array<uint8_t, 10>& allies,
@@ -128,6 +147,8 @@ bool Match::move_unit_to_radius_met(sim::scenario::Condition& condition) {
 }
 
 void Match::advance_local_outcome() {
+    if (local_game_ended_)
+        return;
     auto& view = *outcome_view_;
     auto& world = state();
     for (std::size_t i = 0; i < world_.players.size(); ++i)

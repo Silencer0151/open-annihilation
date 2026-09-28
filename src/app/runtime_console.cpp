@@ -289,6 +289,12 @@ console::Console* Runtime::match_console() {
         };
         if (extension_.console_host != nullptr)
             extension_.console_host(extension_.context, *this, host);
+        // The team panels' host starts empty for each match; the extension
+        // fills what reaches the other players' machines.
+        team_panel_host_ = {};
+        team_panel_host_.context = this;
+        if (extension_.team_panel_host != nullptr)
+            extension_.team_panel_host(extension_.context, *this, team_panel_host_);
         host.issue_group_mission =
             [](void* context, uint8_t kind, int32_t parameter_1, int32_t parameter_2) {
                 runtime_of(context)->issue_group_mission(kind, parameter_1, parameter_2);
@@ -581,9 +587,17 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
     const oa::Game& game = con->world->game;
     const bool developer = (console::console_flags(game) & console::console_flag::developer) != 0;
     const bool debug_keys = (game.outcome_flags & console::outcome_flag::debug_keys) != 0;
+    // A multiplayer game's team menu (Tab) and share panel ('h').
+    const bool multiplayer = multiplayer_session();
     uint32_t code = 0;
     if (key.key == SDLK_F4 || key.scancode == SDL_SCANCODE_F4)
         code = console::hotkey::f1 + 3;
+    else if (key.key == SDLK_PAUSE || key.scancode == SDL_SCANCODE_PAUSE)
+        code = console::hotkey::pause;
+    else if (multiplayer && key.key == SDLK_TAB)
+        code = console::hotkey::tab;
+    else if (multiplayer && key.key == SDLK_H)
+        code = 'h';
     else if (key.key == SDLK_GRAVE)
         code = '`';
     else if (developer && key.key == SDLK_BACKSLASH)
@@ -626,6 +640,17 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
         oa::sim::messages::clear_messages(runtime_of(context)->match_->state().game);
     };
     host.open_options_panel = [](void* context) { runtime_of(context)->show_match_pause_menu(); };
+    host.session_kind = [](void* context) -> int32_t {
+        return runtime_of(context)->multiplayer_session() ? oa::ui::hud::kSessionMultiplayer : 0;
+    };
+    host.open_team_menu = [](void* context) { runtime_of(context)->toggle_team_menu(); };
+    host.open_share_panel = [](void* context) { runtime_of(context)->open_team_share_panel(); };
+    host.send_pause = [](void* context, bool paused) {
+        auto& runtime = *runtime_of(context);
+        runtime.status_ = paused ? "Game paused" : "Resumed";
+        if (runtime.extension_.pause_changed != nullptr)
+            runtime.extension_.pause_changed(runtime.extension_.context, runtime, paused);
+    };
     host.list_files = [](void* context,
                          const char* pattern,
                          void (*visit)(void* user, const char* name),

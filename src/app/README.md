@@ -66,6 +66,21 @@ and `app-window-icon` that the embedded one decodes.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
   camera.
 - `runtime_match_menus.cpp`: the in-match menus.
+- `runtime_team_panels.cpp`: the team panels of a multiplayer game over the
+  running match: the tab menu (Tab), SHARE.GUI ('h'), ALLIES.GUI,
+  CONTROL.GUI and its removal question, laid out and answered by
+  `ui/hud/team_panels.hpp` and `share_panel.hpp`; what they tell the other
+  players' machines goes through the extension's `TeamPanelHost`.
+  `runtime_team_panel_check.cpp` checks the Pause key and the panels in
+  `--check-navigation`.
+- `match_clock.hpp`, `match_clock.cpp`: when the match clock steps. A menu
+  and the outcome hold a match played on this machine alone; a match shared
+  with other players' machines runs on under its menus, the preferences they
+  open (`Runtime::match_running`) and while it waits on its outcome. The
+  pause bit of `Game.sim_run_flags`, which the Pause key
+  flips (and another player's machine may set), holds any match inside the
+  clock, whose time moves on so that nothing is caught up on resuming; a
+  save stores the bit as the match holds it. `app-match-clock` tests both.
 - `runtime_hud.cpp`, `runtime_match_hud.cpp`: the HUD.
 - `runtime_messages.cpp`: the in-game message log (`Game.chat_lines`) drawn
   over the battlefield, and the speed and message part of `--check-navigation`.
@@ -117,7 +132,8 @@ that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
 `extension.hpp` is the table of hooks through which one library linked into
 `oa-game` extends it: long options and game switches, start-up and
 shutdown, screens, the frontend's entry, run modes, per-frame work, match
-events, console commands and checks. `main()` has the library's
+events, the Pause key, the loading's progress, the team panels' host,
+console commands and checks. `main()` has the library's
 `oa_extensions_init` fill it before the command line is parsed; every hook
 left null keeps the engine's behaviour, the game without multiplayer, which
 is what `oa-extensions-default` gives. The CMake cache variable
@@ -140,7 +156,9 @@ fills every hook with a recorder and adds one `Runtime` member;
 `extension-hooks-options` and, over the installed game,
 `extension-hooks-game` check that the game calls every hook but
 `disconnect_text`, which only a shared match reaches (of `match_event`'s
-events they see `finished`, `torn_down` and `results_released`). CI builds
+events they see `finished`, `torn_down` and `results_released`); the
+navigation check's Pause key reaches `pause_changed`, and a skirmish's
+loading `load_progress` and `team_panel_host`. CI builds
 that configuration as a job of its own, but has no game installation:
 there `extension-hooks-game` skips, and only the option hooks and the hook
 list are checked. The rest of the hook coverage runs only where

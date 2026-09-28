@@ -173,26 +173,43 @@ void Match::apply_damage_event(
 }
 
 void Match::capture_unit(sim::unit_spawn::Slot& original, sim::unit_spawn::Slot& capturer) {
-    if (!original.unit || !capturer.unit)
+    if (!original.unit || !capturer.unit || capturer.unit->owner == nullptr)
         return;
-    if (original.unit->owner == capturer.unit->owner)
+    transfer_unit(original.unit_index, capturer.record.owner_index);
+}
+
+void Match::transfer_unit(uint16_t unit, uint8_t new_owner, const TransferredUnit* carried) {
+    auto& original = slots_.at(unit);
+    if (!original.unit || new_owner >= simulation_.players.size())
+        return;
+    auto& receiver = simulation_.players[new_owner];
+    if (original.unit->owner == &receiver)
         return;
     if (!(original.unit->flags & live_unit_flag) || (original.unit->flags & death_pending_flag))
         return;
-    sim::simulation_state::Player* owner = capturer.unit->owner;
-    if (!owner || !owner->present)
+    if (!receiver.present)
         return;
     constexpr auto captured = static_cast<uint8_t>(DeathKind::captured);
-    if (owner->status == 3) {
+    // The captured event is dispatched with the captured unit (owner 1)
+    // before the transfer destroys it.
+    scenario_unit_captured(original);
+    const bool simulated_here = sim::simulation_state::locally_simulated(*original.unit);
+    if (simulated_here && receiver.status == OA_PLAYER_STATUS_MIRRORED) {
+        // The receiving player's machine creates the unit; here it dies.
+        constexpr uint32_t handed_over_cooldown = 150; // ticks it cannot be selected
+        original.unit->flags &= ~OA_UNIT_FLAG_SELECTED;
+        original.unit->capture_cooldown = handed_over_cooldown;
+        if (multiplayer.unit_transferred != nullptr)
+            multiplayer.unit_transferred(multiplayer.context, unit, new_owner);
         TickHost(*this).scaled_damage(nullptr, original, lethal_damage, captured);
         return;
     }
-    if (owner->status != 1 && owner->status != 2)
+    if (receiver.status != OA_PLAYER_STATUS_LOCAL && receiver.status != OA_PLAYER_STATUS_COMPUTER)
         return;
     if (!original.unit->record.type_index)
         return;
     sim::unit_spawn::Request request;
-    request.player = capturer.record.owner_index;
+    request.player = new_owner;
     request.type = original.unit->record.type_index;
     request.position = original.unit->position;
     request.finished = true;
@@ -202,20 +219,27 @@ void Match::capture_unit(sim::unit_spawn::Slot& original, sim::unit_spawn::Slot&
         return;
     // The copy drops the standing move and fire orders it was created with.
     copy->unit->flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
-    copy->unit->health = original.unit->health;
-    copy->record.build_remaining = original.record.build_remaining;
-    copy->record.bank = original.record.bank;
-    copy->yaw = original.yaw;
-    copy->record.pitch = original.record.pitch;
-    for (std::size_t i = 0; i < OA_UNIT_WEAPON_COUNT; ++i) {
-        if (copy->record.weapons[i].flags & OA_UNIT_WEAPON_ENABLED)
-            copy->record.weapons[i].flags = original.record.weapons[i].flags;
+    if (carried != nullptr) {
+        // The unit's own machine kills the old unit and shares its death.
+        copy->unit->health = carried->health;
+        copy->record.build_remaining = carried->build_remaining;
+        copy->record.bank = carried->bank;
+        copy->yaw = carried->heading;
+        copy->record.pitch = carried->pitch;
+        for (std::size_t i = 0; i < OA_UNIT_WEAPON_COUNT; ++i)
+            if (copy->record.weapons[i].flags & OA_UNIT_WEAPON_ENABLED)
+                copy->record.weapons[i].stockpile = carried->stockpiles[i];
+    } else {
+        copy->unit->health = original.unit->health;
+        copy->record.build_remaining = original.record.build_remaining;
+        copy->record.bank = original.record.bank;
+        copy->yaw = original.yaw;
+        copy->record.pitch = original.record.pitch;
+        for (std::size_t i = 0; i < OA_UNIT_WEAPON_COUNT; ++i)
+            if (copy->record.weapons[i].flags & OA_UNIT_WEAPON_ENABLED)
+                copy->record.weapons[i].stockpile = original.record.weapons[i].stockpile;
+        TickHost(*this).scaled_damage(nullptr, original, lethal_damage, captured);
     }
-
-    // The captured event is dispatched with the captured unit (owner 1)
-    // before the capture destroys it.
-    scenario_unit_captured(original);
-    TickHost(*this).scaled_damage(nullptr, original, lethal_damage, captured);
     set_activation(*copy, original.record.state_flags, true);
     set_activation(*copy, static_cast<uint8_t>(~original.record.state_flags), false);
 }

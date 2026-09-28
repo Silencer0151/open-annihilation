@@ -67,6 +67,39 @@ is clear; with it set the match needs its `multiplayer` hooks or it stops.
 `OfflineServices` supplies command and activation sounds, attachment and UI
 callbacks, effects and map-update operations.
 
+## Sharing with the other players
+
+A multiplayer match shares what it settles through `MultiplayerHooks`, and
+applies what the other players' machines settled through entries of its own.
+Every hook is null in a game played on one machine; an entry whose comment
+says what null does may stay null in a multiplayer game too. Besides new
+units, state flags, health events, scripts, shots, deaths and features:
+
+- `shot_intercepted` shares each shot an interceptor's blast sets off here,
+  once it has gone off, with the interceptor's shot. An interceptor
+  simulated elsewhere sets nothing off here.
+- `carry_link_changed` shares every carry link `set_carry_link` accepts,
+  whichever machine simulates the units, just before it applies: transports,
+  factory pads, the AttachUnit and DropUnit scripts, the builder link and a
+  dying carrier's cargo. `apply_carry_link` applies a link another machine
+  shared without sharing it again.
+- `unit_finished` shares a unit simulated here that its builder's work
+  finished, or a building created finished, which names itself as its
+  builder. `finish_unit` runs the builder link on another machine's copy:
+  it is marked built and activated when its type activates when built, and
+  stays on its pad until that machine's carry link sets it down.
+- `script_started` carries StartBuilding from the build, repair, reclaim,
+  capture and resurrect orders, with the heading to the work as its one
+  argument, zero-extended from 16 bits.
+- `feature_changed` with `FeatureChange::resurrected` names the origin plot
+  of a wreck a unit simulated here raised, so the wreck goes everywhere.
+- `unit_transferred` hands a unit simulated here to a player another machine
+  simulates, just before the unit dies here as captured. `transfer_unit`
+  hands a unit to another player, as a capture or a gift of units does, and
+  creates the unit another machine handed over from its `TransferredUnit`.
+- `end_local_game` ends the local player's game at once as a defeat, as
+  another player's machine reporting this one gone does.
+
 `tick_scripts` advances COB contexts only. `tick()` runs a whole simulation
 tick: the unit sweep with the match's own host, projectiles and explosions,
 the path search, each player's controller, knowledge, sight and economy, the
@@ -178,8 +211,9 @@ pieces only, a finished unit explodes when that percentage is above zero, and
 the wreck is left at the shared level; statistics count by the shared kind.
 `feature_host` passes weapon hits on features, and the fires, destructions
 and reclaims settled here (a reclaim with the reclaiming unit), to the
-multiplayer hooks' feature entries; with those entries null every hit is
-applied here and nothing is shared.
+multiplayer hooks' feature entries, and the resurrect order passes the wrecks
+it raises; with those entries null every hit is applied here and nothing is
+shared.
 
 `update_projectiles` flies the pool through its flight modes, tests every
 moved shot against the plot under it (intercept burst, occupants, feature,
@@ -191,8 +225,9 @@ art or an endsmoke puff; a nosealeveltrigger sea swallows such a shot whole.
 It adds the weapon's shake to the running screen shake in `Game`, which the
 app's camera does not apply yet, and plays `soundhit` or `soundwater` where
 the viewpoint player sees the burst. An interceptor's blast detonates the
-shots near it. A dying unit's explodeas or selfdestructas weapon detonates
-through a stand-in shot with no source after the unit has left its plot.
+shots near it and shares each one (`shot_intercepted`). A dying unit's
+explodeas or selfdestructas weapon detonates through a stand-in shot with no
+source after the unit has left its plot.
 
 The commander rule's sweep runs only in the simulation that runs the
 commander, after the `order_panel` hook closes the order panel. A commander is
@@ -236,6 +271,8 @@ stationary ground ticks (idle mission scheduling, health percentage refresh,
 completion of the Create sleep) and 60 ground-motion ticks (cell changes,
 terrain collision, occupancy removal and insertion, moving sight). The other
 tests cover each order family, combat, the deaths shared with and applied
-from the other players (`match-shared-deaths`), projectiles, economy,
-features, transports, outcomes, saved orders, saved features and the trace
-stream.
+from the other players (`match-shared-deaths`), the interceptions, carry
+links, completions, StartBuilding starts, resurrections, unit transfers and
+game endings shared with and applied from them (`match-shared-events`),
+projectiles, economy, features, transports, outcomes, saved orders, saved
+features and the trace stream.

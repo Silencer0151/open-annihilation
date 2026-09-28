@@ -51,11 +51,11 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         oa::sim::messages::clear_messages(match_->state().game);
         return true;
     }
+    // Pause flips the pause bit and opens no menu; a finished match keeps it
+    // as it is.
     if (key.key == SDLK_PAUSE || key.scancode == SDL_SCANCODE_PAUSE) {
-        if (match_paused_)
-            resume_match_pause();
-        else
-            show_match_pause_menu();
+        if (!match_finished_)
+            (void)handle_console_hotkey(key);
         return true;
     }
     if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 &&
@@ -197,10 +197,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         status_ = "Center";
         return true;
     }
-    if (sym == SDLK_H) {
-        share_resources();
+    // A multiplayer game's 'h' reached the console's hotkeys above; outside one
+    // it does nothing.
+    if (sym == SDLK_H)
         return true;
-    }
     if (sym == SDLK_N) {
         select_next_offscreen_unit();
         return true;
@@ -367,32 +367,6 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
     }
     finish_issued_command();
     status_ = std::string(kind) + " " + std::to_string(count);
-}
-
-void Runtime::share_resources() {
-    if (!match_)
-        return;
-    auto& world = match_->world();
-    const auto local = static_cast<std::size_t>(match_local_player_);
-    if (local >= world.players.size())
-        return;
-    const auto alliance = skirmish_settings_.slots[local].alliance;
-    for (std::size_t i = 0; i < world.players.size(); ++i) {
-        if (i == local || skirmish_settings_.slots[i].controller == entry::controller::disabled ||
-            skirmish_settings_.slots[i].alliance != alliance)
-            continue;
-        auto& from = world.players[local];
-        auto& to = world.players[i];
-        const auto metal = std::min(100.0F, from.metal);
-        const auto energy = std::min(100.0F, from.energy);
-        from.metal -= metal;
-        from.energy -= energy;
-        to.metal = std::min(to.metal_cap, to.metal + metal);
-        to.energy = std::min(to.energy_cap, to.energy + energy);
-        status_ = "Shared with P" + std::to_string(i + 1);
-        return;
-    }
-    status_ = "No allied player";
 }
 
 void Runtime::select_next_offscreen_unit() {
@@ -683,6 +657,10 @@ void Runtime::center_camera_on_unit(uint16_t id) {
 }
 
 void Runtime::apply_match_hud_for_selection() {
+    // An open menu, or the outcome, keeps its panel; the menu's closing shows
+    // the page for the selection then.
+    if (match_paused_)
+        return;
     if (selected_match_unit_ == 0) {
         match_build_page_ = 0;
         show_match_orders_page();

@@ -26,7 +26,8 @@
 //   restart returns to the main menu. Other starts (a skirmish from the
 //   menus or a headless run, a saved skirmish a --load run loads) are not
 //   caught. frontend_game, state, match_game, match_event, console_host,
-//   draw_loading, draw_match_hud and draw_match_overlay are reached there;
+//   team_panel_host, load_progress, draw_loading, draw_match_hud and
+//   draw_match_overlay are reached there;
 // - a simulation tick of the main loop or of a headless run (--match-ticks,
 //   a --campaign mission, a --save-after or --load run), which reports the
 //   error as a simulation error and runs the match on: simulation_step,
@@ -55,8 +56,13 @@
 /// ConsoleHost::post_message the line's sender, calls console_host as each
 /// match starts, so that the console's host is filled before the match's
 /// first tick, and adds draw_match_overlay, which draws over the
-/// battlefield.
-#define OA_EXTENSION_API_VERSION 4
+/// battlefield. Version 5 adds pause_changed, load_progress and
+/// team_panel_host; no simulation step is offered while the running match's
+/// pause bit is set, whoever set it; a shared match's clock keeps running
+/// while its in-game menu, or the preferences that menu opens, are up
+/// (Runtime::match_running) and while outcome_ready holds it on its
+/// outcome.
+#define OA_EXTENSION_API_VERSION 5
 
 namespace oa {
 struct Game;
@@ -83,6 +89,10 @@ struct Hooks;
 
 namespace oa::ui::console {
 struct ConsoleHost;
+}
+
+namespace oa::ui::hud {
+struct TeamPanelHost;
 }
 
 namespace oa::app {
@@ -424,8 +434,9 @@ struct Extension {
     /// Does the extension's work of one frame stage.
     ///
     /// Called every frame of the main loop and of the checks that step it,
-    /// once with FrameStage::pump and then once with after_pump, before the
-    /// match clock runs and the frame is drawn.
+    /// including every frame of a pause, once with FrameStage::pump and then
+    /// once with after_pump, before the match clock runs and the frame is
+    /// drawn.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -436,7 +447,11 @@ struct Extension {
     ///
     /// Called for each step the match clock owes when the main loop, or a
     /// check that steps it, advances the match, ahead of the engine's tick;
-    /// headless runs tick the match without it. An exception it throws is
+    /// headless runs tick the match without it. Not called while the pause
+    /// bit of Game.sim_run_flags is set, nor while the in-game menu, or the
+    /// preferences it opens, hold a match played on this machine alone; they
+    /// hold no shared match (extension_state::shared_match), which goes on
+    /// beneath them (Runtime::match_running). An exception it throws is
     /// reported as a simulation error on standard error (the game's log when
     /// it plays) and on the console, the frame's remaining steps are dropped
     /// and the match runs on.
@@ -452,6 +467,9 @@ struct Extension {
     /// Called each time the engine would move the match on: after every frame
     /// drawn with the victory or defeat outcome, and when the disc check a
     /// campaign asks for closes while the match is still on its outcome.
+    /// While it returns false for a shared match the match clock keeps
+    /// running and its steps go to simulation_step as usual; a match played
+    /// on this machine alone stays held on its outcome.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -637,6 +655,55 @@ struct Extension {
     /// @param[in,out] runtime the running app
     /// @param overlay the battlefield and its painter; valid for this call
     void (*draw_match_overlay)(void* context, Runtime& runtime, const MatchOverlay& overlay){};
+
+    /// Reports that the Pause key toggled the running match's pause.
+    ///
+    /// Called during a running match each time the Pause key flips the pause
+    /// bit of Game.sim_run_flags, after the flip, in any kind of game; the
+    /// Pause key of a finished match flips nothing. While the bit is set,
+    /// whoever set it, the match clock steps no simulation and
+    /// simulation_step is not called; frame still is, every frame. Null
+    /// keeps the pause on this machine.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @param paused the pause bit after the flip
+    void (*pause_changed)(void* context, Runtime& runtime, bool paused){};
+
+    /// Reports the progress of a match's loading.
+    ///
+    /// Called each time the loading sets a row of the loading screen while a
+    /// match loads, the building of its world included, before the loading
+    /// screen is drawn. No frame runs while the world is built, so an extension that
+    /// must keep working through a long load does it here. An exception it
+    /// throws during a match start the file header lists abandons the start;
+    /// elsewhere it ends oa-game.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @param rows the loading screen's rows, each 0 to 100 percent; valid for
+    ///        this call
+    /// @param row_count how many rows `rows` holds
+    void (*load_progress)(void* context, Runtime& runtime, const uint8_t* rows, size_t row_count){};
+
+    /// Fills the extension's part of the in-game team panels' host.
+    ///
+    /// Called as each match starts, before its first tick, beside
+    /// console_host, with every entry of the host null and its context the
+    /// runtime. The team panels (TABMENU.GUI, SHARE.GUI, ALLIES.GUI and
+    /// CONTROL.GUI) open only in a multiplayer game
+    /// (extension_state::multiplayer); the engine makes their changes here
+    /// itself and the host tells the other players' machines. The host keeps
+    /// its address for as long as the runtime lives. An exception it throws
+    /// during a match start the file header lists abandons the start;
+    /// elsewhere it ends oa-game.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @param[in,out] host the panels' host, which the runtime keeps at this
+    ///        address while it lives; functions the extension sets must
+    ///        accept the runtime as their context
+    void (*team_panel_host)(void* context, Runtime& runtime, oa::ui::hud::TeamPanelHost& host){};
 };
 
 } // namespace oa::app

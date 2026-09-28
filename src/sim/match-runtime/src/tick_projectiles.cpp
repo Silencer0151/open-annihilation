@@ -371,8 +371,8 @@ void Match::detonate_area(
             );
         }
     }
-    // An interceptor's blast detonates every other live shot inside it. The
-    // notices 3.1c sends the other players for these are not shared.
+    // An interceptor's blast detonates every other live shot inside it, and
+    // shares each one it set off once it has gone off here.
     if ((definition.flags & OA_WEAPON_FLAG_INTERCEPTOR) != 0) {
         const auto reach = static_cast<uint32_t>(definition.areaofeffect) * definition.areaofeffect;
         for (int32_t index = 0;
@@ -384,8 +384,11 @@ void Match::detonate_area(
             const auto dx = wrapping_sub(shot.position.x, other.position.x);
             const auto dy = wrapping_sub(shot.position.y, other.position.y);
             const auto dz = wrapping_sub(shot.position.z, other.position.z);
-            if (base::game_math::squared_magnitude_high(dx, dy, dz) < static_cast<int32_t>(reach))
-                detonate(other, nullptr);
+            if (base::game_math::squared_magnitude_high(dx, dy, dz) >= static_cast<int32_t>(reach))
+                continue;
+            detonate(other, nullptr);
+            if (multiplayer.shot_intercepted != nullptr)
+                multiplayer.shot_intercepted(multiplayer.context, other, shot);
         }
     }
     if (source)

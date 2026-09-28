@@ -291,15 +291,18 @@ struct MultiplayerHooks {
         void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z
     ){};
     /// Shares a feature change settled here: a fire that started here, a
-    /// feature weapon damage destroyed, or one a unit finished reclaiming.
-    /// Null shares nothing.
+    /// feature weapon damage destroyed, one a unit finished reclaiming, or a
+    /// wreck a unit simulated here raised back into a unit. Null shares
+    /// nothing.
     ///
     /// @param context The hooks' context.
     /// @param change What happened to the feature.
-    /// @param cell_x Feature plot column.
-    /// @param cell_z Feature plot row.
-    /// @param reclaimer Unit slot of the unit that finished reclaiming it, 0
-    ///     for a fire or a destruction.
+    /// @param cell_x Feature plot column; the column of a wreck's origin plot
+    ///     for a resurrection.
+    /// @param cell_z Feature plot row; the row of a wreck's origin plot for a
+    ///     resurrection.
+    /// @param reclaimer Unit slot of the unit that finished reclaiming or
+    ///     resurrecting it, 0 for a fire or a destruction.
     void (*feature_changed)(
         void* context,
         sim::feature_runtime::FeatureChange change,
@@ -307,6 +310,70 @@ struct MultiplayerHooks {
         int32_t cell_z,
         uint16_t reclaimer
     ){};
+    /// Shares a shot an interceptor's blast set off here, once the shot has
+    /// been detonated: the other players set off the same shot, then the
+    /// interceptor's own. Called in projectile order for each live shot
+    /// inside the blast of an interceptor whose player is simulated here;
+    /// an interceptor simulated elsewhere sets nothing off here (its blast
+    /// damages nothing here), so its own machine's notice does. Null shares
+    /// nothing.
+    ///
+    /// @param context The hooks' context.
+    /// @param shot The shot the blast set off, detonated; its target point
+    ///     and weapon are as it flew.
+    /// @param interceptor The interceptor's shot whose blast set it off.
+    void (*shot_intercepted)(
+        void* context, const oa::Projectile& shot, const oa::Projectile& interceptor
+    ){};
+    /// Shares that a unit is carried on another at a piece, or set down,
+    /// just before the link applies here. Called for every link
+    /// set_carry_link accepts, whichever machine simulates the two units; a
+    /// link applied through Match::apply_carry_link is not shared again.
+    /// Null shares nothing.
+    ///
+    /// @param context The hooks' context.
+    /// @param unit Carried unit slot.
+    /// @param carrier Carrier slot, 0 when the unit is set down.
+    /// @param piece COB piece of the carrier, -1 for none.
+    /// @param mode Movement layer the carried unit takes.
+    void (*carry_link_changed)(
+        void* context, uint16_t unit, uint16_t carrier, int8_t piece, uint8_t mode
+    ){};
+    /// Shares that a unit simulated here is finished, while the run flag
+    /// (Game.session_flags bit 0) is set: its builder's work completed it,
+    /// or it is a building (bmcode 0) created already finished, which names
+    /// itself as its builder and is shared after unit_created. The other
+    /// players finish their copy (Match::finish_unit). Null shares nothing.
+    ///
+    /// @param context The hooks' context.
+    /// @param unit Finished unit slot.
+    /// @param builder Slot of the unit whose work finished it; `unit` for a
+    ///     building created finished.
+    void (*unit_finished)(void* context, uint16_t unit, uint16_t builder){};
+    /// Hands a unit simulated here to a player another machine simulates,
+    /// just before the unit dies here as captured: that machine creates the
+    /// unit for its player from the unit's build progress, health,
+    /// orientation and weapon stockpiles (Match::transfer_unit with a
+    /// TransferredUnit). Null hands nothing over; the unit still dies.
+    ///
+    /// @param context The hooks' context.
+    /// @param unit Unit slot, still live and still owned by its old owner.
+    /// @param new_owner Player index 0..9 of the receiving player.
+    void (*unit_transferred)(void* context, uint16_t unit, uint8_t new_owner){};
+};
+
+/// The state a unit takes when another player's machine hands it to a
+/// player simulated here (MultiplayerHooks::unit_transferred there,
+/// Match::transfer_unit here).
+struct TransferredUnit {
+    float build_remaining{}; ///< Unit.build_remaining the copy takes; 0 for a finished unit
+    int16_t health{};        ///< Unit.health the copy takes
+    int16_t bank{};          ///< Unit.bank the copy takes
+    uint16_t heading{};      ///< Unit.heading the copy takes
+    int16_t pitch{};         ///< Unit.pitch the copy takes
+    /// UnitWeapon.stockpile per weapon slot; a slot whose weapon is not
+    /// enabled on the copy keeps its own.
+    std::array<uint8_t, OA_UNIT_WEAPON_COUNT> stockpiles{};
 };
 
 // Owns the real unit pool, model/VM objects, weapon slots, spatial plots/buckets
@@ -637,6 +704,19 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param player Player index 0..9; another throws.
     /// @param allies Nonzero for each player it counts as an ally.
     void configure_player_alliances(uint8_t player, const std::array<uint8_t, 10>& allies);
+    /// Takes a player's alliances from its player record's alliance row
+    /// (Player.alliance) as they change during the match, through the team
+    /// panels or another player's machine: every entry but the player's
+    /// own. A player whose row was never configured is left alone.
+    ///
+    /// @param player Player index 0..9; another does nothing.
+    void follow_player_alliances(uint8_t player);
+    /// Gives one player every cell another has mapped, as sharing a map
+    /// does (visibility_state::share_mapped_cells).
+    ///
+    /// @param from Player index 0..9 whose map is shared; another does nothing.
+    /// @param to Player index 0..9 receiving it; another does nothing.
+    void share_mapped_area(uint8_t from, uint8_t to);
     /// Sets up the local player's victory and defeat checks; full ticks
     /// require it. It may be called once; a second call throws.
     ///
@@ -949,18 +1029,43 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param queue Whether the command was queued (shift held).
     /// @return The new order.
     sim::simulation_state::Order& issue_capture(uint16_t unit, uint16_t target, bool queue);
-    /// Gives a captured unit to the capturer's owner: a finished copy with
-    /// its health, build state, attitude, weapon flags and state flags, then
-    /// the captured event and the lethal capture damage on the captured
-    /// unit.
+    /// Gives a captured unit to the capturer's owner (transfer_unit with the
+    /// unit's own state).
     ///
-    /// Nothing happens when either unit is gone, both share an owner, the
-    /// captured unit is dying or the capturer's owner is absent. A watching
-    /// owner (status 3) only kills the unit.
+    /// Nothing happens when either unit is gone or the capturer has no
+    /// owner.
     ///
     /// @param original Captured unit.
     /// @param capturer Capturing unit.
     void capture_unit(sim::unit_spawn::Slot& original, sim::unit_spawn::Slot& capturer);
+    /// Hands a live unit to another player, as a capture or a gift of units
+    /// does.
+    ///
+    /// The unit's captured event runs first. A unit simulated here given to
+    /// a player another machine simulates loses its selection, is kept from
+    /// being selected for 150 ticks, goes to that machine through
+    /// multiplayer.unit_transferred, then dies here as captured. A unit
+    /// given to a player simulated here is created again for that player,
+    /// finished, where it stands and in its occupancy, without the standing
+    /// move and fire orders it is created with. The copy takes `carried`
+    /// when given (its stockpiles only for slots whose weapon is enabled on
+    /// the copy), and the old unit is left for its own machine to kill;
+    /// otherwise it takes the old unit's build progress, health, orientation
+    /// and, for slots whose weapon is enabled on the copy, stockpiles, and
+    /// the old unit dies as captured (lethal damage of the captured kind
+    /// with no attacker). The copy then takes the old unit's state flags. A
+    /// unit simulated elsewhere given to a player simulated elsewhere is
+    /// left alone after its captured event.
+    ///
+    /// Nothing happens when the new owner already owns the unit, is outside
+    /// the ten players or is not present, or the unit is not live or is
+    /// already dying.
+    ///
+    /// @param unit Unit slot; one outside the pool throws.
+    /// @param new_owner Player index 0..9.
+    /// @param carried The state another player's machine handed over with
+    ///     the unit, or null to take the unit's own.
+    void transfer_unit(uint16_t unit, uint8_t new_owner, const TransferredUnit* carried = nullptr);
     /// Issues Ground_Pickup (VTOL_Pickup for an aircraft).
     ///
     /// @param transport Transport slot.
@@ -1567,15 +1672,26 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Carries a unit on another at a piece, or detaches it.
     ///
     /// Nothing happens unless the child is live, not a building and carries
-    /// nothing itself, and a parent is live and not carried itself. A
-    /// detached unit rejoins its bucket chain; a carried one leaves it. A
-    /// child simulated here that is not on an air base gets BeCarried.
+    /// nothing itself, and a parent is live and not carried itself. When the
+    /// link passes these checks, multiplayer.carry_link_changed shares it
+    /// before it applies. A detached unit rejoins its bucket chain; a
+    /// carried one leaves it. A child simulated here that is not on an air
+    /// base gets BeCarried.
     ///
     /// @param child Unit slot to carry.
     /// @param parent Carrier slot, 0 to detach.
     /// @param piece COB piece of the carrier, -1 for none.
     /// @param mode Movement layer the child's movement object takes.
     void set_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode);
+    /// Carries a unit on another at a piece, or detaches it, as a link
+    /// another player's machine shared: set_carry_link's checks and effects
+    /// without multiplayer.carry_link_changed.
+    ///
+    /// @param child Unit slot to carry.
+    /// @param parent Carrier slot, 0 to detach.
+    /// @param piece COB piece of the carrier, -1 for none.
+    /// @param mode Movement layer the child's movement object takes.
+    void apply_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode);
     /// Runs COB ATTACH-UNIT for a carrier: carries a live unit that is free
     /// or already its own at a piece in a movement layer.
     ///
@@ -2048,6 +2164,28 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         uint16_t unit, const KillOutcome& outcome, uint16_t attacker, uint8_t attacker_owner
     );
 
+    /// Finishes a unit as the machine that simulates it shared
+    /// (MultiplayerHooks::unit_finished there): the builder link marks it
+    /// built and flags it for the construction redraw, activates a type
+    /// that activates when built and wakes the unit's construction event. A
+    /// unit simulated elsewhere stays where it hangs, since its own machine
+    /// shares the carry link that sets it down, and nothing is shared for
+    /// it; a unit simulated here is also set down off the pad it was built
+    /// on and shared as set_carry_link and the builder link do.
+    ///
+    /// Nothing happens unless both units are live.
+    ///
+    /// @param unit Finished unit slot; one outside the pool throws.
+    /// @param builder Slot of the unit whose work finished it; `unit` for a
+    ///     building created finished. One outside the pool does nothing.
+    void finish_unit(uint16_t unit, uint16_t builder);
+
+    /// Ends the local player's game at once as a defeat, as another player's
+    /// machine reporting this one gone does: the outcome flags gain finished
+    /// and lose won, and outcome() reports defeat from now on. A game already
+    /// decided ends the same way, so a victory becomes a defeat.
+    void end_local_game() noexcept;
+
     /// Runs one movement tick of a unit simulated elsewhere, once per update
     /// its owner shares.
     ///
@@ -2487,6 +2625,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     bool defeat_allowed_{};
     bool campaign_outcomes_{};
     bool multiplayer_outcomes_{};
+    // Set once end_local_game ended the local player's game: its outcome
+    // checks no longer run, so the defeat stands.
+    bool local_game_ended_{};
     std::vector<sim::scenario::UnitStatus> outcome_unit_status_{};
     /// Runs each active slot's controller, knowledge refresh and sight
     /// stamps and, when its 30-tick deadline (Player.next_economy_tick)
@@ -2498,7 +2639,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     void update_player_slots();
     /// Runs the local slot's victory and defeat checks when its deadline
     /// comes due, then respawns the commander, makes the player a watcher or
-    /// records the outcome as they ask.
+    /// records the outcome as they ask. Nothing runs once end_local_game
+    /// ended the game.
     ///
     /// @quirk A campaign's defeat is tested only while its victory is not
     ///     met, and a watcher is never tested for defeat.
@@ -2743,13 +2885,47 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// @param slot New unit.
     void notify_created(sim::unit_spawn::Slot& slot) override;
-    /// Checks that a finished building's creation can be shared: while the
-    /// run flag is set a local_player_ticked handler is required, or this
-    /// throws; the other players take the completion from the unit's
-    /// per-tick update.
+    /// Shares a building (bmcode 0) created finished, after its creation,
+    /// as a unit its own work finished (the two-argument notify_finished
+    /// with the unit as its builder).
     ///
     /// @param slot New unit.
     void notify_finished(sim::unit_spawn::Slot& slot) override;
+    /// Shares a finished unit through multiplayer.unit_finished while the
+    /// run flag (Game.session_flags bit 0) is set and the unit is simulated
+    /// here; otherwise, or with the entry null, nothing is shared.
+    ///
+    /// @param unit Finished unit.
+    /// @param builder Unit whose work finished it, or the unit itself.
+    void notify_finished(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder);
+    /// Runs the builder link on a unit whose build is complete: its build
+    /// progress becomes finished (Unit.build_remaining 0) and it is flagged
+    /// for the construction redraw, a type that activates when built is
+    /// activated, and the unit's construction event wakes its orders. A
+    /// unit simulated here is then set down off the pad that carries it,
+    /// unless it is a building, and its completion is shared
+    /// (notify_finished).
+    ///
+    /// @param unit Finished unit; must be live.
+    /// @param builder Unit whose work finished it, or the unit itself.
+    void link_built_unit(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder);
+    /// Tests set_carry_link's checks: the child is a live unit, not a
+    /// building, carrying nothing; a parent is another live unit, not
+    /// carried itself.
+    ///
+    /// @param child Unit slot to carry.
+    /// @param parent Carrier slot, 0 to detach.
+    /// @return True when the link may apply.
+    bool carry_link_accepted(uint16_t child, uint16_t parent);
+    /// Applies a carry link that passed carry_link_accepted: the sibling
+    /// chains, bucket membership, piece, movement layer and orders
+    /// set_carry_link describes.
+    ///
+    /// @param child Unit slot to carry.
+    /// @param parent Carrier slot, 0 to detach.
+    /// @param piece COB piece of the carrier, -1 for none.
+    /// @param mode Movement layer the child's movement object takes.
+    void link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode);
     /// Sets or clears state flags with their scripts, sounds, observer wake
     /// and sharing.
     ///

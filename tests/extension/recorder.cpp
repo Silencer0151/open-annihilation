@@ -36,8 +36,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 4;
-constexpr std::size_t kHookCount = 31;
+constexpr uint32_t kExtensionApiVersionRecorded = 5;
+constexpr std::size_t kHookCount = 34;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -491,6 +491,38 @@ struct RuntimeExtension {
     ) {
         record("draw_match_overlay");
     }
+
+    /// Keeps the pause on this machine (Extension::pause_changed).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param paused the pause bit after the flip
+    static void pause_changed(void* /*context*/, Runtime& /*runtime*/, bool paused) {
+        record("pause_changed", paused ? "on" : "off");
+    }
+
+    /// Counts a change of the loading screen's rows (Extension::load_progress).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param rows the loading screen's rows (unused)
+    /// @param row_count how many rows `rows` holds (unused)
+    static void load_progress(
+        void* /*context*/, Runtime& /*runtime*/, const uint8_t* /*rows*/, size_t /*row_count*/
+    ) {
+        record("load_progress");
+    }
+
+    /// Leaves the team panels' host empty (Extension::team_panel_host).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param[in,out] host the panels' host; left with every entry null
+    static void team_panel_host(
+        void* /*context*/, Runtime& /*runtime*/, oa::ui::hud::TeamPanelHost& /*host*/
+    ) {
+        record("team_panel_host");
+    }
 };
 
 } // namespace oa::app
@@ -530,6 +562,9 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->draw_loading = RuntimeExtension::draw_loading;
     table->draw_match_hud = RuntimeExtension::draw_match_hud;
     table->draw_match_overlay = RuntimeExtension::draw_match_overlay;
+    table->pause_changed = RuntimeExtension::pause_changed;
+    table->load_progress = RuntimeExtension::load_progress;
+    table->team_panel_host = RuntimeExtension::team_panel_host;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs.
     uintptr_t words[1 + kHookCount]{};

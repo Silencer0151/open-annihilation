@@ -743,7 +743,7 @@ bool Runtime::save_match_game(const fs::path& path, const char* description, int
     const GameBinding binding(
         world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
     );
-    const LocalClockBinding clock(world.game, match_local_player_, match_timing_);
+    const LocalClockBinding clock(world.game, match_local_player_, saved_match_timing());
     const SessionRecordBinding session(world.game, state_.mission_results, selected_mission_index_);
     SaveLoadState::stage_sight(*this, state);
     SaveLoadState::stage_rules(preferences_, state);

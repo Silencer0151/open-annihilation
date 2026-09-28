@@ -1,0 +1,650 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The team panels of a multiplayer game over the running match: TABMENU.GUI
+// (Tab), SHARE.GUI ('h' and the tab menu), ALLIES.GUI, CONTROL.GUI and the
+// removal question CONTROL.GUI asks. Each loads as the match HUD over the
+// running game; what they tell the other players' machines goes through the
+// extension's TeamPanelHost.
+#include "oa/app/runtime.hpp"
+#include "oa/data/defs/categories.hpp"
+#include "oa/sim/match_runtime.hpp"
+#include "oa/sim/messages.hpp"
+#include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/gui_input.hpp"
+#include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/hud/ingame_menu.hpp"
+#include "oa/ui/hud/order_panel.hpp"
+#include "oa/ui/hud/share_panel.hpp"
+#include "oa/ui/hud/team_panels.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+namespace oa::app {
+
+namespace {
+
+namespace hud = oa::ui::hud;
+
+// The 640x480 screen a panel placed at a negative position counts from.
+constexpr int16_t kSourceScreenWidth = 640;
+constexpr int16_t kSourceScreenHeight = 480;
+
+// Which team menu or panel is loaded as the match HUD.
+enum class TeamPanel : uint8_t { none, tab_menu, share, allies, control, removal_question };
+
+// The open team panel and what it keeps between clicks. The runtime shows one
+// match at a time, so a single session suffices.
+struct TeamPanelSession {
+    TeamPanel panel = TeamPanel::none;
+    hud::SharePanel share{};                  // SHARE.GUI's recipients and slider ranges
+    std::vector<std::string> share_rows;      // PLYRLIST's rows, the recipients' names
+    int32_t share_row = -1;                   // chosen PLYRLIST row, -1 for none
+    int32_t metal = 0;                        // METAL slider's amount
+    int32_t energy = 0;                       // ENERGY slider's amount
+    uint8_t removal_player = OA_PLAYER_COUNT; // player the removal question names
+    std::string translated;                   // the last text the panels translated
+};
+
+/// Returns the team panel session, created on first use.
+///
+/// @return the session
+TeamPanelSession& team_session() {
+    static TeamPanelSession session;
+    return session;
+}
+
+/// Compares two names without regard to case.
+///
+/// @param left one name
+/// @param right the other
+/// @return whether they match
+bool same_name(std::string_view left, std::string_view right) {
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin(), [](char a, char b) {
+               return std::toupper(static_cast<unsigned char>(a)) ==
+                      std::toupper(static_cast<unsigned char>(b));
+           });
+}
+
+/// Tells whether a name is a prefix and a number ("LOGO3", "LIVEALLY12"),
+/// without regard to case.
+///
+/// @param name the name
+/// @param prefix the prefix
+/// @return whether it is
+bool numbered(std::string_view name, std::string_view prefix) {
+    if (name.size() <= prefix.size() || !same_name(name.substr(0, prefix.size()), prefix))
+        return false;
+    return std::all_of(
+        name.begin() + static_cast<std::ptrdiff_t>(prefix.size()), name.end(), [](char c) {
+            return std::isdigit(static_cast<unsigned char>(c)) != 0;
+        }
+    );
+}
+
+/// Places a panel whose root lies at a negative position from the bottom or
+/// right edge of the 640x480 screen, as the game places it.
+///
+/// @param[in,out] layout the loaded panel, its records already at their root's origin
+void place_from_edges(oa::ui::gui_layout::Layout& layout) {
+    if (layout.gadgets.empty())
+        return;
+    const auto& root = layout.gadgets.front().common;
+    const int16_t dx = root.x < 0 ? kSourceScreenWidth : 0;
+    const int16_t dy = root.y < 0 ? kSourceScreenHeight : 0;
+    if (dx == 0 && dy == 0)
+        return;
+    for (auto& gadget : layout.gadgets) {
+        gadget.common.x = static_cast<int16_t>(gadget.common.x + dx);
+        gadget.common.y = static_cast<int16_t>(gadget.common.y + dy);
+    }
+}
+
+/// The per-player state SHARE.GUI works over, gathered from a World.
+struct ShareView {
+    std::array<oa::UnitEconomy*, OA_PLAYER_COUNT> economies{};
+    std::array<uint8_t, OA_PLAYER_COUNT> setup_flags{};
+    hud::ShareWorld world{};
+
+    /// Gathers the players' economy blocks and setup options.
+    ///
+    /// @param[in,out] match_world the running match's World
+    explicit ShareView(oa::World& match_world) {
+        for (std::size_t i = 0; i < OA_PLAYER_COUNT; ++i) {
+            oa::Player& player = match_world.game.players[i];
+            economies[i] = oa::world_player_economy(&match_world, &player);
+            if (const auto* info = oa::world_player_info(&match_world, &player); info != nullptr)
+                setup_flags[i] = static_cast<uint8_t>(info->options);
+        }
+        world = {
+            match_world.game.players,
+            economies.data(),
+            setup_flags.data(),
+            match_world.game.local_player_index,
+            match_world.game.difficulty
+        };
+    }
+
+    ShareView(const ShareView&) = delete;
+    ShareView& operator=(const ShareView&) = delete;
+};
+
+/// Returns a button's fields when a match HUD record is a button.
+///
+/// @param gadget the record
+/// @return its button fields, or null
+oa::ui::gui_layout::ButtonFields* button_of(oa::ui::gui_layout::Gadget& gadget) {
+    return std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+}
+
+} // namespace
+
+bool Runtime::multiplayer_session() const {
+    return (current_extension_state() & extension_state::multiplayer) != 0;
+}
+
+bool Runtime::team_panel_open() const {
+    return team_session().panel != TeamPanel::none;
+}
+
+void Runtime::forget_team_panel() {
+    auto& session = team_session();
+    if (session.panel == TeamPanel::none)
+        return;
+    session = {};
+    if (!match_)
+        return;
+    auto& game = match_->state().game;
+    game.gui_flags = static_cast<uint8_t>(game.gui_flags & ~hud::kGuiFlagsMenuOpen);
+    game.frame_flags = static_cast<uint16_t>(
+        game.frame_flags & ~(hud::kFrameSharePanelOpen | hud::kFrameAlliesPanelOpen)
+    );
+}
+
+bool Runtime::load_team_panel(const char* file) {
+    if (!match_ || !load_match_hud_layout(std::string("guis/") + file))
+        return false;
+    place_from_edges(match_hud_->layout);
+    match_paused_ = true;
+    match_command_ = MatchCommand::none;
+    pending_build_type_ = 0;
+    return true;
+}
+
+oa::ui::hud::PanelControls Runtime::team_panel_controls() {
+    hud::PanelControls controls{};
+    controls.user = this;
+    controls.find = [](void* user, const char* name) -> int32_t {
+        const auto& self = *static_cast<Runtime*>(user);
+        if (!self.match_hud_ || name == nullptr)
+            return -1;
+        const auto& gadgets = self.match_hud_->layout.gadgets;
+        for (std::size_t index = 1; index < gadgets.size(); ++index)
+            if (same_name(gadgets[index].common.name, name))
+                return static_cast<int32_t>(index);
+        return -1;
+    };
+    controls.set_value = [](void* user, int32_t index, int32_t value) {
+        auto& self = *static_cast<Runtime*>(user);
+        const auto& name =
+            self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)].common.name;
+        const auto stage = static_cast<std::size_t>(std::max(value, 0));
+        self.widget_text_stages_[name] = stage;
+        self.widget_gaf_frames_[name] = stage;
+    };
+    controls.value = [](void* user, int32_t index) -> int32_t {
+        const auto& self = *static_cast<Runtime*>(user);
+        const auto& name =
+            self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)].common.name;
+        const auto found = self.widget_text_stages_.find(name);
+        return found != self.widget_text_stages_.end() ? static_cast<int32_t>(found->second) : 0;
+    };
+    controls.set_text = [](void* user, int32_t index, const char* text) {
+        auto& gadget = static_cast<Runtime*>(user)
+                           ->match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
+        if (auto* button = button_of(gadget))
+            button->text = text;
+        else if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
+            label->text = text;
+    };
+    controls.set_active = [](void* user, int32_t index, bool shown) {
+        auto& gadget = static_cast<Runtime*>(user)
+                           ->match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
+        gadget.common.active = shown ? 1 : 0;
+    };
+    controls.set_grayed = [](void* user, int32_t index, bool grayed) {
+        auto& self = *static_cast<Runtime*>(user);
+        auto& gadget = self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
+        if (auto* button = button_of(gadget))
+            button->grayed_out = grayed;
+        if (static_cast<std::size_t>(index) < self.match_hud_states_.size())
+            self.match_hud_states_[static_cast<std::size_t>(index)].grayed = grayed;
+    };
+    controls.disable = [](void* user, int32_t index) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (auto* button =
+                button_of(self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)]))
+            button->grayed_out = true;
+        if (static_cast<std::size_t>(index) < self.match_hud_states_.size())
+            self.match_hud_states_[static_cast<std::size_t>(index)].grayed = true;
+    };
+    // A renamed control keeps its stage and frame under its new name.
+    controls.set_name = [](void* user, int32_t index, const char* name) {
+        auto& self = *static_cast<Runtime*>(user);
+        auto& gadget = self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
+        const std::string old = gadget.common.name;
+        for (auto* map : {&self.widget_text_stages_, &self.widget_gaf_frames_}) {
+            map->erase(name);
+            if (const auto found = map->find(old); found != map->end()) {
+                const auto kept = found->second;
+                map->erase(found);
+                (*map)[name] = kept;
+            }
+        }
+        gadget.common.name = name;
+    };
+    return controls;
+}
+
+void Runtime::present_team_panel(
+    std::vector<renderer::ButtonPresentation>& presentation,
+    std::vector<renderer::ListPresentation>& lists
+) const {
+    const auto& session = team_session();
+    if (session.panel == TeamPanel::none || !match_hud_)
+        return;
+    const auto stage_of = [this](const std::string& name) -> std::optional<std::size_t> {
+        const auto found = widget_text_stages_.find(name);
+        return found != widget_text_stages_.end() ? std::optional<std::size_t>(found->second)
+                                                  : std::nullopt;
+    };
+    for (auto& entry : presentation) {
+        // A player's logo shows its colour's frame of the game's logos.
+        if (numbered(entry.name, "LOGO")) {
+            if (const auto frame = widget_gaf_frames_.find(entry.name);
+                frame != widget_gaf_frames_.end()) {
+                entry.gaf_frame = frame->second;
+                entry.sprite =
+                    renderer::SpriteOverride{renderer::SpriteArchive::global, "32xlogos"};
+            }
+            continue;
+        }
+        // The rows' toggles and team icons keep their templates' art under
+        // their row names.
+        const char* sequence = numbered(entry.name, "LIVEALLY") || numbered(entry.name, "ALLY")
+                                   ? "ALLYx"
+                               : numbered(entry.name, "TEAMICONS") ? "TEAMICONSx"
+                                                                   : nullptr;
+        if (sequence == nullptr)
+            continue;
+        entry.sprite = renderer::SpriteOverride{renderer::SpriteArchive::screen, sequence};
+        entry.gaf_frame = stage_of(entry.name).value_or(0);
+    }
+    if (session.panel == TeamPanel::share)
+        lists.push_back(
+            {"PLYRLIST",
+             session.share_rows,
+             0,
+             session.share_row >= 0 ? std::optional<std::size_t>(session.share_row) : std::nullopt}
+        );
+}
+
+void Runtime::toggle_team_menu() {
+    if (!match_ || match_finished_ || !multiplayer_session())
+        return;
+    const hud::HudEvents events{
+        this,
+        [](void* user, const char* name) { static_cast<Runtime*>(user)->play_ui_sound(name, 0); },
+        nullptr
+    };
+    // Tab over any team panel closes it, as over the tab menu itself.
+    if (team_panel_open()) {
+        hud::play_sound(events, "SmallButton");
+        resume_match_pause();
+        return;
+    }
+    auto& world = match_->state();
+    hud::PanelLoader loader{};
+    loader.user = this;
+    loader.is_loaded = [](void*, const char*) {
+        return team_session().panel == TeamPanel::tab_menu;
+    };
+    loader.close_to_root = [](void* user) {
+        static_cast<Runtime*>(user)->resume_match_pause();
+        return true;
+    };
+    loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
+        auto& self = *static_cast<Runtime*>(user);
+        self.forget_team_panel();
+        if (!self.load_team_panel(name))
+            return false;
+        team_session().panel = TeamPanel::tab_menu;
+        return true;
+    };
+    const bool opened = hud::toggle_tab_menu(
+        world,
+        hud::kSessionMultiplayer,
+        hud::hosts_multiplayer_game(world),
+        loader,
+        team_panel_controls(),
+        events
+    );
+    if (opened) {
+        status_ = "Team menu";
+        render_match_surface();
+    } else if (!team_panel_open()) {
+        // The menu could not load: nothing holds the Game.gui_flags bit.
+        world.game.gui_flags = static_cast<uint8_t>(world.game.gui_flags & ~hud::kGuiFlagsMenuOpen);
+    }
+}
+
+void Runtime::open_team_share_panel() {
+    if (!match_ || match_finished_ || !multiplayer_session())
+        return;
+    auto& world = match_->state();
+    hud::SharePanel panel{};
+    {
+        ShareView view(world);
+        uint16_t frame_flags = world.game.frame_flags;
+        if (!hud::open_share_panel(view.world, panel, frame_flags))
+            return;
+    }
+    // With nobody to share with the panel closes as it opens.
+    if (panel.recipient_count == 0)
+        return;
+    forget_team_panel();
+    if (!load_team_panel("SHARE.GUI"))
+        return;
+    world.game.frame_flags =
+        static_cast<uint16_t>(world.game.frame_flags | hud::kFrameSharePanelOpen);
+    auto& session = team_session();
+    session.panel = TeamPanel::share;
+    session.share = panel;
+    session.share_rows.clear();
+    for (int32_t row = 0; row < panel.recipient_count; ++row) {
+        const oa::Player& player = world.game.players[panel.recipients[row]];
+        session.share_rows.emplace_back(player.name, strnlen(player.name, sizeof player.name));
+    }
+    session.share_row = 0;
+    session.metal = 0;
+    session.energy = 0;
+    const auto controls = team_panel_controls();
+    char amount[16];
+    hud::format_share_amount(amount, sizeof amount, 0);
+    for (const char* label : {"METAL#", "ENERGY#"})
+        if (const auto index = hud::find_control(controls, label); index != -1)
+            controls.set_text(controls.user, index, amount);
+    for (const char* box : {"SHARUNIT", "MAPINFO"}) {
+        widget_text_stages_.erase(box);
+        widget_gaf_frames_.erase(box);
+    }
+    status_ = "Share";
+    render_match_surface();
+}
+
+void Runtime::open_allies_team_panel() {
+    if (!match_ || match_finished_ || !multiplayer_session())
+        return;
+    forget_team_panel();
+    if (!load_team_panel("ALLIES.GUI"))
+        return;
+    team_session().panel = TeamPanel::allies;
+    hud::open_allies_panel(match_->state(), team_panel_controls());
+    status_ = "Allies";
+    render_match_surface();
+}
+
+void Runtime::open_control_team_panel() {
+    if (!match_ || match_finished_ || !multiplayer_session() || local_player_watches())
+        return;
+    forget_team_panel();
+    if (!load_team_panel("CONTROL.GUI"))
+        return;
+    team_session().panel = TeamPanel::control;
+    (void)hud::open_control_panel(match_->state(), team_panel_controls());
+    status_ = "Control";
+    render_match_surface();
+}
+
+void Runtime::open_removal_question(uint8_t player) {
+    if (!match_ || match_finished_)
+        return;
+    forget_team_panel();
+    if (!load_team_panel("YESORNO.GUI"))
+        return;
+    auto& session = team_session();
+    session.panel = TeamPanel::removal_question;
+    session.removal_player = player;
+    hud::open_removal_question(
+        match_->state(),
+        player,
+        team_panel_controls(),
+        [](void* context, const char* text) -> const char* {
+            auto& runtime = *static_cast<Runtime*>(context);
+            auto& translated = team_session().translated;
+            translated = runtime.translate_ui(text);
+            return translated.c_str();
+        },
+        this
+    );
+    render_match_surface();
+}
+
+void Runtime::give_selected_units_to(uint8_t recipient) {
+    if (!match_)
+        return;
+    auto& world = match_->state();
+    // Commanders stay with their player: the COMMANDER category's types.
+    const auto* commanders =
+        oa::data::defs::category_registry_find(&unit_table_.tables.categories, "Commander");
+    const hud::UnitTransfer transfer{
+        this, [](void* user, oa::Unit& unit, oa::Player& to) {
+            auto& self = *static_cast<Runtime*>(user);
+            auto& match_world = self.match_->state();
+            self.match_->transfer_unit(
+                static_cast<uint16_t>(oa::world_unit_slot(&match_world, &unit)), to.index
+            );
+        }
+    };
+    hud::give_selected_units(
+        world, recipient, commanders != nullptr ? commanders->words : nullptr, transfer
+    );
+}
+
+void Runtime::click_team_panel(std::string_view clicked) {
+    if (!match_ || !match_hud_)
+        return;
+    auto& session = team_session();
+    auto& world = match_->state();
+    const std::string name(clicked);
+    const hud::HudEvents events{
+        this,
+        [](void* user, const char* sound) { static_cast<Runtime*>(user)->play_ui_sound(sound, 0); },
+        nullptr
+    };
+    const auto controls = team_panel_controls();
+    const auto index = hud::find_control(controls, name.c_str());
+    // A two-stage toggle the panel reads (allied victory, the share panel's
+    // boxes) turns over as it is clicked.
+    if (index != -1 && (name == "VICTORY" || name == "SHARUNIT" || name == "MAPINFO")) {
+        const auto stage = controls.value(controls.user, index);
+        controls.set_value(controls.user, index, stage == 0 ? 1 : 0);
+    }
+    const auto translate = [](void* context, const char* text) -> const char* {
+        auto& runtime = *static_cast<Runtime*>(context);
+        auto& translated = team_session().translated;
+        translated = runtime.translate_ui(text);
+        return translated.c_str();
+    };
+    switch (session.panel) {
+    case TeamPanel::none:
+        return;
+    case TeamPanel::tab_menu: {
+        auto& game = world.game;
+        const auto action =
+            hud::ingame_menu_click(name.c_str(), game.gui_flags, game.frame_flags, events);
+        switch (action) {
+        case hud::IngameMenuAction::options:
+            // The runtime's options menu keeps no Game.frame_flags bit of its own.
+            game.frame_flags = static_cast<uint16_t>(game.frame_flags & ~hud::kFrameIngameOptions);
+            show_match_pause_menu();
+            return;
+        case hud::IngameMenuAction::share:
+            open_team_share_panel();
+            return;
+        case hud::IngameMenuAction::allies:
+            open_allies_team_panel();
+            return;
+        case hud::IngameMenuAction::control:
+            open_control_team_panel();
+            return;
+        case hud::IngameMenuAction::closed:
+            resume_match_pause();
+            return;
+        case hud::IngameMenuAction::cancel:
+        case hud::IngameMenuAction::none:
+            render_match_surface();
+            return;
+        }
+        return;
+    }
+    case TeamPanel::share: {
+        const auto source = oa::ui::display_layout::canvas_to_source(
+            match_layout_, static_cast<int>(match_pointer_x_), static_cast<int>(match_pointer_y_)
+        );
+        if (index != -1 && (name == "PLYRLIST" || name == "METAL" || name == "ENERGY")) {
+            const auto& gadget = match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
+            if (name == "PLYRLIST") {
+                auto item_height =
+                    static_cast<int32_t>(oa::formats::fnt::line_height(match_hud_->font)) + 1;
+                if (const auto* list =
+                        std::get_if<oa::ui::gui_layout::ListBoxFields>(&gadget.fields);
+                    list != nullptr && list->item_height > 0)
+                    item_height = list->item_height;
+                const auto row = (source.y - gadget.common.y - 2) / std::max(item_height, 1);
+                if (source.y >= gadget.common.y + 2 && row < session.share.recipient_count)
+                    session.share_row = row;
+            } else {
+                const bool metal = name == "METAL";
+                const auto position = static_cast<int16_t>(
+                    std::clamp(source.x - gadget.common.x, 0, std::max(gadget.common.width - 1, 0))
+                );
+                const auto amount = hud::slider_amount(
+                    position,
+                    gadget.common.width,
+                    metal ? session.share.metal_max : session.share.energy_max
+                );
+                (metal ? session.metal : session.energy) = amount;
+                char text[16];
+                hud::format_share_amount(text, sizeof text, amount);
+                if (const auto label = hud::find_control(controls, metal ? "METAL#" : "ENERGY#");
+                    label != -1)
+                    controls.set_text(controls.user, label, text);
+            }
+            render_match_surface();
+            return;
+        }
+        ShareView view(world);
+        hud::ShareHost host{};
+        host.user = this;
+        host.send_metal = [](void* user, uint8_t from, uint8_t to, float amount) {
+            const auto& panels = static_cast<Runtime*>(user)->team_panel_host_;
+            if (panels.resources_given != nullptr)
+                panels.resources_given(panels.context, from, to, true, amount);
+        };
+        host.send_energy = [](void* user, uint8_t from, uint8_t to, float amount) {
+            const auto& panels = static_cast<Runtime*>(user)->team_panel_host_;
+            if (panels.resources_given != nullptr)
+                panels.resources_given(panels.context, from, to, false, amount);
+        };
+        host.give_units = [](void* user, uint8_t, uint8_t to) {
+            static_cast<Runtime*>(user)->give_selected_units_to(to);
+        };
+        host.share_map = [](void* user, uint8_t from, uint8_t to) {
+            auto& runtime = *static_cast<Runtime*>(user);
+            // The receiver takes the giver's map here first.
+            if (runtime.match_)
+                runtime.match_->share_mapped_area(from, to);
+            const auto& panels = runtime.team_panel_host_;
+            if (panels.sight_shared != nullptr)
+                panels.sight_shared(panels.context, from, to);
+        };
+        const auto stage = [&](const char* box) {
+            const auto found = hud::find_control(controls, box);
+            return found != -1 && controls.value(controls.user, found) != 0;
+        };
+        const auto click = hud::share_panel_click(
+            view.world,
+            session.share,
+            name.c_str(),
+            session.share_row,
+            session.metal,
+            session.energy,
+            stage("SHARUNIT"),
+            stage("MAPINFO"),
+            world.game.frame_flags,
+            events,
+            host
+        );
+        // OK and CANCEL close the panel once they have done their part.
+        if (click == hud::ShareClick::closed || name == "OK" || name == "CANCEL")
+            resume_match_pause();
+        else
+            render_match_surface();
+        return;
+    }
+    case TeamPanel::allies: {
+        const auto result = hud::allies_panel_click(
+            world, name.c_str(), controls, events, team_panel_host_, translate, this
+        );
+        // The simulation's alliances follow the players' alliance rows.
+        for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player)
+            match_->follow_player_alliances(player);
+        if (result.announcement[0] != '\0') {
+            const auto& speaker =
+                world.game.players[world.game.local_player_index % OA_PLAYER_COUNT];
+            oa::sim::messages::post_chat(
+                world, speaker, result.announcement, hud::kMessageKindChat, nullptr, message_hooks()
+            );
+        }
+        if (result.click == hud::TeamPanelClick::closed)
+            resume_match_pause();
+        else
+            render_match_surface();
+        return;
+    }
+    case TeamPanel::control: {
+        const auto result =
+            hud::control_panel_click(world, name.c_str(), controls, events, team_panel_host_);
+        if (result.click == hud::TeamPanelClick::confirm_removal)
+            open_removal_question(result.player);
+        else if (result.click == hud::TeamPanelClick::closed)
+            resume_match_pause();
+        else
+            render_match_surface();
+        return;
+    }
+    case TeamPanel::removal_question: {
+        const auto result =
+            hud::removal_question_click(name.c_str(), session.removal_player, team_panel_host_);
+        if (result.click == hud::TeamPanelClick::closed)
+            resume_match_pause();
+        else
+            render_match_surface();
+        return;
+    }
+    }
+}
+
+} // namespace oa::app

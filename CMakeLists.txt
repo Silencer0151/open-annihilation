@@ -226,6 +226,10 @@ if(BUILD_TESTING)
   target_link_libraries(oa-match-model-draws-test PRIVATE oa-app-headers oa-present-model oa-sim-feature-runtime
     oa-options)
   add_test(NAME match-model-draws COMMAND oa-match-model-draws-test)
+  # When the match clock steps: menus, the outcome and the pause bit.
+  add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
+  target_link_libraries(oa-app-match-clock-test PRIVATE oa-base-game-loop oa-ui-console oa-options)
+  add_test(NAME app-match-clock COMMAND oa-app-match-clock-test)
 endif()
 set(oa_game_sources src/app/main.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
@@ -255,7 +259,8 @@ set(oa_game_sources src/app/main.cpp
   src/app/runtime_briefing_narration_check.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
-  src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp)
+  src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
+  src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp)
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
   oa-app-video-capture
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl

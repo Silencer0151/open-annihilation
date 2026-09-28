@@ -113,9 +113,14 @@ void TickHost::ConstructionAdapter::start_building(int16_t heading) {
         const std::array<int32_t, 4> args{heading, 0, 0, 0};
         started = instance->script()->call("StartBuilding", args, false);
     }
+    // The other players start it with the heading as its one argument,
+    // zero-extended from 16 bits.
+    host.match.share_named_script_start(
+        source.unit_index, "StartBuilding", 1, {static_cast<uint16_t>(heading), 0, 0, 0}
+    );
     if (!started)
         source.record.build_flags = static_cast<uint8_t>(source.record.build_flags | 1u);
-    record.order.flags |= 0x40;
+    record.order.flags |= order_building_flag;
 }
 
 bool TickHost::ConstructionAdapter::build_progress(

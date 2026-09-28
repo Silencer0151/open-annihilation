@@ -37,20 +37,39 @@ void TickHost::HealthHost::refund_metal(sim::unit_health::Unit& target, float am
 }
 
 void TickHost::HealthHost::complete_construction(
-    sim::unit_health::Unit&, sim::unit_health::Unit& target
+    sim::unit_health::Unit& builder, sim::unit_health::Unit& target
 ) {
-    auto& s = slot(target);
-    s.record.build_remaining = 0.0F;
-    s.unit->flags |= sim::unit_health::construction_dirty_flag;
-    const auto& definition = *match_.fields(s).definition;
-    if (definition.activate_when_built)
-        match_.set_activation(s, 1, true);
-    match_.notify_finished(s);
-    s.unit->events = static_cast<uint16_t>(s.unit->events | sim::unit_health::construction_event);
-    // Mobile (not bm_code==0) nanoframes detach from the pad and get no
+    match_.link_built_unit(slot(target), slot(builder));
+}
+
+void Match::link_built_unit(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder) {
+    unit.record.build_remaining = 0.0F;
+    unit.unit->flags |= sim::unit_health::construction_dirty_flag;
+    // Only the machine that simulates the unit sets it down and shares the
+    // completion; the other players take the carry link it shares.
+    const bool simulated_here = sim::simulation_state::locally_simulated(*unit.unit);
+    // Mobile (not bm_code==0) nanoframes detach from the pad first and get no
     // order here; their GetBuilt takes them off it.
-    if (!(s.unit->flags & building_unit_flag) && s.record.attach_parent)
-        match_.set_carry_link(s.unit_index, 0, -1, 1);
+    if (simulated_here && !(unit.unit->flags & building_unit_flag) && unit.record.attach_parent)
+        set_carry_link(unit.unit_index, 0, -1, 1);
+    const auto& definition = *fields(unit).definition;
+    if (definition.activate_when_built)
+        set_activation(unit, 1, true);
+    unit.unit->events =
+        static_cast<uint16_t>(unit.unit->events | sim::unit_health::construction_event);
+    if (simulated_here)
+        notify_finished(unit, builder);
+}
+
+void Match::finish_unit(uint16_t unit, uint16_t builder) {
+    auto& finished = slots_.at(unit);
+    if (builder >= slots_.size())
+        return;
+    auto& source = slots_[builder];
+    if (!finished.unit || !source.unit || !(finished.record.flags & live_unit_flag) ||
+        !(source.record.flags & live_unit_flag))
+        return;
+    link_built_unit(finished, source);
 }
 
 bool TickHost::HealthHost::target_is_live(const sim::unit_health::Unit& u) {

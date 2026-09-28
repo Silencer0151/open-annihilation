@@ -81,6 +81,8 @@ struct FakePanel {
     std::map<std::string, int32_t> groups;
     std::map<std::string, int32_t> states;
     std::map<std::string, std::string> texts;
+    std::map<std::string, bool> active;
+    std::map<std::string, bool> grayed;
     std::vector<std::string> loads;
     std::vector<int32_t> load_flags;
     std::vector<std::pair<int32_t, std::string>> links;
@@ -132,6 +134,31 @@ struct FakePanel {
         c.focus = [](void* u, int32_t i) {
             auto* self = static_cast<FakePanel*>(u);
             self->focused = self->name(i);
+        };
+        c.set_active = [](void* u, int32_t i, bool shown) {
+            auto* self = static_cast<FakePanel*>(u);
+            self->active[self->name(i)] = shown;
+        };
+        c.set_grayed = [](void* u, int32_t i, bool gray) {
+            auto* self = static_cast<FakePanel*>(u);
+            self->grayed[self->name(i)] = gray;
+        };
+        // A renamed control keeps the value, text and states it had.
+        c.set_name = [](void* u, int32_t i, const char* n) {
+            auto* self = static_cast<FakePanel*>(u);
+            const std::string old = self->name(i);
+            const auto move = [&](auto& map) {
+                if (const auto found = map.find(old); found != map.end()) {
+                    auto kept = found->second;
+                    map.erase(found);
+                    map[n] = kept;
+                }
+            };
+            move(self->values);
+            move(self->texts);
+            move(self->active);
+            move(self->grayed);
+            self->names[static_cast<size_t>(i)] = n;
         };
         return c;
     }

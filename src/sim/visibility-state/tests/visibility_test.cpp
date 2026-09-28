@@ -67,6 +67,30 @@ bool marked(const PlayerSightGrid& grid) {
            (grid.game->radar_blink_flags & OA_RADAR_MAPPED_DIRTY) != 0;
 }
 
+// A shared map gives the receiver the sharer's mapped cells and nothing
+// else; a new cell for the viewpoint player marks the fog and radar stale.
+void shared_maps() {
+    oa::Game game{};
+    auto grid = make_grid(4, 2, 1);
+    grid.game = &game;
+    grid.player_bits = {0x0001, 0x0003, 0x0000, 0x0004, 0x0001, 0x0000, 0x0005, 0x0002};
+    clear_marks(grid);
+    share_mapped_cells(grid, 0, 1);
+    CHECK(
+        (grid.player_bits ==
+         std::vector<uint16_t>{0x0003, 0x0003, 0x0000, 0x0004, 0x0003, 0x0000, 0x0007, 0x0002})
+    );
+    CHECK(marked(grid));
+    clear_marks(grid);
+    share_mapped_cells(grid, 0, 1);
+    CHECK(!marked(grid));
+    share_mapped_cells(grid, 2, 3);
+    CHECK(grid.player_bits[3] == 0x000c && grid.player_bits[6] == 0x000f && !marked(grid));
+    share_mapped_cells(grid, 16, 1);
+    share_mapped_cells(grid, 0, 16);
+    CHECK(grid.player_bits[2] == 0 && grid.player_bits[5] == 0);
+}
+
 void standard_stamps() {
     // A 3x2 mask with its origin one cell in; pixel value 0 is transparent.
     const SightMask masks[2]{
@@ -476,6 +500,7 @@ int main() {
     CHECK(r.terrain_sum == 33024 && wrapped.speed == -32512 && h.speed == -32512);
     SpeedUnit stopped;
     CHECK(!initialize_terrain_speed(stopped, terrain, &h).updated);
+    shared_maps();
     standard_stamps();
     moving_stamps();
     altitude_stamps();

@@ -641,11 +641,12 @@ class TickHost::ConstructionAdapter {
     // A GetBuilt order at the head of the frame's queue, aimed at the builder.
     void issue_get_built(sim::simulation_state::Unit& nanoframe);
 
-    /// Starts StartBuilding(heading) on the builder's script and marks the
-    /// order as building (order_building_flag).
+    /// Starts StartBuilding(heading) on the builder's script, shares the
+    /// start with the other players (share_named_script_start, one argument:
+    /// the heading zero-extended from 16 bits) and marks the order as
+    /// building (order_building_flag).
     ///
-    /// A builder whose script cannot start it raises its own build stance;
-    /// the call is not shared with the other players.
+    /// A builder whose script cannot start it raises its own build stance.
     ///
     /// @param heading Direction to the site in 65536ths of a turn.
     void start_building(int16_t heading);

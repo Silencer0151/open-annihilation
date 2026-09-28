@@ -32,6 +32,12 @@ struct PanelControls {
     void (*set_text)(void* user, int32_t index, const char* text){};
     /// Gives a text control the keyboard focus.
     void (*focus)(void* user, int32_t index){};
+    /// Shows (true) or hides (false) a control; a hidden control takes no click.
+    void (*set_active)(void* user, int32_t index, bool active){};
+    /// Greys a control out (true) or makes it live again (false).
+    void (*set_grayed)(void* user, int32_t index, bool grayed){};
+    /// Renames a control: finds and clicks report it by the new name.
+    void (*set_name)(void* user, int32_t index, const char* name){};
 };
 
 /// Side effects the HUD raises in the rest of the game.

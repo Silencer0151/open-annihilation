@@ -34,6 +34,7 @@
 #include "oa/ui/hud/camera_scroll.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
+#include "oa/ui/hud/team_panels.hpp"
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
@@ -299,6 +300,17 @@ class Runtime final : public menu::Host,
     /// @return the root gadget's position on those screens, else (0, 0)
     [[nodiscard]] oa::ui::display_layout::Point panel_origin() const;
 
+    /// Tells whether the running match goes on this frame.
+    ///
+    /// It does on the match screen. A match shared with other players'
+    /// machines (extension_state::shared_match) also goes on beneath the
+    /// preferences its in-game menu opens (the options screen and its
+    /// tabs), as it does beneath its menus; a match played on this machine
+    /// alone does not.
+    ///
+    /// @return false without a running match
+    [[nodiscard]] bool match_running() const;
+
   private:
 
     /// Runs one pass of the idle loop.
@@ -407,12 +419,33 @@ class Runtime final : public menu::Host,
 
     /// Runs the match ticks the clock time since the last frame is worth at the current speed.
     ///
-    /// Each tick runs unless the extension's simulation step takes it; a failing
-    /// tick goes to report_match_tick_error(). After any tick at most one expired
-    /// line of the message log is retired.
+    /// The clock first takes the pause bit of the match's Game.sim_run_flags
+    /// (clock_flags_with_pause): while it is set the clock's time moves on and
+    /// no tick is owed. Each tick runs unless the extension's simulation step
+    /// takes it; a failing tick goes to report_match_tick_error(). After any
+    /// tick at most one expired line of the message log is retired.
     ///
     /// @param now_ms clock_milliseconds() of this frame
     void advance_match_clock(uint32_t now_ms);
+
+    /// Tells whether the running match's clock steps this frame.
+    ///
+    /// The match goes on (match_running), its ticks are not blocked, and
+    /// match_clock_runs allows it for the kind of match (shared with other
+    /// players' machines or not), an open menu (match_paused_ before the
+    /// outcome) and the outcome.
+    ///
+    /// @return true when idle_tick advances the match clock
+    [[nodiscard]] bool match_clock_steps() const;
+
+    /// Returns the match clock as a save stores it: its run flags carry the
+    /// running match's pause bit (clock_flags_with_pause), which the clock
+    /// itself takes only as it steps, so a match paused while its menu holds
+    /// it is saved paused.
+    ///
+    /// @return match_timing_ with the pause bit of Game.sim_run_flags; the
+    ///     clock unchanged without a running match
+    [[nodiscard]] oa::base::game_loop::Timing saved_match_timing() const;
 
     /// Returns how many rows the map selection list shows.
     ///
@@ -1089,8 +1122,10 @@ class Runtime final : public menu::Host,
 
     /// Draws the title over a finished or paused match.
     ///
-    /// A finished match shows the victory or defeat title, none for a watcher;
-    /// a paused one the paused title and the in-game options panel.
+    /// A finished match shows the victory or defeat title, none for a watcher.
+    /// The paused title shows while the pause bit of Game.sim_run_flags is set
+    /// or an open menu holds a match played on this machine alone; the menu of
+    /// a shared match draws its panel over the running game.
     void draw_end_overlay();
 
     /// Clicks a named control of the in-game options panels and carries out the action the panel
@@ -1140,11 +1175,125 @@ class Runtime final : public menu::Host,
 
     /// Shows the pause menu's own panels over the battlefield.
     ///
-    /// EXITMENU, YESORNO, RESTART and GAMEOPTIONS lie over the battlefield; they
-    /// render into the HUD source with the side panels, and the battlefield pass
-    /// shows them: RESTART.GUI and GAMEOPTIONS.GUI whole over their art, the
+    /// EXITMENU, YESORNO, RESTART, GAMEOPTIONS and the team panels lie over the
+    /// battlefield; they render into the HUD source with the side panels, and
+    /// the battlefield pass shows them: RESTART.GUI and GAMEOPTIONS.GUI whole
+    /// over their art, the team panels whole over the side panel's tile, the
     /// others (which have no art here) control by control.
     void draw_battlefield_panel();
+
+    /// Tells whether the running game is a multiplayer game (extension_state::multiplayer).
+    ///
+    /// @return true while a multiplayer session is open
+    [[nodiscard]] bool multiplayer_session() const;
+
+    /// Opens TABMENU.GUI over a multiplayer match, or closes the team menu or
+    /// panel that is open (Tab).
+    ///
+    /// ALLIES and SHARE show for a local player who is not a watcher; CONTROL
+    /// also needs this machine to host the game (ui::hud::toggle_tab_menu).
+    /// Nothing once the match is finished.
+    void toggle_team_menu();
+
+    /// Opens SHARE.GUI over a multiplayer match ('h' and the tab menu's SHARE).
+    ///
+    /// The recipients are the players taking part other than local players and
+    /// watchers (ui::hud::open_share_panel), listed in PLYRLIST with the first
+    /// chosen; the METAL and ENERGY sliders run to the local player's stores
+    /// and start at 0. A watcher gets no panel, and one with no recipient
+    /// closes at once.
+    void open_team_share_panel();
+
+    /// Opens ALLIES.GUI over a multiplayer match (ui::hud::open_allies_panel).
+    void open_allies_team_panel();
+
+    /// Opens CONTROL.GUI over a multiplayer match; nothing for a watching
+    /// local player (ui::hud::open_control_panel).
+    void open_control_team_panel();
+
+    /// Opens YESORNO.GUI to ask whether to remove a player (CONTROL.GUI's LIVEPLYRn).
+    ///
+    /// @param player player index 0..9
+    void open_removal_question(uint8_t player);
+
+    /// Tells whether a team menu or panel is open over the match.
+    ///
+    /// @return true while TABMENU.GUI, SHARE.GUI, ALLIES.GUI, CONTROL.GUI or
+    ///     the removal question is loaded as the match HUD
+    [[nodiscard]] bool team_panel_open() const;
+
+    /// Clicks a named control of the open team menu or panel.
+    ///
+    /// The tab menu opens the options menu, SHARE, ALLIES or CONTROL; SHARE.GUI
+    /// picks a recipient row, sets a slider from the pointer, toggles its boxes
+    /// and gives on OK (ui::hud::share_panel_click); ALLIES.GUI and CONTROL.GUI
+    /// follow ui::hud::allies_panel_click and control_panel_click, and the
+    /// alliance line is said in chat through the chat formatter; the removal
+    /// question removes on CHOICE1. A panel that closes resumes the match's
+    /// order panel.
+    ///
+    /// @param name control name in the loaded panel
+    void click_team_panel(std::string_view name);
+
+    /// Forgets the team menu or panel, as any in-game menu closing or
+    /// replacing it does: the menu bits of Game.gui_flags and the share and
+    /// allies panels' bits of Game.frame_flags are dropped.
+    void forget_team_panel();
+
+    /// Gives the team menu or panel's controls their drawn state: the players'
+    /// logos, the alliance and team icons, and SHARE.GUI's recipient list.
+    ///
+    /// @param[in,out] presentation the match HUD's button presentation
+    /// @param[out] lists receives PLYRLIST while SHARE.GUI is open
+    void present_team_panel(
+        std::vector<renderer::ButtonPresentation>& presentation,
+        std::vector<renderer::ListPresentation>& lists
+    ) const;
+
+    /// Returns the named controls of the team menu or panel loaded as the match HUD.
+    ///
+    /// @return controls over match_hud_: a value is a button's stage or an
+    ///     image's frame
+    [[nodiscard]] oa::ui::hud::PanelControls team_panel_controls();
+
+    /// Loads a team menu or panel as the match HUD over the running match.
+    ///
+    /// A panel whose root lies at a negative position is placed from the
+    /// bottom or right edge of the 640x480 screen. The in-game menu counts as
+    /// open (match_paused_), which blocks the battlefield's input.
+    ///
+    /// @param file GUI file under guis/
+    /// @return false when the panel cannot be loaded
+    bool load_team_panel(const char* file);
+
+    /// Hands the local player's selected units to another player
+    /// (ui::hud::give_selected_units): Match::transfer_unit for each, keeping
+    /// commanders (the COMMANDER category), airborne units and units carrying
+    /// or carried by another.
+    ///
+    /// @param recipient player index 0..9
+    void give_selected_units_to(uint8_t recipient);
+
+    /// Checks the Pause key and the menus in a skirmish.
+    ///
+    /// Pause sets the pause bit of Game.sim_run_flags, opens no menu, holds
+    /// Game.tick over a second of frames and shows the paused title; Pause
+    /// again resumes. Escape still opens ARMOPT.GUI and holds the skirmish;
+    /// 'h' opens nothing and moves no resources, and Tab opens no team menu.
+    /// Throws std::runtime_error at the first failure.
+    void check_pause_key();
+
+    /// Checks the rules of a match shared with other players' machines and
+    /// the team panels, over the running skirmish taken as one.
+    ///
+    /// The extension state is taken as a shared multiplayer match and the team
+    /// panels' host records what it is told: ARMOPT.GUI holds nothing, a pause
+    /// bit set elsewhere holds the clock and shows the paused title, Tab and
+    /// 'h' open the tab menu and SHARE.GUI, which gives metal and a unit to the
+    /// computer player, ALLIES.GUI allies with it and says so in chat,
+    /// CONTROL.GUI and its removal question tell the host. Everything is put
+    /// back afterwards. Throws std::runtime_error at the first failure.
+    void check_team_panels();
 
     /// Leaves the options screens for the screen they were opened from.
     ///
@@ -2135,7 +2284,8 @@ class Runtime final : public menu::Host,
 
     /// Sets a load screen category's progress and pumps a frame.
     ///
-    /// Reaching 100 starts the category's flash.
+    /// Reaching 100 starts the category's flash. The extension hears of the
+    /// rows (Extension::load_progress) before the frame is drawn.
     ///
     /// @param row category row, 0 through 5; out of range only pumps
     /// @param percent progress, clamped to 100
@@ -3719,6 +3869,10 @@ class Runtime final : public menu::Host,
     /// Handles a key in a match: the function keys, speed, squads, quick keys, pages and the other
     /// match shortcuts.
     ///
+    /// Pause toggles the pause of a match that is not finished and opens no
+    /// menu; Escape and F2 open and close the in-game options menu. Outside a
+    /// multiplayer game 'h' does nothing.
+    ///
     /// @param key keyboard event; repeats are ignored
     /// @return true when the key was taken
     bool handle_match_hotkey(const SDL_KeyboardEvent& key);
@@ -3750,9 +3904,6 @@ class Runtime final : public menu::Host,
     /// @param y1 the other corner's row
     /// @param kind "attack" (enemy units), "reclaim" (any unit) or "repair" (local units)
     void area_order_units(int x0, int y0, int x1, int y1, std::string_view kind);
-
-    /// Gives up to 100 metal and 100 energy to the first allied player.
-    void share_resources();
 
     /// Selects the next local unit outside the battlefield view and centres the camera on it.
     void select_next_offscreen_unit();
@@ -4560,11 +4711,14 @@ class Runtime final : public menu::Host,
 
     /// Sends a match key to the console's hotkeys.
     ///
-    /// F4 pins the kills board and '`' turns the damage bars on and off.
-    /// Developer keys: backslash repeats the last console line and F11 toggles the
-    /// debug keys once the passphrase is accepted; while the debug keys are on,
-    /// '=', ']', 'i' and 'm' go to the debug dispatcher instead of their normal
-    /// use. Ctrl+F10 starts a film capture.
+    /// F4 pins the kills board and '`' turns the damage bars on and off. Pause
+    /// flips the pause bit of Game.sim_run_flags and reports it through
+    /// Extension::pause_changed. In a multiplayer game Tab opens and closes the
+    /// team menu and 'h' opens SHARE.GUI. Developer keys: backslash repeats
+    /// the last console line and F11 toggles the debug keys once the passphrase
+    /// is accepted; while the debug keys are on, '=', ']', 'i' and 'm' go to the
+    /// debug dispatcher instead of their normal use. Ctrl+F10 starts a film
+    /// capture.
     ///
     /// @param key keyboard event
     /// @return false when the key is not a console hotkey or there is no match
@@ -4903,6 +5057,9 @@ class Runtime final : public menu::Host,
     void center_camera_on_unit(uint16_t id);
 
     /// Shows the order panel for the selection: a builder's first build page, else the order page.
+    ///
+    /// Nothing while an in-game menu or the outcome is up (match_paused_): the
+    /// menu keeps its panel, and resume_match_pause() shows the selection's.
     void apply_match_hud_for_selection();
 
     /// Tests whether a canvas point is on the radar picture.
@@ -6458,6 +6615,9 @@ class Runtime final : public menu::Host,
     bool chat_composing_ = false;
     std::string chat_buffer_{};
     std::shared_ptr<MatchConsole> console_;
+    // What the team panels tell the other players' machines, filled by the
+    // extension (Extension::team_panel_host) as each match starts.
+    oa::ui::hud::TeamPanelHost team_panel_host_{};
     // Model light direction once "Light" set it; later matches keep it.
     std::optional<std::array<float, 3>> model_light_;
     // Per-channel table of the display gamma for the RGB layers.

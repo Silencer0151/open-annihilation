@@ -498,8 +498,11 @@ void Runtime::render_match_surface() {
                  std::nullopt}
             );
         }
+        // A team panel's logos, row icons and recipient list.
+        std::vector<renderer::ListPresentation> lists;
+        present_team_panel(presentation, lists);
         const auto hud_start = std::chrono::steady_clock::now();
-        hud = renderer::render_screen(*match_hud_, presentation);
+        hud = renderer::render_screen(*match_hud_, presentation, lists);
         phase_times_.hud += std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now() - hud_start
         )
@@ -1251,8 +1254,9 @@ void Runtime::render_match_surface() {
     draw_chat_overlay();
     draw_extension_overlay();
     draw_profile_bars();
-    if (match_finished_ || match_paused_)
-        draw_end_overlay();
+    // The outcome, the paused title (a menu's hold or the pause bit) and the
+    // menus over the battlefield.
+    draw_end_overlay();
     outcome_frame_drawn_ = match_finished_;
     overlay_target_ = nullptr;
     hud_source_space_ = false;

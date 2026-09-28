@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/app/game_directory.hpp"
+#include "match_clock.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/platform/app_loop.hpp"
 #include "oa/platform/log_files.hpp"
@@ -344,7 +345,7 @@ void Runtime::idle_tick() {
         mark_profile(OA_PROFILE_SYNC);
     if (extension_.frame != nullptr)
         extension_.frame(extension_.context, *this, FrameStage::after_pump);
-    if (screen_ == Screen::match && match_ && !match_tick_blocked_ && !match_paused_)
+    if (match_clock_steps())
         advance_match_clock(clock_milliseconds());
     if (screen_ == Screen::match && match_)
         present_match_outcome();
@@ -367,7 +368,35 @@ uint32_t Runtime::clock_milliseconds() const {
                                      .count());
 }
 
+bool Runtime::match_running() const {
+    if (!match_)
+        return false;
+    if (screen_ == Screen::match)
+        return true;
+    const bool beneath_preferences =
+        options_parent_ == Screen::match &&
+        (screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
+         screen_ == Screen::speeds || screen_ == Screen::music);
+    return beneath_preferences && (current_extension_state() & extension_state::shared_match) != 0;
+}
+
+bool Runtime::match_clock_steps() const {
+    if (!match_running() || match_tick_blocked_)
+        return false;
+    const bool shared = (current_extension_state() & extension_state::shared_match) != 0;
+    return match_clock_runs(shared, match_paused_ && !match_finished_, match_finished_);
+}
+
+oa::base::game_loop::Timing Runtime::saved_match_timing() const {
+    auto timing = match_timing_;
+    if (match_)
+        timing.flags = clock_flags_with_pause(timing.flags, match_->state().game.sim_run_flags);
+    return timing;
+}
+
 void Runtime::advance_match_clock(uint32_t now_ms) {
+    match_timing_.flags =
+        clock_flags_with_pause(match_timing_.flags, match_->state().game.sim_run_flags);
     oa::base::game_loop::update_timing(
         match_timing_, oa::base::game_loop::scaled_clock(now_ms, match_clock_scale())
     );

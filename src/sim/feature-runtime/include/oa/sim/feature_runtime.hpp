@@ -55,9 +55,10 @@ inline constexpr oa_fixed wreck_sink_speed = static_cast<oa_fixed>(0xffffd334u);
 
 // A feature change settled on this machine, for the other players.
 enum class FeatureChange : uint8_t {
-    ignited,   // caught fire here
-    destroyed, // weapon damage started its die sequence
-    reclaimed, // a unit finished reclaiming it
+    ignited,     // caught fire here
+    destroyed,   // weapon damage started its die sequence
+    reclaimed,   // a unit finished reclaiming it
+    resurrected, // a unit raised the wreck back into a unit, which removed it
 };
 
 #pragma pack(push, 1)

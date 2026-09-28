@@ -14,6 +14,7 @@
 #include "oa/ui/gui_input.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/ui/screen_registry.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/app/runtime.hpp"
 #include <algorithm>
 #include <cctype>
@@ -753,6 +754,7 @@ void Runtime::show_match_orders_page() {
 void Runtime::show_match_pause_menu() {
     if (match_finished_)
         return;
+    forget_team_panel();
     match_paused_ = true;
     match_command_ = MatchCommand::none;
     pending_build_type_ = 0;
@@ -769,7 +771,9 @@ void Runtime::show_match_pause_menu() {
         panel_to_widgets(
             session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_
         );
-        status_ = "Game paused";
+        // The menu of a shared match holds nothing.
+        status_ = (current_extension_state() & extension_state::shared_match) != 0 ? "Options"
+                                                                                   : "Game paused";
         render_match_surface();
     } else
         status_ = "Pause menu unavailable";
@@ -778,6 +782,7 @@ void Runtime::show_match_pause_menu() {
 void Runtime::resume_match_pause() {
     if (match_finished_)
         return;
+    forget_team_panel();
     match_paused_ = false;
     if (selected_match_unit_ != 0)
         apply_match_hud_for_selection();
@@ -1097,10 +1102,15 @@ void Runtime::draw_end_overlay() {
             );
         return;
     }
-    if (match_paused_) {
+    // The pause bit holds any match; a menu holds only a match played on this
+    // machine alone, and a shared match's menu shows over the running game.
+    const bool pause_bit =
+        match_ && (match_->state().game.sim_run_flags & oa::ui::console::kSimRunPaused) != 0;
+    const bool shared = (current_extension_state() & extension_state::shared_match) != 0;
+    if (pause_bit || (match_paused_ && !shared))
         draw_igtitle("igpaused");
+    if (match_paused_)
         draw_battlefield_panel();
-    }
 }
 
 void Runtime::draw_battlefield_panel() {
@@ -1126,7 +1136,7 @@ void Runtime::draw_battlefield_panel() {
             area.height
         );
     };
-    if (match_menu_session().ingame_panel == IngamePanel::restart ||
+    if (team_panel_open() || match_menu_session().ingame_panel == IngamePanel::restart ||
         match_menu_session().ingame_panel == IngamePanel::game_settings) {
         show(root);
         return;
@@ -1143,6 +1153,10 @@ void Runtime::activate_pause_gadget(std::string_view name) {
     auto& panel = session.panel;
     if (!match_hud_)
         return;
+    if (team_panel_open()) {
+        click_team_panel(name);
+        return;
+    }
     panel_from_widgets(panel, match_hud_->layout, widget_text_stages_);
     panel.selected = ui::panel_find(panel, name);
     // A click steps a multi-stage button before the panel handler runs.

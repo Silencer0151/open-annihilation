@@ -97,10 +97,10 @@
   },
   "src/sim/match-runtime": {
    "doc-block": 167,
-   "flags-raw-mask": 86,
+   "flags-raw-mask": 85,
    "member-initializer": 4,
    "tier-heap-container": 65,
-   "tier-throw": 125,
+   "tier-throw": 124,
    "tier-virtual": 42
   },
   "src/sim/mission-units": {

@@ -96,10 +96,15 @@ bool is_watcher(World& world, const Player& player) noexcept {
     return info != nullptr && (info->options & OA_SETUP_OPTION_WATCHER) != 0;
 }
 
-void set_named(const PanelControls& controls, const char* name, int32_t value) {
+/// Shows or hides a named control of the loaded panel.
+///
+/// @param controls Named controls of the panel.
+/// @param name Control name.
+/// @param shown Whether the control shows.
+void show_named(const PanelControls& controls, const char* name, bool shown) {
     const auto index = find_control(controls, name);
-    if (index != -1 && controls.set_value != nullptr)
-        controls.set_value(controls.user, index, value);
+    if (index != -1 && controls.set_active != nullptr)
+        controls.set_active(controls.user, index, shown);
 }
 
 } // namespace
@@ -131,16 +136,16 @@ bool toggle_tab_menu(
             !is_watcher(world, player))
             ++others;
     const Player& local = game.players[game.local_player_index % OA_PLAYER_COUNT];
-    int32_t control = 0;
+    bool control = false;
     if (session_kind == kSessionMultiplayer && !is_watcher(world, local)) {
-        set_named(controls, "ALLIES", others > 0 ? 1 : 0);
-        set_named(controls, "SHARE", others > 0 ? 1 : 0);
-        control = (game.setup_options & kSetupOptionLocked) == 0 && control_offered ? 1 : 0;
+        show_named(controls, "ALLIES", others > 0);
+        show_named(controls, "SHARE", others > 0);
+        control = (game.setup_options & kSetupOptionLocked) == 0 && control_offered;
     } else {
-        set_named(controls, "ALLIES", 0);
-        set_named(controls, "SHARE", 0);
+        show_named(controls, "ALLIES", false);
+        show_named(controls, "SHARE", false);
     }
-    set_named(controls, "CONTROL", control);
+    show_named(controls, "CONTROL", control);
     return true;
 }
 

@@ -317,21 +317,40 @@ void Match::finalize_attachment(uint16_t index) {
     }
 }
 
-void Match::set_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode) {
+bool Match::carry_link_accepted(uint16_t child, uint16_t parent) {
     if (child == 0 || child >= slots_.size() || !slots_[child].unit)
-        return;
-    auto& child_slot = slots_[child];
-    auto& child_unit = *child_slot.unit;
+        return false;
+    const auto& child_unit = *slots_[child].unit;
     if (!(child_unit.flags & live_unit_flag) || (child_unit.flags & building_unit_flag) ||
         link_first_child(match_unit(*this, child)) != 0)
-        return;
+        return false;
     if (parent != 0) {
         if (parent >= slots_.size() || parent == child || !slots_[parent].unit)
-            return;
+            return false;
         if (!(slots_[parent].unit->flags & live_unit_flag) ||
             link_parent(match_unit(*this, parent)) != 0)
-            return;
+            return false;
     }
+    return true;
+}
+
+void Match::set_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode) {
+    if (!carry_link_accepted(child, parent))
+        return;
+    // Every machine shares the links it makes, whoever simulates the units.
+    if (multiplayer.carry_link_changed != nullptr)
+        multiplayer.carry_link_changed(multiplayer.context, child, parent, piece, mode);
+    link_carried_unit(child, parent, piece, mode);
+}
+
+void Match::apply_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode) {
+    if (carry_link_accepted(child, parent))
+        link_carried_unit(child, parent, piece, mode);
+}
+
+void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode) {
+    auto& child_slot = slots_[child];
+    auto& child_unit = *child_slot.unit;
     auto bucket_for = [this](sim::spatial_state::Unit& unit) -> sim::spatial_state::Bucket& {
         if (unit.bucket) {
             if (*unit.bucket >= spatial_.buckets.size())

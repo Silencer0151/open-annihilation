@@ -435,6 +435,22 @@ void map_area(const SightStamp& stamp, SightContext& context) noexcept {
         mark_viewpoint_sight_changed(grid);
 }
 
+void share_mapped_cells(PlayerSightGrid& grid, uint8_t from, uint8_t to) noexcept {
+    constexpr uint8_t player_bit_count = 16;
+    if (from >= player_bit_count || to >= player_bit_count)
+        return;
+    const auto shared = static_cast<uint16_t>(1U << from);
+    const auto received = static_cast<uint16_t>(1U << to);
+    bool changed = false;
+    for (auto& bits : grid.player_bits)
+        if ((bits & shared) != 0 && (bits & received) == 0) {
+            bits = static_cast<uint16_t>(bits | received);
+            changed = true;
+        }
+    if (changed && to == grid.viewpoint_player)
+        mark_viewpoint_sight_changed(grid);
+}
+
 void update_area_coverage(SightStamp& stamp, SightContext& context) noexcept {
     const auto rules = context.visibility_flags;
     if ((rules & altitude_sight_algorithm) != 0) {

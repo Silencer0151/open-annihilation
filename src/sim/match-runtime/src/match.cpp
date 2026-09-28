@@ -828,12 +828,25 @@ void Match::notify_created(sim::unit_spawn::Slot& slot) {
     throw std::logic_error("unit creation shared without a multiplayer handler");
 }
 
-void Match::notify_finished(sim::unit_spawn::Slot&) {
-    // A shared completion names the builder, which is not known here; the
-    // other players take it from the unit's per-tick update.
-    const bool shared = multiplayer.local_player_ticked != nullptr;
-    if (simulation_.run_flag && !shared)
-        throw std::logic_error("unit completion shared without a multiplayer handler");
+void Match::notify_finished(sim::unit_spawn::Slot& slot) {
+    // A building created finished names itself as its builder.
+    notify_finished(slot, slot);
+}
+
+void Match::notify_finished(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder) {
+    if (!simulation_.run_flag || multiplayer.unit_finished == nullptr || !unit.unit ||
+        !sim::simulation_state::locally_simulated(*unit.unit))
+        return;
+    multiplayer.unit_finished(multiplayer.context, unit.unit_index, builder.unit_index);
+}
+
+void Match::end_local_game() noexcept {
+    // A game already decided ends this way too: a victory becomes a defeat.
+    outcome_state_.flags |= sim::scenario::outcome_flag::finished;
+    outcome_state_.flags =
+        static_cast<uint16_t>(outcome_state_.flags & ~sim::scenario::outcome_flag::won);
+    outcome_result_ = sim::scenario::Outcome::defeat;
+    local_game_ended_ = true;
 }
 
 void Match::set_activation(sim::unit_spawn::Slot& slot, uint8_t mask, bool enabled) {

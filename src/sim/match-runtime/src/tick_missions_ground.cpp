@@ -126,10 +126,25 @@ uint32_t TickHost::GroundMissions::resurrect() {
             plot_index(point[0] >> ground::cell_shift, point[2] >> ground::cell_shift);
         if (!index || origin_feature_word(feature_origin(*index)) >= ground::first_reserved_feature)
             return ground::mission_failed;
-        copy_wreck_orientation(raised->record, feature_origin(*index));
+        const auto origin = feature_origin(*index);
+        copy_wreck_orientation(raised->record, origin);
         (void)sim::feature_runtime::clear_plot_feature(
             world(), host.match.feature_host(), *index, false
         );
+        // The wreck goes on the other players' machines too, named by its
+        // origin plot, when the resurrecting unit is simulated here.
+        const auto& multiplayer = host.match.multiplayer;
+        if (multiplayer.feature_changed != nullptr &&
+            sim::simulation_state::locally_simulated(*s.unit)) {
+            const auto width = static_cast<size_t>(host.match.spatial_.terrain_width);
+            multiplayer.feature_changed(
+                multiplayer.context,
+                sim::feature_runtime::FeatureChange::resurrected,
+                static_cast<int32_t>(origin % width),
+                static_cast<int32_t>(origin / width),
+                s.unit_index
+            );
+        }
         raised->record.build_remaining = 0.0F;
         raised->record.health = 1;
         ConstructionAdapter(host, s, record).refresh_selected();
