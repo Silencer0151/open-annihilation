@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -314,15 +315,13 @@ class Parser {
         if (!output.compressed) {
             if (!fits(data_at, pixel_count, bytes_.size()))
                 return set_error(ErrorCode::truncated, data_at, "truncated raw GAF pixels");
-            std::copy_n(
-                bytes_.begin() + static_cast<std::ptrdiff_t>(data_at),
-                static_cast<std::ptrdiff_t>(pixel_count),
-                output.pixels.begin()
-            );
-            for (std::size_t index = 0; index < pixel_count; ++index) {
-                output.coverage[index] =
-                    output.pixels[index] != output.transparency_index ? 1U : 0U;
-            }
+            // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
+            uint8_t* const pixels = output.pixels.data();
+            uint8_t* const coverage = output.coverage.data();
+            const uint8_t transparent = output.transparency_index;
+            std::memcpy(pixels, bytes_.data() + data_at, pixel_count);
+            for (std::size_t index = 0; index < pixel_count; ++index)
+                coverage[index] = pixels[index] != transparent ? 1U : 0U;
             return true;
         }
         return decode_compressed(data_at, output);
@@ -332,6 +331,10 @@ class Parser {
     [[nodiscard]] bool decode_compressed(std::size_t at, Frame& output) {
         std::size_t row_at = at;
         const auto width = static_cast<std::size_t>(output.width);
+        // Plain pointers keep the per-byte work free of calls in unoptimised builds.
+        const uint8_t* const input = bytes_.data();
+        uint8_t* const pixels = output.pixels.data();
+        uint8_t* const coverage = output.coverage.data();
         for (std::size_t y = 0; y < output.height; ++y) {
             if (!fits(row_at, row_length_bytes, bytes_.size()))
                 return set_error(
@@ -346,7 +349,7 @@ class Parser {
                 continue;
             std::size_t x = 0;
             while (row_at < row_end && x < width) {
-                const auto command = bytes_[row_at++];
+                const auto command = input[row_at++];
                 std::size_t count = 0;
                 if ((command & compression::transparent_flag) != 0) {
                     count = static_cast<std::size_t>(command >> compression::transparent_shift);
@@ -360,18 +363,10 @@ class Parser {
                             row_at - 1,
                             "repeated GAF run lacks its value"
                         );
-                    const auto value = bytes_[row_at++];
+                    const auto value = input[row_at++];
                     count = std::min(count, width - x);
-                    std::fill_n(
-                        output.pixels.begin() + static_cast<std::ptrdiff_t>(y * width + x),
-                        static_cast<std::ptrdiff_t>(count),
-                        value
-                    );
-                    std::fill_n(
-                        output.coverage.begin() + static_cast<std::ptrdiff_t>(y * width + x),
-                        static_cast<std::ptrdiff_t>(count),
-                        uint8_t{1}
-                    );
+                    std::memset(pixels + y * width + x, value, count);
+                    std::memset(coverage + y * width + x, 1, count);
                     x += count;
                 } else {
                     count = static_cast<std::size_t>(command >> compression::counted_shift) +
@@ -383,16 +378,8 @@ class Parser {
                             row_at - 1,
                             "literal GAF run lacks visible bytes"
                         );
-                    std::copy_n(
-                        bytes_.begin() + static_cast<std::ptrdiff_t>(row_at),
-                        static_cast<std::ptrdiff_t>(count),
-                        output.pixels.begin() + static_cast<std::ptrdiff_t>(y * width + x)
-                    );
-                    std::fill_n(
-                        output.coverage.begin() + static_cast<std::ptrdiff_t>(y * width + x),
-                        static_cast<std::ptrdiff_t>(count),
-                        uint8_t{1}
-                    );
+                    std::memcpy(pixels + y * width + x, input + row_at, count);
+                    std::memset(coverage + y * width + x, 1, count);
                     row_at += count;
                     x += count;
                 }
@@ -454,26 +441,32 @@ class Parser {
         };
         return false;
     }
-    const auto destination_width = static_cast<int32_t>(destination.width);
     const auto destination_height = static_cast<int32_t>(destination.height);
+    // Only the source columns that land inside the destination are copied.
+    const int64_t first_x = std::max<int64_t>(0, -static_cast<int64_t>(left));
+    const int64_t end_x = std::min<int64_t>(
+        source.width, static_cast<int64_t>(destination.width) - static_cast<int64_t>(left)
+    );
+    // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
+    const uint8_t* const source_pixels = source.pixels.data();
+    const uint8_t* const source_coverage = source.coverage.data();
+    uint8_t* const destination_pixels = destination.pixels.data();
+    uint8_t* const destination_coverage = destination.coverage.data();
     for (int32_t y = 0; y < static_cast<int32_t>(source.height); ++y) {
         const auto destination_y = top + y;
         if (destination_y < 0 || destination_y >= destination_height)
             continue;
-        for (int32_t x = 0; x < static_cast<int32_t>(source.width); ++x) {
-            const auto destination_x = left + x;
-            if (destination_x < 0 || destination_x >= destination_width)
+        const std::size_t source_row = static_cast<std::size_t>(y) * source.width;
+        const std::size_t destination_row =
+            static_cast<std::size_t>(destination_y) * destination.width;
+        for (int64_t x = first_x; x < end_x; ++x) {
+            const std::size_t source_index = source_row + static_cast<std::size_t>(x);
+            if (source_coverage[source_index] == 0)
                 continue;
-            const auto source_index =
-                static_cast<std::size_t>(y) * source.width + static_cast<std::size_t>(x);
-            const auto pixel = source.pixels[source_index];
-            if (source.coverage[source_index] == 0)
-                continue;
-            const auto destination_index =
-                static_cast<std::size_t>(destination_y) * destination.width +
-                static_cast<std::size_t>(destination_x);
-            destination.pixels[destination_index] = pixel;
-            destination.coverage[destination_index] = 1;
+            const std::size_t destination_index =
+                destination_row + static_cast<std::size_t>(left + x);
+            destination_pixels[destination_index] = source_pixels[source_index];
+            destination_coverage[destination_index] = 1;
         }
     }
     return true;

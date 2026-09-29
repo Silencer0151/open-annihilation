@@ -336,6 +336,8 @@ void test_asset_store_precedence() {
         std::ofstream stream(std::filesystem::path(root) / "RaW.Bin", std::ios::binary);
         stream << "loose override";
     }
+    // The store lists each loose folder once; a rescan picks up the new file.
+    store.mark_loose_shadows();
     data = store.read("raw.bin");
     require(
         !data.archived && std::string(data.bytes.begin(), data.bytes.end()) == "loose override",
@@ -351,6 +353,7 @@ void test_asset_store_precedence() {
         std::ofstream stream(std::filesystem::path(root) / "GuiS" / "MainMenu.GUI");
         stream << "nested";
     }
+    store.mark_loose_shadows();
     require(store.read("GUIS\\mainmenu.gui").bytes.size() == 6, "Windows path lookup failed");
     require(
         store.list_effective("GUIS", ".GUI") == std::vector<std::string>{"guis/mainmenu.gui"},

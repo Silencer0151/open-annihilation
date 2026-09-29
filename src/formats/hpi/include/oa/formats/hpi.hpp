@@ -108,6 +108,9 @@ inline constexpr char TrailerChars[] = {0x43, 0x6f, 0x70, 0x79, 0x72, 0x69, 0x67
 inline constexpr std::string_view Trailer{TrailerChars, sizeof TrailerChars};
 static_assert(Trailer.size() == 36);
 inline constexpr std::size_t TrailerYearOffset = 10;
+/// Most folder entries an AssetStore keeps listed for loose-file lookups. With
+/// more, the store lists the folders on every lookup instead.
+inline constexpr std::size_t LooseIndexEntryLimit = 16 * 1024;
 inline constexpr std::size_t TrailerYearBytes = 4;
 // Decoded bytes per chunk of a compressed entry, and the per-read block cache.
 inline constexpr uint32_t BlockBytes = 0x10000;
@@ -198,6 +201,11 @@ struct ArchiveNode {
     }
 };
 
+/// An open HPI archive: its resolved directory and the file its entries are read from.
+///
+/// Reads may run on several threads at once. Each holds the archive's file
+/// only while it copies stored bytes, and decrypts and decompresses them
+/// outside it.
 class HpiArchive {
   public:
 
@@ -356,8 +364,19 @@ class AssetStore {
 
     /// Creates a store over a game directory with no archives mounted.
     ///
+    /// Loose-file lookups list each folder below the game directory once, the
+    /// first time a lookup passes through it, and answer later lookups from
+    /// those listings: a file added, removed or renamed afterwards is seen only
+    /// after mark_loose_shadows() or discover(), which drop the listings. Once
+    /// the listings would hold more than loose_index_limit entries, the store
+    /// drops them and lists every folder on every lookup instead.
+    ///
     /// @param loose_root game directory; loose files are resolved below it
-    explicit AssetStore(std::filesystem::path loose_root);
+    /// @param loose_index_limit most folder entries the kept listings may hold
+    explicit AssetStore(
+        std::filesystem::path loose_root,
+        std::size_t loose_index_limit = formats::hpi::LooseIndexEntryLimit
+    );
     /// Unmounts every archive.
     ~AssetStore();
     /// Takes over another store's root and mounts.
@@ -409,6 +428,10 @@ class AssetStore {
     ///
     /// @return canonical paths in lookup order
     [[nodiscard]] std::span<const std::filesystem::path> mount_paths() const noexcept;
+    /// Returns whether loose-file lookups answer from kept folder listings.
+    ///
+    /// @return false once the listings would have held more entries than the store's limit
+    [[nodiscard]] bool loose_index_enabled() const noexcept;
     /// Returns one mounted archive.
     ///
     /// Throws std::out_of_range past the mounts.
@@ -592,6 +615,14 @@ class AssetStore {
     /// @param resource '\\'- or '/'-separated path
     /// @return the host path, or nullopt when no loose file exists
     [[nodiscard]] std::optional<std::filesystem::path> loose_path(std::string_view resource) const;
+    /// Resolves a folded resource path to a loose file by listing every folder on the way.
+    ///
+    /// Throws std::runtime_error for a traversing path or an ambiguous case collision.
+    ///
+    /// @param key resource path, '/'-separated and ASCII lower case
+    /// @return the host path, or nullopt when no loose file exists
+    [[nodiscard]] std::optional<std::filesystem::path>
+    loose_path_listed(const std::string& key) const;
 
     struct ArchivedNode {
         std::size_t mount{};
@@ -649,6 +680,9 @@ class AssetStore {
     std::filesystem::path loose_root_;
     std::vector<Mount> mounts_;
     std::vector<std::filesystem::path> mount_paths_;
+    // Folder listings kept by loose-file lookups; null in a moved-from store.
+    struct LooseIndex;
+    std::unique_ptr<LooseIndex> loose_index_;
 };
 
 /// Writes a loose file, replacing any previous content.

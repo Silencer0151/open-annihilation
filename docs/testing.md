@@ -56,6 +56,26 @@ added only when `OA_GAME_DIR` names one at configure time. The game is
 executable inside the application bundle `open-annihilation.app`), the file
 the `oa-game` target builds; tests start it through `$<TARGET_FILE:oa-game>`.
 
+### Threads
+
+`installed-content` spreads its work over one thread per logical core, so it
+takes a few seconds on a machine with many cores. The `OA_TEST_THREADS`
+environment variable sets the number of threads instead: a whole number from
+1 to 1024, where 0 or an empty value keeps one per logical core. Each thread
+holds the entry it is decoding, so memory grows with the count, to about
+1 GB with 24 threads. In a parallel ctest run the sweep starts among the
+first tests and its threads share the cores with the others. A container
+limited to fewer CPUs than its host usually still reports every core of the
+host, so there, and on a machine with little memory, give the sweep fewer
+threads:
+
+```sh
+OA_TEST_THREADS=4 ctest --test-dir build -R '^installed-content$'
+```
+
+The output is the same for any number of threads, apart from the time the
+sweep took.
+
 ### The demo's installer
 
 `OA_DEMO_INSTALLER` names the installer of the Total Annihilation demo (1997):
@@ -152,8 +172,8 @@ for review.
 
 `installed-content` is the base-content guard: it mounts every archive of
 the installation, decodes every entry with the engine's decoders and runs the
-definition loaders a skirmish start runs. A change to a decoder runs it
-before review.
+definition loaders a skirmish start runs, on every core (see
+[Threads](#threads)). A change to a decoder runs it before review.
 
 ## Writing a test
 

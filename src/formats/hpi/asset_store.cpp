@@ -4,11 +4,14 @@
 #include "oa/formats/hpi.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace oa {
 namespace {
@@ -146,8 +149,91 @@ struct ResourceFile {
     std::vector<uint8_t> block;
 };
 
-AssetStore::AssetStore(std::filesystem::path loose_root)
-    : loose_root_(std::filesystem::absolute(std::move(loose_root))) {
+// Folder listings of the loose tree, keyed by the folded resource path of the
+// folder. Each folder is listed once, the first time a lookup passes through it.
+struct AssetStore::LooseIndex {
+    // The entry a folded name selects in one folder.
+    struct Child {
+        std::filesystem::path path; // host path of the entry
+        bool regular = false;       // a regular file, following links, when listed
+        bool directory = false;     // a folder, following links, when listed
+        bool ambiguous = false;     // several entries fold to this name
+    };
+
+    // One folder's listing.
+    struct Folder {
+        std::size_t entry_count = 0;                     // entries the listing held
+        std::unordered_map<std::string, Child> children; // keyed by folded name
+    };
+
+    explicit LooseIndex(std::size_t limit) : entry_limit(limit) {}
+
+    /// Returns a folder's listing, listing the folder the first time.
+    ///
+    /// Disables the index, dropping every listing, when the listings would
+    /// hold more than entry_limit entries.
+    ///
+    /// @param key folded resource path of the folder, empty for the game directory
+    /// @param host host path of the folder
+    /// @return the listing, or null when host is not a readable folder or the index was disabled
+    const Folder* listing(const std::string& key, const std::filesystem::path& host);
+    /// Drops every listing and enables the index again.
+    void reset();
+
+    std::mutex lock;
+    const std::size_t entry_limit;
+    std::size_t entry_count = 0; // entries held across every listing
+    std::atomic<bool> enabled{true};
+    std::unordered_map<std::string, Folder> folders;
+};
+
+const AssetStore::LooseIndex::Folder*
+AssetStore::LooseIndex::listing(const std::string& key, const std::filesystem::path& host) {
+    if (const auto kept = folders.find(key); kept != folders.end())
+        return &kept->second;
+    std::error_code error;
+    if (!std::filesystem::is_directory(host, error))
+        return nullptr;
+    Folder fresh;
+    for (const auto& item : std::filesystem::directory_iterator(host, error)) {
+        ++fresh.entry_count;
+        auto [slot, inserted] =
+            fresh.children.try_emplace(normalized_path(item.path().filename().string()));
+        if (!inserted) {
+            slot->second.ambiguous = true;
+            continue;
+        }
+        std::error_code status_error;
+        slot->second.path = item.path();
+        slot->second.regular = item.is_regular_file(status_error);
+        slot->second.directory = item.is_directory(status_error);
+    }
+    if (error)
+        return nullptr;
+    if (entry_count + fresh.entry_count > entry_limit) {
+        folders.clear();
+        entry_count = 0;
+        enabled.store(false);
+        return nullptr;
+    }
+    entry_count += fresh.entry_count;
+    return &(folders[key] = std::move(fresh));
+}
+
+void AssetStore::LooseIndex::reset() {
+    const std::lock_guard guard(lock);
+    folders.clear();
+    entry_count = 0;
+    enabled.store(true);
+}
+
+AssetStore::AssetStore(std::filesystem::path loose_root, std::size_t loose_index_limit)
+    : loose_root_(std::filesystem::absolute(std::move(loose_root))),
+      loose_index_(std::make_unique<LooseIndex>(loose_index_limit)) {
+}
+
+bool AssetStore::loose_index_enabled() const noexcept {
+    return loose_index_ && loose_index_->enabled.load();
 }
 
 AssetStore::~AssetStore() = default;
@@ -232,6 +318,8 @@ std::vector<DiscoveredArchive> AssetStore::discover(
 }
 
 void AssetStore::mark_loose_shadows() {
+    if (loose_index_)
+        loose_index_->reset();
     for (auto& mounted : mounts_)
         mounted.marks.assign(mounted.archive.nodes().size(), 0);
     if (!mounts_.empty())
@@ -270,6 +358,36 @@ std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view res
         resource.find('\0') != std::string_view::npos || resource.size() > kMaxPathLength)
         fail("invalid asset resource path");
     const auto key = normalized_path(resource);
+    if (!loose_index_ || !loose_index_->enabled.load())
+        return loose_path_listed(key);
+    const std::lock_guard guard(loose_index_->lock);
+    auto loose = loose_root_;
+    std::string folder;
+    for (std::size_t begin = 0; begin < key.size();) {
+        const auto end = key.find('/', begin);
+        const auto part = key.substr(begin, end == std::string::npos ? end : end - begin);
+        if (part == "." || part == "..")
+            fail("asset path contains traversal");
+        const auto* listing = loose_index_->listing(folder, loose);
+        if (listing == nullptr)
+            return loose_index_->enabled.load() ? std::nullopt : loose_path_listed(key);
+        const auto child = listing->children.find(part);
+        if (child == listing->children.end())
+            return std::nullopt;
+        if (child->second.ambiguous)
+            fail("ambiguous loose asset case: " + key);
+        if (end == std::string::npos)
+            return child->second.regular ? std::optional(child->second.path) : std::nullopt;
+        if (!child->second.directory)
+            return std::nullopt;
+        loose = child->second.path;
+        folder = key.substr(0, end);
+        begin = end + 1;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> AssetStore::loose_path_listed(const std::string& key) const {
     auto loose = loose_root_;
     for (std::size_t begin = 0; begin < key.size();) {
         const auto end = key.find('/', begin);

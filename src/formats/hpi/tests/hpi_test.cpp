@@ -749,6 +749,48 @@ void resource_file_semantics() {
     );
 }
 
+/// Loose lookups answer from folder listings taken once, until a rescan, and
+/// list on every lookup once the listings would exceed the store's limit.
+void asset_store_loose_listings() {
+    TempDir dir;
+    dir.write("game/Units/A.FBI", text("a"));
+    dir.write("game/Anims/x.gaf", text("x"));
+    oa::AssetStore store(dir.path() / "game");
+    check(store.loose_index_enabled(), "a new store keeps folder listings");
+    check(
+        store.read("units/a.fbi").bytes == text("a"), "a loose file is found through the listings"
+    );
+    check(store.read("UNITS\\A.fbi").bytes == text("a"), "the listings match names ignoring case");
+    dir.write("game/Units/B.FBI", text("b"));
+    check(
+        throws([&] { (void)store.read("units/b.fbi"); }, "asset not found"),
+        "a file added after its folder was listed is not seen"
+    );
+    store.mark_loose_shadows();
+    check(store.read("units/b.fbi").bytes == text("b"), "a rescan lists the folders again");
+    check(throws([&] { (void)store.read("units"); }, "asset not found"), "a folder is not a file");
+    check(
+        throws([&] { (void)store.read("units/a.fbi/x"); }, "asset not found"),
+        "a file does not lead on as a folder"
+    );
+    check(
+        throws([&] { (void)store.read("units/../units/a.fbi"); }, "traversal"),
+        "a traversing path still fails"
+    );
+
+    // Two entries at the top, then two more in Units, exceed a limit of two.
+    oa::AssetStore limited(dir.path() / "game", 2);
+    check(
+        limited.read("units/a.fbi").bytes == text("a"), "a store over its limit still finds files"
+    );
+    check(!limited.loose_index_enabled(), "listings beyond the limit are dropped");
+    dir.write("game/Units/C.FBI", text("c"));
+    check(
+        limited.read("units/c.fbi").bytes == text("c"),
+        "without listings a new file is seen at once"
+    );
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -787,6 +829,7 @@ int main(int argc, char** argv) {
         asset_store_find_and_shadowing();
         asset_store_discover_order_and_hpi_limit();
         asset_store_discover_pins_install_layout();
+        asset_store_loose_listings();
         resource_file_semantics();
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

@@ -39,6 +39,37 @@ std::vector<uint8_t> decode_lz77(
     std::span<const uint8_t> initial_dictionary = {}
 );
 
+/// How a decode_lz77_into call ended.
+enum class Lz77Status : uint8_t {
+    ok,             ///< the stream reached its end marker
+    truncated,      ///< the input ends before the end marker
+    output_full,    ///< the stream produces more bytes than the output holds
+    bad_dictionary, ///< the initial dictionary is neither empty nor 4096 bytes
+};
+
+/// What a decode_lz77_into call wrote, and how it ended.
+struct Lz77Decoded {
+    std::size_t written{}; ///< bytes written to the start of the output
+    Lz77Status status{};
+};
+
+/// Decompresses one LZ77 stream, as decode_lz77 does, into a buffer the caller owns.
+///
+/// The size of `output` is the output limit. Bytes past the written count
+/// are left as they were. A stream that fails has written the bytes it
+/// decoded before the failure; a dictionary of the wrong size writes none.
+///
+/// @param input compressed bytes
+/// @param[out] output receives the decompressed bytes; its size is the most the stream may produce
+/// @param initial_dictionary empty for the game's fresh zero-filled window,
+///        otherwise exactly 4096 bytes to seed it
+/// @return the count of bytes written, and ok or why the stream stopped
+[[nodiscard]] Lz77Decoded decode_lz77_into(
+    std::span<const uint8_t> input,
+    std::span<uint8_t> output,
+    std::span<const uint8_t> initial_dictionary = {}
+) noexcept;
+
 /// Compresses bytes with the game's LZ77 encoder, starting from a fresh tree.
 ///
 /// The output decodes with decode_lz77. Throws std::runtime_error when

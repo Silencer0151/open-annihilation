@@ -10,9 +10,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <exception>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_set>
@@ -70,9 +70,12 @@ bool equal_nocase(std::string_view a, std::string_view b) noexcept {
 void decrypt_at(std::span<uint8_t> bytes, uint8_t key, uint64_t position) noexcept {
     if (key == 0)
         return;
-    for (std::size_t i = 0; i < bytes.size(); ++i)
-        bytes[i] = static_cast<uint8_t>(
-            static_cast<uint8_t>(position + i) ^ static_cast<uint8_t>(~bytes[i]) ^ key
+    // A plain pointer keeps the per-byte loop free of calls in unoptimised builds.
+    uint8_t* const data = bytes.data();
+    const std::size_t size = bytes.size();
+    for (std::size_t i = 0; i < size; ++i)
+        data[i] = static_cast<uint8_t>(
+            static_cast<uint8_t>(position + i) ^ static_cast<uint8_t>(~data[i]) ^ key
         );
 }
 
@@ -155,13 +158,10 @@ unsquash_archive_block(std::span<uint8_t> output, std::span<uint8_t> block) noex
         return SquashStatus::bad_params;
     uint32_t produced = 0;
     if (type == kSquashLz77) {
-        try {
-            const auto decoded = formats::sqsh::decode_lz77(payload, output.size());
-            std::copy(decoded.begin(), decoded.end(), output.begin());
-            produced = static_cast<uint32_t>(decoded.size());
-        } catch (const std::exception&) {
+        const auto decoded = formats::sqsh::decode_lz77_into(payload, output);
+        if (decoded.status != formats::sqsh::Lz77Status::ok)
             return SquashStatus::bad_unpack_size;
-        }
+        produced = static_cast<uint32_t>(decoded.written);
     } else if (type == kSquashZlib) {
         produced = unpacked;
         (void)uncompress_legacy(output, &produced, payload);
@@ -228,7 +228,9 @@ struct HpiArchive::Impl {
     uint64_t archive_size{};
     uint8_t key{};
     std::vector<ArchiveNode> nodes;
-    // Kept open while the archive is mounted; reads are serialised.
+    // Kept open while the archive is mounted. The lock is held only while a
+    // read seeks and copies stored bytes; decrypting and decompressing run
+    // outside it, so reads on several threads decode at the same time.
     mutable std::ifstream stream;
     mutable std::mutex stream_lock;
 
@@ -385,6 +387,16 @@ struct HpiArchive::Impl {
         }
     }
 
+    /// Reads stored bytes at `offset` through the shared stream.
+    ///
+    /// @param offset archive offset of the first byte
+    /// @param[out] output receives the bytes
+    /// @return the count read; a read past the end of the archive is short
+    std::size_t read_stored(uint64_t offset, std::span<uint8_t> output) const {
+        const std::lock_guard guard(stream_lock);
+        return read_at(stream, offset, output);
+    }
+
     /// Copies file node `index`'s decoded bytes from `position` into `output`.
     [[nodiscard]] int64_t
     read_range(uint32_t index, uint32_t position, std::span<uint8_t> output) const {
@@ -394,10 +406,9 @@ struct HpiArchive::Impl {
         if (position >= node.size || output.empty())
             return 0;
         const std::size_t wanted = std::min<std::size_t>(output.size(), node.size - position);
-        const std::lock_guard guard(stream_lock);
         if (node.compression == 0) {
             const uint64_t at = static_cast<uint64_t>(node.data_offset) + position;
-            const std::size_t got = read_at(stream, at, output.first(wanted));
+            const std::size_t got = read_stored(at, output.first(wanted));
             decrypt_at(output.first(got), key, at);
             return static_cast<int64_t>(got);
         }
@@ -405,11 +416,15 @@ struct HpiArchive::Impl {
         const uint32_t chunks =
             node.size / formats::hpi::BlockBytes + (node.size % formats::hpi::BlockBytes != 0);
         std::vector<uint8_t> table(static_cast<std::size_t>(chunks) * 4U);
-        if (read_at(stream, node.data_offset, table) != table.size())
+        if (read_stored(node.data_offset, table) != table.size())
             return -1;
         decrypt_at(table, key, node.data_offset);
 
-        std::vector<uint8_t> decoded(formats::hpi::BlockBytes);
+        // Every byte of these buffers is written before it is read, so they
+        // are allocated without being filled.
+        const auto decoded_bytes =
+            std::make_unique_for_overwrite<uint8_t[]>(formats::hpi::BlockBytes);
+        const std::span<uint8_t> decoded(decoded_bytes.get(), formats::hpi::BlockBytes);
         std::size_t copied = 0;
         uint32_t cursor = position;
         uint32_t loaded = std::numeric_limits<uint32_t>::max();
@@ -422,12 +437,16 @@ struct HpiArchive::Impl {
                 const uint32_t stored = le32(table.data() + block_index * 4U);
                 if (stored > kMaxStoredChunkSize)
                     fail("stored HPI chunk exceeds the 1 MiB safety limit");
-                std::vector<uint8_t> chunk(stored);
-                if (read_at(stream, at, chunk) != chunk.size())
+                // Each chunk gets a buffer of exactly its size, so a read past
+                // the chunk is a read past the allocation, which the sanitizer
+                // build reports.
+                const auto chunk_bytes = std::make_unique_for_overwrite<uint8_t[]>(stored);
+                const std::span<uint8_t> chunk(chunk_bytes.get(), stored);
+                if (read_stored(at, chunk) != chunk.size())
                     return -1;
                 decrypt_at(chunk, key, at);
                 // Bytes a short chunk leaves unwritten read as zero.
-                std::fill(decoded.begin(), decoded.end(), uint8_t{0});
+                std::memset(decoded.data(), 0, decoded.size());
                 const auto status = unsquash_archive_block(decoded, chunk);
                 if (status != formats::hpi::SquashStatus::ok)
                     fail(
@@ -441,9 +460,7 @@ struct HpiArchive::Impl {
             const uint32_t offset = cursor % formats::hpi::BlockBytes;
             const std::size_t take =
                 std::min<std::size_t>(formats::hpi::BlockBytes - offset, wanted - copied);
-            std::copy_n(
-                decoded.begin() + offset, take, output.begin() + static_cast<std::ptrdiff_t>(copied)
-            );
+            std::memcpy(output.data() + copied, decoded.data() + offset, take);
             copied += take;
             cursor += static_cast<uint32_t>(take);
         }

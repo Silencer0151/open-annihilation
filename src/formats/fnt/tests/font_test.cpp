@@ -79,13 +79,17 @@ int main() {
     assert(named_width(assets, "smlfont.old", "") == 3);
     assert(named_width(assets, "smlfont", "english") == 3);
     write_bytes(root / "fonts-english" / "smlfont.FNT", fnt_with_width(5));
+    // The store lists each loose folder once; a rescan picks up the new folder.
+    assets.mark_loose_shadows();
     assert(named_width(assets, "smlfont", "english") == 5);
     assert(named_width(assets, "smlfont", "") == 3);
     write_bytes(root / "fonts-en.FNT", fnt_with_width(7));
     write_bytes(root / "fonts-en.gb" / "smlfont.FNT", fnt_with_width(9));
+    assets.mark_loose_shadows();
     assert(named_width(assets, "smlfont", "en.gb") == 7);
     write_bytes(root / "fonts-english" / "blank.FNT", {});
     write_bytes(root / "fonts" / "blank.FNT", fnt_with_width(4));
+    assets.mark_loose_shadows();
     bool missing = false;
     try {
         (void)oa::formats::fnt::load_named_fnt(assets, "blank", "english");
@@ -95,6 +99,7 @@ int main() {
     assert(missing);
     write_bytes(root / "fonts-english" / "bad.FNT", std::vector<uint8_t>{1, 2, 3, 4});
     write_bytes(root / "fonts" / "bad.FNT", fnt_with_width(4));
+    assets.mark_loose_shadows();
     bool rejected_language_file = false;
     try {
         (void)oa::formats::fnt::load_named_fnt(assets, "bad", "english");
