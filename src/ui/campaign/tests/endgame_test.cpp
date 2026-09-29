@@ -43,20 +43,21 @@ constexpr uint8_t kLitGlyphColor = 0x31;
 // but for the 5-wide '1' and the 7-wide space, which is never drawn. 'I'
 // makes the line 12 rows high.
 const oa::formats::fnt::Font& test_font() {
-    static const oa::formats::fnt::Font font = [] {
-        oa::formats::fnt::Font glyphs{};
-        for (int code = ' '; code <= '~'; ++code) {
-            oa::formats::fnt::Glyph glyph{};
-            glyph.width = code == ' ' ? 7 : code == '1' ? 5 : 6;
-            glyph.height = 10;
-            glyph.origin_y = -1;
-            glyph.pixels.assign(static_cast<std::size_t>(glyph.width) * glyph.height, kGlyphColor);
-            glyph.coverage.assign(glyph.pixels.size(), 1);
-            glyphs.glyphs[static_cast<std::size_t>(code)] = std::move(glyph);
-        }
-        glyphs.nominal_height = 10;
-        return glyphs;
-    }();
+    // Filled in place on first use: GCC 12 cannot compile a static Font
+    // initialised from a copy.
+    static oa::formats::fnt::Font font{};
+    if (font.nominal_height != 0)
+        return font;
+    for (int code = ' '; code <= '~'; ++code) {
+        oa::formats::fnt::Glyph glyph{};
+        glyph.width = code == ' ' ? 7 : code == '1' ? 5 : 6;
+        glyph.height = 10;
+        glyph.origin_y = -1;
+        glyph.pixels.assign(static_cast<std::size_t>(glyph.width) * glyph.height, kGlyphColor);
+        glyph.coverage.assign(glyph.pixels.size(), 1);
+        font.glyphs[static_cast<std::size_t>(code)] = std::move(glyph);
+    }
+    font.nominal_height = 10;
     return font;
 }
 

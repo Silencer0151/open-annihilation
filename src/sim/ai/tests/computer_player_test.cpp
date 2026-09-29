@@ -3,6 +3,7 @@
 
 #include "oa/sim/ai.hpp"
 #include "oa/sim/combat_state.hpp"
+#include "oa/sim/unit_movement/movement.hpp"
 #include "oa/test/game_assets.hpp"
 
 #include <array>
@@ -785,6 +786,197 @@ void test_tick() {
     computer_players_release(&state);
 }
 
+// The sighted weight near a point: the signed base weights of the units on the
+// player's seen list within the radius on the ground plane, a unit's distance
+// taken from the whole parts of its squared 16.16 offsets.
+void test_sighted_weight() {
+    Fake fake;
+    fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 30);
+    auto host = host_for(fake);
+    ComputerPlayers state{};
+    describe_catalog(state);
+    check(computer_players_configure(&state, "", kBuildLists), "configure");
+    check(computer_players_initialize(&state, host), "initialize");
+    auto* knowledge = computer_player_knowledge(&state, 1);
+    check(knowledge != nullptr && knowledge->base_weights[ARMLLT] == 40, "structure weight");
+    knowledge->base_weights[ARMPW] = -5;
+    constexpr int32_t x = 500, z = 700;
+    const oa::FixedVec3 at{x << 16, 0, z << 16};
+    fake.spawn(40, 0, ARMLLT, x + 96, z + 128, OA_UNIT_FLAG_BUILDING); // exactly 160 away
+    fake.spawn(41, 0, ARMLLT, x + 161, z, OA_UNIT_FLAG_BUILDING);      // just outside
+    fake.spawn(42, 0, ARMPW, x, z - 10, 0).flags = 0;                  // dead, still counts
+    fake.spawn(43, 0, ARMLLT, x - 160, z, OA_UNIT_FLAG_BUILDING);
+    // 200/65536 of a unit past 160: the square's whole part is still 25600.
+    fake.units[43].position.x -= 200;
+    fake.spawn(44, 0, ARMLLT, x, z, OA_UNIT_FLAG_BUILDING);
+    fake.units[44].type_index = TYPE_COUNT + 3; // outside the type table: adds nothing
+    fake.spawn(45, 0, ARMSOLAR, x + 20, z + 20, OA_UNIT_FLAG_BUILDING); // not sighted
+    std::array<uint16_t, 6> seen{40, 41, 42, 43, 44, 63};
+    oa::sim::detection::Sightings sightings{};
+    sightings.seen = seen.data();
+    sightings.capacity = static_cast<uint32_t>(seen.size());
+    sightings.seen_count = static_cast<uint32_t>(seen.size());
+    // 40 + 40 - 5 for units 40, 43 and 42; slot 63 is an empty record of type 0.
+    check(
+        computer_sighted_weight(&state, *knowledge, sightings, fake.world, at, 160) == 75,
+        "sighted weight within 160"
+    );
+    check(
+        computer_sighted_weight(&state, *knowledge, sightings, fake.world, at, 159) == -5,
+        "sighted weight within 159"
+    );
+    check(
+        computer_sighted_weight(&state, *knowledge, sightings, fake.world, at, 161) == 115,
+        "sighted weight within 161"
+    );
+    sightings.seen_count = 0;
+    check(
+        computer_sighted_weight(&state, *knowledge, sightings, fake.world, at, 160) == 0,
+        "no sightings"
+    );
+    computer_players_release(&state);
+}
+
+// What the siege test's host answers beyond the fake match.
+struct SiegeView {
+    std::array<uint16_t, 4> seen{};
+    oa::sim::detection::Sightings sightings{};
+    bool reach[64]{};
+    int32_t visible_below_z = 0; // player 1 sees points with z under this, world units
+};
+
+SiegeView siege_view;
+
+// The siege task: with members in squad 9 it turns its search now and then,
+// steps it, weighs a point the player sees by what it has sighted around it,
+// keeps the better draw as its target and orders its members to attack there.
+void test_siege() {
+    Fake fake;
+    auto& siege = siege_view;
+    siege = {};
+    fake.world.game.map_width_world = 1024;
+    fake.world.game.map_height_world = 512;
+    fake.player(0, OA_PLAYER_STATUS_LOCAL, 1, 9);
+    fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+    auto host = host_for(fake);
+    host.point_visible = [](void*, uint8_t player, const oa::FixedVec3* at) {
+        return player == 1 && (at->z >> 16) < siege_view.visible_below_z;
+    };
+    host.sightings = [](void*, uint8_t player) -> const oa::sim::detection::Sightings* {
+        return player == 1 ? &siege_view.sightings : nullptr;
+    };
+    host.weapon_reaches = [](void*, uint16_t unit, const oa::FixedVec3*) {
+        return unit < 64 && siege_view.reach[unit];
+    };
+    host.order_attack_point = [](void* c, uint16_t unit, const oa::FixedVec3* at) {
+        fake_of(c)->orders.push_back({"attack point", unit, 0, *at, false});
+        return true;
+    };
+    fake.defs[ARMPW].abilities = OA_UNIT_DEF_ABILITY_CAN_ATTACK;
+    fake.defs[ARMLLT].abilities = OA_UNIT_DEF_ABILITY_CAN_ATTACK;
+    ComputerPlayers state{};
+    describe_catalog(state);
+    check(computer_players_configure(&state, "", kBuildLists), "configure");
+    check(computer_players_initialize(&state, host), "initialize");
+    auto& ai = state.players[1];
+    auto& task = ai.tasks[static_cast<uint32_t>(Squad::siege)];
+    check(task.kind == TaskKind::siege, "siege task");
+    const oa::FixedVec3 centre{512 << 16, 0, 256 << 16};
+    const auto same = [](const oa::FixedVec3& a, const oa::FixedVec3& b) {
+        return a.x == b.x && a.y == b.y && a.z == b.z;
+    };
+    check(
+        same(task.siege_target, centre) && same(task.siege_probe, centre) &&
+            same(task.siege_step, centre) && task.siege_weight == 0,
+        "the siege starts at the map's centre"
+    );
+    // Only the siege runs: every other task and the sort wait.
+    for (auto& other : ai.tasks)
+        if (&other != &task)
+            other.next_tick = 1000000;
+    ai.sort_countdown = 1000000;
+    fake.world.game.tick = 100;
+    // An empty squad takes only the reschedule's draw.
+    fake.rolls = {7};
+    fake.roll = 0;
+    computer_player_tick_orders(&state, host, 1);
+    check(fake.roll == 1 && task.next_tick == 100 + 7 + 30, "empty siege squad reschedules");
+    check(same(task.siege_probe, centre) && fake.orders.empty(), "empty siege squad stays");
+
+    // Members: two armed walkers, two armed structures (one in reach) and a
+    // builder that cannot attack.
+    fake.spawn(20, 1, ARMPW, 100, 100, OA_UNIT_FLAG_HAS_WEAPONS).movement = 1;
+    fake.spawn(21, 1, ARMLLT, 120, 100, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+    fake.spawn(22, 1, ARMLLT, 140, 100, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+    fake.spawn(23, 1, ARMCK, 160, 100, 0).movement = 1;
+    fake.spawn(24, 1, ARMPW, 180, 100, OA_UNIT_FLAG_HAS_WEAPONS).movement = 1;
+    siege.reach[22] = true;
+    for (uint16_t slot : {20, 21, 22, 23, 24}) {
+        auto& unit = fake.units[slot];
+        unit.def = oa::world_unit_def_ref(&fake.world, &fake.defs[unit.type_index]);
+        fake.set_squad(slot, static_cast<int>(Squad::siege));
+    }
+    // Sighted around the first step: two structures of weight 40 in reach, one
+    // out of it.
+    fake.spawn(2, 0, ARMLLT, 512 + 96, 576 + 128, OA_UNIT_FLAG_BUILDING);
+    fake.spawn(3, 0, ARMLLT, 512, 576 - 30, OA_UNIT_FLAG_BUILDING);
+    fake.spawn(4, 0, ARMLLT, 512 + 170, 576, OA_UNIT_FLAG_BUILDING);
+    siege.seen = {2, 3, 4, 0};
+    siege.sightings.seen = siege.seen.data();
+    siege.sightings.capacity = 4;
+    siege.sightings.seen_count = 3;
+    siege.visible_below_z = 800;
+    // Reschedule 9; the search turns (0 of 10) to half a turn, so it steps 320
+    // world units toward +z; the point weighs 80 and its draw 12 beats the
+    // target's, which draws nothing below 2.
+    fake.world.game.tick = task.next_tick;
+    fake.rolls = {9, 0, 0x8000, 12};
+    fake.roll = 0;
+    computer_player_tick_orders(&state, host, 1);
+    const oa::FixedVec3 step{
+        -oa::sim::unit_movement::sine_scaled(0x8000, 0x1400000),
+        0,
+        -oa::sim::unit_movement::cosine_scaled(0x8000, 0x1400000)
+    };
+    check(step.x == 0 && step.z == 0x1400000, "half a turn steps along +z");
+    const oa::FixedVec3 first{512 << 16, 0, 576 << 16};
+    check(fake.roll == 4, "four draws");
+    check(same(task.siege_step, step) && same(task.siege_probe, first), "the search stepped");
+    check(
+        same(task.siege_target, first) && task.siege_weight == 80, "the richer point is the target"
+    );
+    std::vector<uint16_t> ordered;
+    for (const auto& order : fake.orders) {
+        check(order.kind == "attack point" && same(order.at, first), "attack at the target");
+        ordered.push_back(order.unit);
+    }
+    check(
+        ordered == std::vector<uint16_t>{20, 22, 24},
+        "walkers, and structures in reach, attack; the builder does not"
+    );
+    // The next run keeps the heading, steps past what the player sees and
+    // leaves the target; one after that sees a poorer point, whose draw loses.
+    fake.orders.clear();
+    fake.world.game.tick = task.next_tick;
+    siege.visible_below_z = 800;
+    fake.rolls = {1, 3};
+    fake.roll = 0;
+    computer_player_tick_orders(&state, host, 1);
+    const oa::FixedVec3 second{512 << 16, 0, 896 << 16};
+    check(fake.roll == 2 && same(task.siege_probe, second), "unseen step draws nothing more");
+    check(same(task.siege_target, first) && task.siege_weight == 80, "the target stays");
+    check(fake.orders.size() == 3, "the members attack the target again");
+    fake.world.game.tick = task.next_tick;
+    siege.visible_below_z = 2000;
+    siege.sightings.seen_count = 1; // unit 2 alone, far from the third point
+    fake.rolls = {1, 3, 5};
+    fake.roll = 0;
+    computer_player_tick_orders(&state, host, 1);
+    check(fake.roll == 3, "a seen point with nothing near draws only against the target");
+    check(same(task.siege_target, first) && task.siege_weight == 80, "a poorer point loses");
+    computer_players_release(&state);
+}
+
 // The build score is nothing for a DOWNLOADABLE type (OA_UNIT_DEF_FLAG_DOWNLOADABLE)
 // while the session object's kind is 1, a campaign.
 void test_campaign_downloadables() {
@@ -914,6 +1106,8 @@ int main(int argc, char** argv) {
     test_busy_factory_gets_no_pick();
     test_campaign_downloadables();
     test_profile_reload();
+    test_sighted_weight();
+    test_siege();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

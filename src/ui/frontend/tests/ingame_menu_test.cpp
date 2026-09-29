@@ -140,6 +140,11 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::return_to_main_menu);
     select(confirm, "CHOICE2");
     OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::closed);
+    // Enter and Escape answer No, as CHOICE2 does.
+    OA_CHECK(kExitConfirmDefault == "CHOICE2");
+    OA_CHECK(text_of(confirm, kExitConfirmDefault) == "No");
+    select(confirm, kExitConfirmDefault);
+    OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::closed);
 }
 
 OA_GAME_DATA_TEST(exit_menu_service_label_replaces_button) {

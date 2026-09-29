@@ -67,8 +67,10 @@
 /// ScreenServices entries quit, stop_sounds, play_sound_alternate and
 /// run_frontend, and query_register; launched_by_service is also asked as
 /// each match starts, and a ScreenContext's host and services may be kept
-/// while the runtime lives.
-#define OA_EXTENSION_API_VERSION 6
+/// while the runtime lives. Version 7 adds speed_changed, which the speed
+/// keys and the GAME slider call, and app_mode_set, which every application
+/// mode the frontend sets calls.
+#define OA_EXTENSION_API_VERSION 7
 
 namespace oa {
 struct Game;
@@ -752,6 +754,40 @@ struct Extension {
     /// @return the label, kept by the extension and read at once; null, an
     ///         empty label or a null hook means none
     const char* (*service_label)(void* context){};
+
+    /// Reports a game speed the local player set with the speed keys or the
+    /// GAME slider.
+    ///
+    /// Called during a running match each time '+' sets the speed, which it
+    /// does below the fastest speed, 20, and each time '-' sets it, above
+    /// the slowest, 1; and each time the in-game preferences' GAME slider
+    /// sets it, whatever its value. Neither works in a watcher's game
+    /// (extension_state::local_watcher), which calls it for neither. Called
+    /// after the speed is clamped to 1..20, posted to the message log when
+    /// it changed and set as the match's speed. The preferences' Cancel and
+    /// UNDO, which put back the speed they opened with, and RESTORE, which
+    /// puts back the normal speed, do not call it, nor does anything else
+    /// that sets the speed. It must not throw. Null keeps the speed on this
+    /// machine.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @param speed the match's game speed now, 1 to 20; 10 is normal
+    void (*speed_changed)(void* context, Runtime& runtime, uint16_t speed){};
+
+    /// Reports an application mode the frontend set.
+    ///
+    /// Called each time the engine sets the frontend Game's application mode
+    /// (Game.mode, an oa::ui::frontend_state::mode_id value), after writing
+    /// it, also when the mode is the one it already holds: as the frontend's
+    /// states and screens move between menus, as a match is set up or a
+    /// saved game loads, as the end-of-game screen opens and as its buttons
+    /// leave it. A running match sets no mode here. It must not throw.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app
+    /// @param mode the mode set
+    void (*app_mode_set)(void* context, Runtime& runtime, int32_t mode){};
 };
 
 } // namespace oa::app

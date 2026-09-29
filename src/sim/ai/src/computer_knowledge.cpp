@@ -62,12 +62,6 @@ char* duplicate(std::string_view text) noexcept {
     return copy;
 }
 
-int32_t truncate_to_int32(double value) noexcept {
-    if (!std::isfinite(value) || value >= 2147483648.0 || value < -2147483648.0)
-        return static_cast<int32_t>(0x80000000u);
-    return static_cast<int32_t>(value);
-}
-
 int32_t clamp_percent(int32_t value) noexcept {
     return value < 1 ? 0 : (value < 100 ? value : 100);
 }
@@ -662,6 +656,12 @@ void apply_profile(ComputerPlayers* state, const ComputerHost& host) noexcept {
 
 } // namespace
 
+int32_t truncate_to_int32(double value) noexcept {
+    if (!std::isfinite(value) || value >= 2147483648.0 || value < -2147483648.0)
+        return static_cast<int32_t>(0x80000000u);
+    return static_cast<int32_t>(value);
+}
+
 const ComputerType* computer_type(const ComputerPlayers* state, uint16_t type) noexcept {
     if (state == nullptr || type == 0 || type >= state->type_count)
         return nullptr;
@@ -717,7 +717,7 @@ bool computer_players_initialize(ComputerPlayers* state, const ComputerHost& hos
         const auto& player = host.world->game.players[index];
         if (player.in_use == 0 || player.status != OA_PLAYER_STATUS_COMPUTER)
             continue;
-        computer_player_create(ai, index);
+        computer_player_create(ai, index, host.world->game);
         if (!create_knowledge(state, host, ai.knowledge))
             ai.present = 0;
     }
@@ -797,6 +797,29 @@ ComputerKnowledge* computer_player_knowledge(ComputerPlayers* state, uint8_t pla
     if (state == nullptr || player >= OA_PLAYER_COUNT || !state->players[player].present)
         return nullptr;
     return &state->players[player].knowledge;
+}
+
+int32_t computer_sighted_weight(
+    const ComputerPlayers* state,
+    const ComputerKnowledge& k,
+    const sim::detection::Sightings& sightings,
+    const oa::World& world,
+    const oa::FixedVec3& at,
+    int32_t radius
+) noexcept {
+    const auto reach =
+        static_cast<int32_t>(static_cast<uint32_t>(radius) * static_cast<uint32_t>(radius));
+    uint32_t sum = 0;
+    if (state == nullptr || k.base_weights == nullptr || sightings.seen == nullptr)
+        return 0;
+    for (uint32_t i = 0; i < sightings.seen_count; ++i) {
+        const auto* unit = oa::world_unit_at(&world, sightings.seen[i]);
+        if (unit == nullptr || sim::detection::squared_distance_high(at, unit->position) > reach)
+            continue;
+        if (unit->type_index < state->type_count)
+            sum += static_cast<uint32_t>(static_cast<int32_t>(k.base_weights[unit->type_index]));
+    }
+    return static_cast<int32_t>(sum);
 }
 
 void computer_knowledge_clear(const ComputerPlayers* state, ComputerKnowledge& k) noexcept {

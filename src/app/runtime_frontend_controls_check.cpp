@@ -328,6 +328,24 @@ void Runtime::check_frontend_controls() {
     const auto chosen_index = (current + 1U) % bound_map_names_.size();
     const auto chosen = bound_map_names_[chosen_index];
     preview_map_index(chosen_index);
+    // The map's summary names its players in the game's language, in the word
+    // gamedata\translate.tdf gives for "Players": "Spieler" in German.
+    const auto summary = label_text("SIZE");
+    load_translations("German");
+    preview_map_index(chosen_index);
+    const auto german_summary = label_text("SIZE");
+    load_translations(command_line::launch_language(options_.launch));
+    preview_map_index(chosen_index);
+    std::cout << "frontend controls check: the map summary reads '" << summary << "', in German '"
+              << german_summary << "'\n";
+    expect(
+        german_summary.find("  Spieler: ") != std::string::npos,
+        "the map summary reads '" + german_summary + "' in German, without \"Spieler\""
+    );
+    expect(
+        label_text("SIZE") == summary,
+        "the map summary did not return to '" + summary + "' in the game's own language"
+    );
     click(map_modal::resource_name(map_modal::Button::load));
     require(screen_ == Screen::skirmish, "Load did not return to SKIRMISH.GUI");
     auto after_map = frame();
@@ -563,9 +581,8 @@ void Runtime::check_frontend_controls() {
     require(screen_ == Screen::single_player, "Previous Menu did not leave NEWGAME.GUI");
 
     // The options tabs and the sub-panels' staged buttons; CANCEL puts the
-    // options back. SOUNDS.GUI and MUSIC.GUI are left out: their buttons are
-    // drawn lit by their foreground colour, which the frontend renderer does
-    // not draw yet.
+    // options back. SOUNDS.GUI's and MUSIC.GUI's buttons are left out here;
+    // native-scroll-bars opens SOUND's panel and drives its slider.
     click(entry::resource_name(entry::Button::options));
     require(screen_ == Screen::options, "Options did not open STARTOPT.GUI");
     constexpr std::array<std::string_view, 4> tabs{"SOUND", "SPEEDS", "VISUALS", "MUSIC"};

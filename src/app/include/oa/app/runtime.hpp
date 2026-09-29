@@ -13,6 +13,7 @@
 #include "oa/ui/display_layout.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/base/game_loop.hpp"
+#include "oa/data/defs/locale.hpp"
 #include "oa/data/defs/sides.hpp"
 #include "oa/data/defs/unit_catalog.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
@@ -37,6 +38,7 @@
 #include "oa/ui/hud/team_panels.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/resource_palette.hpp"
+#include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/sim/selection.hpp"
@@ -243,9 +245,9 @@ class Runtime final : public menu::Host,
     /// display, archives, sound and session) is main() and the constructor.
     ///
     /// Start-up differs from 3.1c's in three ways: several copies of the game
-    /// may run at once, no translate.tdf language table is read, so text shows
-    /// as the archives hold it, and no AudioCD or multiplayer settings are
-    /// written.
+    /// may run at once, the translate.tdf language table is read for the
+    /// language the command line names (English without one, as no Language
+    /// setting is kept), and no AudioCD or multiplayer settings are written.
     ///
     /// @return the exit status: 0, the campaign run's result, the one an
     ///     extension run phase set, or, after the application loop, the one
@@ -287,6 +289,12 @@ class Runtime final : public menu::Host,
     /// @param text new text
     void set_screen_label(std::string_view name, std::string_view text);
 
+    /// Translates interface text into the game's language (gamedata/translate.tdf).
+    ///
+    /// @param text text to translate, matched exactly
+    /// @return its translation, or the text itself when the language has none
+    std::string translate_ui(std::string_view text) override;
+
     /// Returns the directory that holds SAVEGAME: the one the preferences file is in.
     ///
     /// @return that directory
@@ -302,6 +310,22 @@ class Runtime final : public menu::Host,
     ///
     /// @return the root gadget's position on those screens, else (0, 0)
     [[nodiscard]] oa::ui::display_layout::Point panel_origin() const;
+
+    /// Returns the first row a list of the frontend screen shows while its
+    /// scroll bars are bound.
+    ///
+    /// @param name list gadget
+    /// @return the row, or nothing for a list that is not bound
+    [[nodiscard]] std::optional<std::size_t> frontend_list_first(std::string_view name);
+
+    /// Returns the row a press on a list of the frontend screen picks, as
+    /// 3.1c picks it: the row under the pointer, kept on the list's page.
+    ///
+    /// @param name list gadget
+    /// @param canvas_y pointer row on the canvas
+    /// @return the row, or nothing when the list is not bound or the press misses its rows
+    [[nodiscard]] std::optional<std::size_t>
+    frontend_list_row_at(std::string_view name, float canvas_y);
 
     /// Tells whether the running match goes on this frame.
     ///
@@ -1078,9 +1102,15 @@ class Runtime final : public menu::Host,
     /// @return true when the match is on screen again; false when no such page is open
     bool return_to_match_for_close();
 
-    /// Answers Escape over a paused match: the surrender confirmation takes it as CHOICE2,
-    /// the preferences as their Escape default (OK), any other menu resumes the match.
+    /// Answers Escape over a paused match: the surrender confirmation takes it as its Escape
+    /// default (No), the preferences as theirs (OK), any other menu resumes the match.
     void escape_match_menu();
+
+    /// Answers Enter over a paused match: the surrender confirmation takes it as its Enter
+    /// default (No).
+    ///
+    /// @return true when the confirmation took the key; false over any other menu
+    bool enter_match_menu();
 
     /// Steps and draws the lightbar sweep of the preferences a match opens while it runs.
     ///
@@ -1198,7 +1228,8 @@ class Runtime final : public menu::Host,
     /// A multi-stage button steps first. The action may open the save, briefing,
     /// game settings, help, exit or restart panels, restart the mission, return
     /// to the main menu or leave the game. Over the preferences the options
-    /// handlers take the click: a slider's knob moves to the pointer, a tab
+    /// handlers take the click: a slider takes none (its bar and arrows take
+    /// the pointer, preferences_bar_moved), a tab
     /// merges its sub-panel into PREFS.GUI, OK and Cancel close them.
     ///
     /// @param name control name in the loaded panel
@@ -1250,6 +1281,145 @@ class Runtime final : public menu::Host,
     /// by control.
     void draw_battlefield_panel();
 
+    // ---- Scroll bars (runtime_scroll_bars.cpp) ----
+
+    /// Binds the frontend screen's scroll bars and readies its lists, as the
+    /// first draw of its panel does in 3.1c.
+    ///
+    /// The bars take the panel's own SLIDERS art when `sprites` is named after
+    /// `layout`, else the shared art of COMMONGUI.GAF, and the panel font's
+    /// line height paces the lists.
+    ///
+    /// @param layout GUI file the screen's panel was loaded from
+    /// @param sprites GAF file it was loaded with
+    void bind_frontend_scrolls(std::string_view layout, std::string_view sprites);
+
+    /// Binds the match HUD panel's scroll bars and readies its lists from a
+    /// gadget on, as the first draw of a panel does; those bound before stay.
+    ///
+    /// Its own GAF is anims/<GUI name>.GAF and the shared art comes from the
+    /// HUD's COMMONGUI.GAF sequences.
+    ///
+    /// @param first first gadget bound
+    void bind_hud_scrolls(std::size_t first);
+
+    /// Returns the frontend screen's scroll bars while they are bound to its layout.
+    ///
+    /// @return the bars, or null when the layout was replaced since they were bound
+    [[nodiscard]] renderer::LayoutScrolls* frontend_scrolls();
+
+    /// Returns the match HUD panel's scroll bars while they are bound to its layout.
+    ///
+    /// @return the bars, or null when the layout was replaced since they were bound
+    [[nodiscard]] renderer::LayoutScrolls* hud_scrolls();
+
+    /// Maps a canvas point to the frontend screen panel's coordinates, as the
+    /// pointer's hit test does.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return the point in the panel's coordinates
+    [[nodiscard]] oa::ui::display_layout::Point frontend_panel_point(float x, float y) const;
+
+    /// Maps a canvas point of a match to the HUD layer's 640x480 source.
+    ///
+    /// The preferences' sub-panel over the battlefield takes its own rows,
+    /// down to its bottom, wherever the window puts the bottom bar
+    /// (preferences_panel_rows); elsewhere the chrome's mapping applies.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return the point in HUD source coordinates
+    [[nodiscard]] oa::ui::display_layout::Point hud_source_point(float x, float y) const;
+
+    /// Routes a pointer event to the scroll bars of the panel it is over.
+    ///
+    /// A press on a shown bar or arrow holds it and is kept from the panel's
+    /// buttons; the release of a held bar is too. Moves are passed on.
+    ///
+    /// @param event the SDL pointer event
+    /// @param x canvas column of the pointer
+    /// @param y canvas row of the pointer
+    /// @return true when the scroll bars took the event
+    bool route_scroll_pointer(const SDL_Event& event, float x, float y);
+
+    /// Runs the held scroll bar, or arrow, for this frame at the frontend's 30 Hz tick.
+    void tick_scroll_bars();
+
+    /// Runs the handler of a bar whose knob moved: an options slider's
+    /// callback, the share panel's amounts, or a list that follows it.
+    ///
+    /// @param over_hud true for a bar of the match HUD panel, false for the frontend screen's
+    /// @param gadget the bar's gadget
+    void scroll_bar_changed(bool over_hud, int32_t gadget);
+
+    /// Fills a list of the frontend screen with rows and shows or hides its scroll bar.
+    ///
+    /// @param name list gadget
+    /// @param count rows
+    void fill_frontend_list(std::string_view name, std::size_t count);
+
+    /// Selects a row of a frontend list and brings it into view, moving its bar's knob.
+    ///
+    /// @param name list gadget
+    /// @param row row selected
+    void select_frontend_list_row(std::string_view name, std::size_t row);
+
+    /// Tells whether a panel whose first draw binds its scroll bars only once
+    /// its setup has run: NEWGAME.GUI, which loads undrawn.
+    ///
+    /// @param screen the screen loaded
+    /// @return true for the new campaign and any mission screens
+    [[nodiscard]] static bool first_draw_after_setup(Screen screen);
+
+    /// Binds the scroll bars of a panel its setup has already filled, as its
+    /// first draw does: each list the setup filled is filled again with its
+    /// rows, and its selected row brought into view.
+    ///
+    /// @param layout GUI file the screen's panel was loaded from
+    /// @param sprites GAF file it was loaded with
+    void bind_set_up_frontend_scrolls(std::string_view layout, std::string_view sprites);
+
+    /// Moves an options slider of the frontend screen to its bar's knob and runs its callback.
+    ///
+    /// @param gadget the slider's gadget
+    void options_bar_moved(std::size_t gadget);
+
+    /// Moves a slider of the match's preferences to its bar's knob and runs
+    /// its callback; the match takes the options it sets.
+    ///
+    /// @param gadget the slider's gadget
+    void preferences_bar_moved(std::size_t gadget);
+
+    /// Takes the share panel's amount from a METAL or ENERGY bar, or the recipient list's first row.
+    ///
+    /// @param gadget the bar's gadget
+    void share_bar_moved(std::size_t gadget);
+
+    /// Returns the first row SHARE.GUI's recipient list shows.
+    ///
+    /// @return the row; 0 without the panel's scroll bars
+    [[nodiscard]] std::size_t share_list_first() const;
+
+    /// Returns the source rows the preferences' sub-panel shows over the
+    /// battlefield: from its top down to its bottom, the bottom bar's rows
+    /// included, as 3.1c places the panel at every resolution.
+    ///
+    /// @return the rows' source rectangle, or an empty one when the preferences are not open
+    [[nodiscard]] oa::ui::display_layout::Rect preferences_panel_rows() const;
+
+    /// Places the preferences' sub-panel's rows in the bottom bar's band of the HUD layer.
+    ///
+    /// Where the bottom bar sits apart from the chrome (a window taller than
+    /// the chrome's 4:3), each of its rows under the panel shows the panel's
+    /// row the chrome's scale puts at that height, or else the bar's own
+    /// picture; the panel as drawn is kept (preferences_hud_) for the rows
+    /// over the battlefield. Where the bar joins the chrome the layer is left
+    /// as it is.
+    ///
+    /// @param[in,out] hud the HUD layer, in 640x480 source space
+    void place_preferences_rows(renderer::Surface& hud);
+
     /// Tells whether the running game is a multiplayer game (extension_state::multiplayer).
     ///
     /// @return true while a multiplayer session is open
@@ -1293,7 +1463,8 @@ class Runtime final : public menu::Host,
     /// Clicks a named control of the open team menu or panel.
     ///
     /// The tab menu opens the options menu, SHARE, ALLIES or CONTROL; SHARE.GUI
-    /// picks a recipient row, sets a slider from the pointer, toggles its boxes
+    /// picks a recipient row (its sliders' bars and arrows take the pointer,
+    /// share_bar_moved), toggles its boxes
     /// and gives on OK (ui::hud::share_panel_click); ALLIES.GUI and CONTROL.GUI
     /// follow ui::hud::allies_panel_click and control_panel_click, and the
     /// alliance line is said in chat through the chat formatter; the removal
@@ -2758,6 +2929,62 @@ class Runtime final : public menu::Host,
     /// every mismatch.
     void check_frontend_controls();
 
+    /// Checks the engine screens' scroll bars through the SDL presenter.
+    ///
+    /// The options' SOUND panel binds FXVOL between its arrows with 89
+    /// positions and draws its knob; a press beside the knob steps it one
+    /// position and a hold one a tick, a drag moves it pixel for pixel, an
+    /// arrow steps at once and repeats after 15 ticks, and each move sets the
+    /// effects volume the knob stands for. SELMAP.GUI's list shows its scroll
+    /// bar when the maps overflow it, with the knob 3.1c sizes, and its knob
+    /// scrolls the list; so does NEWGAME.GUI's Missions list for any mission,
+    /// bound once its setup has placed and filled it. Over a skirmish in a 1920x1080 window and a 1280x960
+    /// one the preferences' SPEEDS sub-panel draws GAME's knob, the knob sets
+    /// the game speed, and the sub-panel's last rows show over the battlefield
+    /// where the bottom bar sits apart from the chrome (its own picture under
+    /// them) and in the bottom bar where it joins the chrome, with the pointer
+    /// over them taking the sub-panel's controls. Throws std::runtime_error on
+    /// a failure.
+    void check_scroll_bars();
+
+    /// Returns the canvas point of a point of the screen's panel, or of the
+    /// HUD layer's 640x480 source in a match.
+    ///
+    /// @param x column in the panel's (or source) coordinates
+    /// @param y row in the panel's (or source) coordinates
+    /// @return the canvas point the pointer is at over it
+    [[nodiscard]] oa::ui::display_layout::Point scroll_canvas_point(int32_t x, int32_t y) const;
+
+    /// Sends a pointer event at a canvas point, through the SDL presenter's
+    /// coordinates when there is one.
+    ///
+    /// @param type SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN or SDL_EVENT_MOUSE_BUTTON_UP
+    /// @param canvas canvas point
+    /// @param button SDL button of a press or release
+    void
+    send_check_pointer(SDL_EventType type, oa::ui::display_layout::Point canvas, uint8_t button);
+
+    /// Returns a bound scroll bar of the screen's panel, or of the match HUD's panel in a match.
+    ///
+    /// Throws std::runtime_error naming the bar when it is not bound.
+    ///
+    /// @param name the bar's gadget
+    /// @return the bar
+    [[nodiscard]] const renderer::LayoutScrolls::Bar& check_scroll_bar(std::string_view name);
+
+    /// Drags a scroll bar's knob along the bar through pointer events, as a
+    /// player does: a press on the knob, a move, one update and the release.
+    ///
+    /// @param name the bar's gadget
+    /// @param pixels pixels along the bar, negative toward its start
+    void drag_check_knob(std::string_view name, int32_t pixels);
+
+    /// Clicks one of a scroll bar's arrows through pointer events.
+    ///
+    /// @param name the bar's gadget
+    /// @param forward true for the arrow that steps the knob forward
+    void click_check_arrow(std::string_view name, bool forward);
+
     /// Checks that the mission briefing's narration plays exactly while SHUTUP is on.
     ///
     /// Opens the first mission's briefing from NEWGAME.GUI with sound on: the
@@ -2921,6 +3148,15 @@ class Runtime final : public menu::Host,
     /// Loads the two fonts the engine keeps for its whole run: COMIX, which the message log draws
     /// in, and smlfont.
     void load_common_fonts();
+
+    /// Loads the interface texts of gamedata/translate.tdf in a language, in place of those of
+    /// the language loaded before.
+    ///
+    /// Each section of the file names a text as the game holds it and gives its translation
+    /// under the language's key; English has none, so its texts show as they are.
+    ///
+    /// @param language language key, such as "German"; null is English
+    void load_translations(const char* language);
 
     /// Fills Game.sides from the side table and every player record as a skirmish or campaign
     /// leaves it.
@@ -4085,7 +4321,8 @@ class Runtime final : public menu::Host,
     void area_order_units(int x0, int y0, int x1, int y1, std::string_view kind);
 
     /// Steps the requested game speed (1..20, 10 normal) with '+' and '-'; the change is posted to
-    /// the message log and the next frame steps at the new rate.
+    /// the message log, the next frame steps at the new rate and a key that set the speed reports
+    /// it through Extension::speed_changed.
     ///
     /// @param delta positive to raise, negative to lower
     void adjust_game_speed(int delta);
@@ -4297,8 +4534,11 @@ class Runtime final : public menu::Host,
     ///
     /// The local commander starts a solar plant beside itself, a finished Kbot
     /// Lab near it queues three Peewees, and three new Peewees patrol, guard the
-    /// commander and walk to the far side of the map. Throws std::runtime_error
-    /// when a type or site is missing.
+    /// commander and walk to the far side of the map. An Atlas is ordered to
+    /// pick up a Peewee and then to set it down on the far side, and a
+    /// transport ship in the water nearest the commander starts with three
+    /// Peewees in its hold. Throws std::runtime_error when a type or site is
+    /// missing.
     void give_saveload_orders();
 
     /// Gives the local player's units orders towards the mission's victory,
@@ -4361,12 +4601,11 @@ class Runtime final : public menu::Host,
     ///
     /// The line "saveload: features" gives the normal, 3D and animating record
     /// counts, the animating records playing a burn, die and reclamate
-    /// sequence, and a digest of the section's blobs, which a load of that
-    /// save reproduces. The digest follows the order of the feature type
-    /// names, which a load can change: a fresh game loads the mission
-    /// schema's feature types before its units' remnants, and a resumed game
-    /// after them, from the save. It therefore matches across a load only on
-    /// a map whose schema names no feature type beyond the map's own.
+    /// sequence, and a digest of the section, which a load of that save
+    /// reproduces. The digest names each feature type by its name rather than
+    /// by its place in the type table, whose order a load changes: a fresh
+    /// game loads the mission schema's feature types before its units'
+    /// remnants, and a resumed game after them, from the save.
     void print_saved_features();
 
     /// Checks download build pages and a missile silo's build page.
@@ -5608,7 +5847,8 @@ class Runtime final : public menu::Host,
     /// @param value 0 for a new campaign, 1 for any mission; kept for the screen
     void open_new_game_panel(frontend::State& state, int32_t value) override;
 
-    /// Sets the application mode, kept here and in the frontend Game block.
+    /// Sets the application mode, kept here and in the frontend Game block,
+    /// and reports it through Extension::app_mode_set.
     ///
     /// @param state dispatcher state
     /// @param mode a mode_id value
@@ -5953,12 +6193,6 @@ class Runtime final : public menu::Host,
     ///
     /// @return the region; zeros without a TextRegion
     [[nodiscard]] oa::ui::campaign::BriefingRegion briefing_region();
-
-    /// Translates interface text; the text is returned unchanged.
-    ///
-    /// @param text text to translate
-    /// @return the text
-    std::string translate_ui(std::string_view text) override;
 
     /// Sets a button's or label's text.
     ///
@@ -6407,10 +6641,10 @@ class Runtime final : public menu::Host,
     /// is done.
     void refresh_disc_archives() override;
 
-    /// Translates a message; the text is returned unchanged.
+    /// Translates a message into the game's language (gamedata/translate.tdf).
     ///
     /// @param message message to translate
-    /// @return its text
+    /// @return its text's translation, or its text when the language has none
     std::string translate(entry::Message message) override;
 
     /// Shows a frontend message box over the current screen, or an unsupported notice when it
@@ -6536,6 +6770,23 @@ class Runtime final : public menu::Host,
     // in place of Game.common_fonts.
     std::optional<oa::formats::fnt::Font> message_font_;
     std::optional<oa::formats::fnt::Font> small_font_;
+
+    // The texts of gamedata/translate.tdf in the game's language, freed with
+    // the runtime.
+    struct Translations {
+        oa::data::defs::LocaleTable table{};
+
+        /// Starts with no language loaded.
+        Translations() noexcept { oa::data::defs::locale_table_init(&table); }
+
+        /// Frees the loaded texts.
+        ~Translations() { oa::data::defs::locale_table_free(&table); }
+
+        Translations(const Translations&) = delete;
+        Translations& operator=(const Translations&) = delete;
+    };
+
+    Translations translations_;
     SideHud side_hud_{};
     HudRect radar_picture_{};
     int radar_map_w_ = 0;
@@ -6758,6 +7009,23 @@ class Runtime final : public menu::Host,
     bool input_enabled_ = true;
     bool preferences_dirty_ = false;
     renderer::ScreenResources resources_;
+    // The frontend screen's scroll bars and lists, bound to resources_'s
+    // layout, and the gadgets and records they were bound over.
+    renderer::LayoutScrolls frontend_scrolls_;
+    const oa::ui::gui_layout::Gadget* frontend_scrolls_layout_ = nullptr;
+    std::size_t frontend_scrolls_count_ = 0;
+    bool frontend_scrolls_own_art_ = false; // resources_.sprites is the panel's own GAF
+    std::vector<uint8_t> frontend_gray_table_;
+    // The match HUD panel's scroll bars and lists, bound to match_hud_'s
+    // layout, and the panel's own GAF.
+    renderer::LayoutScrolls hud_scrolls_;
+    const oa::ui::gui_layout::Gadget* hud_scrolls_layout_ = nullptr;
+    std::size_t hud_scrolls_count_ = 0;
+    oa::formats::gaf::Archive hud_own_art_;
+    std::vector<uint8_t> hud_gray_table_;
+    // The HUD layer as the preferences' sub-panel was drawn on it, before the
+    // bottom bar in a window taller than the chrome took back its own rows.
+    renderer::Surface preferences_hud_;
     NamedBackgrounds named_backgrounds_;
     // The options lightbar's FLIPSURFACE (the frame below) and BKUPSURFACE.
     static constexpr oa_ref32 kOptionsFlipSurface = 1;

@@ -57,6 +57,17 @@ inline constexpr std::size_t position_bytes = 0xc;    // X, Y and Z, 16.16
 inline constexpr std::size_t orientation_bytes = 0x6; // three 16-bit angles
 } // namespace feature_record
 
+// The Features account's blobs. "Feature Type Names" holds one name per
+// FeatureDef, NUL-padded to type_name_bytes; each record of "Normal
+// Features", "Animating Features" and "3D Features" opens with the cell's X
+// and Z words and, at record_type, the type word, which indexes those names.
+namespace feature_section {
+inline constexpr uint32_t type_name_bytes = 0x80;
+inline constexpr uint32_t normal_record_bytes = 8, animating_record_bytes = 10,
+                          object_record_bytes = 0x1a;
+inline constexpr std::size_t record_type = 0x04;
+} // namespace feature_section
+
 // Movement object bytes copied into the mobility blob.
 inline constexpr std::size_t movement_saved_offset = 0x08, movement_saved_bytes = 0x22,
                              movement_flags = 0x2e;

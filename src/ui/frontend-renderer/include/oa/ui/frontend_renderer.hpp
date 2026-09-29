@@ -114,6 +114,17 @@ struct ScreenAssetNames {
 /// @throws std::runtime_error when a resource is missing or malformed.
 [[nodiscard]] ScreenResources load_screen(AssetStore& assets, const ScreenAssetNames& names);
 
+/// Binds a screen's buttons as the first draw of their panel does.
+///
+/// Each button from `first` on loses its authored foreground and background
+/// colours, and one without the checkbox or text_list attribute takes the
+/// size of its GAF frame. load_screen() binds a loaded panel's buttons; a
+/// panel merged into it afterwards binds its own with this.
+///
+/// @param[in,out] resources The screen's resources; its layout's buttons change.
+/// @param first First gadget bound.
+void bind_screen_buttons(ScreenResources& resources, std::size_t first);
+
 // Which MAINMENU.GUI the main menu takes. The by.ccx data archive overrides
 // TA's with one whose SINGLE/MULTI/INTRO/EXIT sit exactly under its main-menu
 // overlay's own buttons, outside FrontendX's pipe frames. With no overlay

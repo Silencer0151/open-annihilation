@@ -49,9 +49,10 @@ aims to match the 3.1c game's behaviour and its save files: campaigns,
 skirmish, computer players, simulation, unit scripts, rendering, sound and
 save/load.
 
-It is a work in progress. The frontend, skirmish and campaign matches run;
-parts of the game are still missing (ships and transports among them), and
-unsupported actions report their status instead of failing silently.
+It is a work in progress. The frontend, skirmish and campaign matches run,
+with land units, ships, submarines, hovercraft, aircraft and transports; some
+parts of the game are still missing, and unsupported actions report their
+status instead of failing silently.
 
 - **Core:** the canonical game records in `src/core` (Game, Unit, Player,
   UnitDef, WeaponDef, FeatureDef, MapPlot) with fixed, asserted layouts;
@@ -59,8 +60,9 @@ unsupported actions report their status instead of failing silently.
 - **Formats:** HPI archives with the game's mount order, TDF/FBI, GAF,
   TNT/OTA maps, 3DO models, COB unit scripts and PCX.
 - **Simulation:** missions and victory conditions, economy, weapons and
-  projectiles, damage, ground path finding, aircraft, unit scripts, features
-  and meteors, selection and the skirmish computer players.
+  projectiles, damage, ground path finding, ships, aircraft and transports,
+  unit scripts, features and meteors, selection and the computer players of
+  skirmish and campaign matches.
 - **Presentation:** the 8-bit raster, sprite and polygon layer, the GUI gadget
   engine, the world camera, radar and fog, the 3DO model renderer, the audio
   mixer, speech, CD music and the intro movies.
@@ -170,8 +172,9 @@ headless checks (`--headless-check`, `--match-ticks N`,
 ```text
 oa-tool list ARCHIVE
 oa-tool extract ARCHIVE ENTRY OUTPUT
-oa-tool preview ARCHIVE PCX_ENTRY OUTPUT.ppm
-oa-tool decode-pcx INPUT.pcx OUTPUT.ppm
+oa-tool asset-extract ROOT ENTRY OUTPUT [ARCHIVE...]
+oa-tool preview ARCHIVE PCX_ENTRY OUTPUT.ppm|OUTPUT.png
+oa-tool decode-pcx INPUT.pcx OUTPUT.ppm|OUTPUT.png
 ```
 
 ## Layout of the tree

@@ -33,9 +33,7 @@ void Runtime::update_pointer(float x, float y) {
         match_pointer_x_ = x;
         match_pointer_y_ = y;
         hovered_.reset();
-        const auto hud_point = oa::ui::display_layout::canvas_to_source(
-            match_layout_, static_cast<int>(x), static_cast<int>(y)
-        );
+        const auto hud_point = hud_source_point(x, y);
         // The HUD of a finished match takes no pointer.
         if (!match_finished_ && match_hud_) {
             const oa::ui::gui_input::MenuObject hud{match_hud_->layout.gadgets, -1};

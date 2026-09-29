@@ -176,6 +176,8 @@ bool Runtime::load_team_panel(const char* file) {
     if (!match_ || !load_match_hud_layout(std::string("guis/") + file))
         return false;
     place_from_edges(match_hud_->layout);
+    // The panel's first draw, where it is placed, binds its scroll bars.
+    bind_hud_scrolls(1);
     match_paused_ = true;
     match_command_ = MatchCommand::none;
     pending_build_type_ = 0;
@@ -295,9 +297,45 @@ void Runtime::present_team_panel(
         lists.push_back(
             {"PLYRLIST",
              session.share_rows,
-             0,
+             share_list_first(),
              session.share_row >= 0 ? std::optional<std::size_t>(session.share_row) : std::nullopt}
         );
+}
+
+std::size_t Runtime::share_list_first() const {
+    if (!match_hud_ || hud_scrolls_layout_ != match_hud_->layout.gadgets.data())
+        return 0;
+    for (const auto& entry : hud_scrolls_.lists)
+        if (entry.gadget < match_hud_->layout.gadgets.size() &&
+            match_hud_->layout.gadgets[entry.gadget].common.name == "PLYRLIST")
+            return static_cast<std::size_t>(std::max<int16_t>(0, entry.list.first));
+    return 0;
+}
+
+void Runtime::share_bar_moved(std::size_t gadget) {
+    auto& session = team_session();
+    auto* scrolls = hud_scrolls();
+    if (session.panel != TeamPanel::share || scrolls == nullptr ||
+        gadget >= match_hud_->layout.gadgets.size())
+        return;
+    const auto* entry = renderer::find_layout_bar(*scrolls, gadget);
+    const auto& name = match_hud_->layout.gadgets[gadget].common.name;
+    // PLYRLIST's bar has scrolled the list itself.
+    if (entry == nullptr || (name != "METAL" && name != "ENERGY"))
+        return;
+    // The counter shows the amount the knob stands for.
+    const bool metal = name == "METAL";
+    const auto amount = hud::slider_amount(
+        entry->bar.knob,
+        entry->bar.range,
+        metal ? session.share.metal_max : session.share.energy_max
+    );
+    (metal ? session.metal : session.energy) = amount;
+    char text[16];
+    hud::format_share_amount(text, sizeof text, amount);
+    const auto controls = team_panel_controls();
+    if (const auto label = hud::find_control(controls, metal ? "METAL#" : "ENERGY#"); label != -1)
+        controls.set_text(controls.user, label, text);
 }
 
 void Runtime::toggle_team_menu() {
@@ -380,6 +418,35 @@ void Runtime::open_team_share_panel() {
     session.share_row = 0;
     session.metal = 0;
     session.energy = 0;
+    // METAL and ENERGY take a knob as long as the bar is high and the bar's
+    // width less that as their positions, and run from 0 to the whole store;
+    // PLYRLIST is filled with the recipients.
+    if (auto* scrolls = hud_scrolls()) {
+        for (auto& entry : scrolls->bars) {
+            const auto& name = match_hud_->layout.gadgets[entry.gadget].common.name;
+            if (name != "METAL" && name != "ENERGY")
+                continue;
+            auto& bar = entry.bar;
+            bar.knob_size = bar.rect.height;
+            bar.range = static_cast<int16_t>(bar.rect.width - bar.rect.height);
+            bar.maximum = name == "METAL" ? panel.metal_max : panel.energy_max;
+            oa::ui::gui_input::scroll_set_value(bar, 0);
+            auto& fields = std::get<oa::ui::gui_layout::ScrollBarFields>(
+                match_hud_->layout.gadgets[entry.gadget].fields
+            );
+            fields.knob_position = bar.knob;
+            fields.knob_size = bar.knob_size;
+            fields.range = bar.range;
+        }
+        for (std::size_t index = 1; index < match_hud_->layout.gadgets.size(); ++index)
+            if (match_hud_->layout.gadgets[index].common.name == "PLYRLIST")
+                renderer::fill_layout_list(
+                    *scrolls,
+                    match_hud_->layout,
+                    index,
+                    static_cast<int32_t>(session.share_rows.size())
+                );
+    }
     const auto controls = team_panel_controls();
     char amount[16];
     hud::format_share_amount(amount, sizeof amount, 0);
@@ -524,35 +591,21 @@ void Runtime::click_team_panel(std::string_view clicked) {
         const auto source = oa::ui::display_layout::canvas_to_source(
             match_layout_, static_cast<int>(match_pointer_x_), static_cast<int>(match_pointer_y_)
         );
-        if (index != -1 && (name == "PLYRLIST" || name == "METAL" || name == "ENERGY")) {
+        // METAL and ENERGY are never clicked: their bars and arrows take the
+        // pointer (share_bar_moved).
+        if (index != -1 && (name == "METAL" || name == "ENERGY"))
+            return;
+        if (index != -1 && name == "PLYRLIST") {
             const auto& gadget = match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
-            if (name == "PLYRLIST") {
-                auto item_height =
-                    static_cast<int32_t>(oa::formats::fnt::line_height(match_hud_->font)) + 1;
-                if (const auto* list =
-                        std::get_if<oa::ui::gui_layout::ListBoxFields>(&gadget.fields);
-                    list != nullptr && list->item_height > 0)
-                    item_height = list->item_height;
-                const auto row = (source.y - gadget.common.y - 2) / std::max(item_height, 1);
-                if (source.y >= gadget.common.y + 2 && row < session.share.recipient_count)
-                    session.share_row = row;
-            } else {
-                const bool metal = name == "METAL";
-                const auto position = static_cast<int16_t>(
-                    std::clamp(source.x - gadget.common.x, 0, std::max(gadget.common.width - 1, 0))
-                );
-                const auto amount = hud::slider_amount(
-                    position,
-                    gadget.common.width,
-                    metal ? session.share.metal_max : session.share.energy_max
-                );
-                (metal ? session.metal : session.energy) = amount;
-                char text[16];
-                hud::format_share_amount(text, sizeof text, amount);
-                if (const auto label = hud::find_control(controls, metal ? "METAL#" : "ENERGY#");
-                    label != -1)
-                    controls.set_text(controls.user, label, text);
-            }
+            auto item_height =
+                static_cast<int32_t>(oa::formats::fnt::line_height(match_hud_->font)) + 1;
+            if (const auto* list = std::get_if<oa::ui::gui_layout::ListBoxFields>(&gadget.fields);
+                list != nullptr && list->item_height > 0)
+                item_height = list->item_height;
+            const auto row = (source.y - gadget.common.y - 2) / std::max(item_height, 1) +
+                             static_cast<int32_t>(share_list_first());
+            if (source.y >= gadget.common.y + 2 && row < session.share.recipient_count)
+                session.share_row = row;
             render_match_surface();
             return;
         }

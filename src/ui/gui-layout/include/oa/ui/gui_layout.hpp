@@ -135,6 +135,9 @@ struct ScrollBarFields {
     int16_t knob_size = 0;
     std::string source_text;
     std::string text;
+    // The record's lock: a locked bar is drawn grayed and takes no pointer.
+    // The GUI never sets it; a screen does.
+    bool locked = false;
     bool operator==(const ScrollBarFields&) const = default;
 };
 

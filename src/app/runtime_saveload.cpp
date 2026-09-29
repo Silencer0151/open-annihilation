@@ -35,6 +35,7 @@
 #include <ctime>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -57,6 +58,16 @@ constexpr const char* kGameBuildTime = "11:45:48";
 
 constexpr std::size_t kSightWordBytes = sizeof(uint16_t);
 constexpr const char* kHeadlessSaveName = "headless.sav";
+
+// World units along one side of a map cell.
+constexpr int32_t kCellPixels = 16;
+
+// Units a save/load run's transport ship starts with in its hold. A unit
+// starting aboard, as a mission's can, hangs from no piece of its carrier and
+// takes movement layer 0.
+constexpr int32_t kSaveloadShipCargo = 3;
+constexpr int8_t kNoCarryPiece = -1;
+constexpr uint8_t kStartAboardLayer = 0;
 
 // gamedata\meteor.tdf [Default] and the map keys it stands in for.
 constexpr const char* kMeteorDefaults = "gamedata/meteor.tdf";
@@ -371,6 +382,86 @@ persist::MeteorTdf meteor_tdf(const oa::data::unit_definitions::TdfSection& sect
         return value != nullptr ? std::strtod(value->c_str(), nullptr) : fallback;
     };
     return tdf;
+}
+
+/// Returns the bytes of a named blob of a bank's open account.
+///
+/// @param[in,out] bank bank whose account holds the blob; the blob is left open
+/// @param name blob name
+/// @return the blob's bytes, empty when the account has no such blob
+std::vector<uint8_t> blob_bytes(persist::Bank& bank, const char* name) {
+    std::vector<uint8_t> bytes;
+    if (!persist::bank_open_blob_name(&bank, name))
+        return bytes;
+    bytes.resize(static_cast<std::size_t>(std::max(persist::bank_blob_size(&bank), 0)));
+    persist::bank_blob_seek(&bank, 0);
+    bytes.resize(persist::bank_blob_read(&bank, bytes.data(), static_cast<uint32_t>(bytes.size())));
+    return bytes;
+}
+
+/// Digests the Features section a bank holds by feature type name.
+///
+/// A load builds the feature type table in an order of its own: the map's
+/// types, then its units' remnants and what those turn into, then the types
+/// the save names that the table still lacks, such as those a mission's
+/// schema places. The same features saved before and after a load can thus
+/// list their type names in another order and carry other type words. The
+/// digest takes the type names in byte order, then the records of "Normal
+/// Features", "Animating Features" and "3D Features" in the order each blob
+/// holds them, each with its type word replaced by the name it indexes (a
+/// word past the names keeps its own two bytes): 64-bit FNV-1a from
+/// digest_basis.
+///
+/// @param[in,out] bank bank with the Features account open; its open blob changes
+/// @return the digest
+uint64_t features_digest_by_name(persist::Bank& bank) {
+    namespace layout = persist::feature_section;
+    constexpr std::size_t type_word_bytes = sizeof(uint16_t);
+    uint64_t digest = oa::sim::trace::digest_basis;
+    const auto add = [&digest](std::span<const uint8_t> bytes) {
+        for (const uint8_t byte : bytes) {
+            digest ^= byte;
+            digest *= oa::sim::trace::digest_prime;
+        }
+    };
+    const std::vector<uint8_t> names = blob_bytes(bank, save_key::feature_type_names);
+    const std::size_t name_count = names.size() / layout::type_name_bytes;
+    const auto name_at = [&names](std::size_t index) {
+        return std::span<const uint8_t>(names).subspan(
+            index * layout::type_name_bytes, layout::type_name_bytes
+        );
+    };
+    std::vector<std::span<const uint8_t>> sorted;
+    sorted.reserve(name_count);
+    for (std::size_t index = 0; index < name_count; ++index)
+        sorted.push_back(name_at(index));
+    std::sort(sorted.begin(), sorted.end(), [](auto left, auto right) {
+        return std::ranges::lexicographical_compare(left, right);
+    });
+    for (const auto name : sorted)
+        add(name);
+
+    struct RecordBlob {
+        const char* name{};
+        uint32_t record_bytes{};
+    };
+
+    for (const RecordBlob blob :
+         {RecordBlob{save_key::normal_features, layout::normal_record_bytes},
+          RecordBlob{save_key::animating_features, layout::animating_record_bytes},
+          RecordBlob{save_key::object_features, layout::object_record_bytes}}) {
+        const std::vector<uint8_t> records = blob_bytes(bank, blob.name);
+        for (std::size_t at = 0; at + blob.record_bytes <= records.size();
+             at += blob.record_bytes) {
+            const auto record = std::span<const uint8_t>(records).subspan(at, blob.record_bytes);
+            const std::size_t type = load_le16(record.data() + layout::record_type);
+            add(record.first(layout::record_type));
+            add(type < name_count ? name_at(type)
+                                  : record.subspan(layout::record_type, type_word_bytes));
+            add(record.subspan(layout::record_type + type_word_bytes));
+        }
+    }
+    return digest;
 }
 
 } // namespace
@@ -1341,12 +1432,10 @@ void Runtime::give_saveload_orders() {
     const auto x = static_cast<int32_t>(slots[commander].unit->position[0] >> 16);
     const auto z = static_cast<int32_t>(slots[commander].unit->position[2] >> 16);
     (void)match_->issue_mobile_build(commander, solar, at(x, z - 64), false);
-    std::array<uint16_t, 3> walkers{};
-    for (std::size_t i = 0; i < walkers.size(); ++i) {
-        const auto point = at(x - 24 + static_cast<int32_t>(i) * 24, z + 100);
+    const auto spawn = [&](uint16_t spawned, const oa::sim::ground_orders::Point& point) {
         oa::sim::unit_spawn::Request request;
         request.player = match_local_player_;
-        request.type = peewee;
+        request.type = spawned;
         request.finished = true;
         request.state = kGroundOccupancyState;
         request.position = {
@@ -1354,16 +1443,51 @@ void Runtime::give_saveload_orders() {
             std::bit_cast<uint32_t>(point[1]),
             std::bit_cast<uint32_t>(point[2])
         };
-        auto* walker = match_->create(request);
-        if (walker == nullptr || walker->unit == nullptr)
-            throw std::runtime_error("saveload orders could not place ARMPW");
-        walkers[i] = walker->unit_index;
-    }
+        auto* created = match_->create(request);
+        if (created == nullptr || created->unit == nullptr)
+            throw std::runtime_error(
+                "saveload orders could not place " + std::string(spawn_type_names_[spawned])
+            );
+        return created->unit_index;
+    };
+    // The centre of the site nearest a point where a type can stand, searched
+    // ring by ring outwards over the whole map.
+    const auto nearest_site = [&](uint16_t placed, int32_t near_x, int32_t near_z) {
+        const auto& footprint = spawn_types_[placed];
+        const int32_t cells_x = map_w / kCellPixels, cells_z = map_h / kCellPixels;
+        const int32_t cell_x = near_x / kCellPixels, cell_z = near_z / kCellPixels;
+        for (int32_t ring = 0; ring < std::max(cells_x, cells_z); ++ring)
+            for (int32_t dz = -ring; dz <= ring; ++dz)
+                for (int32_t dx = -ring; dx <= ring; ++dx)
+                    if ((std::abs(dx) == ring || std::abs(dz) == ring) &&
+                        match_->building_site(placed, cell_x + dx, cell_z + dz, 0))
+                        return at(
+                            (cell_x + dx) * kCellPixels + footprint.footprint_x * kCellPixels / 2,
+                            (cell_z + dz) * kCellPixels + footprint.footprint_z * kCellPixels / 2
+                        );
+        throw std::runtime_error(
+            "saveload orders found no site for " + std::string(spawn_type_names_[placed])
+        );
+    };
+    std::array<uint16_t, 3> walkers{};
+    for (std::size_t i = 0; i < walkers.size(); ++i)
+        walkers[i] = spawn(peewee, at(x - 24 + static_cast<int32_t>(i) * 24, z + 100));
+    const auto far_side = at(x < map_w / 2 ? map_w : 0, z < map_h / 2 ? map_h : 0);
     (void)match_->issue_patrol(walkers[0], at(x, z + 300), false);
     (void)match_->issue_guard(walkers[1], commander, false);
-    (void)match_->issue_ground_move(
-        walkers[2], at(x < map_w / 2 ? map_w : 0, z < map_h / 2 ? map_h : 0), false
-    );
+    (void)match_->issue_ground_move(walkers[2], far_side, false);
+    // An Atlas lifts a Peewee onto its link piece, then carries it towards
+    // the far side; a transport ship in the water nearest the commander
+    // starts with Peewees in its hold.
+    const auto atlas = spawn(type("ARMATLAS"), at(x - 160, z - 120));
+    (void)match_->issue_load(atlas, spawn(peewee, at(x - 200, z - 120)), false);
+    (void)match_->issue_unload(atlas, far_side, true);
+    const auto transport_ship = type("ARMTSHIP");
+    const auto ship = spawn(transport_ship, nearest_site(transport_ship, x, z));
+    for (int32_t i = 0; i < kSaveloadShipCargo; ++i)
+        match_->set_carry_link(
+            spawn(peewee, at(x + 24 * i, z - 140)), ship, kNoCarryPiece, kStartAboardLayer
+        );
 }
 
 void Runtime::print_saved_orders() const {
@@ -1492,25 +1616,7 @@ void Runtime::print_saved_features() {
         throw std::runtime_error("saveload features: no bank to write to");
     persist::save_write_features(&save, &guard.bank);
     persist::bank_open_account(&guard.bank, save_key::features);
-    uint64_t digest = oa::sim::trace::digest_basis;
-    for (const char* name :
-         {save_key::feature_type_names,
-          save_key::normal_features,
-          save_key::animating_features,
-          save_key::object_features}) {
-        std::vector<uint8_t> bytes;
-        if (persist::bank_open_blob_name(&guard.bank, name)) {
-            bytes.resize(static_cast<std::size_t>(persist::bank_blob_size(&guard.bank)));
-            persist::bank_blob_seek(&guard.bank, 0);
-            (void)persist::bank_blob_read(
-                &guard.bank, bytes.data(), static_cast<uint32_t>(bytes.size())
-            );
-        }
-        for (const uint8_t byte : bytes) {
-            digest ^= byte;
-            digest *= oa::sim::trace::digest_prime;
-        }
-    }
+    const uint64_t digest = features_digest_by_name(guard.bank);
     std::printf(
         "saveload: features normal %d 3d %d animating %d burn %zu die %zu reclaim %zu digest "
         "%016llx\n",

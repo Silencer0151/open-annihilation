@@ -124,6 +124,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         selected_mission_index_ = static_cast<std::size_t>(next);
         if (selected_mission_index_ < campaign_mission_first_visible_)
             campaign_mission_first_visible_ = selected_mission_index_;
+        select_frontend_list_row("Missions", selected_mission_index_);
         rebuild_surface();
         return;
     }
@@ -139,6 +140,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
         const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
         update_pointer(x, y);
+        // A press on a scroll bar or its arrow, and the release of a held
+        // one, belong to the bar alone.
+        if (route_scroll_pointer(event, x, y))
+            return;
         if (screen_ == Screen::match && !match_paused_ && !match_finished_) {
             record_pointer_event(event);
             if (follow_pointer_modes(event))

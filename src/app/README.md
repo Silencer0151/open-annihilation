@@ -77,6 +77,16 @@ and `app-window-icon` that the embedded one decodes.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
   camera.
 - `runtime_match_menus.cpp`: the in-match menus.
+- `runtime_scroll_bars.cpp`: the scroll bars of the frontend screen's panel
+  and of the match HUD's panel (`renderer::LayoutScrolls`), bound as each
+  panel's first draw binds them, drawn over it, driven by the pointer and
+  each frame's tick, and kept in step with the lists they scroll; a slider's
+  move runs its options callback or sets the share panel's amounts. The
+  preferences' sub-panel keeps the side column's scale down to its bottom
+  over the battlefield wherever the window puts the bottom bar
+  (`place_preferences_rows`). `runtime_scroll_bar_check.cpp` holds
+  `--check-scroll-bars` and the pointer helpers other checks drive scroll
+  bars with.
 - `runtime_team_panels.cpp`: the team panels of a multiplayer game over the
   running match: the tab menu (Tab), SHARE.GUI ('h'), ALLIES.GUI,
   CONTROL.GUI and its removal question, laid out and answered by
@@ -143,7 +153,8 @@ that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
 `extension.hpp` is the table of hooks through which one library linked into
 `oa-game` extends it: long options and game switches, start-up and
 shutdown, screens, the frontend's entry (its game name and nickname), run
-modes, per-frame work, match events, the Pause key, the loading's
+modes, per-frame work, match events, the Pause key, the speed keys and
+the GAME slider, the frontend's application modes, the loading's
 progress, the team panels' host (a tournament game withholds CONTROL),
 requests to close the window, the launcher's label in the match menus,
 console commands and checks. `main()` has the library's
@@ -170,9 +181,11 @@ fills every hook with a recorder and adds one `Runtime` member;
 `extension-hooks-game` check that the game calls every hook but
 `disconnect_text`, which only a shared match reaches (of `match_event`'s
 events they see `finished`, `torn_down` and `results_released`); the
-navigation check's Pause key reaches `pause_changed`, a skirmish's
-loading `load_progress`, `team_panel_host` and `service_label`, and
-`--check-match-dialogs`'s close requests `close_requested`. With
+navigation check's Pause key reaches `pause_changed`, its speed keys
+`speed_changed` and its menus `app_mode_set`, a skirmish's loading
+`load_progress`, `team_panel_host` and `service_label`, and
+`--check-match-dialogs`'s close requests `close_requested` and its GAME
+slider `speed_changed`. With
 `--record-quit STATUS` the recorder keeps the screen services an overlay
 is given, stops the sounds, plays BGM on the alternate route, asks for a
 frontend pass and ends the run through `quit`, which must exit with

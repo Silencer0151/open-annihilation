@@ -179,6 +179,11 @@ struct Options {
     // setting and what the screen shows for it (<stem>-*.ppm beside
     // --snapshot).
     bool check_frontend_controls = false;
+    // Drives the scroll bars of the options, the map and mission lists and
+    // the match's preferences through the SDL presenter and checks what they draw and
+    // set, and where the preferences' sub-panel shows in a window taller
+    // than the chrome (<report dir>/native-scroll-bars-*.ppm).
+    bool check_scroll_bars = false;
     // Opens the first mission's briefing through NEWGAME.GUI with sound on and
     // checks its narration plays exactly while SHUTUP is on and stops as the
     // briefing is left by its buttons or keys (<stem>-*.ppm beside

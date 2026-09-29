@@ -179,6 +179,7 @@ void panel_load_layout(Panel& panel, const ui::gui_layout::Layout& layout) noexc
             control.slider.maximum = slider->thickness;
             control.slider.knob = slider->knob_position;
             control.slider.knob_size = slider->knob_size;
+            control.grayed = slider->locked ? 1 : 0;
             set_control_text(control, slider->text);
         } else if (const auto* label = std::get_if<ui::gui_layout::LabelFields>(&gadget.fields)) {
             set_control_text(control, label->text);

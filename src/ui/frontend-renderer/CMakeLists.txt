@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp)
+add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp src/scroll_bars.cpp)
 add_library(oa::ui::frontend_renderer ALIAS oa-ui-frontend-renderer)
 target_include_directories(oa-ui-frontend-renderer PUBLIC include)
 target_link_libraries(oa-ui-frontend-renderer PUBLIC
-  oa-formats-hpi oa-formats-fnt oa-ui-gui-layout oa-formats-gaf oa-present oa-options)
+  oa-formats-hpi oa-formats-fnt oa-ui-gui-layout oa-ui-gui-input oa-formats-gaf oa-present
+  oa-options)
 
 add_executable(oa-render-main-menu EXCLUDE_FROM_ALL tools/render_main_menu.cpp)
 target_link_libraries(oa-render-main-menu PRIVATE oa-ui-frontend-renderer)
@@ -14,6 +15,10 @@ if(BUILD_TESTING)
   add_executable(oa-frontend-renderer-test tests/frontend_renderer_test.cpp)
   target_link_libraries(oa-frontend-renderer-test PRIVATE oa-ui-frontend-renderer)
   add_test(NAME frontend-renderer COMMAND oa-frontend-renderer-test)
+
+  add_executable(oa-scroll-bars-test tests/scroll_bars_test.cpp)
+  target_link_libraries(oa-scroll-bars-test PRIVATE oa-ui-frontend-renderer)
+  add_test(NAME frontend-scroll-bars COMMAND oa-scroll-bars-test)
 
   add_executable(oa-gadget-draw-test tests/gadget_draw_test.cpp)
   target_link_libraries(oa-gadget-draw-test PRIVATE oa-ui-frontend-renderer)

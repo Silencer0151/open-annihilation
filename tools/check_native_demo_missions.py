@@ -16,9 +16,9 @@ and from fresh preferences. --check picks what it runs:
   saveload  each demo mission saved at SAVE_TICK loads back into the same
             tick, units, world digest and orders, and the same counts of
             normal, 3D and animating features and of the features playing
-            a burn, die or reclamate sequence, with no state dropped either
-            way, and, loaded again with none dropped, plays RESUME_TICKS
-            ticks on.
+            a burn, die or reclamate sequence, and the same digest of the
+            saved features, with no state dropped either way, and, loaded
+            again with none dropped, plays RESUME_TICKS ticks on.
 
 Without OA_DEMO_INSTALLER the check prints one line and exits with 77, which
 ctest reports as skipped.
@@ -70,11 +70,10 @@ SAVED = re.compile(r"^saveload: saved .* at tick (\d+); save failures (\d+)$", r
 LOADED = re.compile(r"^saveload: Loaded .* at tick (\d+); restore failures (\d+)$", re.M)
 DIGEST = re.compile(r"^saveload: tick (\d+) units (\d+) digest ([0-9a-f]{16})$", re.M)
 ORDERS = re.compile(r"^saveload: orders (\d+)((?: \S+=\d+)*)$", re.M)
-# The Features section the match would save: its counts are compared; its
-# digest, which follows the order of the feature type names, is not.
+# The Features section the match would save: its counts and its digest.
 FEATURES = re.compile(
     r"^saveload: features normal (\d+) 3d (\d+) animating (\d+) burn (\d+) die (\d+) "
-    r"reclaim (\d+) digest [0-9a-f]{16}$", re.M)
+    r"reclaim (\d+) digest ([0-9a-f]{16})$", re.M)
 # The line open-annihilation writes to stderr for each tick that threw.
 SIMULATION_ERROR = "simulation error:"
 
@@ -147,16 +146,16 @@ def check_mission(native, installer, data, workdir, mission):
 
 
 def saveload_state(stdout, what):
-    """The tick, unit count, digest, order count, orders by kind and feature counts a saveload run printed."""
+    """The tick, unit count, digest, order count, orders by kind, and feature counts and digest a saveload run printed."""
     digest = DIGEST.search(stdout)
     orders = ORDERS.search(stdout)
     features = FEATURES.search(stdout)
     if digest is None or orders is None or features is None:
         raise CheckFailed(f"{what}: no saveload digest, orders or features line")
     by_kind = dict(item.split("=") for item in orders.group(2).split())
-    feature_counts = tuple(int(count) for count in features.groups())
+    feature_counts = tuple(int(count) for count in features.groups()[:6])
     return (int(digest.group(1)), int(digest.group(2)), digest.group(3), int(orders.group(1)), by_kind,
-            feature_counts)
+            feature_counts, features.group(7))
 
 
 def require_full_load(stdout, what):
@@ -201,9 +200,9 @@ def check_saveload(native, installer, data, workdir):
         if loaded != saved:
             raise CheckFailed(
                 f"{what}: loaded world differs: saved tick {saved[0]} units {saved[1]} digest {saved[2]} "
-                f"orders {saved[3]} {saved[4]} features {saved[5]}, loaded tick {loaded[0]} "
-                f"units {loaded[1]} digest {loaded[2]} orders {loaded[3]} {loaded[4]} "
-                f"features {loaded[5]}")
+                f"orders {saved[3]} {saved[4]} features {saved[5]} {saved[6]}, loaded tick "
+                f"{loaded[0]} units {loaded[1]} digest {loaded[2]} orders {loaded[3]} {loaded[4]} "
+                f"features {loaded[5]} {loaded[6]}")
 
         code, stdout, stderr = run_game(native, installer, data, mission_dir, "--headless-check",
                                         "--load", str(save), "--match-ticks", str(RESUME_TICKS))
@@ -216,7 +215,7 @@ def check_saveload(native, installer, data, workdir):
                               f"units, not tick {SAVE_TICK + RESUME_TICKS}")
         print(f"demo saveload check: {what} at tick {SAVE_TICK}, digest {saved[2]} with {saved[1]} units, "
               f"{saved[3]} orders and {saved[5][0]} normal, {saved[5][1]} 3D and {saved[5][2]} animating "
-              f"features, loads back the same and plays on to tick {resumed[0]}")
+              f"features (digest {saved[6]}), loads back the same and plays on to tick {resumed[0]}")
 
 
 def main():

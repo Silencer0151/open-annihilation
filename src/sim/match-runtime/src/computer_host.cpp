@@ -6,7 +6,10 @@
 #include "oa/sim/ai.hpp"
 
 #include "oa/sim/match_runtime.hpp"
+#include "oa/data/mission_types.hpp"
 #include "oa/data/unit_definitions.hpp"
+#include "oa/sim/gameplay_input/order_cursor.hpp"
+#include "oa/sim/weapon_execution/retaliation.hpp"
 
 #include <cstring>
 #include <exception>
@@ -166,6 +169,61 @@ void host_set_active(void* context, uint16_t unit, bool on) {
     }
 }
 
+/// Tells whether a player sees a point, as Match::point_visible does; false when the query
+/// throws.
+bool host_point_visible(void* context, uint8_t player, const oa::FixedVec3* at) {
+    try {
+        return match_of(context).point_visible(
+            player,
+            {static_cast<uint32_t>(at->x),
+             static_cast<uint32_t>(at->y),
+             static_cast<uint32_t>(at->z)}
+        );
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+/// Returns a player's sightings of other players' units; null for a slot outside the player
+/// table.
+const sim::detection::Sightings* host_sightings(void* context, uint8_t player) {
+    if (player >= OA_PLAYER_COUNT)
+        return nullptr;
+    return &match_of(context).sightings(player);
+}
+
+/// Tells whether a unit's first weapon reaches a point from where the unit stands; false for a
+/// missing unit.
+bool host_weapon_reaches(void* context, uint16_t unit, const oa::FixedVec3* at) {
+    const auto& world = match_of(context).state();
+    const auto* shooter = oa::world_unit_at(&world, unit);
+    return shooter != nullptr && sim::weapon_execution::slot_reaches_point(world, *shooter, *at, 0);
+}
+
+/// Orders an attack on a point with the order the Attack command resolves to over open
+/// ground, not queued.
+bool host_order_attack_point(void* context, uint16_t unit, const oa::FixedVec3* at) {
+    auto& match = match_of(context);
+    const auto& world = match.state();
+    const auto* actor = oa::world_unit_at(&world, unit);
+    if (actor == nullptr)
+        return false;
+    const auto order = sim::gameplay_input::unit_order(
+        world, sim::gameplay_input::OrderCommand::attack, *actor, nullptr, at, {}
+    );
+    const auto kind =
+        data::mission_types::index_for_name(sim::gameplay_input::unit_order_name(order));
+    if (kind == data::mission_types::unknown_mission)
+        return false;
+    const auto point = point_of(at);
+    try {
+        (void)match.issue_order(unit, kind, false, 0, &point, 0, 0);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 /// SurfaceMetal seeds every plot's metal before feature overlays replace it;
 /// the first plot without a metal feature still holds it.
 int32_t surface_metal_of(const Match& match) noexcept {
@@ -201,6 +259,10 @@ ComputerHost make_host(Match& match) noexcept {
     host.order_build = host_order_build;
     host.order_factory = host_order_factory;
     host.set_active = host_set_active;
+    host.point_visible = host_point_visible;
+    host.sightings = host_sightings;
+    host.weapon_reaches = host_weapon_reaches;
+    host.order_attack_point = host_order_attack_point;
     return host;
 }
 

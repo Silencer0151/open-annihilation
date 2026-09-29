@@ -83,6 +83,7 @@ void Runtime::check_options_gamma() {
         exercise_click("VISUALS");
         require(screen_ == Screen::visuals, "VISUALS did not open the visuals panel");
     };
+    // The knob dragged to the end of GAMMA's bar, as a player drags it.
     const auto top_gamma = [&] {
         const auto found = std::find_if(
             resources_.layout.gadgets.begin(),
@@ -90,11 +91,7 @@ void Runtime::check_options_gamma() {
             [](const auto& gadget) { return gadget.common.name == "GAMMA"; }
         );
         require(found != resources_.layout.gadgets.end(), "the visuals panel has no GAMMA slider");
-        const auto origin = panel_origin();
-        const auto x = static_cast<float>(origin.x + found->common.x + found->common.width - 1);
-        const auto y = static_cast<float>(origin.y + found->common.y + found->common.height / 2);
-        update_pointer(x, y);
-        activate();
+        drag_check_knob("GAMMA", found->common.width);
     };
     // A frontend frame goes out as the composed one through the display
     // gamma's channel table (render()); every byte must be the gamma's.

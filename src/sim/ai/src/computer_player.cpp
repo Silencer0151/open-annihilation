@@ -23,6 +23,9 @@ constexpr uint32_t air_raid_jitter_ticks = 900;
 constexpr int32_t air_raid_group_size = 5;
 constexpr uint32_t siege_base_ticks = 30;
 constexpr uint32_t siege_jitter_ticks = 150;
+constexpr uint32_t siege_turn_odds = 10;         // one run in this many turns the search
+constexpr int32_t siege_step_length = 0x1400000; // 320 world units
+constexpr int32_t siege_search_radius = 160;     // world units around the searched point
 constexpr int32_t commander_factory_quota = 5;
 constexpr int32_t builder_patrol_radius = 0x1400000;   // 320 world units
 constexpr int32_t builder_nudge_radius = 0x100000;     // 16 world units
@@ -388,18 +391,75 @@ void run_air_raid(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& ta
     order_squad(host, ai, task.squad, Command::patrol, false, 0, &edge);
 }
 
-/// Runs the siege squad timer.
+/// Runs the siege task: search the sighted enemy for the richest area, and attack it.
 ///
-/// The sort never assigns squad 9, so only the reschedule (and its random draw) is
-/// reachable.
+/// With members in its squad, the search starts again from the target one run in ten,
+/// heading a random way in steps of 320 world units, and takes one step each run. A
+/// point the player sees is weighed by the sighted base weight within 160 world units
+/// of it, and becomes the target when a draw below its weight beats a draw below the
+/// target's. Then every member that can attack is ordered to attack the target, as the
+/// Attack command over open ground orders it; one without a movement object only when
+/// its first weapon reaches the target. Runs again in 30 plus a random 0..149 ticks.
 ///
-/// @param host random stream and world
+/// @param state computer players and their type table
+/// @param host squads, sight, sightings, weapon reach, orders, random stream and world
 /// @param ai the player's controller
-/// @param[in,out] task siege task
-void run_siege(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task) noexcept {
+/// @param[in,out] task siege task; its search state and target change
+/// @quirk The sort puts no unit in the siege squad, so a computer player's siege
+///        only reschedules itself; only units already in squad 9 take part.
+void run_siege(
+    const ComputerPlayers* state, const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
+) noexcept {
     task.next_tick =
         tick_of(host) + host.random(host.context, siege_jitter_ticks) + siege_base_ticks;
-    (void)squad_size(host, ai, task.squad);
+    if (squad_empty(host, ai, task.squad))
+        return;
+    if (host.random(host.context, siege_turn_odds) == 0) {
+        task.siege_probe = task.siege_target;
+        const auto angle = static_cast<uint16_t>(host.random(host.context, 0x10000));
+        task.siege_step = {
+            -sim::unit_movement::sine_scaled(angle, siege_step_length),
+            0,
+            -sim::unit_movement::cosine_scaled(angle, siege_step_length)
+        };
+    }
+    task.siege_probe = {
+        wrap_add(task.siege_probe.x, task.siege_step.x),
+        wrap_add(task.siege_probe.y, task.siege_step.y),
+        wrap_add(task.siege_probe.z, task.siege_step.z)
+    };
+    if (host.point_visible != nullptr &&
+        host.point_visible(host.context, ai.player, &task.siege_probe)) {
+        const auto* sightings =
+            host.sightings != nullptr ? host.sightings(host.context, ai.player) : nullptr;
+        const auto weight = sightings != nullptr ? computer_sighted_weight(
+                                                       state,
+                                                       ai.knowledge,
+                                                       *sightings,
+                                                       *host.world,
+                                                       task.siege_probe,
+                                                       siege_search_radius
+                                                   )
+                                                 : 0;
+        const auto draw = host.random(host.context, static_cast<uint32_t>(weight));
+        const auto held = host.random(host.context, static_cast<uint32_t>(task.siege_weight));
+        if (static_cast<int32_t>(draw) > static_cast<int32_t>(held)) {
+            task.siege_target = task.siege_probe;
+            task.siege_weight = weight;
+        }
+    }
+    for (uint32_t i = 0; i < squad_size(host, ai, task.squad); ++i) {
+        const auto slot = squad_member(host, ai, task.squad, i);
+        const auto* unit = unit_at(host, slot);
+        const auto* def = unit != nullptr ? oa::world_unit_def_of(host.world, unit) : nullptr;
+        if (def == nullptr || (def->abilities & OA_UNIT_DEF_ABILITY_CAN_ATTACK) == 0)
+            continue;
+        if (unit->movement == 0 && (host.weapon_reaches == nullptr ||
+                                    !host.weapon_reaches(host.context, slot, &task.siege_target)))
+            continue;
+        if (host.order_attack_point != nullptr)
+            (void)host.order_attack_point(host.context, slot, &task.siege_target);
+    }
 }
 
 /// Runs the structures task: metal makers follow the energy surplus; idle factories queue one pick.
@@ -612,7 +672,7 @@ void run_task(
         run_air_raid(host, ai, task);
         break;
     case TaskKind::siege:
-        run_siege(host, ai, task);
+        run_siege(state, host, ai, task);
         break;
     case TaskKind::none:
     case TaskKind::idle:
@@ -635,7 +695,7 @@ Squad computer_sort_squad(const oa::Unit& unit, const ComputerType& type) noexce
     return armed ? Squad::land_army : Squad::none;
 }
 
-void computer_player_create(ComputerPlayer& ai, uint8_t player) noexcept {
+void computer_player_create(ComputerPlayer& ai, uint8_t player, const oa::Game& game) noexcept {
     ai.present = 1;
     ai.player = player;
     ai.sort_countdown = static_cast<int32_t>(sort_interval_ticks);
@@ -653,7 +713,19 @@ void computer_player_create(ComputerPlayer& ai, uint8_t player) noexcept {
     ai.tasks[6] = {TaskKind::strike, Squad::naval_strike, 0, 3, 6, 50000, Squad::navy, 0};
     ai.tasks[7] = {TaskKind::rally, Squad::navy, 0, 0, 0, 0, Squad::naval_strike, 0};
     ai.tasks[8].kind = TaskKind::air_raid;
-    ai.tasks[9].kind = TaskKind::siege;
+    // The siege search starts at the map's centre, and its first step is the
+    // centre's own offset.
+    const oa::FixedVec3 centre{
+        truncate_to_int32(static_cast<double>(game.map_width_world / 2) * 65536.0),
+        0,
+        truncate_to_int32(static_cast<double>(game.map_height_world / 2) * 65536.0)
+    };
+    auto& siege = ai.tasks[9];
+    siege.kind = TaskKind::siege;
+    siege.siege_target = centre;
+    siege.siege_probe = centre;
+    siege.siege_step = centre;
+    siege.siege_weight = 0;
 }
 
 void computer_player_tick_orders(

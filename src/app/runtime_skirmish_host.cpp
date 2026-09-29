@@ -115,7 +115,8 @@ void Runtime::create_slot_widget(const skirmish::SlotWidget& source) {
 }
 
 std::string Runtime::translate_ui(std::string_view text) {
-    return std::string(text);
+    const std::string source(text);
+    return oa::data::defs::locale_translate(&translations_.table, source.c_str());
 }
 
 void Runtime::set_text(
@@ -285,6 +286,7 @@ void Runtime::install_map_event_callback(map_modal::MenuHandle) {
 
 void Runtime::bind_map_names(std::span<const std::string> names) {
     bound_map_names_.assign(names.begin(), names.end());
+    fill_frontend_list("MAPNAMES", bound_map_names_.size());
 }
 
 void Runtime::install_map_selection_callback() {
@@ -292,6 +294,8 @@ void Runtime::install_map_selection_callback() {
 
 void Runtime::set_selected_map_index(int16_t index) {
     modal_map_index_ = index;
+    if (index >= 0)
+        select_frontend_list_row("MAPNAMES", static_cast<std::size_t>(index));
 }
 
 int16_t Runtime::selected_map_index() {

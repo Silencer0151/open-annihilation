@@ -3,6 +3,7 @@
 
 // The in-game message log (Game.chat_lines) drawn over the battlefield, and
 // the game speed keys that post to it.
+#include "oa/app/asset_files.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/sim/speed.hpp"
@@ -37,12 +38,37 @@ load_engine_font(oa::AssetStore& assets, const char* name, const char* language)
     }
 }
 
+// The interface's texts by language, and the language when the command line
+// names none.
+constexpr const char* kTranslationFile = "gamedata\\translate.tdf";
+constexpr const char* kDefaultLanguage = "English";
+
+/// Returns the step from one message log line to the next: the height in the
+/// font file's header, the low byte of its first word.
+///
+/// @param font the message log's font
+/// @return pixels between the tops of two lines
+int32_t message_line_step(const oa::formats::fnt::Font& font) {
+    return static_cast<uint8_t>(font.nominal_height);
+}
+
 } // namespace
 
 void Runtime::load_common_fonts() {
     const char* language = oa::app::command_line::launch_language(options_.launch);
     message_font_ = load_engine_font(assets_, "COMIX", language);
     small_font_ = load_engine_font(assets_, "smlfont", language);
+}
+
+void Runtime::load_translations(const char* language) {
+    // A missing or unreadable file leaves every text as it is.
+    const auto files = asset_files(assets_);
+    (void)oa::data::defs::load_locale_table(
+        &files,
+        &translations_.table,
+        kTranslationFile,
+        language != nullptr ? language : kDefaultLanguage
+    );
 }
 
 messages::Hooks Runtime::message_hooks() {
@@ -163,9 +189,7 @@ void Runtime::draw_match_message_log() {
     oa::ui::hud::MessageLogSink sink{};
     sink.user = &paint;
     sink.font_height = [](void* user) {
-        return static_cast<int32_t>(
-            oa::formats::fnt::line_height(*static_cast<Paint*>(user)->font)
-        );
+        return message_line_step(*static_cast<Paint*>(user)->font);
     };
     sink.set_color = [](void* user, uint8_t color) {
         auto& target = *static_cast<Paint*>(user);
@@ -229,7 +253,7 @@ CanvasRect Runtime::message_log_rect(std::size_t lines) {
     );
     const int right = match_layout_.left + match_layout_.battlefield_width();
     const int bottom = match_layout_.top + match_layout_.battlefield_height();
-    const auto height = static_cast<std::size_t>(oa::formats::fnt::line_height(message_font())) *
+    const auto height = static_cast<std::size_t>(message_line_step(message_font())) *
                         static_cast<std::size_t>(hud_text_scale()) * lines;
     return {
         corner.x,
@@ -384,7 +408,7 @@ void Runtime::check_game_speed_messages() {
     };
 
     const auto walk_log = [&] {
-        LogWalk walk{static_cast<int32_t>(oa::formats::fnt::line_height(message_font()))};
+        LogWalk walk{message_line_step(message_font())};
         oa::ui::hud::MessageLogSink walker{};
         walker.user = &walk;
         walker.font_height = [](void* user) { return static_cast<LogWalk*>(user)->line_height; };
@@ -538,6 +562,70 @@ void Runtime::check_game_speed_messages() {
     if (plain_changed == 0)
         throw std::runtime_error(
             "speed check: the line from no player left the logo's square as it was"
+        );
+    messages::clear_messages(game);
+
+    // Every kind of line the log shows steps down by the height the font's
+    // header gives (14 for COMIX), whether or not it starts with a logo.
+    const int32_t step = message_line_step(message_font());
+    const auto quiet = frame_now();
+    host->post_message(
+        host->context, "unit report", messages::kind_unit_report, oa::ui::console::kMessageNoSender
+    );
+    host->post_message(host->context, kChatText, messages::kind_player_chat, sender);
+    host->post_message(
+        host->context, "elimination", messages::kind_elimination, oa::ui::console::kMessageNoSender
+    );
+    host->post_message(
+        host->context, kChatText, messages::kind_player_chat, oa::ui::console::kMessageNoSender
+    );
+
+    // The walk draws with the step the log paints with and records each
+    // line's top.
+    struct RowWalk {
+        int32_t step{};
+        std::vector<int32_t> rows;
+    } row_walk{step, {}};
+
+    oa::ui::hud::MessageLogSink rower{};
+    rower.user = &row_walk;
+    rower.font_height = [](void* user) { return static_cast<RowWalk*>(user)->step; };
+    rower.text = [](void* user, const char*, int32_t, int32_t y) {
+        static_cast<RowWalk*>(user)->rows.push_back(y);
+    };
+    oa::ui::hud::draw_message_log(match_->state(), rower);
+    const auto& rows = row_walk.rows;
+    bool stepped = rows.size() == 4 && step + 2 == oa::formats::fnt::line_height(message_font());
+    for (std::size_t line = 0; stepped && line < rows.size(); ++line)
+        stepped = rows[line] == oa::ui::hud::kMessageLogTop + static_cast<int32_t>(line) * step;
+    if (!stepped)
+        throw std::runtime_error(
+            "speed check: the log's " + std::to_string(rows.size()) +
+            " lines of four kinds are not " + std::to_string(step) + " pixels apart"
+        );
+    // Painted, the fourth line fills its rows and nothing below them.
+    const auto four_lines = frame_now();
+    const auto fourth_top = oa::ui::hud::kMessageLogTop + 3 * step;
+    const auto fourth = changed_in(
+        quiet,
+        four_lines,
+        oa::ui::hud::kMessageLogLeft,
+        fourth_top,
+        battlefield_right,
+        fourth_top + step
+    );
+    const auto below = changed_in(
+        quiet,
+        four_lines,
+        oa::ui::hud::kMessageLogLeft,
+        fourth_top + step,
+        battlefield_right,
+        fourth_top + 2 * step
+    );
+    if (fourth < kTextMinPixels || below != 0)
+        throw std::runtime_error(
+            "speed check: the log's fourth line changed " + std::to_string(fourth) +
+            " pixels of its rows and " + std::to_string(below) + " below them"
         );
     messages::clear_messages(game);
 

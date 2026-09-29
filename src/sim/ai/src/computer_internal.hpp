@@ -24,13 +24,19 @@ computer_type(const ComputerPlayers* state, uint16_t type) noexcept;
 /// Builds a controller with one task per squad.
 ///
 /// Structures, a land strike group with its rally, construction, an idle task for armed
-/// structures, a naval strike group with its rally, air raids and the siege timer.
+/// structures, a naval strike group with its rally, air raids and the siege, whose
+/// target, search point and search step all start at the map's centre.
 ///
 /// @param[out] ai controller to build
 /// @param player player index
-/// @quirk The siege task's map-centre scan point is not kept: only its scan of a
-///        non-empty siege squad reads it.
-void computer_player_create(ComputerPlayer& ai, uint8_t player) noexcept;
+/// @param game map size in world units (Game.map_width_world, Game.map_height_world)
+void computer_player_create(ComputerPlayer& ai, uint8_t player, const oa::Game& game) noexcept;
+
+/// Converts a double to a 32-bit integer, truncating toward zero.
+///
+/// @param value value to convert
+/// @return the integer; a value that is not finite or does not fit gives INT32_MIN
+[[nodiscard]] int32_t truncate_to_int32(double value) noexcept;
 
 /// Chooses a construction site for a type near the builder and the base.
 ///

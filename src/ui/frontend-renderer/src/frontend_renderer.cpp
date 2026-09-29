@@ -742,29 +742,7 @@ ScreenResources load_screen_with_layout(
         result.game_palette.emplace();
         std::copy(game.begin(), game.end(), result.game_palette->begin());
     }
-    // The first panel draw commits the selected GAF frame dimensions back into
-    // each type-1 gadget without the checkbox or text_list attribute (NEWCAMP
-    // Side/Easy keep authored 159x49 / 107x41). Preserve that mutation so
-    // drawing and hit testing share the same rectangles.
-    constexpr uint32_t skip_default_button_gaf =
-        ui::gui_layout::attribute::checkbox | ui::gui_layout::attribute::text_list;
-    for (auto& gadget : result.layout.gadgets) {
-        if (gadget.common.type != ui::gui_layout::GadgetType::button)
-            continue;
-        // The first panel draw clears a type-1 gadget's authored colorf and
-        // colorb before resolving its GAF sequence, so later drawing takes the
-        // normal sprite path unless a color table is installed at run time.
-        gadget.common.foreground_color = 0;
-        gadget.common.background_color = 0;
-        if ((static_cast<uint32_t>(gadget.common.attributes) & skip_default_button_gaf) != 0)
-            continue;
-        const auto binding = resolve_button_sprite(result, gadget);
-        if (binding.sequence == nullptr || binding.base_frame >= binding.sequence->frames.size())
-            continue;
-        const auto& frame = binding.sequence->frames[binding.base_frame];
-        gadget.common.width = static_cast<int16_t>(frame.width);
-        gadget.common.height = static_cast<int16_t>(frame.height);
-    }
+    bind_screen_buttons(result, 0);
     return result;
 }
 
@@ -780,6 +758,33 @@ std::string_view staged_caption(std::string_view text, std::size_t stage) noexce
         text.remove_prefix(separator + 1);
     }
     return text.substr(0, text.find('|'));
+}
+
+void bind_screen_buttons(ScreenResources& resources, std::size_t first) {
+    // The first panel draw commits the selected GAF frame dimensions back into
+    // each type-1 gadget without the checkbox or text_list attribute (NEWCAMP
+    // Side/Easy keep authored 159x49 / 107x41). Preserve that mutation so
+    // drawing and hit testing share the same rectangles.
+    constexpr uint32_t skip_default_button_gaf =
+        ui::gui_layout::attribute::checkbox | ui::gui_layout::attribute::text_list;
+    for (auto index = first; index < resources.layout.gadgets.size(); ++index) {
+        auto& gadget = resources.layout.gadgets[index];
+        if (gadget.common.type != ui::gui_layout::GadgetType::button)
+            continue;
+        // The first panel draw clears a type-1 gadget's authored colorf and
+        // colorb before resolving its GAF sequence, so later drawing takes the
+        // normal sprite path unless a color table is installed at run time.
+        gadget.common.foreground_color = 0;
+        gadget.common.background_color = 0;
+        if ((static_cast<uint32_t>(gadget.common.attributes) & skip_default_button_gaf) != 0)
+            continue;
+        const auto binding = resolve_button_sprite(resources, gadget);
+        if (binding.sequence == nullptr || binding.base_frame >= binding.sequence->frames.size())
+            continue;
+        const auto& frame = binding.sequence->frames[binding.base_frame];
+        gadget.common.width = static_cast<int16_t>(frame.width);
+        gadget.common.height = static_cast<int16_t>(frame.height);
+    }
 }
 
 ScreenResources load_screen(AssetStore& assets, const ScreenAssetNames& names) {

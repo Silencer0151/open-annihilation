@@ -25,10 +25,11 @@ constexpr const char* normal_count_field = save_key::normal_feature_count;
 constexpr const char* object_count_field = save_key::object_feature_count;
 constexpr const char* animating_count_field = save_key::animating_feature_count;
 
-constexpr uint32_t type_name_bytes = 0x80;
-constexpr uint32_t normal_record_bytes = 8;
-constexpr uint32_t animating_record_bytes = 10;
-constexpr uint32_t object_record_bytes = 0x1a;
+using feature_section::animating_record_bytes;
+using feature_section::normal_record_bytes;
+using feature_section::object_record_bytes;
+using feature_section::record_type;
+using feature_section::type_name_bytes;
 
 // An animating record's last byte packs which sequence is playing, in its low
 // nibble, with the high nibble of the spread countdown.
@@ -129,7 +130,7 @@ void save_write_features(const SaveContext* save, Bank* bank) {
                     uint8_t record[object_record_bytes];
                     store_le16(record + 0, static_cast<uint16_t>(x));
                     store_le16(record + 2, static_cast<uint16_t>(z));
-                    store_le16(record + 4, type);
+                    store_le16(record + record_type, type);
                     std::memcpy(record + 6, f + feature_record::damage, 2);
                     std::memcpy(
                         record + 8, f + feature_record::position, feature_record::position_bytes
@@ -146,7 +147,7 @@ void save_write_features(const SaveContext* save, Bank* bank) {
                 uint8_t record[normal_record_bytes];
                 store_le16(record + 0, static_cast<uint16_t>(x));
                 store_le16(record + 2, static_cast<uint16_t>(z));
-                store_le16(record + 4, type);
+                store_le16(record + record_type, type);
                 store_le16(record + 6, record_index);
                 append_record(bank, normal_blob, record, normal_record_bytes);
                 ++normal;
@@ -154,7 +155,7 @@ void save_write_features(const SaveContext* save, Bank* bank) {
                 uint8_t record[animating_record_bytes];
                 store_le16(record + 0, static_cast<uint16_t>(x));
                 store_le16(record + 2, static_cast<uint16_t>(z));
-                store_le16(record + 4, type);
+                store_le16(record + record_type, type);
                 std::memcpy(record + 6, f + feature_record::damage, 2);
                 record[8] = f[feature_record::frame];
                 const uint32_t sequence = detail::load_le32(f + feature_record::sequence);
@@ -259,7 +260,7 @@ void save_read_features(SaveContext* save, Bank* bank) {
         if (p == nullptr)
             continue;
         hooks->place_feature(
-            context, p, remap(types, type_count, load_le16(record + 4)), nullptr, nullptr
+            context, p, remap(types, type_count, load_le16(record + record_type)), nullptr, nullptr
         );
         std::memcpy(p + plot::feature_record, record + 6, 2);
     }
@@ -276,7 +277,7 @@ void save_read_features(SaveContext* save, Bank* bank) {
         if (p == nullptr)
             continue;
         hooks->place_feature(
-            context, p, remap(types, type_count, load_le16(record + 4)), nullptr, nullptr
+            context, p, remap(types, type_count, load_le16(record + record_type)), nullptr, nullptr
         );
         const auto sequence = static_cast<FeatureSequence>(record[9] & sequence_mask);
         if (sequence == FeatureSequence::burn)
@@ -304,7 +305,11 @@ void save_read_features(SaveContext* save, Bank* bank) {
         if (p == nullptr)
             continue;
         hooks->place_feature(
-            context, p, remap(types, type_count, load_le16(record + 4)), record + 8, record + 20
+            context,
+            p,
+            remap(types, type_count, load_le16(record + record_type)),
+            record + 8,
+            record + 20
         );
         uint8_t* f = restored_record(save, p);
         if (f == nullptr)

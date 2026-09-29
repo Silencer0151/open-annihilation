@@ -231,7 +231,7 @@ void ingame_enter_exit_confirm(Panel& panel, const IngameContext& context) noexc
     }
     if (has_title)
         panel_set_text(panel, "TITLE", title);
-    // CHOICE2 is both the Enter and Escape default and takes the focus.
+    // kExitConfirmDefault answers Enter and Escape and takes the focus.
     panel.selected = kNoSelection;
     panel.dirty = true;
 }

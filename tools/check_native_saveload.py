@@ -6,13 +6,15 @@
 
 Run A fights COMBAT_UNITS units a side beside the commanders, with a factory
 queue, a building, a patrol, a guard and a move given, for SAVE_TICK ticks and
-saves at that tick, so its closing digest is the world the save captured.
-Two ticks before the save a tree catches fire, one feature starts its die
-sequence, another its reclamate sequence and a fourth is cleared away, so
-the save holds them while they play. Run B starts from the save without
-stepping and must print the same tick, unit count, digest, orders and saved
-features. Run C resumes the save for RESUME_TICKS ticks to show the loaded
-match keeps simulating and keeps those orders.
+saves at that tick, so its closing digest is the world the save captured. An
+Atlas picks a unit up onto its link piece and is flying it off at the save,
+and a transport ship holds units that started aboard. Two ticks before the
+save a tree catches fire, one feature starts its die sequence, another its
+reclamate sequence and a fourth is cleared away, so the save holds them while
+they play. Run B starts from the save without stepping and must print the
+same tick, unit count, digest, orders and saved features. Run C resumes the
+save for RESUME_TICKS ticks to show the loaded match keeps simulating and
+keeps those orders, the transports still carrying their units.
 
 The digest covers each unit's record, economy, weapons, COB script state,
 movement state and saved orders, the map's metal, placing-player and sight
@@ -22,16 +24,16 @@ state. The saved features are compared as the Features section writes them:
 the counts of normal, 3D and animating records, the animating ones playing a
 burn, die or reclamate sequence, and a digest of the section, leaving out the
 features on plots a load hides under the map's edges, which do not come back.
-The digest follows the order of the feature type names, so it matches across
-a load only on a map whose schema names no feature type beyond the map's own,
-as the map this check plays does.
+The digest names each feature type by its name, since a load orders the
+feature type table its own way.
 
 Two campaign missions then check carried units across a save and a load: one
-where an Atlas starts with a unit aboard, one where Bears and transport ships
-start loaded. Each is saved at CARRIED_SAVE_TICK and loaded back, and must
-come back with the same unit digest, which covers each unit's carrier, its
-piece (none for a unit in the hold, which is not drawn) and its attacker, and
-the same orders, BeCarried among them.
+where an Atlas starts with a unit aboard, on a map whose schema places
+feature types beyond the map's own, one where Bears and transport ships start
+loaded. Each is saved at CARRIED_SAVE_TICK and loaded back, and must come back
+with the same unit digest, which covers each unit's carrier, its piece (none
+for a unit in the hold, which is not drawn) and its attacker, the same orders,
+BeCarried among them, and the same saved features.
 """
 import argparse
 import os
@@ -60,10 +62,15 @@ FEATURES = re.compile(
     r"^saveload: features normal (\d+) 3d (\d+) animating (\d+) burn (\d+) die (\d+) "
     r"reclaim (\d+) digest ([0-9a-f]{16})$", re.M)
 # Missions the given orders hold at the save: the commander's building, the
-# lab's queue, the patrol, the guard and the move.
-SAVED_MISSIONS = {"MobileBuild", "BuildingBuild", "Patrol", "Follow_Ground", "Move_Ground"}
+# lab's queue, the patrol, the guard, the move, the Atlas flying its unit off
+# and the carried units.
+SAVED_MISSIONS = {"MobileBuild", "BuildingBuild", "Patrol", "Follow_Ground", "Move_Ground",
+                  "VTOL_Unload", "BeCarried"}
 # Missions that still run after the resumed ticks.
-RESUMED_MISSIONS = {"BuildingBuild", "Patrol", "Follow_Ground"}
+RESUMED_MISSIONS = {"BuildingBuild", "Patrol", "Follow_Ground", "VTOL_Unload", "BeCarried"}
+# Units aboard the Atlas and the transport ship at the save and after the
+# resumed ticks, at the least.
+TRANSPORTED = 1 + 3
 # Campaign missions whose units start aboard transports, by campaign name
 # (as its file names it) and mission index, and what carries them.
 CARRIED_MISSIONS = (
@@ -131,6 +138,9 @@ def main():
         missing = SAVED_MISSIONS - saved[4].keys()
         if missing:
             raise SystemExit(f"run A saved no {', '.join(sorted(missing))} orders")
+        if int(saved[4]["BeCarried"]) < TRANSPORTED:
+            raise SystemExit(f"run A saved {saved[4]['BeCarried']} carried units, not the "
+                             f"{TRANSPORTED} aboard the Atlas and the transport ship")
         loaded = run(native, game_dir, profile, temporary, "--load", str(save), "--match-ticks", "0")
         if loaded != saved:
             raise SystemExit(
@@ -145,10 +155,13 @@ def main():
         dropped = RESUMED_MISSIONS - resumed[4].keys()
         if dropped:
             raise SystemExit(f"resumed match lost its {', '.join(sorted(dropped))} orders")
-        print(f"saveload check: tick {SAVE_TICK} digest {saved[2]} with {saved[1]} units, "
-              f"{saved[3]} orders and features {saved[5][6]} ({saved[5][2]} animating) matches "
-              f"after load; resumed to tick {resumed[0]} with {resumed[1]} units and "
-              f"{resumed[3]} orders")
+        if int(resumed[4]["BeCarried"]) < TRANSPORTED:
+            raise SystemExit(f"resumed match carries {resumed[4]['BeCarried']} units, not the "
+                             f"{TRANSPORTED} aboard the Atlas and the transport ship")
+        print(f"saveload check: tick {SAVE_TICK} digest {saved[2]} with {saved[1]} units "
+              f"({saved[4]['BeCarried']} carried), {saved[3]} orders and features {saved[5][6]} "
+              f"({saved[5][2]} animating) matches after load; resumed to tick {resumed[0]} with "
+              f"{resumed[1]} units and {resumed[3]} orders")
         for campaign, mission, carriers in CARRIED_MISSIONS:
             carried_save = Path(temporary) / "savegame" / f"carried{mission}.sav"
             carried = run(native, game_dir, profile, temporary, "--campaign", campaign,
@@ -162,16 +175,14 @@ def main():
                                  f"{carriers}")
             reloaded = run(native, game_dir, profile, temporary, "--load", str(carried_save),
                            "--match-ticks", "0")
-            # The features section's digest follows the feature type names,
-            # which a campaign schema can extend, so only the units and their
-            # orders are compared here.
-            if reloaded[:5] != carried[:5]:
+            if reloaded != carried:
                 raise SystemExit(
                     f"{campaign.strip()} mission {mission} with units aboard {carriers} differs "
-                    f"after load: saved digest {carried[2]} orders {carried[4]}, loaded digest "
-                    f"{reloaded[2]} orders {reloaded[4]}")
+                    f"after load: saved digest {carried[2]} orders {carried[4]} features "
+                    f"{carried[5]}, loaded digest {reloaded[2]} orders {reloaded[4]} features "
+                    f"{reloaded[5]}")
             print(f"saveload check: {aboard} units aboard {carriers} ({campaign.strip()} mission "
-                  f"{mission}) match after load, digest {carried[2]}")
+                  f"{mission}) match after load, digest {carried[2]}, features {carried[5][6]}")
     return 0
 
 

@@ -114,6 +114,7 @@ Runtime::Runtime(
     load_logo_textures();
     discover_first_map();
     load_side_table();
+    load_translations(oa::app::command_line::launch_language(options_.launch));
     load_common_fonts();
     init::reset_player_slots(state_, player_storage_, false);
     init::load_preferences(state_, skirmish_settings_, preferences_, *this);
@@ -191,6 +192,11 @@ int Runtime::run() {
     }
     if (options_.check_frontend_controls) {
         check_frontend_controls();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_scroll_bars) {
+        check_scroll_bars();
         flush_preferences();
         return 0;
     }
@@ -355,6 +361,8 @@ void Runtime::idle_tick() {
     // before the ticks, so a unit that moves under it becomes the cursor unit.
     if (screen_ == Screen::match && match_ && !match_paused_ && !match_finished_)
         pick_cursor_unit(false);
+    // A held scroll bar or arrow moves its knob in the frame's update.
+    tick_scroll_bars();
     if (match_clock_steps())
         advance_match_clock(clock_milliseconds());
     if (screen_ == Screen::match && match_)
@@ -501,6 +509,8 @@ void Runtime::load(Screen screen) {
     const auto* desc = screen_find(&screens_, screen_id(screen));
     if (desc == nullptr)
         desc = screen_find(&screens_, screen_id(Screen::map_selection));
+    // A screen without a panel of its own has no scroll bars.
+    frontend_scrolls_layout_ = nullptr;
     auto context = screen_context();
     if (desc->assets.layout != nullptr) {
         const char* background = desc->background != nullptr
@@ -514,12 +524,19 @@ void Runtime::load(Screen screen) {
             desc->assets.shared_sprites
         };
         resources_ = renderer::load_screen(assets_, names);
+        // A panel's first draw binds its scroll bars: at once for a panel
+        // drawn as it loads, after its setup for NEWGAME.GUI, which loads
+        // undrawn and is set up first.
+        if (!first_draw_after_setup(screen))
+            bind_frontend_scrolls(names.layout, names.sprites);
         // The panel is up first; its setup then asks for the named background.
         if (background != nullptr)
             (void)load_named_background(background, false, false, false);
     }
     if (desc->enter != nullptr)
         desc->enter(&context, desc->state);
+    if (desc->assets.layout != nullptr && first_draw_after_setup(screen))
+        bind_set_up_frontend_scrolls(desc->assets.layout, desc->assets.sprites);
     selected_ = -1;
     hovered_.reset();
     apply_output_mode();
@@ -596,6 +613,11 @@ void Runtime::rebuild_surface() {
         const auto selected = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
         lists.push_back({"MAPNAMES", bound_map_names_, map_first_visible(), selected});
     }
+    // A list its scroll bar scrolls shows the rows the bar brings into view.
+    if (const auto first = frontend_list_first("Campaign"))
+        campaign_first_visible_ = *first;
+    if (const auto first = frontend_list_first("Missions"))
+        campaign_mission_first_visible_ = *first;
     if (screen_ == Screen::any_mission || screen_ == Screen::new_campaign) {
         if (!campaign_labels_.empty())
             lists.push_back(
@@ -620,6 +642,18 @@ void Runtime::rebuild_surface() {
     if (screen_ == Screen::load_game)
         present_load_game_panel(lists);
     surface_ = renderer::render_screen(resources_, presentation, lists);
+    if (auto* scrolls = frontend_scrolls()) {
+        renderer::refresh_layout_scrolls(*scrolls, resources_.layout);
+        renderer::draw_layout_scrolls(
+            surface_,
+            renderer::grayed_paint(resources_, frontend_gray_table_),
+            frontend_scrolls_own_art_ ? &resources_.sprites : nullptr,
+            resources_.shared_sprites,
+            *scrolls,
+            0,
+            0
+        );
+    }
     if (screen_ == Screen::main_menu) {
         if (menu_sparks_.dest.empty())
             renderer::reset_menu_sparks(menu_sparks_, resources_.background);

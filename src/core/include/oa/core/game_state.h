@@ -330,9 +330,9 @@ typedef struct Game {
     ResourceReadout resource_readout;
     uint8_t block_after_resource_readout[0x30]; /* zero-initialised and never read */
     int32_t status_panel_offset;                /* space-bar strip: 0 hidden, -31 fully raised */
-    oa_ref32 status_lightbar; /* the strip's picture, LIGHTBAR frame 1 of COMMONGUI.GAF */
-    uint8_t block_after_status_lightbar[0x4]; /* zero-initialised and never read */
-    uint16_t panel_unit_id;                   /* unit shown in the order panel; 0 none */
+    oa_ref32 status_lightbar;       /* the strip's picture, LIGHTBAR frame 1 of COMMONGUI.GAF */
+    int32_t options_lightbar_drawn; /* ? 1 once an options light bar frame is drawn */
+    uint16_t panel_unit_id;         /* unit shown in the order panel; 0 none */
     uint16_t panel_unit_type;
     uint8_t mission_panel_name[0x1e];
     uint16_t frame_flags;
@@ -637,7 +637,7 @@ OA_ASSERT_OFFSET(Game, resource_readout, 0x37e3f);
 OA_ASSERT_OFFSET(Game, block_after_resource_readout, 0x37e60);
 OA_ASSERT_OFFSET(Game, status_panel_offset, 0x37e90);
 OA_ASSERT_OFFSET(Game, status_lightbar, 0x37e94);
-OA_ASSERT_OFFSET(Game, block_after_status_lightbar, 0x37e98);
+OA_ASSERT_OFFSET(Game, options_lightbar_drawn, 0x37e98);
 OA_ASSERT_OFFSET(Game, panel_unit_id, 0x37e9c);
 OA_ASSERT_OFFSET(Game, panel_unit_type, 0x37e9e);
 OA_ASSERT_OFFSET(Game, mission_panel_name, 0x37ea0);

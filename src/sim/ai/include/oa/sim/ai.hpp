@@ -3,10 +3,12 @@
 
 // Computer player: the per-player controller that sorts units into squads,
 // runs one task per squad (factory production, construction, strike groups,
-// rallies, air raids) and chooses builds from the AI profile weights/limits.
+// rallies, air raids, the siege of sighted bases) and chooses builds from the
+// AI profile weights/limits.
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/sim/detection.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -31,7 +33,7 @@ enum class Squad : uint32_t {
     naval_strike = 6,
     navy = 7,
     aircraft = 8,
-    siege = 9, /* ? never assigned by the sort */
+    siege = 9, // the sort assigns none; a unit already in squad 9 stays
 };
 
 enum class TaskKind : uint8_t {
@@ -42,7 +44,7 @@ enum class TaskKind : uint8_t {
     construction,
     idle,
     air_raid,
-    siege, // only its timer is reachable
+    siege, // searches the sighted enemy for the richest area and attacks it
 };
 
 /// The type fields the computer player reads, gathered from the unit
@@ -69,12 +71,16 @@ struct ComputerType {
 struct ComputerTask {
     TaskKind kind{};
     Squad squad{};
-    uint32_t next_tick{};   // Game.tick the task runs next
-    int32_t min_size{};     // strike: size that may attack
-    int32_t launch_size{};  // strike: size that always attacks
-    int32_t merge_radius{}; // strike: squared world-unit radius per member
-    Squad source_squad{};   // strike: squad it recruits from; rally: its strike squad
-    int32_t attacking{};    // strike: nonzero while the squad attacks
+    uint32_t next_tick{};         // Game.tick the task runs next
+    int32_t min_size{};           // strike: size that may attack
+    int32_t launch_size{};        // strike: size that always attacks
+    int32_t merge_radius{};       // strike: squared world-unit radius per member
+    Squad source_squad{};         // strike: squad it recruits from; rally: its strike squad
+    int32_t attacking{};          // strike: nonzero while the squad attacks
+    oa::FixedVec3 siege_target{}; // siege: the point the squad attacks, 16.16
+    oa::FixedVec3 siege_probe{};  // siege: the point the search looks at, 16.16
+    oa::FixedVec3 siege_step{};   // siege: the search's step from one look to the next, 16.16
+    int32_t siege_weight{};       // siege: sighted base weight around siege_target
 };
 
 /// Cell of a metal-bearing feature.
@@ -171,6 +177,17 @@ struct ComputerHost {
     bool (*order_build)(void* context, uint16_t unit, uint16_t type, const oa::FixedVec3* at){};
     bool (*order_factory)(void* context, uint16_t factory, uint16_t type, int32_t count){};
     void (*set_active)(void* context, uint16_t unit, bool on){};
+    /// Whether a player sees a point: its line of sight, or where the game keeps no sight
+    /// grid, the mapped area; null sees nothing.
+    bool (*point_visible)(void* context, uint8_t player, const oa::FixedVec3* at){};
+    /// A player's sightings of other players' units; null, or a null result, sights none.
+    const sim::detection::Sightings* (*sightings)(void* context, uint8_t player){};
+    /// Whether a unit's first weapon reaches a point from where the unit stands; null
+    /// reaches nothing.
+    bool (*weapon_reaches)(void* context, uint16_t unit, const oa::FixedVec3* at){};
+    /// Gives a unit the order the Attack command gives over open ground at a point, in
+    /// place of its orders; false when the unit takes no such order.
+    bool (*order_attack_point)(void* context, uint16_t unit, const oa::FixedVec3* at){};
 };
 
 /// Stores the AI profile text and the side build lists applied at the next initialisation.
@@ -235,6 +252,29 @@ bool computer_players_reload_profile(
 /// @param player player index; nothing for a player without a computer controller
 void computer_player_tick_orders(
     ComputerPlayers* state, const ComputerHost& host, uint8_t player
+) noexcept;
+
+/// Sums the base weights of the units a player has sighted near a point.
+///
+/// Every unit on the seen list counts, active or not, whose squared distance from the
+/// point on the ground plane (sim::detection::squared_distance_high) is at most the
+/// radius squared, the square kept to 32 bits. The weight is the player's base weight
+/// for the unit's type (ComputerKnowledge.base_weights), signed.
+///
+/// @param state computer players, for the type count
+/// @param knowledge the player's knowledge
+/// @param sightings the player's sightings
+/// @param world unit table
+/// @param at the point, 16.16 world coordinates
+/// @param radius world units
+/// @return the sum, with 32-bit wraparound; a type outside the table adds nothing
+[[nodiscard]] int32_t computer_sighted_weight(
+    const ComputerPlayers* state,
+    const ComputerKnowledge& knowledge,
+    const sim::detection::Sightings& sightings,
+    const oa::World& world,
+    const oa::FixedVec3& at,
+    int32_t radius
 ) noexcept;
 
 /// Weighted position sums of the own units counted in one knowledge rebuild.

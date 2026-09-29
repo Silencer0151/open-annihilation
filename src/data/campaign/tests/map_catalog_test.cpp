@@ -86,7 +86,13 @@ const char* memory_translate(void* context, const char* text) {
 }
 
 CampaignFiles services(MemoryFiles& files) {
-    return {&files, memory_size, memory_read, memory_list, memory_translate, nullptr, nullptr};
+    CampaignFiles services{};
+    services.context = &files;
+    services.size = memory_size;
+    services.read = memory_read;
+    services.list = memory_list;
+    services.translate = memory_translate;
+    return services;
 }
 
 std::string ota(const char* schema_types) {

@@ -514,6 +514,19 @@ void Runtime::render_match_surface() {
         present_team_panel(presentation, lists);
         const auto hud_start = std::chrono::steady_clock::now();
         hud = renderer::render_screen(*match_hud_, presentation, lists);
+        if (auto* scrolls = hud_scrolls()) {
+            renderer::refresh_layout_scrolls(*scrolls, match_hud_->layout);
+            renderer::draw_layout_scrolls(
+                hud,
+                renderer::grayed_paint(*match_hud_, hud_gray_table_),
+                &hud_own_art_,
+                match_hud_->sprites,
+                *scrolls,
+                0,
+                0
+            );
+        }
+        place_preferences_rows(hud);
         phase_times_.hud += std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now() - hud_start
         )

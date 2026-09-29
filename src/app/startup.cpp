@@ -162,6 +162,8 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
             result.check_load_save = true;
         else if (argument == "--check-frontend-controls")
             result.check_frontend_controls = true;
+        else if (argument == "--check-scroll-bars")
+            result.check_scroll_bars = true;
         else if (argument == "--check-briefing-narration")
             result.check_briefing_narration = true;
         else if (argument == "--check-match-layers")
@@ -211,6 +213,7 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
                          "[--check-pointer-interfaces] "
                          "[--check-multiplayer-menu] "
                          "[--check-load-save] [--check-frontend-controls] "
+                         "[--check-scroll-bars] "
                          "[--check-briefing-narration] "
                          "[--trace-input] "
                       << extension_text(extension, ExtensionText::usage_checks, "")
@@ -284,12 +287,12 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
         extension.check_options(extension.context);
     if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
         result.debug_order_lines = true;
-    result.fixed_clock = result.headless_check || result.check_match_layers ||
-                         result.check_match_dialogs || result.check_load_save ||
-                         result.check_frontend_controls || result.check_match_orders ||
-                         result.check_factory_orders || result.check_download_builds ||
-                         result.check_kill_board || result.check_patrol_reclaim ||
-                         result.check_reclaim_cursor || result.check_pointer_interfaces;
+    result.fixed_clock =
+        result.headless_check || result.check_match_layers || result.check_match_dialogs ||
+        result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
+        result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
+        result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
+        result.check_pointer_interfaces;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

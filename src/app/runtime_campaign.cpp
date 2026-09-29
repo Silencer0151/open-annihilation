@@ -843,6 +843,8 @@ void Runtime::load_campaign_missions(std::size_t campaign_index) {
         campaign_mission_labels_.emplace_back(names[index]);
         campaign_mission_files_.emplace_back(file);
     }
+    if (first_draw_after_setup(screen_))
+        fill_frontend_list("Missions", campaign_mission_labels_.size());
 }
 
 void Runtime::discover_campaigns() {
@@ -866,6 +868,10 @@ void Runtime::discover_campaigns() {
             selected_campaign_index_ = i;
             break;
         }
+    if (first_draw_after_setup(screen_)) {
+        fill_frontend_list("Campaign", campaign_labels_.size());
+        select_frontend_list_row("Campaign", selected_campaign_index_);
+    }
     load_campaign_missions(selected_campaign_index_);
 }
 
@@ -881,20 +887,27 @@ void Runtime::select_campaign_list_row(std::string_view gadget_name, float canva
     const auto local_y = static_cast<int32_t>(canvas_y) - list->common.y - 2;
     if (local_y < 0 || item_height == 0)
         return;
+    // A list its scroll bar scrolls picks as 3.1c does, from the row it shows first.
+    const auto bound = frontend_list_first(gadget_name).has_value();
+    const auto picked = bound ? frontend_list_row_at(gadget_name, canvas_y) : std::nullopt;
+    if (bound && !picked)
+        return;
     const auto row = static_cast<std::size_t>(local_y) / item_height;
     if (gadget_name == "Campaign") {
-        const auto index = campaign_first_visible_ + row;
+        const auto index = picked ? *picked : campaign_first_visible_ + row;
         if (index >= campaign_files_.size())
             return;
         selected_campaign_index_ = index;
+        select_frontend_list_row("Campaign", index);
         load_campaign_missions(index);
         rebuild_surface();
         return;
     }
-    const auto index = campaign_mission_first_visible_ + row;
+    const auto index = picked ? *picked : campaign_mission_first_visible_ + row;
     if (index >= campaign_mission_files_.size())
         return;
     selected_mission_index_ = index;
+    select_frontend_list_row("Missions", index);
     rebuild_surface();
 }
 

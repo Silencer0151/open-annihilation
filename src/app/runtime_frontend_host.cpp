@@ -38,6 +38,8 @@ namespace oa::app {
 }
 
 [[nodiscard]] std::size_t Runtime::map_first_visible() {
+    if (const auto first = frontend_list_first("MAPNAMES"))
+        return *first;
     const auto selected = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
     const auto rows = map_visible_rows();
     return selected >= rows ? selected - rows + 1U : 0U;
@@ -47,6 +49,7 @@ void Runtime::preview_map_index(std::size_t index) {
     if (index >= bound_map_names_.size())
         return;
     modal_map_index_ = static_cast<int16_t>(index);
+    select_frontend_list_row("MAPNAMES", index);
     map_modal::preview_selection(map_modal_, *this);
     rebuild_surface();
 }
@@ -55,6 +58,11 @@ void Runtime::select_map_row_at(float canvas_y) {
     const auto* list = widget("MAPNAMES");
     if (list == nullptr)
         return;
+    if (frontend_list_first("MAPNAMES")) {
+        if (const auto row = frontend_list_row_at("MAPNAMES", canvas_y))
+            preview_map_index(*row);
+        return;
+    }
     const auto modal_offset_y =
         (kCanvasHeight - static_cast<int>(resources_.layout.gadgets.front().common.height)) / 2;
     auto item_height =
@@ -122,6 +130,9 @@ void Runtime::open_new_game_panel(frontend::State&, int32_t value) {
 void Runtime::set_app_mode(frontend::State&, int32_t mode) {
     frontend_mode_ = mode;
     frontend_game().mode = mode;
+    // The extension hears of every mode set, the same one again included.
+    if (extension_.app_mode_set != nullptr)
+        extension_.app_mode_set(extension_.context, *this, mode);
 }
 
 oa::Game& Runtime::frontend_game() {
@@ -476,7 +487,7 @@ void Runtime::refresh_disc_archives() {
 }
 
 std::string Runtime::translate(entry::Message message) {
-    return std::string(entry::message_text(message));
+    return translate_ui(entry::message_text(message));
 }
 
 void Runtime::show_frontend_message(

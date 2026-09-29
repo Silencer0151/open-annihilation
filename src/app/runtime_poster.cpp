@@ -148,7 +148,9 @@ void Runtime::capture_screenshot() {
     std::error_code error;
     fs::create_directories(save_game_root() / save_relative_path(output), error);
     char folder[present::numbered_pcx_path_bytes];
-    std::snprintf(folder, sizeof folder, kScreenshotFolder, output);
+    // The path is cut to the buffer; one that cannot be formatted is left empty.
+    if (std::snprintf(folder, sizeof folder, kScreenshotFolder, output) < 0)
+        folder[0] = '\0';
     fs::create_directories(save_game_root() / save_relative_path(folder), error);
     status_ = save_numbered_frame(folder, kScreenshotPrefix) ? std::string("Saved screenshot")
                                                              : std::string("screenshot not saved");

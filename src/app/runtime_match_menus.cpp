@@ -265,6 +265,9 @@ void panel_to_widgets(
             auto* slider = std::get_if<oa::ui::gui_layout::ScrollBarFields>(&gadget.fields)
         ) {
             slider->knob_position = control.slider.knob;
+            slider->range = control.slider.range;
+            slider->knob_size = control.slider.knob_size;
+            slider->locked = control.grayed != 0;
         } else if (auto* box = std::get_if<oa::ui::gui_layout::TextBoxFields>(&gadget.fields)) {
             box->text = text;
         }
@@ -465,13 +468,18 @@ int load_overlay_event(ScreenContext* ctx, void*) {
             y <= rect->bottom)
             hit = index;
     }
-    if (hit < 0)
+    // SLIDER and its arrows are the screen's scroll bar's to take.
+    if (hit < 0 ||
+        overlay.panel.controls[static_cast<std::size_t>(hit)].type == ui::ControlType::slider)
         return 0;
     overlay.context = ctx;
     auto& panel = overlay.panel;
     if (ui::control_name(panel.controls[static_cast<std::size_t>(hit)]) == "GAMES") {
         const auto rect = load_overlay_rect(overlay, "GAMES");
-        const auto row = (y - rect->top - kListRowInset) / load_overlay_row_height(overlay);
+        // Rows count from the first row the list's scroll bar shows.
+        const auto first = static_cast<Runtime*>(ctx->host)->frontend_list_first("GAMES");
+        const auto row = (y - rect->top - kListRowInset) / load_overlay_row_height(overlay) +
+                         static_cast<int32_t>(first.value_or(0));
         if (row >= 0 && static_cast<std::size_t>(row) < overlay.saves.list.entries.size()) {
             panel.controls[static_cast<std::size_t>(hit)].list_selection =
                 static_cast<int16_t>(row);
@@ -718,12 +726,16 @@ void blit_lightbar(
 /// @param area source rectangle shown
 /// @param cover one byte per HUD pixel, set where the HUD layer shows; null
 ///        shows all of `area`
+/// @param source_bottom source row the rows shown stop short of: the bottom
+///        bar's, or a panel's own bottom for a panel that keeps the side
+///        column's scale past it
 void show_hud_over_battlefield(
     renderer::Surface& world,
     const renderer::Surface& hud,
     const oa::ui::display_layout::MatchLayout& layout,
     const oa::ui::display_layout::Rect& area,
-    const std::vector<uint8_t>* cover
+    const std::vector<uint8_t>* cover,
+    int32_t source_bottom = oa::ui::display_layout::kSourceBottomBarY
 ) {
     if (area.width <= 0 || area.height <= 0 || hud.rgb.empty() || world.rgb.empty() ||
         layout.scale <= 0.0)
@@ -734,7 +746,7 @@ void show_hud_over_battlefield(
     const auto scaled = [&layout](int32_t value) {
         return static_cast<int32_t>(std::lround(static_cast<double>(value) * layout.scale));
     };
-    const auto bottom = std::min(area.y + area.height, oa::ui::display_layout::kSourceBottomBarY);
+    const auto bottom = std::min(area.y + area.height, source_bottom);
     // A pixel either side catches the rounding of the scale.
     const auto first_x = std::max(layout.left, scaled(area.x) - 1);
     const auto last_x = std::min(layout.width - 1, scaled(area.x + area.width) + 1);
@@ -933,11 +945,13 @@ void Runtime::present_load_game_panel(std::vector<renderer::ListPresentation>& l
     if (!overlay.bound)
         return;
     const auto count = std::min(resources_.layout.gadgets.size(), ui::kPanelControls);
+    // SLIDER shows as its list fills, which the scroll bars decide.
     for (std::size_t index = 1;
          index < count && index <= static_cast<std::size_t>(overlay.panel.count);
          ++index)
-        resources_.layout.gadgets[index].common.active =
-            static_cast<int8_t>(overlay.panel.controls[index].active);
+        if (overlay.panel.controls[index].type != ui::ControlType::slider)
+            resources_.layout.gadgets[index].common.active =
+                static_cast<int8_t>(overlay.panel.controls[index].active);
     overlay.rows.clear();
     for (const auto& entry : overlay.saves.list.entries)
         overlay.rows.emplace_back(entry.description.data());
@@ -946,10 +960,24 @@ void Runtime::present_load_game_panel(std::vector<renderer::ListPresentation>& l
         list != nullptr && list->list_selection >= 0 &&
         static_cast<std::size_t>(list->list_selection) < overlay.rows.size())
         selected = static_cast<std::size_t>(list->list_selection);
-    lists.push_back({"GAMES", overlay.rows, 0, selected});
+    // The dialog fills GAMES as a text list whenever its saves change; its
+    // scroll bar then shows when they overflow it.
+    if (auto* scrolls = frontend_scrolls())
+        if (const auto* gadget = widget("GAMES"))
+            if (const auto* list = renderer::find_layout_list(
+                    *scrolls, static_cast<std::size_t>(gadget - resources_.layout.gadgets.data())
+                );
+                list != nullptr &&
+                static_cast<std::size_t>(list->list.count) != overlay.rows.size())
+                fill_frontend_list("GAMES", overlay.rows.size());
+    lists.push_back({"GAMES", overlay.rows, frontend_list_first("GAMES").value_or(0), selected});
 }
 
 bool Runtime::load_match_hud_layout(const std::string& layout) {
+    // A new panel's scroll bars are bound once it is placed.
+    hud_scrolls_ = {};
+    hud_scrolls_layout_ = nullptr;
+    hud_scrolls_count_ = 0;
     const auto prefix = match_side_prefix();
     const auto panel = prefix == "cor" ? "anims/CORINT.GAF" : "anims/ARMINT.GAF";
     const auto tile = "bitmaps/" + prefix + "guisidetile.pcx";
@@ -1288,8 +1316,14 @@ void Runtime::open_end_panel(oa::ui::campaign::ScoreLayout* reopened) {
     const auto selected =
         std::clamp<int32_t>(list != nullptr ? list->list_selection : 0, 0, count - 1);
     selected_mission_index_ = static_cast<std::size_t>(selected);
-    // The list scroll puts a selection out of view at the top, short of the end.
-    if (const auto* gadget = widget("Missions")) {
+    // The list is filled as a text list, which shows its scroll bar when the
+    // rows overflow, and the list scroll puts a selection out of view at the
+    // top, short of the end.
+    fill_frontend_list("Missions", end_mission_rows_.size());
+    select_frontend_list_row("Missions", selected_mission_index_);
+    if (const auto first = frontend_list_first("Missions"))
+        campaign_mission_first_visible_ = *first;
+    else if (const auto* gadget = widget("Missions")) {
         int32_t item_height =
             static_cast<int32_t>(oa::formats::fnt::line_height(resources_.font)) + 1;
         if (const auto* fields = std::get_if<oa::ui::gui_layout::ListBoxFields>(&gadget->fields);
@@ -1513,15 +1547,25 @@ void Runtime::draw_battlefield_panel() {
         return;
     }
     // The preferences' sub-panel lies beside the side column, at its scale.
+    // Where the bottom bar sits apart from the chrome, the panel keeps that
+    // scale down to its bottom, over the battlefield, as 3.1c's panel stays
+    // where it is at a larger screen.
     if (match_menu_session().ingame_panel == IngamePanel::preferences &&
         match_hud_panel_ == kPreferencesLayout) {
-        show_hud_over_battlefield(
-            match_world_cpu_,
-            match_hud_cpu_,
-            match_layout_,
-            {kBattlefieldLeft, root.y, root.x + root.width - kBattlefieldLeft, root.height},
-            nullptr
-        );
+        const auto rows = preferences_panel_rows();
+        if (!preferences_hud_.rgb.empty())
+            show_hud_over_battlefield(
+                match_world_cpu_,
+                preferences_hud_,
+                match_layout_,
+                rows,
+                nullptr,
+                rows.y + rows.height
+            );
+        else
+            show_hud_over_battlefield(
+                match_world_cpu_, match_hud_cpu_, match_layout_, rows, nullptr
+            );
         return;
     }
     for (std::size_t index = 1; index < gadgets.size(); ++index) {
@@ -1572,28 +1616,9 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         auto& control = panel.controls[static_cast<std::size_t>(index)];
         const auto& gadget = layout.gadgets[static_cast<std::size_t>(index)];
         if (control.type == ui::ControlType::slider) {
-            // A click on the track moves the knob to the pointer; a greyed
-            // slider takes none.
+            // A slider is never clicked: its bar and arrows take the pointer
+            // (preferences_bar_moved).
             panel.selected = ui::kNoSelection;
-            if (control.grayed != 0)
-                return;
-            const auto source = oa::ui::display_layout::canvas_to_source(
-                match_layout_,
-                static_cast<int>(match_pointer_x_),
-                static_cast<int>(match_pointer_y_)
-            );
-            const bool vertical = gadget.common.height > gadget.common.width;
-            const int extent =
-                std::max(1, vertical ? gadget.common.height - 1 : gadget.common.width - 1);
-            const int offset = vertical ? source.y - gadget.common.y : source.x - gadget.common.x;
-            const int steps = std::max(1, static_cast<int>(control.slider.range) - 1);
-            control.slider.knob =
-                static_cast<int16_t>(std::clamp((offset * steps + extent / 2) / extent, 0, steps));
-            if (control.on_change != nullptr)
-                control.on_change(panel, context);
-            panel_to_widgets(panel, layout, widget_gaf_frames_, widget_text_stages_);
-            apply_to_match();
-            render_match_surface();
             return;
         }
         control.stage = oa::ui::gui_input::released_button_stage(gadget, control.stage);
@@ -1648,6 +1673,18 @@ void Runtime::activate_pause_gadget(std::string_view name) {
             ui::options_merge_realtime_panel(panel, loaded);
             const auto first = layout.gadgets.size();
             append_merged_records(layout, panel, sub);
+            // The merge draws the panel as its first draw, which binds the
+            // sub-panel's sliders: the sliders' handlers then read the
+            // positions the bound bars have.
+            bind_hud_scrolls(first);
+            if (auto* scrolls = hud_scrolls())
+                for (const auto& bar : scrolls->bars)
+                    if (bar.gadget < ui::kPanelControls) {
+                        auto& slider = panel.controls[bar.gadget].slider;
+                        slider.range = bar.bar.range;
+                        slider.knob_size = bar.bar.knob_size;
+                        slider.knob = bar.bar.knob;
+                    }
             for (auto index = first; index < layout.gadgets.size(); ++index) {
                 const auto* button =
                     std::get_if<oa::ui::gui_layout::ButtonFields>(&layout.gadgets[index].fields);
@@ -1907,8 +1944,10 @@ bool Runtime::return_to_match_for_close() {
 
 void Runtime::escape_match_menu() {
     const auto& session = match_menu_session();
-    if (session.close_confirm && session.ingame_panel == IngamePanel::exit_confirm) {
-        activate_pause_gadget("CHOICE2");
+    // The surrender confirmation, asked from the menu or by closing the
+    // window, answers Escape as No.
+    if (session.ingame_panel == IngamePanel::exit_confirm && !team_panel_open()) {
+        activate_pause_gadget(ui::kExitConfirmDefault);
         return;
     }
     // The preferences take Escape as their Escape default, PREV.
@@ -1925,6 +1964,13 @@ void Runtime::escape_match_menu() {
         return;
     }
     resume_match_pause();
+}
+
+bool Runtime::enter_match_menu() {
+    if (match_menu_session().ingame_panel != IngamePanel::exit_confirm || team_panel_open())
+        return false;
+    activate_pause_gadget(ui::kExitConfirmDefault);
+    return true;
 }
 
 void Runtime::request_match_close() {
@@ -2234,10 +2280,13 @@ void Runtime::draw_options_lightbar() {
             play_ui_sound("Options", 0);
             ++options_lightbar_sounds_;
         }
-        // The radar picture is drawn again with the frame.
-        match_->state().game.radar_blink_flags = static_cast<uint16_t>(
-            match_->state().game.radar_blink_flags | oa::present::world_renderer::radar_flag_redraw
+        // The radar picture is drawn again with the frame, and the game marks
+        // the frame drawn.
+        auto& game = match_->state().game;
+        game.radar_blink_flags = static_cast<uint16_t>(
+            game.radar_blink_flags | oa::present::world_renderer::radar_flag_redraw
         );
+        game.options_lightbar_drawn = 1;
     }
     const auto& step = session.lightbar_step;
     if (!step.drawn)
@@ -2299,6 +2348,69 @@ void Runtime::leave_options_screen() {
     }
     load(options_parent_);
     options_parent_ = Screen::main_menu;
+}
+
+oa::ui::display_layout::Rect Runtime::preferences_panel_rows() const {
+    if (match_menu_session().ingame_panel != IngamePanel::preferences || !match_hud_ ||
+        match_hud_panel_ != kPreferencesLayout || match_hud_->layout.gadgets.empty())
+        return {};
+    const auto& root = match_hud_->layout.gadgets.front().common;
+    if (root.x + root.width <= kBattlefieldLeft || root.height <= 0)
+        return {};
+    return {kBattlefieldLeft, root.y, root.x + root.width - kBattlefieldLeft, root.height};
+}
+
+void Runtime::place_preferences_rows(renderer::Surface& hud) {
+    preferences_hud_ = {};
+    const auto rows = preferences_panel_rows();
+    constexpr int32_t band_top = oa::ui::display_layout::kSourceBottomBarY;
+    const auto bottom = rows.y + rows.height;
+    if (rows.width <= 0 || bottom <= band_top || match_layout_.scale <= 0.0 ||
+        hud.width != static_cast<uint32_t>(kCanvasWidth) ||
+        hud.height != static_cast<uint32_t>(kCanvasHeight))
+        return;
+    const auto scaled = [this](int32_t value) {
+        return static_cast<int32_t>(std::lround(static_cast<double>(value) * match_layout_.scale));
+    };
+    const auto unscaled = [this](int32_t value) {
+        return static_cast<int32_t>(std::lround(static_cast<double>(value) / match_layout_.scale));
+    };
+    // The bottom bar joins the chrome where its source rows are where the
+    // chrome's scale puts them: the panel's last rows then show in it.
+    if (match_layout_.bottom_bar_y() == scaled(band_top))
+        return;
+    // Elsewhere each bottom bar row shows the panel's row the chrome's scale
+    // puts at that height when the panel reaches it, and else the bar's own
+    // picture.
+    preferences_hud_ = hud;
+    const auto& bar = match_hud_->background;
+    for (int32_t row = band_top; row < kCanvasHeight; ++row) {
+        const auto panel_row = unscaled(match_layout_.bottom_bar_y() + scaled(row - band_top));
+        const bool panel = panel_row >= rows.y && panel_row < bottom && panel_row < kCanvasHeight;
+        for (int32_t column = rows.x; column < rows.x + rows.width && column < kCanvasWidth;
+             ++column) {
+            const auto to =
+                (static_cast<std::size_t>(row) * hud.width + static_cast<std::size_t>(column)) * 3U;
+            if (panel) {
+                const auto from = (static_cast<std::size_t>(panel_row) * hud.width +
+                                   static_cast<std::size_t>(column)) *
+                                  3U;
+                std::copy_n(
+                    preferences_hud_.rgb.begin() + static_cast<std::ptrdiff_t>(from),
+                    3,
+                    hud.rgb.begin() + static_cast<std::ptrdiff_t>(to)
+                );
+            } else if (
+                bar.width == hud.width && bar.height == hud.height && bar.rgb.size() >= to + 3U
+            ) {
+                std::copy_n(
+                    bar.rgb.begin() + static_cast<std::ptrdiff_t>(to),
+                    3,
+                    hud.rgb.begin() + static_cast<std::ptrdiff_t>(to)
+                );
+            }
+        }
+    }
 }
 
 bool Runtime::match_preferences_open() const {
@@ -2424,7 +2536,8 @@ void Runtime::bind_options_context() {
         return true;
     };
     if (in_match)
-        // The GAME slider sets the running game's speed, as the speed keys do.
+        // The GAME slider sets the running game's speed, as the speed keys
+        // do, and the extension hears of it as it does of theirs.
         context.host.set_game_speed = [](void* host, uint16_t speed) {
             auto& runtime = *static_cast<Runtime*>(host);
             if (!runtime.match_)
@@ -2434,6 +2547,10 @@ void Runtime::bind_options_context() {
             runtime.match_timing_.requested_rate = world.game.requested_speed;
             runtime.match_timing_.actual_rate = world.game.current_speed;
             runtime.preferences_.current_game_speed = world.game.current_speed;
+            if (runtime.extension_.speed_changed != nullptr)
+                runtime.extension_.speed_changed(
+                    runtime.extension_.context, runtime, world.game.requested_speed
+                );
         };
 
     // The OPTIONS lightbar: the top panel's own picture as FLIPSURFACE. Over
@@ -2543,6 +2660,73 @@ void Runtime::enter_options_panel() {
     rebuild_surface();
 }
 
+void Runtime::options_bar_moved(std::size_t index) {
+    if (index >= resources_.layout.gadgets.size() || index >= ui::kPanelControls)
+        return;
+    auto& session = match_menu_session();
+    auto& context = session.options;
+    auto& panel = session.panel;
+    bind_options_context();
+    if (session.options_bound != resources_.layout.gadgets.data() ||
+        (session.kind != options_panel_for(screen_) &&
+         session.kind != ui::OptionsPanel::select_video_mode)) {
+        if (!session.options_open) {
+            ui::options_capture_entry(context);
+            session.options_open = true;
+        }
+        session.kind = options_panel_for(screen_);
+        panel_from_widgets(panel, resources_.layout, widget_text_stages_);
+        if (session.kind == ui::OptionsPanel::tabs)
+            ui::options_enter_tabs(panel, context);
+        session.options_bound = resources_.layout.gadgets.data();
+    }
+    auto& control = panel.controls[index];
+    const auto* bar =
+        std::get_if<oa::ui::gui_layout::ScrollBarFields>(&resources_.layout.gadgets[index].fields);
+    if (control.type != ui::ControlType::slider || bar == nullptr)
+        return;
+    // The knob moved: the slider's callback reads the value it stands for.
+    control.slider.knob = bar->knob_position;
+    if (control.on_change != nullptr)
+        control.on_change(panel, context);
+    panel_to_widgets(panel, resources_.layout, widget_gaf_frames_, widget_text_stages_);
+}
+
+void Runtime::preferences_bar_moved(std::size_t index) {
+    auto& session = match_menu_session();
+    if (!match_ || !match_hud_ || session.ingame_panel != IngamePanel::preferences ||
+        index >= match_hud_->layout.gadgets.size() || index >= ui::kPanelControls)
+        return;
+    auto& panel = session.panel;
+    auto& context = session.options;
+    bind_options_context();
+    auto& layout = match_hud_->layout;
+    auto& control = panel.controls[index];
+    const auto* bar =
+        std::get_if<oa::ui::gui_layout::ScrollBarFields>(&layout.gadgets[index].fields);
+    if (control.type != ui::ControlType::slider || bar == nullptr)
+        return;
+    // The speed they show is the match's own, read afresh: another player's
+    // machine may have set it since they opened.
+    preferences_.game_speed = match_->state().game.requested_speed;
+    preferences_.current_game_speed = match_->state().game.current_speed;
+    control.slider.knob = bar->knob_position;
+    if (control.on_change != nullptr)
+        control.on_change(panel, context);
+    panel_to_widgets(panel, layout, widget_gaf_frames_, widget_text_stages_);
+    // The match takes the preferences' option fields at once, as they are its
+    // own; the GAME slider sets the running speed itself.
+    auto& game = match_->state().game;
+    seed_match_options(game);
+    if (game.requested_speed != preferences_.game_speed ||
+        game.current_speed != preferences_.current_game_speed) {
+        game.requested_speed = preferences_.game_speed;
+        game.current_speed = preferences_.current_game_speed;
+        match_timing_.requested_rate = game.requested_speed;
+        match_timing_.actual_rate = game.current_speed;
+    }
+}
+
 void Runtime::activate_options_gadget() {
     if (!hovered_ || *hovered_ >= resources_.layout.gadgets.size())
         return;
@@ -2570,20 +2754,9 @@ void Runtime::activate_options_gadget() {
     panel.selected = static_cast<int32_t>(index);
     auto& control = panel.controls[std::min(index, ui::kPanelControls - 1)];
     if (control.type == ui::ControlType::slider) {
-        // A click on the track moves the knob to the pointer.
-        const bool vertical = gadget.common.height > gadget.common.width;
-        const int extent =
-            std::max(1, vertical ? gadget.common.height - 1 : gadget.common.width - 1);
-        const int offset = vertical ? static_cast<int>(pointer_y_) - gadget.common.y
-                                    : static_cast<int>(pointer_x_) - gadget.common.x;
-        const int steps = std::max(1, static_cast<int>(control.slider.range) - 1);
-        control.slider.knob =
-            static_cast<int16_t>(std::clamp((offset * steps + extent / 2) / extent, 0, steps));
-        if (control.on_change != nullptr)
-            control.on_change(panel, context);
+        // A slider is never clicked: its bar and arrows take the pointer
+        // (options_bar_moved).
         panel.selected = ui::kNoSelection;
-        panel_to_widgets(panel, resources_.layout, widget_gaf_frames_, widget_text_stages_);
-        rebuild_surface();
         return;
     }
     control.stage = oa::ui::gui_input::released_button_stage(gadget, control.stage);
@@ -2645,6 +2818,10 @@ void Runtime::activate_options_gadget() {
             status_ = "options panel unavailable: " + std::string(error.what());
             return;
         }
+        // The sub-panel is merged and drawn: the first draw binds its buttons
+        // and its sliders.
+        renderer::bind_screen_buttons(resources_, 1);
+        bind_frontend_scrolls("guis/startopt.gui", "anims/commongui.gaf");
         widget_gaf_frames_.clear();
         widget_text_stages_.clear();
         session.kind = which;

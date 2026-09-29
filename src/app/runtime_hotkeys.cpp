@@ -97,6 +97,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         }
         return true;
     }
+    // The surrender confirmation answers Enter as No, its Enter default;
+    // escape_match_menu answers its Escape.
+    if (match_paused_ && (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && enter_match_menu())
+        return true;
     // The unit info panel's Enter and Escape defaults are both DONE.
     if (unit_info_panel_ &&
         (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER || key.key == SDLK_ESCAPE)) {
@@ -456,6 +460,11 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
 void Runtime::adjust_game_speed(int delta) {
     auto& world = match_->state();
     const auto hooks = message_hooks();
+    // '+' sets the speed only below the fastest, '-' only above the slowest.
+    const int32_t before = world.game.requested_speed;
+    const bool sets = delta > 0   ? before < oa::sim::speed::fastest
+                      : delta < 0 ? before > oa::sim::speed::slowest
+                                  : false;
     if (delta > 0)
         oa::sim::speed::raise_speed(world, hooks);
     else if (delta < 0)
@@ -463,6 +472,8 @@ void Runtime::adjust_game_speed(int delta) {
     match_timing_.requested_rate = world.game.requested_speed;
     match_timing_.actual_rate = world.game.current_speed;
     preferences_.current_game_speed = world.game.current_speed;
+    if (sets && extension_.speed_changed != nullptr)
+        extension_.speed_changed(extension_.context, *this, world.game.requested_speed);
 }
 
 namespace {

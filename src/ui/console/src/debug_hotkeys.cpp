@@ -150,12 +150,19 @@ void toggle_movie_capture(Console* console, const HotkeyHost& host) noexcept {
         return;
     char output[kOutputDirectoryBytes + 1] = {};
     std::memcpy(output, game_bytes(game, game_offset::output_directory), kOutputDirectoryBytes);
+    // Each path is cut to its buffer; one that cannot be formatted is left empty.
     char pattern[kPathBytes];
-    std::snprintf(pattern, sizeof pattern, "%s\\MOVIE*", output);
+    if (std::snprintf(pattern, sizeof pattern, "%s\\MOVIE*", output) < 0)
+        pattern[0] = '\0';
     game.capture_enabled = highest_listed_number(host, pattern, kMovieNumberAt, 0) + 1;
-    std::snprintf(
-        game.capture_path, sizeof game.capture_path, "%s\\MOVIE%03i", output, game.capture_enabled
-    );
+    if (std::snprintf(
+            game.capture_path,
+            sizeof game.capture_path,
+            "%s\\MOVIE%03i",
+            output,
+            game.capture_enabled
+        ) < 0)
+        game.capture_path[0] = '\0';
     if (console->host != nullptr && console->host->create_directories != nullptr)
         console->host->create_directories(console->host->context, game.capture_path);
     if (host.begin_movie_capture != nullptr)

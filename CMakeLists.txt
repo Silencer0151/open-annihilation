@@ -260,7 +260,8 @@ set(oa_game_sources src/app/main.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
-  src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp)
+  src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
+  src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp)
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
   oa-app-video-capture
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
@@ -350,6 +351,21 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_frontend_controls_dir}/frontend-controls.conf")
       set_tests_properties(native-frontend-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_frontend_controls_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The scroll bars of the options' SOUND panel, SELMAP.GUI's map list,
+      # NEWGAME.GUI's mission list and the match's preferences, driven
+      # through the SDL presenter: each draws
+      # its knob and arrows, a press beside the knob steps it one position, a
+      # drag moves it pixel for pixel, an arrow steps and repeats, and the
+      # preferences' sub-panel shows whole over the battlefield in a window
+      # taller than the chrome.
+      set(oa_scroll_bars_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/scroll-bars")
+      file(MAKE_DIRECTORY "${oa_scroll_bars_dir}")
+      add_test(NAME native-scroll-bars COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-scroll-bars
+        --preferences-file "${oa_scroll_bars_dir}/scroll-bars.conf")
+      set_tests_properties(native-scroll-bars PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_scroll_bars_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The first mission's briefing opened from NEWGAME.GUI with sound on the
       # dummy device: its narration is heard exactly while SHUTUP is on,

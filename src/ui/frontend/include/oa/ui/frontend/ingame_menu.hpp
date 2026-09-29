@@ -123,12 +123,16 @@ void ingame_enter_exit_menu(Panel& panel, IngameContext& context) noexcept;
 /// @return The dialog to open next, closed or none.
 IngameAction ingame_on_exit_menu_click(Panel& panel, IngameContext& context) noexcept;
 
+/// The exit confirmation's answer to Enter and to Escape: its Enter and Escape
+/// default, which also takes the focus as it opens.
+inline constexpr std::string_view kExitConfirmDefault = "CHOICE2";
+
 /// Sets up YESORNO as the exit confirmation, titled from the exit kind.
 ///
 /// Main menu asks "Surrender this battle and return to main menu?" (the
 /// launcher's label instead of "main menu" when it fits); leaving asks
 /// "Surrender this battle and exit to Windows?", or "Exit the Battle" for a
-/// spectator. CHOICE2 is both the Enter and Escape default and takes the focus.
+/// spectator. Enter and Escape both answer kExitConfirmDefault.
 ///
 /// @param[in,out] panel The loaded YESORNO panel.
 /// @param context Exit kind, spectator and launcher state.

@@ -254,6 +254,12 @@ computer player, its own-unit counts and base position, then a one-in-30 draw
 runs the strategic refresh. Offline matches run the wind from the OTA
 `MinWindSpeed` and `MaxWindSpeed`.
 
+The computer players reach the match through `ComputerHost`
+(`src/computer_host.cpp`): squads, orders, placement queries and the random
+stream, and for the siege task a player's sight of a point, its sightings, a
+unit's first-weapon reach and the order the Attack command gives over open
+ground.
+
 ## Path search
 
 `advance_path_search` runs after the projectiles each tick: it starts a job

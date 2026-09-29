@@ -41,3 +41,25 @@ Runtime image pointers are explicit presentation bindings. Dynamic `SIDEx`
 buttons and `ally icons` bind to the screen GAF, while player colors bind to
 `32xlogos` in the globally loaded `textures/LOGOS.GAF`; these are not inferred
 from widget dimensions or stage counts.
+
+## Scroll bars
+
+`oa/ui/frontend_renderer/scroll_bars.hpp` draws scroll bars on the RGB
+surface as 3.1c draws them from the SLIDERS art: the track's start, middle
+and end frames, the knob 3 pixels past its position (a vertical knob as its
+start, middle and end frames, at most the bar's height less 6 long and
+ending at least 4 pixels above the bar's end; a horizontal knob as its start
+frame, at least its width and 2 pixels before the bar's last column), and
+each arrow's frame, or its held face while the pointer holds it. A grayed bar
+and its arrows are grayed through the palette's gray table and shaded at the
+grayed level over their rectangles, as a grayed button with art is
+(`grayed_paint`, `gray_and_shade`).
+
+`LayoutScrolls` binds a loaded layout's bars and readies its lists as a
+panel's first draw does (`bind_layout_scrolls`), writing the bound rectangle,
+positions, knob size and knob back into the gadgets, routes the pointer's
+presses, moves, releases and holds to them, keeps each list's first row in
+step with its bar, and draws them over the screen (`draw_layout_scrolls`).
+`bind_screen_buttons` binds a panel's buttons as the first draw does, for a
+panel merged into a loaded one. `scroll_bars_test.cpp` (`frontend-scroll-bars`)
+pins the art, the drawing and a layout's bars and lists.

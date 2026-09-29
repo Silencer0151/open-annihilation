@@ -507,7 +507,8 @@ void Runtime::check_team_panels() {
             return nullptr;
         }();
         require(metal_slider != nullptr, "SHARE.GUI has no METAL slider");
-        click("METAL", metal_slider->common.width - 1, metal_slider->common.height / 2);
+        // The knob dragged to the end of the bar gives the whole store.
+        drag_check_knob("METAL", metal_slider->common.width);
         const auto given = static_cast<int>(kGiftMetal);
         require(text_of("METAL#") == std::to_string(given), "METAL# reads " + text_of("METAL#"));
         click("SHARUNIT");

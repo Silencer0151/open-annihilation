@@ -845,7 +845,9 @@ void make_poster(TokenLine* line) {
     char directory[kPathBytes];
     char output[kOutputDirectoryBytes + 1] = {};
     std::memcpy(output, game_bytes(g, game_offset::output_directory), kOutputDirectoryBytes);
-    std::snprintf(directory, sizeof directory, "%s\\screenshots", output);
+    // The path is cut to the buffer; one that cannot be formatted is left empty.
+    if (std::snprintf(directory, sizeof directory, "%s\\screenshots", output) < 0)
+        directory[0] = '\0';
     if (host().create_directories != nullptr)
         host().create_directories(host().context, directory);
     if (host().render_poster != nullptr)

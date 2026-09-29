@@ -13,11 +13,13 @@ that call only. --runs picks the runs:
   options  the option hooks, without game data: --help, the -r switch, an
            unknown option and a game directory that does not exist;
   game     the rest, over the installation OA_GAME_DIR names: a headless
-           skirmish, the headless --check-navigation run, and interactive
-           main menu frames, --check-multiplayer-menu, --check-match-dialogs
-           (whose close requests reach close_requested) and a run the
-           recorder ends through ScreenServices::quit (--record-quit) with
-           status 3, through SDL's dummy drivers. When OA_GAME_DIR is unset,
+           skirmish, the headless --check-navigation run (whose speed keys
+           reach speed_changed and whose menus app_mode_set), and
+           interactive main menu frames, --check-multiplayer-menu,
+           --check-match-dialogs (whose close requests reach close_requested
+           and whose GAME slider speed_changed) and a run the recorder ends
+           through ScreenServices::quit (--record-quit) with status 3,
+           through SDL's dummy drivers. When OA_GAME_DIR is unset,
            empty or names no directory it exits with --skip-code
            (OA_GAME_DATA_SKIP_CODE), which ctest reports as skipped, or fails
            when OA_REQUIRE_GAME_DATA=1.
@@ -59,7 +61,7 @@ HOOKS = [
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
-    "close_requested", "service_label",
+    "close_requested", "service_label", "speed_changed", "app_mode_set",
 ]
 # Hooks only a match played with other machines reaches.
 UNREACHED = {
@@ -115,7 +117,7 @@ RUNS = {
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],
             ["console_host", "check_console", "give_resources", "message_hooks", "simulation_step",
              "outcome_ready", "player_gone", "match_event finished", "match_event results_released",
-             "pause_changed on", "pause_changed off"],
+             "pause_changed on", "pause_changed off", "speed_changed", "app_mode_set"],
             game=True),
         Run("main-menu-frames", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "30"],
             ["start_scene", "frame pump", "frame after_pump", "shutdown", "state"], game=True, dummy=True),
@@ -123,8 +125,8 @@ RUNS = {
             ["check_multiplayer_menu", "select_multiplayer"], game=True, dummy=True,
             output="recorder: --check-multiplayer-menu"),
         Run("match-dialogs", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-match-dialogs"],
-            ["close_requested", "service_label", "launched_by_service"], game=True, dummy=True,
-            output="match close check:"),
+            ["close_requested", "service_label", "launched_by_service", "speed_changed"], game=True,
+            dummy=True, output="match close check:"),
         # The recorder uses the screen services it keeps on the fifth frame
         # and ends the run through quit on the tenth, long before 60.
         Run("quit", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "60", "--record-quit", "3"],

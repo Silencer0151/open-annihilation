@@ -42,8 +42,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 6;
-constexpr std::size_t kHookCount = 36;
+constexpr uint32_t kExtensionApiVersionRecorded = 7;
+constexpr std::size_t kHookCount = 38;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -602,6 +602,24 @@ struct RuntimeExtension {
         record("close_requested");
         return false;
     }
+
+    /// Keeps a speed the local player set on this machine (Extension::speed_changed).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param speed the match's game speed now (unused)
+    static void speed_changed(void* /*context*/, Runtime& /*runtime*/, uint16_t /*speed*/) {
+        record("speed_changed");
+    }
+
+    /// Counts an application mode the frontend set (Extension::app_mode_set).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param mode the mode set (unused)
+    static void app_mode_set(void* /*context*/, Runtime& /*runtime*/, int32_t /*mode*/) {
+        record("app_mode_set");
+    }
 };
 
 } // namespace oa::app
@@ -646,6 +664,8 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->team_panel_host = RuntimeExtension::team_panel_host;
     table->close_requested = RuntimeExtension::close_requested;
     table->service_label = service_label;
+    table->speed_changed = RuntimeExtension::speed_changed;
+    table->app_mode_set = RuntimeExtension::app_mode_set;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs.
     uintptr_t words[1 + kHookCount]{};

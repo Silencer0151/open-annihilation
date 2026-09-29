@@ -447,6 +447,38 @@ void Runtime::check_match_dialogs() {
         send(escape(false)) && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
         "Escape did not return to the in-game menu the confirmation was asked over"
     );
+    // Enter answers No as well: CHOICE2 is the confirmation's Enter default.
+    const auto enter = [] {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = SDLK_RETURN;
+        event.key.scancode = SDL_SCANCODE_RETURN;
+        event.key.down = true;
+        return event;
+    };
+    require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
+    require(
+        send(enter()) && !exit_requested_ && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        "Enter did not return to the in-game menu the confirmation was asked over"
+    );
+    // The confirmation EXITGAME asks answers Enter and Escape as No too,
+    // going back to the in-game menu.
+    const auto ask_from_menu = [&] {
+        activate_pause_gadget("EXIT");
+        activate_pause_gadget("EXITGAME");
+        return confirming();
+    };
+    require(ask_from_menu(), "EXITGAME did not ask to surrender");
+    require(
+        send(enter()) && !exit_requested_ && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        "Enter did not answer EXITGAME's confirmation as No"
+    );
+    require(ask_from_menu(), "EXITGAME did not ask to surrender again");
+    require(
+        send(escape(false)) && !exit_requested_ && match_paused_ &&
+            match_hud_panel_ == "guis/ARMOPT.GUI",
+        "Escape did not answer EXITGAME's confirmation as No"
+    );
     // A panel that pauses the match after an answered confirmation, as the
     // team panels do, still gets asked.
     resume_match_pause();
@@ -545,6 +577,8 @@ void Runtime::check_match_dialogs() {
     const auto menu = match_hud_->layout.gadgets.front().common;
     auto in_game_menu = composed();
     const auto sounds = options_lightbar_sounds_;
+    // Each frame of the lightbar marks it drawn in the game.
+    match_->state().game.options_lightbar_drawn = 0;
     activate_pause_gadget("PREFS");
     require(showing(kPreferencesLayout), "PREFS did not open PREFS.GUI over the match");
     const auto prefs = match_hud_->layout.gadgets.front().common;
@@ -593,6 +627,10 @@ void Runtime::check_match_dialogs() {
         "the lightbar played \"Options\" " + std::to_string(options_lightbar_sounds_ - sounds) +
             " times"
     );
+    require(
+        match_->state().game.options_lightbar_drawn == 1,
+        "the lightbar's frames did not mark it drawn in the game"
+    );
     // Held at its end, the turned-over picture covers the battlefield beside
     // the side column; the rest of the match shows as the menu left it.
     const auto beside = canvas_rect(kBattlefieldLeft + 2, 150, 146, 280);
@@ -622,10 +660,12 @@ void Runtime::check_match_dialogs() {
     );
     const auto* filler = hud_gadget("PANEL");
     require(filler != nullptr && filler->common.active == 0, "PREFS.GUI has no hidden PANEL");
+    // FXVOL, at 140,195, lies between its 9-pixel arrows once bound.
     const auto* volume = hud_gadget("FXVOL");
     require(
-        volume != nullptr && volume->common.x == 140 && volume->common.y == 126 + 69,
-        "SOUNDSRT.GUI's FXVOL is not at 140,195"
+        volume != nullptr && volume->common.x == 140 + 9 && volume->common.y == 126 + 69 &&
+            volume->common.width == 122 - 2 * 9,
+        "SOUNDSRT.GUI's FXVOL is not bound between its arrows at 140,195"
     );
     const auto* sound_picture = hud_gadget("SOUNDSRT");
     require(
@@ -649,18 +689,19 @@ void Runtime::check_match_dialogs() {
     );
     write_ppm(report_directory / "native-match-preferences-sound.ppm", sound);
 
-    // A click on a slider's track moves its knob there and applies it at
-    // once; Cancel puts back what the preferences opened with.
+    // A slider's knob, dragged or stepped by its arrows, applies the value
+    // it stands for at once; Cancel puts back what the preferences opened with.
     const auto entry_volume = preferences_.fx_volume;
     if ((preferences_.sound_flags & init::preference_flags::sound_mode) == 0)
         click_control("MODE", 50);
-    click_control("FXVOL", 20);
+    drag_check_knob("FXVOL", -volume->common.width);
     const auto quiet = preferences_.fx_volume;
-    click_control("FXVOL", 80);
+    for (int step = 0; step < 20; ++step)
+        click_check_arrow("FXVOL", true);
     const auto loud = preferences_.fx_volume;
     require(
-        loud > quiet && (quiet != entry_volume || loud != entry_volume),
-        "FXVOL's track did not set the effects volume (" + std::to_string(quiet) + ", then " +
+        quiet == 0 && loud > quiet,
+        "FXVOL's knob did not set the effects volume (" + std::to_string(quiet) + ", then " +
             std::to_string(loud) + ")"
     );
     click_control("CANCEL", 50);
@@ -677,7 +718,8 @@ void Runtime::check_match_dialogs() {
     activate_pause_gadget("PREFS");
     click_control("SPEEDS", 50);
     require(hud_gadget("GAME") != nullptr, "INTERFACE did not merge SPEEDSRT.GUI");
-    click_control("GAME", 98);
+    // Position 85 of GAME's 88 stands for speed 20: 85 / 87 * 21, truncated.
+    drag_check_knob("GAME", 85 - check_scroll_bar("GAME").bar.knob);
     require(
         game.requested_speed == oa::sim::speed::fastest &&
             match_timing_.requested_rate == oa::sim::speed::fastest,
@@ -936,7 +978,7 @@ void Runtime::check_in_game_briefing(const fs::path& report_directory) {
             dispatch_event(event, running);
         }
     };
-    for (const auto [width, height] :
+    for (const auto& [width, height] :
          {std::pair{kCanvasWidth, kCanvasHeight},
           std::pair{kDefaultWindowWidth, kDefaultWindowHeight}}) {
         const auto size = std::to_string(width) + 'x' + std::to_string(height);

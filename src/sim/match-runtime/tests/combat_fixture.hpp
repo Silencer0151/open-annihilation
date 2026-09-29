@@ -126,21 +126,21 @@ struct Options {
     int32_t lava_world{};
     // Plot height of the cells from this column east, over sea level 30; the
     // rest of the map stays at height 0.
-    std::optional<uint32_t> high_ground_from;
+    std::optional<uint32_t> high_ground_from{};
     // Edge of the square sight mask in 32-unit sight cells, centred on the
     // unit; 1 covers only the unit's own cell.
     uint32_t sight_cells = 1;
     // Explosion art by (archive, entry); none leaves the blasts without sprites.
     std::function<const formats::gaf::Sequence*(std::string_view, std::string_view)>
-        effect_sequence;
+        effect_sequence{};
     // The FeatureDef table, the loader's resolved plot words by plot index,
     // and the frames of the table's sequences.
-    std::vector<FeatureDef> features;
-    std::vector<std::pair<std::size_t, uint16_t>> feature_words;
+    std::vector<FeatureDef> features{};
+    std::vector<std::pair<std::size_t, uint16_t>> feature_words{};
     std::function<bool(oa_ref32, uint16_t, sim::feature_runtime::FeatureSequenceFrame&)>
-        feature_sequence_frame;
+        feature_sequence_frame{};
     // The mission schema's feature placements, over the same table.
-    std::vector<sim::feature_runtime::FeaturePlacement> mission_features;
+    std::vector<sim::feature_runtime::FeaturePlacement> mission_features{};
     // A savegame resumes: the loader's features and the placements are left
     // for its Features section.
     bool resuming_saved_game{};
@@ -148,7 +148,7 @@ struct Options {
     int32_t water_does_damage{};
     int32_t water_damage{};
     // GlobalHeader DefeatCondition_UnitTypeKilled text ("NAME,COUNT").
-    std::optional<std::string> unit_type_killed;
+    std::optional<std::string> unit_type_killed{};
     // Arms the type's third slot with a 120-unit commandfire turret gun of
     // 400 energy a shot (registry index 2); AimTertiary accepts at once and
     // FireTertiary counts shots in static 2.

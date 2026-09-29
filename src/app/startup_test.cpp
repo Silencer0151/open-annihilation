@@ -251,6 +251,7 @@ int main() {
         {"--check-multiplayer-menu"},
         {"--check-load-save"},
         {"--check-frontend-controls"},
+        {"--check-scroll-bars"},
         {"--check-briefing-narration"},
         {"--benchmark", "60"},
         {"--frames", "120"},
