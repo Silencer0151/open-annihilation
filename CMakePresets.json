@@ -1,0 +1,57 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Unoptimised, for stepping through code in a debugger",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/local/deps/sdl-install"
+      }
+    },
+    {
+      "name": "check",
+      "displayName": "Check",
+      "description": "Optimised with assertions kept: the build the test suite is validated in",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-check",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Check" }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Check with sanitizers",
+      "description": "The Check build with AddressSanitizer and UndefinedBehaviorSanitizer",
+      "inherits": "check",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": { "OA_SANITIZERS": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "check", "configurePreset": "check" },
+    { "name": "sanitize", "configurePreset": "sanitize" }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "environment": { "SDL_VIDEO_DRIVER": "dummy", "SDL_AUDIO_DRIVER": "dummy" }
+    },
+    {
+      "name": "check",
+      "inherits": "debug",
+      "configurePreset": "check"
+    },
+    {
+      "name": "sanitize",
+      "inherits": "debug",
+      "configurePreset": "sanitize",
+      "environment": { "ASAN_OPTIONS": "detect_leaks=0:handle_sigfpe=0" }
+    }
+  ]
+}

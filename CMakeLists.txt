@@ -3,6 +3,9 @@
 
 cmake_minimum_required(VERSION 3.24)
 project(open_annihilation VERSION 0.2.0 LANGUAGES C CXX)
+# The Check build type, the build the test suite is validated in
+# (cmake/OaBuildTypes.cmake).
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaBuildTypes.cmake")
 # End-to-end app checks run the real game headless; a loaded machine can
 # stretch their wall time several-fold without any extra CPU work.
 set(OA_NATIVE_CHECK_TIMEOUT 1800)
