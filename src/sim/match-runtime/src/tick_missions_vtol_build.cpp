@@ -449,10 +449,9 @@ class TickHost::VtolBuildMissions {
             point ? match.insert_ground_order(s.unit_index, kind, point_of(*point))
                   : match.insert_ground_order(s.unit_index, kind)
         );
-        if (order_target) {
-            pushed.construction.target = order_target;
-            pushed.attack.target = order_target;
-        } else
+        if (order_target)
+            host.retarget(pushed, order_target);
+        else
             pushed.extra.command_flags &= static_cast<uint8_t>(~has_target_flag);
         return pushed;
     }
@@ -672,7 +671,9 @@ class TickHost::VtolBuildMissions {
             }
             adapter.snap_build_height();
             auto* frame = adapter.spawn_nanoframe();
-            record.construction.target = frame;
+            // The order watches its frame, so a frame destroyed before it is
+            // finished ends the order as a lost target.
+            host.retarget(record, frame);
             if (!frame) {
                 speak(speech_failed, "Unable to create any more units");
                 return 8;

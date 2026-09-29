@@ -344,6 +344,61 @@ int main() {
     CHECK(step(match, *builder, *salvage, 0) == 5);
     CHECK(match.spatial().plots[feature_plot].feature_word == sim::spatial_state::no_feature);
 
+    // A frame destroyed before it is finished wakes its VTOL_MobileBuild
+    // with the target-lost event, and the order ends without touching the
+    // dead unit. The finished frame leaves first, freeing player 0's second
+    // slot for the new one.
+    match.stop_orders(builder_id);
+    match.kill_unit(
+        frame->unit_index, static_cast<uint8_t>(sim::match_runtime::DeathKind::dismissed)
+    );
+    const sim::ground_orders::Point second_site{224 << 16, 0, 224 << 16};
+    auto& doomed = match.issue_mobile_build(builder_id, structure_type, second_site, false);
+    CHECK(step(match, *builder, doomed, 0) == 1);
+    CHECK(step(match, *builder, doomed, 0) == 1);
+    services.speech.clear();
+    CHECK(step(match, *builder, doomed, 0) == 1 && services.caption == "Starting construction");
+    sim::unit_spawn::Slot* doomed_frame = nullptr;
+    for (auto& slot : match.world().slots)
+        if (slot.unit && slot.record.type_index == structure_type &&
+            slot.record.build_remaining == 1.0F)
+            doomed_frame = &slot;
+    CHECK(doomed_frame);
+    match.kill_unit(
+        doomed_frame->unit_index, static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon)
+    );
+    CHECK(doomed_frame->record.type_index == 0);
+    CHECK((doomed.raised_events & 0x8) != 0);
+    services.speech.clear();
+    CHECK(step(match, *builder, doomed, doomed.raised_events) == 8 && services.last() == 7);
+    CHECK(services.caption == "Construction terminated");
+
+    // Every order given against a unit watches it the same way: when the
+    // unit dies, each is woken with the target-lost event.
+    match.stop_orders(builder_id);
+    auto* victim = match.create({0, structure_type, {300u << 16, 0, 300u << 16}, false, 1, 0});
+    CHECK(victim);
+    const auto victim_id = victim->unit_index;
+    std::vector<const sim::simulation_state::Order*> watching{
+        &match.issue_help_build(builder_id, victim_id, false),
+        &match.issue_repair(builder_id, victim_id, true),
+        &match.issue_reclaim(builder_id, victim_id, true),
+        &match.issue_capture(builder_id, victim_id, true),
+        &match.issue_guard(builder_id, victim_id, true),
+    };
+    CHECK(match.issue_attack(builder_id, victim_id, false, true));
+    const auto* queued_attack = queue.primary;
+    while (queued_attack && queued_attack->next)
+        queued_attack = queued_attack->next;
+    CHECK(queued_attack && queued_attack != watching.back());
+    watching.push_back(queued_attack);
+    match.kill_unit(victim_id, static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon));
+    for (const auto* order : watching)
+        CHECK((order->raised_events & 0x8) != 0);
+    services.speech.clear();
+    CHECK(step(match, *builder, *queue.primary, queue.primary->raised_events) == 8);
+    CHECK(services.caption == "Construction terminated by hostile action");
+
     std::cout << "match-missions-vtol-build: ok\n";
     return 0;
 }

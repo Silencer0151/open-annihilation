@@ -396,7 +396,7 @@ bool Match::issue_attack(uint16_t source_index, uint16_t target_index, bool forc
         auto& order = issue_queued_command(source_index, 6, here, true, 0x280u);
         for (auto& candidate : orders_)
             if (&candidate->order == &order)
-                candidate->attack.target = &target;
+                link_target_observer(*candidate, &target);
         return true;
     }
     TargetHost host(*this);

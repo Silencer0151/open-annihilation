@@ -644,7 +644,7 @@ sim::simulation_state::Order& Match::issue_help_build(uint16_t index, uint16_t t
         if (&candidate->order == &order) {
             candidate->construction.target = &assisted;
             candidate->construction.type_index = static_cast<int32_t>(assisted.record.type_index);
-            candidate->attack.target = &assisted;
+            link_target_observer(*candidate, &assisted);
         }
     return order;
 }
@@ -663,7 +663,7 @@ sim::simulation_state::Order& Match::issue_repair(uint16_t index, uint16_t targe
         if (&candidate->order == &order) {
             candidate->construction.target = &repaired;
             candidate->construction.type_index = static_cast<int32_t>(repaired.record.type_index);
-            candidate->attack.target = &repaired;
+            link_target_observer(*candidate, &repaired);
         }
     (void)unit;
     return order;
@@ -681,7 +681,7 @@ sim::simulation_state::Order& Match::issue_reclaim(uint16_t index, uint16_t targ
     for (auto& candidate : orders_)
         if (&candidate->order == &order) {
             candidate->construction.target = &reclaimed;
-            candidate->attack.target = &reclaimed;
+            link_target_observer(*candidate, &reclaimed);
         }
     return order;
 }
@@ -697,7 +697,7 @@ sim::simulation_state::Order& Match::issue_capture(uint16_t index, uint16_t targ
     for (auto& candidate : orders_)
         if (&candidate->order == &order) {
             candidate->construction.target = &captured;
-            candidate->attack.target = &captured;
+            link_target_observer(*candidate, &captured);
         }
     return order;
 }
@@ -750,7 +750,7 @@ sim::simulation_state::Order& Match::issue_guard(uint16_t index, uint16_t target
     for (auto& candidate : orders_)
         if (&candidate->order == &order) {
             candidate->construction.target = &guarded;
-            candidate->attack.target = &guarded;
+            link_target_observer(*candidate, &guarded);
         }
     return order;
 }
