@@ -22,16 +22,28 @@
 // given, and on the fifth frame the recorder stops the sounds, plays BGM on
 // the alternate route and asks for a frontend pass, and on the tenth ends
 // the run through quit with STATUS. Without the option none of this runs.
+//
+// The check host (check_host.hpp) is driven as a check an extension runs
+// drives it, through its entries and runtime_options alone: after the
+// engine's own --check-multiplayer-menu check, a round of the main menu
+// clicks MULTI, closes the box it opens with Return and clicks it again;
+// and with --record-check-host the recorder takes the headless run
+// (run_mode headless) for the entries that work without a window.
 #include "recorder.hpp"
 
+#include "oa/app/check_host.hpp"
 #include "oa/app/runtime.hpp"
+
+#include <SDL3/SDL.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -63,6 +75,8 @@ static_assert(
 constexpr std::string_view kRecordOption = "--record-hooks";
 // The option that ends the run through ScreenServices::quit with a status.
 constexpr std::string_view kQuitOption = "--record-quit";
+// The option that has the recorder take the headless run for the check host.
+constexpr std::string_view kCheckHostOption = "--record-check-host";
 // The after_pump frames --record-quit waits before the sound and frontend
 // services, and before quit.
 constexpr uint64_t kServicesFrame = 5;
@@ -77,6 +91,7 @@ struct Recorder {
     uint64_t after_pump_frames{};     // frames seen at FrameStage::after_pump
     void* host{};                     // ScreenContext::host, kept from the overlay
     const ScreenServices* services{}; // ScreenContext::services, kept likewise
+    bool check_host{};                // --record-check-host was given
 };
 
 /// Returns the recorder of this process.
@@ -188,13 +203,14 @@ const char* event_name(MatchEvent event) {
     return "unknown";
 }
 
-/// Takes --record-hooks FILE and --record-quit STATUS and no other option (Extension::take_option).
+/// Takes --record-hooks FILE, --record-quit STATUS and --record-check-host and no other
+/// option (Extension::take_option).
 ///
 /// @param context Extension::context (unused)
 /// @param name the option as given
 /// @param values takes the arguments after it
 /// @param[out] effects option_effect bits; left 0
-/// @return true for --record-hooks and --record-quit
+/// @return true for --record-hooks, --record-quit and --record-check-host
 bool take_option(
     void* /*context*/, const char* name, const OptionValues& values, uint32_t& /*effects*/
 ) {
@@ -206,6 +222,10 @@ bool take_option(
     if (std::string_view(name) == kQuitOption) {
         recorder().quit = true;
         recorder().quit_status = std::atoi(values.next(values.arguments));
+        return true;
+    }
+    if (std::string_view(name) == kCheckHostOption) {
+        recorder().check_host = true;
         return true;
     }
     return false;
@@ -351,6 +371,233 @@ const char* return_label(void* /*context*/) {
     return nullptr;
 }
 
+// The sound the main menu's big buttons play, and the file allsound.tdf
+// gives it.
+constexpr const char* kBigButtonSound = "BIGBUTTON";
+constexpr std::string_view kBigButtonFile = "sounds/butmain1.wav";
+// Frames a click leaves the menus to settle in.
+constexpr int kSettleFrames = 4;
+// The clock is held this far ahead of real time.
+constexpr uint32_t kHeldTicks = 1000;
+
+/// Fails a check host round unless a condition holds.
+///
+/// @param condition the condition
+/// @param what the failure, thrown as "recorder check host: <what>"
+void require(bool condition, const std::string& what) {
+    if (!condition)
+        throw std::runtime_error("recorder check host: " + what);
+}
+
+// A canvas point.
+struct Point {
+    int32_t x{};
+    int32_t y{};
+};
+
+/// Returns the centre of a gadget of the layout shown, found by its name.
+///
+/// @param host the check host
+/// @param name the gadget's name
+/// @return its centre; the round fails when the layout has none
+Point gadget_centre(const CheckHost& host, const char* name) {
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    require(
+        host.gadget(host.context, name, &x, &y, &width, &height),
+        std::string("the layout has no ") + name
+    );
+    return {x + width / 2, y + height / 2};
+}
+
+/// Checks that the main menu is shown, its frame and input the frontend's own.
+///
+/// @param host the check host
+/// @param when the step, for the failure
+void require_main_menu(const CheckHost& host, const std::string& when) {
+    require(
+        host.screen(host.context) == screen_id(Screen::main_menu) &&
+            host.frontend_state(host.context) == frontend::state_id::main_menu &&
+            !host.frame_owned_by_package(host.context),
+        when + ": the main menu is not shown"
+    );
+}
+
+/// Checks the entries that read the game's files and sounds and write its
+/// preferences.
+///
+/// @param host the check host
+/// @param options the game's options
+void check_files(const CheckHost& host, const Options& options) {
+    char file[64]{};
+    require(
+        host.sound_resource(host.context, kBigButtonSound, file, sizeof file) &&
+            std::string_view(file) == kBigButtonFile,
+        std::string(kBigButtonSound) + " does not play " + std::string(kBigButtonFile)
+    );
+    char small[4]{};
+    require(
+        !host.sound_resource(host.context, kBigButtonSound, small, sizeof small),
+        "a sound's file is handed back where it does not fit"
+    );
+    const oa::AssetStore* assets = host.assets(host.context);
+    require(
+        assets != nullptr && assets->file_size(file) > 0, "the store has no " + std::string(file)
+    );
+    host.write_preferences(host.context);
+    require(
+        options.preferences_file && std::filesystem::is_regular_file(*options.preferences_file),
+        "the preferences were not written"
+    );
+}
+
+/// Checks that the clock holds where it is held, and follows real time once
+/// released.
+///
+/// @param host the check host
+void check_clock(const CheckHost& host) {
+    const uint32_t held = host.clock(host.context) + kHeldTicks;
+    host.hold_clock(host.context, held);
+    require(host.clock(host.context) == held, "the held clock moved");
+    host.release_clock(host.context);
+    require(host.clock(host.context) < held, "the released clock stays held");
+}
+
+/// Checks a composed frame of the frontend: 640x480.
+///
+/// @param host the check host
+void check_composed_frame(const CheckHost& host) {
+    host.package_pass(host.context);
+    host.compose(host.context);
+    const renderer::Surface* frame = host.surface(host.context);
+    require(
+        frame != nullptr && frame->width == static_cast<uint32_t>(kCanvasWidth) &&
+            frame->height == static_cast<uint32_t>(kCanvasHeight) &&
+            frame->rgb.size() == static_cast<std::size_t>(kCanvasWidth) * kCanvasHeight * 3U,
+        "the composed frame is not the 640x480 canvas"
+    );
+}
+
+/// Clicks a canvas point through the check host: a motion, a press and a
+/// release, each with a frame after it, then the frames the menus settle in.
+///
+/// @param host the check host
+/// @param at the point
+void click(const CheckHost& host, Point at) {
+    for (const uint32_t type :
+         {static_cast<uint32_t>(SDL_EVENT_MOUSE_MOTION),
+          static_cast<uint32_t>(SDL_EVENT_MOUSE_BUTTON_DOWN),
+          static_cast<uint32_t>(SDL_EVENT_MOUSE_BUTTON_UP)}) {
+        require(host.pointer(host.context, type, at.x, at.y, 1), "a click ended the run");
+        host.frame(host.context);
+    }
+    for (int frame = 0; frame < kSettleFrames; ++frame)
+        host.frame(host.context);
+}
+
+/// Presses and releases Return through the check host, then runs the frames
+/// the menus settle in.
+///
+/// @param host the check host
+void press_return(const CheckHost& host) {
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.windowID = host.window_id(host.context);
+    event.key.scancode = SDL_SCANCODE_RETURN;
+    event.key.key = SDLK_RETURN;
+    event.key.down = true;
+    require(host.dispatch(host.context, &event), "Return ended the run");
+    event.type = SDL_EVENT_KEY_UP;
+    event.key.down = false;
+    require(host.dispatch(host.context, &event), "Return ended the run");
+    for (int frame = 0; frame < kSettleFrames; ++frame)
+        host.frame(host.context);
+}
+
+/// Drives a round of the main menu through the check host, with the window
+/// up: MULTI clicked asks the extensions (select_multiplayer), whose answer
+/// opens the engine's message box; Return closes it, so that a second click
+/// reaches MULTI again, and Return closes that box too. The cursor follows
+/// the pointer, the clock holds, and the files, sounds and preferences
+/// entries answer.
+///
+/// @param runtime the running game, on the main menu with its window up
+void check_host_menu_round(Runtime& runtime) {
+    const CheckHost host = check_host(runtime);
+    require(host.window_id(host.context) != 0, "the window has no id");
+    require(
+        SDL_GetWindowFromID(host.window_id(host.context)) != nullptr,
+        "SDL knows no window by the host's id"
+    );
+    require_main_menu(host, "the start");
+    const Point multi = gadget_centre(host, "multi");
+    const uint64_t asked = hook_recorder::calls("select_multiplayer");
+    click(host, multi);
+    int32_t cursor_x = 0;
+    int32_t cursor_y = 0;
+    host.cursor(host.context, &cursor_x, &cursor_y);
+    require(
+        std::abs(cursor_x - multi.x) <= 1 && std::abs(cursor_y - multi.y) <= 1,
+        "the cursor is at (" + std::to_string(cursor_x) + ", " + std::to_string(cursor_y) +
+            "), not on MULTI"
+    );
+    require(hook_recorder::calls("select_multiplayer") == asked + 1, "MULTI was not asked");
+    require_main_menu(host, "MULTI");
+    press_return(host);
+    click(host, multi);
+    require(
+        hook_recorder::calls("select_multiplayer") == asked + 2,
+        "Return did not close MULTI's message box"
+    );
+    press_return(host);
+    require_main_menu(host, "the end");
+    check_clock(host);
+    check_composed_frame(host);
+    check_files(host, runtime_options(runtime));
+    std::printf("recorder: check host, windowed: MULTI clicked twice, Return closed its box\n");
+}
+
+/// Drives the entries that work without a window through the check host,
+/// in the headless run: the main menu and its gadgets, a motion that moves
+/// the cursor to the canvas point, the clock, a composed frame, the files,
+/// sounds and preferences, a close request, which ends the run, and a frame,
+/// which needs the window.
+///
+/// @param runtime the running game, headless on the main menu
+void check_host_headless(Runtime& runtime) {
+    const CheckHost host = check_host(runtime);
+    require(host.window_id(host.context) == 0, "a headless run has a window id");
+    require_main_menu(host, "the start");
+    const Point multi = gadget_centre(host, "MULTI");
+    require(
+        host.pointer(host.context, SDL_EVENT_MOUSE_MOTION, multi.x, multi.y, 0),
+        "a motion ended the run"
+    );
+    int32_t cursor_x = 0;
+    int32_t cursor_y = 0;
+    host.cursor(host.context, &cursor_x, &cursor_y);
+    require(cursor_x == multi.x && cursor_y == multi.y, "the cursor did not follow the motion");
+    check_clock(host);
+    check_composed_frame(host);
+    check_files(host, runtime_options(runtime));
+    SDL_Event close{};
+    close.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+    require(!host.dispatch(host.context, &close), "a close request did not end the run");
+    bool refused = false;
+    try {
+        host.frame(host.context);
+    } catch (const std::runtime_error&) {
+        refused = true;
+    }
+    require(refused, "a frame ran without the window");
+    std::printf(
+        "recorder: check host, headless: the main menu, a motion, the clock, a frame "
+        "composed, the files and a close request\n"
+    );
+}
+
 } // namespace
 
 void hook_recorder::record(const char* hook, const char* detail) {
@@ -382,17 +629,22 @@ struct RuntimeExtension {
     /// @param[in,out] runtime the runtime being built; left as it is
     static void ready(void* /*context*/, Runtime& /*runtime*/) { record("ready"); }
 
-    /// Runs nothing of its own (Extension::run_mode).
+    /// Runs nothing of its own, but with --record-check-host takes the headless
+    /// run for the check host's entries that work without a window (Extension::run_mode).
     ///
     /// @param context Extension::context (unused)
-    /// @param[in,out] runtime the running app; left as it is
+    /// @param[in,out] runtime the running app; driven through the check host
+    ///        when the recorder takes the run
     /// @param phase the point of Runtime::run
-    /// @param[out] exit_code oa-game's exit status; left as it is
-    /// @return false
-    static bool
-    run_mode(void* /*context*/, Runtime& /*runtime*/, RunPhase phase, int& /*exit_code*/) {
+    /// @param[out] exit_code oa-game's exit status; 0 when the recorder takes the run
+    /// @return true when the recorder took the run
+    static bool run_mode(void* /*context*/, Runtime& runtime, RunPhase phase, int& exit_code) {
         record("run_mode", phase_name(phase));
-        return false;
+        if (!recorder().check_host || phase != RunPhase::headless)
+            return false;
+        check_host_headless(runtime);
+        exit_code = 0;
+        return true;
     }
 
     /// Leaves the first scene to the menu music (Extension::start_scene).
@@ -412,7 +664,8 @@ struct RuntimeExtension {
     static void shutdown(void* /*context*/, Runtime& /*runtime*/) { record("shutdown"); }
 
     /// Says that --check-multiplayer-menu ran, then runs the engine's own check,
-    /// whose click on MULTI reaches select_multiplayer (Extension::check_multiplayer_menu).
+    /// whose click on MULTI reaches select_multiplayer, and a round of the main
+    /// menu through the check host (Extension::check_multiplayer_menu).
     ///
     /// @param context Extension::context (unused)
     /// @param[in,out] runtime the running app, whose main menu the check drives
@@ -420,6 +673,7 @@ struct RuntimeExtension {
         record("check_multiplayer_menu");
         std::printf("recorder: --check-multiplayer-menu\n");
         runtime.check_multiplayer_unavailable();
+        check_host_menu_round(runtime);
     }
 
     /// Reports no session of its own (Extension::state).

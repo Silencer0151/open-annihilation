@@ -24,8 +24,8 @@ if(BUILD_TESTING)
   target_link_libraries(oa-gadget-draw-test PRIVATE oa-ui-frontend-renderer)
   add_test(NAME frontend-gadget-draw COMMAND oa-gadget-draw-test)
 
-  # The installed game's MAINMENU.GUI, and by.ccx's under its overlay when
-  # the install carries it.
+  # The installed game's MAINMENU.GUI, the one laid out for FrontendX, which
+  # the main menu takes with no overlay drawn over it.
   add_executable(oa-main-menu-layout-test tests/main_menu_layout_test.cpp)
   target_link_libraries(oa-main-menu-layout-test PRIVATE oa-ui-frontend-renderer oa-test-game-data)
   oa_add_game_data_test(frontend-main-menu-layout oa-main-menu-layout-test)

@@ -842,6 +842,8 @@ class Runtime final : public menu::Host,
     void rebuild_surface();
 
     friend struct BuiltinScreens;
+    // The check host's entries (check_host.hpp, runtime_check_host.cpp).
+    friend struct CheckHostAccess;
     // Defined by the one extension that adds Runtime members, whose hooks
     // reach the runtime through it; to be replaced by hooks and declared
     // headers (src/app/README.md).

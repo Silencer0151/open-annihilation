@@ -192,6 +192,7 @@ file src/app/offline_services.hpp src/app/include/oa/app/offline_services.hpp -
 file src/app/runtime.hpp src/app/include/oa/app/runtime.hpp -
 file src/app/match_model_draws.hpp src/app/include/oa/app/match_model_draws.hpp - runtime.hpp includes it, so it goes where runtime.hpp goes
 file src/app/include/oa/app/extension_list.hpp src/app/include/oa/app/extension_list.hpp - added after the pass: the combined extension table, beside extension.hpp
+file src/app/include/oa/app/check_host.hpp src/app/include/oa/app/check_host.hpp - added after the pass: the table a check an extension runs drives the game through, beside extension.hpp
 
 # ---- tools -------------------------------------------------------------------
 # The module tools (the inspectors of formats/gaf, hpi and tnt and of

@@ -8,12 +8,15 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::ui::frontend_renderer {
@@ -30,9 +33,6 @@ constexpr std::string_view default_light_table = "palettes/palette.lht";
 constexpr std::string_view default_shade_table = "palettes/palette.shd";
 constexpr std::string_view game_palette_file = "palettes/palette.pal";
 constexpr std::string_view global_logo_sprites = "textures/logos.gaf";
-// The by.ccx main-menu overlay's art; the archive that carries it also
-// carries the MAINMENU.GUI laid out under that overlay.
-constexpr std::string_view main_menu_overlay_sprites = "anims/main_console.gaf";
 
 // Entries of the destination palette map the button drawing uses.
 constexpr uint8_t palette_black = 0;
@@ -791,11 +791,41 @@ ScreenResources load_screen(AssetStore& assets, const ScreenAssetNames& names) {
     return load_screen_with_layout(assets, names, assets.read(names.layout).bytes);
 }
 
+namespace {
+
+/// Reads MAINMENU.GUI from one mounted archive.
+///
+/// @param assets the asset store
+/// @param archive the archive's mount path
+/// @return the bytes, or nullopt when the archive is not mounted or holds no
+///         such file
+std::optional<std::vector<uint8_t>>
+main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archive) {
+    const auto mounts = assets.mount_paths();
+    for (std::size_t index = 0; index < mounts.size(); ++index) {
+        if (mounts[index] != archive)
+            continue;
+        const auto& mounted = assets.mounted(index);
+        const auto node = mounted.lookup(main_menu_layout);
+        if (!node || mounted.nodes()[*node].directory())
+            return std::nullopt;
+        return mounted.read_node(*node);
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 MainMenuResources load_main_menu(AssetStore& assets, MainMenuLayout layout) {
     auto gui = assets.read(main_menu_layout);
-    if (layout == MainMenuLayout::base_game && gui.archived &&
-        assets.providing_archive(main_menu_overlay_sprites) == gui.source)
-        gui = assets.read_without(main_menu_layout, gui.source);
+    // With no overlay, an archived layout goes with the archived background
+    // it was drawn for, when that archive holds one.
+    if (layout == MainMenuLayout::base_game && gui.archived) {
+        const auto background = assets.providing_archive(main_menu_background);
+        if (background && *background != gui.source)
+            if (auto bytes = main_menu_layout_in(assets, *background))
+                gui = {std::move(*bytes), *background, true};
+    }
     auto result = load_screen_with_layout(
         assets,
         {std::string(main_menu_layout),

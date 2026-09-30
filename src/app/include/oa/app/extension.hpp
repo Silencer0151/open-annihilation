@@ -51,6 +51,10 @@
 //   that names both.
 // With one extension the combined table behaves as that extension's own.
 //
+// A check an extension runs from run_mode or check_multiplayer_menu drives
+// the running game through the check host (check_host.hpp), which is not
+// part of this table.
+//
 // The engine calls every hook on the thread that runs main(), and passes
 // Extension::context back unchanged; the extension owns it and keeps it
 // valid until the process exits. Pointers and references a hook receives

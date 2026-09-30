@@ -31,8 +31,8 @@ static bool asset_exists(const oa::AssetStore& assets, const std::string& path) 
     return true;
 }
 
-// The galactic-map screen's sound names resolve in the packed install: a registered name to
-// its WAV whatever the case of the file name, and the allsound.tdf names
+// A screen package's registered sound names resolve in the packed install: a registered name
+// to its WAV whatever the case of the file name, and the allsound.tdf names
 // beside them.
 static void registered_sound_names(const oa::AssetStore& assets) {
     const oa::data::defs::Files files = oa::data::defs::asset_store_files(&assets);
@@ -47,16 +47,17 @@ static void registered_sound_names(const oa::AssetStore& assets) {
     oa::data::defs::SoundCategoryTable categories{};
     oa::data::defs::load_all_sounds(&files, nullptr, cache, &categories);
     oa::data::defs::sound_category_table_free(&categories);
-    registry.add("GREEN_BUTTON", "beep2");
-    registry.add("GREEN_SLIDE", "HOVEROK1");
+    registry.add("PACKAGE_BUTTON", "beep2");
+    registry.add("PACKAGE_SLIDE", "HOVEROK1");
     const PlaybackState enabled{true, 1, false, false, PlaybackRoute::primary};
-    const auto green = select(registry, "green_button", false, enabled);
+    const auto button = select(registry, "package_button", false, enabled);
     require(
-        green.status == SelectionStatus::selected && green.sound->resource == "sounds/beep2.wav" &&
-            asset_exists(assets, green.sound->resource),
-        "GREEN_BUTTON plays sounds/beep2.wav"
+        button.status == SelectionStatus::selected &&
+            button.sound->resource == "sounds/beep2.wav" &&
+            asset_exists(assets, button.sound->resource),
+        "PACKAGE_BUTTON plays sounds/beep2.wav"
     );
-    const auto slide = select(registry, "GREEN_SLIDE", false, enabled);
+    const auto slide = select(registry, "PACKAGE_SLIDE", false, enabled);
     require(
         slide.status == SelectionStatus::selected &&
             slide.sound->resource == "sounds/HOVEROK1.wav" &&

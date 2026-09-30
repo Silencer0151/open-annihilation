@@ -200,6 +200,13 @@ if(OA_BUILD_PLATFORM)
     add_executable(oa-app-video-capture-test src/app/video_capture_test.cpp)
     target_link_libraries(oa-app-video-capture-test PRIVATE oa-app-video-capture oa-options)
     add_test(NAME app-video-capture COMMAND oa-app-video-capture-test)
+    # The check host's table (check_host.hpp) and the parts of it that need
+    # no running game: the pointer events it makes, the gadgets it finds and
+    # the text it hands back.
+    add_executable(oa-app-check-host-test src/app/check_host_test.cpp src/app/check_host_input.cpp)
+    target_link_libraries(oa-app-check-host-test PRIVATE oa-app-headers oa-ui-gui-layout
+      oa-ui-screen-registry SDL3::SDL3 oa-options)
+    add_test(NAME app-check-host COMMAND oa-app-check-host-test)
   endif()
 endif()
 if(BUILD_TESTING)
@@ -261,6 +268,7 @@ set(oa_game_sources src/app/main.cpp
   src/app/runtime_kill_board.cpp src/app/runtime_frontend_controls_check.cpp
   src/app/runtime_briefing_narration_check.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
+  src/app/runtime_check_host.cpp src/app/check_host_input.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp

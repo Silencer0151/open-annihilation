@@ -125,10 +125,11 @@ struct ScreenAssetNames {
 /// @param first First gadget bound.
 void bind_screen_buttons(ScreenResources& resources, std::size_t first);
 
-// Which MAINMENU.GUI the main menu takes. The by.ccx data archive overrides
-// TA's with one whose SINGLE/MULTI/INTRO/EXIT sit exactly under its main-menu
-// overlay's own buttons, outside FrontendX's pipe frames. With no overlay
-// drawn, TA's layout, which fits those frames, applies.
+// Which MAINMENU.GUI the main menu takes. An add-on archive may carry a
+// MAINMENU.GUI whose SINGLE/MULTI/INTRO/EXIT sit under the buttons of a
+// main-menu overlay drawn over the menu, outside FrontendX's pipe frames.
+// With an overlay drawn, the top copy applies; with none, the layout of the
+// archive that provides FrontendX, which fits its frames.
 enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 
 /// Loads the four resources of the main menu screen.
@@ -138,8 +139,10 @@ enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 /// policy.
 ///
 /// @param assets Asset store.
-/// @param layout base_game passes over a MAINMENU.GUI from the archive
-///        holding the by.ccx overlay art.
+/// @param layout with_overlay takes the top copy of MAINMENU.GUI; base_game
+///        takes the copy in the archive that provides FrontendX, and the top
+///        copy when FrontendX or that top copy is a loose file or that
+///        archive holds no MAINMENU.GUI.
 /// @return The loaded resources.
 /// @throws std::runtime_error when a resource is missing or malformed, or
 ///         FrontendX is not 640x480.

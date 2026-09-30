@@ -20,12 +20,15 @@ when it did not, which fails the run. --runs picks the runs:
            follower that fills frontend_game too, which stops the start;
   game     the rest, over the installation OA_GAME_DIR names: a headless
            skirmish, the headless --check-navigation run (whose speed keys
-           reach speed_changed and whose menus app_mode_set), and
-           interactive main menu frames, --check-multiplayer-menu,
-           --check-match-dialogs (whose close requests reach close_requested
-           and whose GAME slider speed_changed) and a run the recorder ends
-           through ScreenServices::quit (--record-quit) with status 3,
-           through SDL's dummy drivers. When OA_GAME_DIR is unset,
+           reach speed_changed and whose menus app_mode_set), a headless run
+           the recorder takes to drive the check host without a window
+           (--record-check-host), and interactive main menu frames,
+           --check-multiplayer-menu (after which the recorder drives a round
+           of the main menu through the check host), --check-match-dialogs
+           (whose close requests reach close_requested and whose GAME slider
+           speed_changed) and a run the recorder ends through
+           ScreenServices::quit (--record-quit) with status 3, through SDL's
+           dummy drivers. When OA_GAME_DIR is unset,
            empty or names no directory it exits with --skip-code
            (OA_GAME_DATA_SKIP_CODE), which ctest reports as skipped, or fails
            when OA_REQUIRE_GAME_DATA=1.
@@ -145,12 +148,19 @@ RUNS = {
              "outcome_ready", "player_gone", "match_event finished", "match_event results_released",
              "pause_changed on", "pause_changed off", "speed_changed", "app_mode_set"],
             game=True),
+        # The recorder takes the headless run and drives the check host's
+        # entries that need no window; its close request reaches
+        # close_requested.
+        Run("check-host-headless",
+            ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--record-check-host"],
+            ["run_mode headless", "close_requested", "follower.order run_mode"], game=True,
+            output="recorder: check host, headless:"),
         Run("main-menu-frames", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "30"],
             ["start_scene", "frame pump", "frame after_pump", "shutdown", "state",
              "follower.order shutdown"], game=True, dummy=True),
         Run("multiplayer-menu", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-multiplayer-menu"],
             ["check_multiplayer_menu", "select_multiplayer"], game=True, dummy=True,
-            output="recorder: --check-multiplayer-menu"),
+            output=["recorder: --check-multiplayer-menu", "recorder: check host, windowed:"]),
         Run("match-dialogs", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-match-dialogs"],
             ["close_requested", "return_label", "speed_changed"], game=True,
             dummy=True, output="match close check:"),

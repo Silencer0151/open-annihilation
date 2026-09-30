@@ -426,13 +426,14 @@ void asset_store_discover_order_and_hpi_limit() {
     );
 }
 
-// Mount order of a full install's archives: the revision patch, the CCX and
-// UFO groups in Windows name order, then the first ten of its thirteen *.HPI
-// files. totala3.hpi, totala4.hpi and worlds.hpi are past the limit; the game
-// reaches them only through the CD-ROM root scan.
+// Mount order of a full install's archives, with one add-on CCX beside the
+// game's own: the revision patch, the CCX and UFO groups in Windows name
+// order, then the first ten of its thirteen *.HPI files. totala3.hpi,
+// totala4.hpi and worlds.hpi are past the limit; the game reaches them only
+// through the CD-ROM root scan.
 const std::vector<std::string> kInstallMountOrder{
-    "rev31.gp3",    "btdata.ccx",   "btmaps.ccx",   "by.ccx",       "ccdata.ccx",   "ccmaps.ccx",
-    "ccmiss.ccx",   "AFark.ufo",    "AFlea.ufo",    "AScarab.ufo",  "Cometctr.ufo", "Cormabm.ufo",
+    "rev31.gp3",    "btdata.ccx",   "btmaps.ccx",   "ccdata.ccx",   "ccmaps.ccx",   "ccmiss.ccx",
+    "extra.ccx",    "AFark.ufo",    "AFlea.ufo",    "AScarab.ufo",  "Cometctr.ufo", "Cormabm.ufo",
     "CorNecro.ufo", "corplas.ufo",  "Evadrivd.ufo", "Example.ufo",  "floggen.ufo",  "Mndsmars.ufo",
     "tactics1.hpi", "tactics2.hpi", "tactics3.hpi", "tactics4.hpi", "tactics5.hpi", "tactics6.hpi",
     "tactics7.hpi", "tactics8.hpi", "totala1.hpi",  "totala2.hpi",
@@ -476,7 +477,7 @@ void asset_store_discover_pins_install_layout() {
         {{"gamedata/sound.tdf", text("totala1.hpi"), 0},
          {"sounds/loose.wav", text("totala1.hpi"), 0}}
     );
-    pack("by.ccx", {{"anims/shared.gaf", text("by.ccx"), 0}});
+    pack("extra.ccx", {{"anims/shared.gaf", text("extra.ccx"), 0}});
     pack("AFark.ufo", {{"anims/shared.gaf", text("AFark.ufo"), 0}});
     // Within a group Windows orders names case-insensitively, so Cormabm
     // precedes CorNecro although a byte comparison puts 'N' before 'm'.
@@ -511,7 +512,8 @@ void asset_store_discover_pins_install_layout() {
         "revision patch beats CCX and HPI"
     );
     check(
-        store.read("anims/shared.gaf").bytes == text("by.ccx"), "CCX beats UFO regardless of name"
+        store.read("anims/shared.gaf").bytes == text("extra.ccx"),
+        "CCX beats UFO regardless of name"
     );
     check(
         store.read("units/shared.fbi").bytes == text("Cormabm.ufo"),

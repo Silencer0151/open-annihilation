@@ -120,6 +120,10 @@ and `app-window-icon` that the embedded one decodes.
   such data.
 - A screen package registers through `screens.inc` rather than adding its
   cases to `runtime.cpp`.
+- `check_host.hpp`, `runtime_check_host.cpp`, `check_host_input.*`: the
+  check host, through which a check an extension runs drives the running
+  game (see [Extensions](#extensions)); `app-check-host` tests its table and
+  the parts that need no running game.
 - `video_capture.hpp`, `video_capture.cpp`: `--capture-video`, the
   developer's capture of the window's frames and the game's sound as an MP4
   video through the `ffmpeg` program; `runtime_showcase.cpp`: the scripted
@@ -216,7 +220,13 @@ close requests `close_requested` and its GAME slider `speed_changed`.
 With `--record-quit STATUS` the recorder keeps the screen services an
 overlay is given, stops the sounds, plays BGM on the alternate route,
 asks for a frontend pass and ends the run through `quit`, which must exit
-with STATUS. The navigation check itself puts probes in place of the
+with STATUS. The recorder drives the check host too, through its entries
+alone: after the engine's `--check-multiplayer-menu` check it clicks MULTI,
+closes the box it opens with Return and clicks it again, with the cursor,
+the clock, a composed frame, a sound's file and the preferences checked on
+the way; and with `--record-check-host` it takes the headless run for the
+entries that work without a window, down to a close request, which ends
+the run, and a frame, which needs the window. The navigation check itself puts probes in place of the
 hooks to check what the engine does with their answers: a close request
 answered or declined, quit's status, one frontend pass for two requests,
 a query binding, the launch's nickname, the return label kept as a match
@@ -226,6 +236,23 @@ installation: there `extension-hooks-game` skips, and only the option
 hooks and the hook list are checked. The rest of the hook coverage runs
 only where `OA_GAME_DIR` is set, locally or in a private run; run it there
 before an extension moves its engine pin.
+
+A check an extension runs, from `run_mode` or `check_multiplayer_menu`,
+drives the running game through the check host (`check_host.hpp`), as the
+engine's own checks drive it: `check_host(runtime)` returns a table whose
+entries hand the game SDL events and left-button pointer events at canvas
+points (placed in the window as the game shows the canvas, or taken as they
+are without one), run a frame of the main loop (with the window up) or a
+pass of the screen packages, compose the frame and return it, hold the
+frontend clock at a tick and release it, and read the cursor, the window's
+SDL id, the screen shown, the frontend's state, whether a package owns the
+main menu's frame, a gadget of the shown layout by name, the game's files,
+the file a sound name plays, and write the preferences.
+`runtime_options(runtime)` returns the command line's options. The header
+includes no other engine header, so such a check needs only
+`oa::app::headers` and never a private name of `Runtime`. The check host is
+not part of the extension table, which `OA_EXTENSION_API_VERSION` numbers
+alone.
 
 An extension reaches `oa-game` only through these hooks and declared
 headers. When it needs something the table does not offer, add a hook or
