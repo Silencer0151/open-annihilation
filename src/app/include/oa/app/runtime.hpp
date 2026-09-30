@@ -587,17 +587,17 @@ class Runtime final : public menu::Host,
     /// presenter stays in use, the panel is centred right of the drawn side
     /// column, the options panel under it is darkened, every other pixel
     /// matches the paused frame, and OK at its presented position closes it;
-    /// then check_in_game_briefing(). Over a new skirmish: the window's close
-    /// request and a held Escape; the preferences the in-game menu opens,
-    /// PREFS.GUI in the side column with the OPTIONS lightbar sweeping over
-    /// it and the battlefield beside it, each tab's sub-panel (SOUNDSRT,
-    /// SPEEDSRT, VISUALRT, MUSICRT) merged beside the tabs, the FXVOL and GAME
-    /// sliders, Cancel, Enter, Escape, the quick keys and F2, and a close
-    /// request over them whose CHOICE2 returns to the in-game menu; a unit's
-    /// speech with its order's caption; a return label in the exit menus and
-    /// on ENDMSN.GUI, whose MAIN MENU then leaves the pointer's picture as it
-    /// is; and the system's quit, whose CHOICE1 surrenders and ends the
-    /// run. Throws std::runtime_error on a failure.
+    /// then check_in_game_briefing() and check_surrender_prompt(). Over a new
+    /// skirmish: the window's close request and a held Escape; the preferences
+    /// the in-game menu opens, PREFS.GUI in the side column with the OPTIONS
+    /// lightbar sweeping over it and the battlefield beside it, each tab's
+    /// sub-panel (SOUNDSRT, SPEEDSRT, VISUALRT, MUSICRT) merged beside the
+    /// tabs, the FXVOL and GAME sliders, Cancel, Enter, Escape, the quick keys
+    /// and F2, and a close request over them whose CHOICE2 returns to the
+    /// in-game menu; a unit's speech with its order's caption; a return label
+    /// in the exit menus and on ENDMSN.GUI, whose MAIN MENU then leaves the
+    /// pointer's picture as it is; and the system's quit, whose CHOICE1
+    /// surrenders and ends the run. Throws std::runtime_error on a failure.
     void check_match_dialogs();
 
     /// Checks BRIEFING.GUI opened by MISSION on the pause menu of a campaign mission.
@@ -614,6 +614,24 @@ class Runtime final : public menu::Host,
     ///
     /// @param report_directory directory the frames are written to
     void check_in_game_briefing(const fs::path& report_directory);
+
+    /// Checks the exit menu and the surrender confirmation over a paused skirmish.
+    ///
+    /// On a 640x480 window and on the default window, each composed from the
+    /// match's layers and written to native-match-exit-menu-WxH.ppm and
+    /// native-match-surrender-WxH.ppm: EXITMENU.GUI, and YESORNO.GUI as
+    /// EXITGAME, MAINMENU and the window's close request ask it, each sit at
+    /// the centre of the 640x480 screen's area right of the 128-pixel strip
+    /// and show on the canvas at the side column's scale, centred right of the
+    /// drawn side column; every pixel of the panel outside its records is the
+    /// BackTile face in the match palette, and nothing else over the
+    /// battlefield changes. The pointer is over Yes and No where they show and
+    /// over nothing just left of the panel, and a click on No answers it.
+    /// RESTART.GUI shows centred right of the drawn side column as well.
+    /// Throws std::runtime_error on a failure.
+    ///
+    /// @param report_directory directory the frames are written to
+    void check_surrender_prompt(const fs::path& report_directory);
 
     /// Checks the kills board F4 pins in a skirmish.
     ///
@@ -1428,11 +1446,37 @@ class Runtime final : public menu::Host,
     /// EXITMENU, YESORNO, RESTART, GAMEOPTIONS, the team panels and the
     /// preferences' sub-panels lie over the battlefield; they render into the
     /// HUD source with the side panels, and the battlefield pass shows them:
-    /// RESTART.GUI and GAMEOPTIONS.GUI whole over their art, the team panels
-    /// whole over the side panel's tile, PREFS.GUI's part beside the side column
-    /// at the side column's scale, the others (which have no art here) control
-    /// by control.
+    /// a panel placed beside the HUD strip (EXITMENU, YESORNO, RESTART and
+    /// GAMEOPTIONS, place_match_panel_beside_hud) whole where
+    /// beside_hud_panel_area() puts it, the team panels whole over the side
+    /// panel's tile, PREFS.GUI's part beside the side column at the side
+    /// column's scale, and any other panel control by control.
     void draw_battlefield_panel();
+
+    /// Places the loaded match HUD panel as 3.1c places a panel it centres
+    /// right of the HUD strip, and shows it there from then on.
+    ///
+    /// The root moves, and its records with it, to the centre of the 640x480
+    /// screen's area right of the 128-pixel strip; over a match on a larger
+    /// window the panel shows where beside_hud_panel_area() puts it. With
+    /// `back_tile_face` the root gets the face 3.1c gives a panel whose GUI
+    /// file names no picture of its own: the common GUI art's BackTile frames
+    /// tiled over it, corner and edge frames round the middle ones.
+    ///
+    /// @param back_tile_face true to draw the BackTile face; false for a panel
+    ///        drawn over art of its own
+    void place_match_panel_beside_hud(bool back_tile_face);
+
+    /// Returns where the paused match shows the panel placed beside the HUD strip.
+    ///
+    /// The panel keeps the side column's scale and is centred right of the
+    /// drawn side column on the match canvas, as 3.1c centres it right of the
+    /// strip on its screen; on a 640x480 window that is the panel's own
+    /// position.
+    ///
+    /// @return the panel's rectangle in canvas pixels, or nothing when no such
+    ///         panel shows
+    [[nodiscard]] std::optional<oa::ui::display_layout::Rect> beside_hud_panel_area() const;
 
     // ---- Scroll bars (runtime_scroll_bars.cpp) ----
 
@@ -1478,7 +1522,10 @@ class Runtime final : public menu::Host,
     ///
     /// The preferences' sub-panel over the battlefield takes its own rows,
     /// down to its bottom, wherever the window puts the bottom bar
-    /// (preferences_panel_rows); elsewhere the chrome's mapping applies.
+    /// (preferences_panel_rows). While a panel placed beside the HUD strip
+    /// shows, the whole canvas maps through where it shows
+    /// (beside_hud_panel_area), so a point off the panel is off its records.
+    /// Elsewhere the chrome's mapping applies.
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -7064,6 +7111,8 @@ class Runtime final : public menu::Host,
     oa::Image match_chrome_{};
     std::optional<renderer::ScreenResources> match_hud_;
     std::string match_hud_panel_; // GUI file of match_hud_, as its loader named it
+    // match_hud_ is a panel placed beside the HUD strip (place_match_panel_beside_hud).
+    bool match_hud_beside_hud_ = false;
     std::vector<MatchGadgetState> match_hud_states_; // one per match_hud_ gadget
     std::optional<oa::formats::fnt::Font> match_small_font_;
     // The fonts start-up loads for the whole run, COMIX and smlfont, kept here

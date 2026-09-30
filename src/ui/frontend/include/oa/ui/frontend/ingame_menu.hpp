@@ -130,12 +130,16 @@ IngameAction ingame_on_exit_menu_click(Panel& panel, IngameContext& context) noe
 /// default, which also takes the focus as it opens.
 inline constexpr std::string_view kExitConfirmDefault = "CHOICE2";
 
+/// The exit confirmation's title when the player leaves the game. 3.1c's
+/// wording names Windows as the place the player exits to; the engine runs
+/// on several systems, so it says "the system" instead.
+inline constexpr std::string_view kLeaveGameTitle = "Surrender this battle and exit to the system?";
+
 /// Sets up YESORNO as the exit confirmation, titled from the exit kind.
 ///
 /// Main menu asks "Surrender this battle and return to main menu?" (the
 /// return label instead of "main menu" when it fits); leaving asks
-/// "Surrender this battle and exit to Windows?", or "Exit the Battle" for a
-/// spectator. Enter and Escape both answer kExitConfirmDefault.
+/// kLeaveGameTitle, or "Exit the Battle" for a spectator. Enter and Escape both answer kExitConfirmDefault.
 ///
 /// @param[in,out] panel The loaded YESORNO panel.
 /// @param context Exit kind, spectator and return label.

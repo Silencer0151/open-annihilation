@@ -124,7 +124,7 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     if (!load_panel(confirm, "yesorno.gui"))
         return;
     ingame_enter_exit_confirm(confirm, context);
-    OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and exit to Windows?");
+    OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and exit to the system?");
     OA_CHECK(text_of(confirm, "CHOICE1") == "Yes");
     select(confirm, "CHOICE1");
     OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::leave_game);

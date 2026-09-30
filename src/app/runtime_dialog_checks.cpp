@@ -42,6 +42,63 @@ constexpr int32_t kCursorReach = 64;
 // Readout steps that close any store gap: an eighth of it each step, then
 // one unit at a time.
 constexpr int kReadoutSettleSteps = 256;
+// The face of a panel whose GUI file names no picture of its own: the common
+// GUI art's BackTile, three rows (top, middle, bottom) of three frames (left,
+// middle, right).
+constexpr std::string_view kBackTile = "BackTile";
+constexpr std::size_t kBackTileFrames = 9;
+constexpr std::size_t kBackTileRowFrames = 3;
+constexpr std::size_t kBackTileMiddle = 1;
+constexpr std::size_t kBackTileLast = 2;
+constexpr std::string_view kExitMenuLayout = "guis/EXITMENU.GUI";
+constexpr std::string_view kConfirmLayout = "guis/YESORNO.GUI";
+constexpr std::string_view kRestartLayout = "guis/RESTART.GUI";
+
+/// The BackTile frame and the pixel of it a panel's face shows.
+struct FacePixel {
+    std::size_t frame = 0; ///< row * kBackTileRowFrames + column
+    int32_t x = 0;
+    int32_t y = 0;
+};
+
+/// Returns the tile along one axis of a face at least one tile long, and the
+/// offset into it.
+///
+/// The first tile starts at the near edge and the others follow on from it,
+/// except that with `last_flush` the last one ends flush with the far edge,
+/// over the tiles before it.
+///
+/// @param at pixel along the axis, from the near edge
+/// @param length face length along the axis, in pixels
+/// @param tile tile length, in pixels
+/// @param last_flush true when the last tile ends flush with the far edge
+/// @return the tile (0 first, kBackTileMiddle, kBackTileLast) and the offset into it
+std::pair<std::size_t, int32_t>
+face_tile(int32_t at, int32_t length, int32_t tile, bool last_flush) {
+    if (last_flush && at >= length - tile)
+        return {kBackTileLast, at - (length - tile)};
+    if (at < tile)
+        return {0, at};
+    return {kBackTileMiddle, at % tile};
+}
+
+/// Returns the BackTile pixel a face shows at a point.
+///
+/// The right column ends flush with the right edge, and the bottom row with
+/// the bottom edge unless the face is a whole number of tiles high, when its
+/// last row is a middle one.
+///
+/// @param x face column
+/// @param y face row
+/// @param width face width, at least one tile
+/// @param height face height, at least one tile
+/// @param tile side of the square BackTile frames, in pixels
+/// @return the frame and its pixel
+FacePixel back_tile_pixel(int32_t x, int32_t y, int32_t width, int32_t height, int32_t tile) {
+    const auto [column, tile_x] = face_tile(x, width, tile, true);
+    const auto [row, tile_y] = face_tile(y, height, tile, height % tile != 0);
+    return {row * kBackTileRowFrames + column, tile_x, tile_y};
+}
 
 bool inside(const Rect& rect, int32_t x, int32_t y) {
     return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
@@ -490,6 +547,7 @@ void Runtime::check_match_dialogs() {
     std::cout << "match dialog check: HELP.GUI at " << panel.x << ',' << panel.y << " on the "
               << match_layout_.width << 'x' << match_layout_.height << " match canvas\n";
     check_in_game_briefing(report_directory);
+    check_surrender_prompt(report_directory);
 
     // Over a new skirmish: the window's close request, a held Escape, the
     // OPTIONS lightbar and a unit's speech with its order's caption.
@@ -535,7 +593,7 @@ void Runtime::check_match_dialogs() {
     constexpr std::string_view confirm = "guis/YESORNO.GUI";
     const auto confirming = [&] {
         return match_paused_ && match_hud_ && match_hud_panel_ == confirm &&
-               hud_label("TITLE") == "Surrender this battle and exit to Windows?";
+               hud_label("TITLE") == "Surrender this battle and exit to the system?";
     };
     // A held Escape's repeats open no menu.
     require(send(escape(true)) && !match_paused_, "a held Escape opened the pause menu");
@@ -1217,6 +1275,283 @@ void Runtime::check_in_game_briefing(const fs::path& report_directory) {
         );
         std::cout << what << " at " << panel.x << ',' << panel.y << " on the " << size
                   << " window\n";
+    }
+    leave_match();
+    if (!SDL_SetWindowSize(sdl_.window, kDefaultWindowWidth, kDefaultWindowHeight) ||
+        !SDL_SyncWindow(sdl_.window))
+        throw std::runtime_error(std::string("SDL_SetWindowSize: ") + SDL_GetError());
+}
+
+void Runtime::check_surrender_prompt(const fs::path& report_directory) {
+    const auto require = [](bool ok, const std::string& failure) {
+        if (!ok)
+            throw std::runtime_error("surrender prompt check: " + failure);
+    };
+    oa::formats::gaf::Archive common;
+    append_gaf_file(common, "anims/commongui.gaf");
+    const auto* tile = gaf_sequence(common, kBackTile);
+    require(
+        tile != nullptr && tile->frames.size() >= kBackTileFrames,
+        "the common GUI art has no BackTile"
+    );
+    std::vector<oa::formats::gaf::RenderedFrame> tiles;
+    for (std::size_t index = 0; index < kBackTileFrames; ++index) {
+        auto rendered = oa::formats::gaf::render_normal(tile->frames[index]);
+        require(rendered.ok(), "a BackTile frame does not render");
+        tiles.push_back(std::move(*rendered.frame));
+        require(
+            tiles.back().width == tiles.front().width &&
+                tiles.back().height == tiles.front().height &&
+                tiles.back().width == tiles.back().height,
+            "the BackTile frames are not square tiles of one size"
+        );
+    }
+    const auto tile_size = static_cast<int32_t>(tiles.front().width);
+    const auto point_at = [this](float x, float y) {
+        update_pointer(x, y);
+        return hovered_ ? std::string_view(match_hud_->layout.gadgets[*hovered_].common.name)
+                        : std::string_view();
+    };
+    const auto click_at = [this](float x, float y) {
+        float window_x = 0;
+        float window_y = 0;
+        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y))
+            throw std::runtime_error(
+                std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError()
+            );
+        bool running = true;
+        for (const auto type : {SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {
+            SDL_Event event{};
+            event.button.type = type;
+            event.button.windowID = SDL_GetWindowID(sdl_.window);
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.clicks = 1;
+            event.button.x = window_x;
+            event.button.y = window_y;
+            dispatch_event(event, running);
+        }
+    };
+    const auto hud_label = [this](std::string_view name) {
+        for (const auto& gadget : match_hud_->layout.gadgets)
+            if (gadget.common.name == name)
+                if (const auto* label =
+                        std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
+                    return label->text;
+        return std::string();
+    };
+    for (const auto& [width, height] :
+         {std::pair{kCanvasWidth, kCanvasHeight},
+          std::pair{kDefaultWindowWidth, kDefaultWindowHeight}}) {
+        const auto size = std::to_string(width) + 'x' + std::to_string(height);
+        if (match_)
+            leave_match();
+        if (!SDL_SetWindowSize(sdl_.window, width, height) || !SDL_SyncWindow(sdl_.window))
+            throw std::runtime_error(std::string("SDL_SetWindowSize: ") + SDL_GetError());
+        load(Screen::main_menu);
+        start_benchmark_skirmish();
+        require(
+            match_layout_.width == width && match_layout_.height == height,
+            "could not size the match canvas to " + size
+        );
+        show_match_pause_menu();
+        // The pointer rests in the window's corner, clear of the panels.
+        update_pointer(static_cast<float>(width - 1), static_cast<float>(height - 1));
+        if (const auto viewer = match_view_player(); viewer < OA_PLAYER_COUNT) {
+            auto& game = match_->state().game;
+            for (int step = 0; step < kReadoutSettleSteps; ++step)
+                oa::ui::hud::update_resource_readout(
+                    game.resource_readout, game.players[viewer], game.tick
+                );
+        }
+        const auto composed = [this] {
+            render();
+            renderer::Surface frame;
+            compose_match_layers(frame);
+            return frame;
+        };
+        // The paused battlefield with nothing over it but the paused title.
+        auto paused = composed();
+        const Rect battlefield{
+            match_layout_.left,
+            match_layout_.top,
+            match_layout_.battlefield_width(),
+            match_layout_.battlefield_height()
+        };
+        const auto scaled = [this](int32_t value) {
+            return static_cast<int32_t>(
+                std::lround(static_cast<double>(value) * match_layout_.scale)
+            );
+        };
+        // The canvas rectangle of the loaded panel, which must sit centred
+        // right of the 128-pixel strip of the 640x480 screen and show centred
+        // right of the drawn side column; nothing else over the battlefield
+        // may differ from the paused frame.
+        const auto placed = [&](renderer::Surface& frame, std::string_view layout) {
+            const auto name = std::string(layout) + " on the " + size + " window";
+            require(
+                screen_ == Screen::match && match_paused_ && match_hud_ &&
+                    match_hud_panel_ == layout,
+                name + " is not open"
+            );
+            const auto& root = match_hud_->layout.gadgets.front().common;
+            const auto source_x =
+                (kCanvasWidth - kBattlefieldLeft - root.width) / 2 + kBattlefieldLeft;
+            const auto source_y = (kCanvasHeight - root.height) / 2;
+            require(
+                root.x == source_x && root.y == source_y,
+                name + " is at " + std::to_string(root.x) + ',' + std::to_string(root.y) +
+                    ", not " + std::to_string(source_x) + ',' + std::to_string(source_y) +
+                    ", centred right of the HUD strip"
+            );
+            const Rect panel{
+                (width - match_layout_.left - scaled(root.width)) / 2 + match_layout_.left,
+                (height - scaled(root.height)) / 2,
+                scaled(root.width),
+                scaled(root.height)
+            };
+            std::size_t outside = 0;
+            for (int32_t y = battlefield.y; y < battlefield.y + battlefield.height; ++y)
+                for (int32_t x = battlefield.x; x < battlefield.x + battlefield.width; ++x)
+                    if (!inside(panel, x, y) && !same_pixel(paused, frame, x, y))
+                        ++outside;
+            require(
+                outside == 0,
+                name + " changed " + std::to_string(outside) +
+                    " battlefield pixels outside the panel"
+            );
+            const auto area =
+                static_cast<std::size_t>(panel.width) * static_cast<std::size_t>(panel.height);
+            require(
+                differing_pixels(paused, frame, panel) > area / 2,
+                name + " does not show where it is placed"
+            );
+            return panel;
+        };
+        // The loaded panel's canvas rectangle, whose every pixel outside the
+        // records shows the BackTile face in the match palette.
+        const auto faced = [&](renderer::Surface& frame, std::string_view layout) {
+            const auto panel = placed(frame, layout);
+            const auto name = std::string(layout) + " on the " + size + " window";
+            const auto& gadgets = match_hud_->layout.gadgets;
+            const auto& root = gadgets.front().common;
+            require(
+                root.width >= tile_size && root.height >= tile_size,
+                name + " is smaller than a BackTile frame"
+            );
+            std::size_t compared = 0;
+            std::size_t differing = 0;
+            for (int32_t y = panel.y; y < panel.y + panel.height; ++y)
+                for (int32_t x = panel.x; x < panel.x + panel.width; ++x) {
+                    // The source pixel the panel's draw shows here.
+                    const auto face_x = (x - panel.x) * root.width / panel.width;
+                    const auto face_y = (y - panel.y) * root.height / panel.height;
+                    const auto on_record = [&](const auto& gadget) {
+                        const auto& record = gadget.common;
+                        return &gadget != &gadgets.front() && record.active != 0 &&
+                               root.x + face_x >= record.x &&
+                               root.x + face_x < record.x + record.width &&
+                               root.y + face_y >= record.y &&
+                               root.y + face_y < record.y + record.height;
+                    };
+                    if (std::any_of(gadgets.begin(), gadgets.end(), on_record))
+                        continue;
+                    const auto face =
+                        back_tile_pixel(face_x, face_y, root.width, root.height, tile_size);
+                    const auto& art = tiles[face.frame];
+                    const auto at = static_cast<std::size_t>(face.y) * art.width +
+                                    static_cast<std::size_t>(face.x);
+                    if (at >= art.coverage.size() || art.coverage[at] == 0)
+                        continue;
+                    const auto* colour =
+                        &match_palette_[static_cast<std::size_t>(art.pixels[at]) * 4U];
+                    ++compared;
+                    if (!std::equal(colour, colour + 3, pixel(frame, x, y)))
+                        ++differing;
+                }
+            require(
+                compared > static_cast<std::size_t>(panel.width) * panel.height / 2,
+                name + " has too few face pixels to compare"
+            );
+            require(
+                differing == 0,
+                name + " differs from its BackTile face at " + std::to_string(differing) + " of " +
+                    std::to_string(compared) + " pixels"
+            );
+            return panel;
+        };
+        const auto control = [this](std::string_view name) {
+            for (const auto& gadget : match_hud_->layout.gadgets)
+                if (gadget.common.name == name)
+                    return gadget.common;
+            throw std::runtime_error("surrender prompt check: no control " + std::string(name));
+        };
+
+        activate_pause_gadget("EXIT");
+        auto exit_menu = composed();
+        write_ppm(report_directory / ("native-match-exit-menu-" + size + ".ppm"), exit_menu);
+        faced(exit_menu, kExitMenuLayout);
+
+        activate_pause_gadget("EXITGAME");
+        auto confirm = composed();
+        write_ppm(report_directory / ("native-match-surrender-" + size + ".ppm"), confirm);
+        const auto panel = faced(confirm, kConfirmLayout);
+        require(
+            hud_label("TITLE") == "Surrender this battle and exit to the system?",
+            "EXITGAME's confirmation reads \"" + hud_label("TITLE") + '"'
+        );
+        // The pointer finds the choices where they show, and nothing beside them.
+        const auto root = match_hud_->layout.gadgets.front().common;
+        const auto shown_at = [&](const oa::ui::gui_layout::CommonFields& record) {
+            return std::pair{
+                static_cast<float>(
+                    panel.x + (record.x - root.x) * panel.width / root.width +
+                    record.width * panel.width / root.width / 2
+                ),
+                static_cast<float>(
+                    panel.y + (record.y - root.y) * panel.height / root.height +
+                    record.height * panel.height / root.height / 2
+                )
+            };
+        };
+        const auto [yes_x, yes_y] = shown_at(control("CHOICE1"));
+        const auto [no_x, no_y] = shown_at(control("CHOICE2"));
+        require(point_at(yes_x, yes_y) == "CHOICE1", "the pointer over Yes is not over it");
+        require(
+            point_at(static_cast<float>(panel.x - 1), yes_y).empty(),
+            "the pointer left of the confirmation is over one of its controls"
+        );
+        require(point_at(no_x, no_y) == "CHOICE2", "the pointer over No is not over it");
+        click_at(no_x, no_y);
+        require(
+            !exit_requested_ && match_paused_ && match_hud_panel_ == kInGameMenuLayout,
+            "a click on No where it shows did not return to the in-game menu"
+        );
+
+        activate_pause_gadget("EXIT");
+        activate_pause_gadget("MAINMENU");
+        auto main_menu = composed();
+        faced(main_menu, kConfirmLayout);
+        require(
+            hud_label("TITLE") == "Surrender this battle and return to main menu?",
+            "MAINMENU's confirmation reads \"" + hud_label("TITLE") + '"'
+        );
+        activate_pause_gadget("CHOICE2");
+
+        activate_pause_gadget("EXIT");
+        activate_pause_gadget("RESTART");
+        auto restart = composed();
+        placed(restart, kRestartLayout);
+        activate_pause_gadget("CANCEL");
+
+        resume_match_pause();
+        request_match_close();
+        auto closing = composed();
+        faced(closing, kConfirmLayout);
+        activate_pause_gadget("CHOICE2");
+        require(!match_paused_, "No to the close request did not return to the match");
+        std::cout << "surrender prompt check: EXITMENU.GUI and YESORNO.GUI at " << panel.x << ','
+                  << panel.y << " over their BackTile faces on the " << size << " window\n";
     }
     leave_match();
     if (!SDL_SetWindowSize(sdl_.window, kDefaultWindowWidth, kDefaultWindowHeight) ||

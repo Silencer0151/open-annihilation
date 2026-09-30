@@ -36,6 +36,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace oa::app {
 
@@ -133,6 +134,74 @@ void place_beside_hud(oa::ui::gui_layout::Layout& layout) {
         gadget.common.x = static_cast<int16_t>(gadget.common.x + dx);
         gadget.common.y = static_cast<int16_t>(gadget.common.y + dy);
     }
+}
+
+// The face 3.1c gives a panel whose GUI file names no picture of its own: the
+// common GUI art's BackTile, a nine-frame skin.
+constexpr std::string_view kBackTile = "BackTile";
+
+/// Tiles the BackTile frames over a panel root's rectangle of an RGB image.
+///
+/// The frames are laid out as `oa::ui::gui_layout::skin_tiles` places them
+/// over the root. Frame origins are ignored, and nothing is drawn outside the
+/// root.
+///
+/// @param[in,out] image RGB image the root lies on
+/// @param root the panel's root, in the image's pixels
+/// @param tile the BackTile sequence
+/// @param palette palette the frames' colours index, 4 bytes per colour
+void draw_back_tile(
+    oa::Image& image,
+    const oa::ui::gui_layout::CommonFields& root,
+    const oa::formats::gaf::Sequence& tile,
+    const oa::PaletteBytes& palette
+) {
+    namespace skin_frame = oa::ui::gui_layout::skin_frame;
+    if (tile.frames.size() < skin_frame::count || root.width <= 0 || root.height <= 0)
+        return;
+    std::vector<oa::formats::gaf::RenderedFrame> frames;
+    for (std::size_t index = 0; index < skin_frame::count; ++index) {
+        auto rendered = oa::formats::gaf::render_normal(tile.frames[index]);
+        if (!rendered.ok())
+            return;
+        frames.push_back(std::move(*rendered.frame));
+    }
+    const auto stamp = [&](const oa::formats::gaf::RenderedFrame& frame, int left, int top) {
+        for (int row = 0; row < static_cast<int>(frame.height); ++row)
+            for (int column = 0; column < static_cast<int>(frame.width); ++column) {
+                const auto at =
+                    static_cast<std::size_t>(row) * frame.width + static_cast<std::size_t>(column);
+                const int x = left + column;
+                const int y = top + row;
+                if (at >= frame.coverage.size() || frame.coverage[at] == 0 || x < 0 || y < 0 ||
+                    x >= root.width || y >= root.height)
+                    continue;
+                const int image_x = root.x + x;
+                const int image_y = root.y + y;
+                if (image_x < 0 || image_y < 0 || image_x >= static_cast<int>(image.width) ||
+                    image_y >= static_cast<int>(image.height))
+                    continue;
+                const auto colour = static_cast<std::size_t>(frame.pixels[at]) * 4U;
+                const auto to = (static_cast<std::size_t>(image_y) * image.width +
+                                 static_cast<std::size_t>(image_x)) *
+                                3U;
+                if (colour + 2 >= palette.size() || to + 2 >= image.rgb.size())
+                    continue;
+                std::copy_n(
+                    palette.begin() + static_cast<std::ptrdiff_t>(colour),
+                    3,
+                    image.rgb.begin() + static_cast<std::ptrdiff_t>(to)
+                );
+            }
+    };
+    const auto tiles = oa::ui::gui_layout::skin_tiles(
+        root.width,
+        root.height,
+        static_cast<int32_t>(frames.front().width),
+        static_cast<int32_t>(frames.front().height)
+    );
+    for (const auto& placed : tiles)
+        stamp(frames[placed.frame], placed.x, placed.y);
 }
 
 // Copies the top-left of `art` the size of the panel root onto the panel.
@@ -1066,6 +1135,7 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
         return false;
     }
     match_hud_panel_ = layout;
+    match_hud_beside_hud_ = false;
     match_hud_states_.clear();
     for (const auto& gadget : match_hud_->layout.gadgets) {
         const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
@@ -1614,8 +1684,23 @@ void Runtime::draw_battlefield_panel() {
             area.height
         );
     };
-    if (team_panel_open() || match_menu_session().ingame_panel == IngamePanel::restart ||
-        match_menu_session().ingame_panel == IngamePanel::game_settings) {
+    if (const auto area = beside_hud_panel_area()) {
+        const auto at = canvas_paint(area->x, area->y);
+        scale_blit(
+            paint_target(),
+            match_hud_cpu_,
+            at.x,
+            at.y,
+            area->width,
+            area->height,
+            root.x,
+            root.y,
+            root.width,
+            root.height
+        );
+        return;
+    }
+    if (team_panel_open()) {
         show(root);
         return;
     }
@@ -1646,6 +1731,54 @@ void Runtime::draw_battlefield_panel() {
         if (area.active != 0 && area.width > 0 && area.height > 0)
             show(area);
     }
+}
+
+void Runtime::place_match_panel_beside_hud(bool back_tile_face) {
+    if (!match_hud_ || match_hud_->layout.gadgets.empty())
+        return;
+    place_beside_hud(match_hud_->layout);
+    match_hud_beside_hud_ = true;
+    if (!back_tile_face)
+        return;
+    const auto* tile = gaf_sequence(match_hud_->sprites, kBackTile);
+    if (tile == nullptr) {
+        std::cerr << "match panel '" << match_hud_panel_ << "' has no BackTile face\n";
+        return;
+    }
+    const auto& palette =
+        match_hud_->background.palette ? *match_hud_->background.palette : match_hud_->gui_palette;
+    draw_back_tile(
+        match_hud_->background, match_hud_->layout.gadgets.front().common, *tile, palette
+    );
+}
+
+std::optional<oa::ui::display_layout::Rect> Runtime::beside_hud_panel_area() const {
+    if (!match_hud_beside_hud_ || !match_paused_ || match_finished_ || !match_hud_ ||
+        match_hud_->layout.gadgets.empty() || match_layout_.scale <= 0.0)
+        return std::nullopt;
+    const auto& root = match_hud_->layout.gadgets.front().common;
+    if (root.width <= 0 || root.height <= 0)
+        return std::nullopt;
+    const auto scaled = [this](int32_t value) {
+        return std::max(
+            1, static_cast<int32_t>(std::lround(static_cast<double>(value) * match_layout_.scale))
+        );
+    };
+    const auto width = scaled(root.width);
+    const auto height = scaled(root.height);
+    int16_t x = 0;
+    int16_t y = 0;
+    oa::ui::gui_input::place_root(
+        x,
+        y,
+        width,
+        height,
+        oa::ui::gui_input::panel_flag::beside_hud | oa::ui::gui_input::panel_flag::first_draw,
+        match_layout_.width,
+        match_layout_.height,
+        match_layout_.left
+    );
+    return oa::ui::display_layout::Rect{x, y, width, height};
 }
 
 void Runtime::activate_pause_gadget(std::string_view name) {
@@ -1892,10 +2025,13 @@ void Runtime::activate_pause_gadget(std::string_view name) {
     );
     context.in_game = true;
     context.return_label = return_label_;
+    // Opens EXITMENU or YESORNO: 3.1c centres each right of the HUD strip
+    // over the BackTile face, as neither names a picture of its own.
     const auto show = [this, &session](const char* layout, IngamePanel which) {
         if (!load_match_hud_layout(layout))
             return false;
         session.ingame_panel = which;
+        place_match_panel_beside_hud(true);
         panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
         return true;
     };
@@ -2078,6 +2214,7 @@ void Runtime::request_match_close() {
     session.ingame_panel = IngamePanel::exit_confirm;
     session.close_confirm = true;
     session.close_confirm_from_menu = from_menu;
+    place_match_panel_beside_hud(true);
     auto& context = session.ingame;
     context.host = {};
     context.session = ingame_session(
@@ -2097,7 +2234,7 @@ void Runtime::open_restart_dialog() {
     if (!load_match_hud_layout(kRestartLayout) || match_hud_->layout.gadgets.empty())
         return;
     session.ingame_panel = IngamePanel::restart;
-    place_beside_hud(match_hud_->layout);
+    place_match_panel_beside_hud(false);
     try {
         draw_panel_backdrop(
             match_hud_->background,
@@ -2123,7 +2260,7 @@ void Runtime::open_game_settings_sheet() {
         return;
     session.ingame_panel = IngamePanel::game_settings;
     auto& layout = match_hud_->layout;
-    place_beside_hud(layout);
+    place_match_panel_beside_hud(false);
     try {
         draw_panel_backdrop(
             match_hud_->background,

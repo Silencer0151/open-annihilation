@@ -279,6 +279,34 @@ void shipped_score_eof_is_an_implicit_top_level_close() {
     );
 }
 
+void skin_tiles_end_flush_with_the_far_edges() {
+    using Tile = gui::SkinTile;
+    // 400x100 with 64-pixel tiles: seven columns, the last moved left to 336,
+    // and a bottom row moved up to 36.
+    const auto panel = gui::skin_tiles(400, 100, 64, 64);
+    require(panel.size() == 14, "a 400x100 skin did not take seven columns of two rows");
+    require(panel[0] == Tile{0, 0, 0}, "the top-left tile was not frame 0 at the corner");
+    require(panel[1] == Tile{1, 64, 0}, "the second top tile was not a middle frame");
+    require(panel[6] == Tile{2, 336, 0}, "the top-right tile did not end flush with the edge");
+    require(panel[7] == Tile{6, 0, 36}, "the bottom row did not move up to end flush");
+    require(panel[13] == Tile{8, 336, 36}, "the bottom-right tile was not frame 8 flush");
+
+    // A whole number of tiles high: the last row stays a middle one.
+    const auto whole = gui::skin_tiles(64, 128, 64, 64);
+    require(
+        whole == std::vector<Tile>{{2, 0, 0}, {5, 0, 64}},
+        "a skin two tiles high did not keep middle frames on its last row"
+    );
+
+    // Narrower and shorter than a tile: one right-column tile moved up and left.
+    require(
+        gui::skin_tiles(40, 20, 64, 64) == std::vector<Tile>{{2, -24, -44}},
+        "a skin smaller than a tile was not one moved top-right tile"
+    );
+    require(gui::skin_tiles(40, 0, 64, 64).empty(), "a skin with no height took tiles");
+    require(gui::skin_tiles(40, 20, 0, 64).empty(), "a zero-width frame took tiles");
+}
+
 } // namespace
 
 int main() {
@@ -288,6 +316,7 @@ int main() {
         malformed_and_bounded_inputs();
         positioned_rectangle_adds_root_origin_only_for_nonzero_type();
         shipped_score_eof_is_an_implicit_top_level_close();
+        skin_tiles_end_flush_with_the_far_edges();
     } catch (const std::exception& error) {
         std::cerr << "gui-layout test failure: " << error.what() << '\n';
         return 1;

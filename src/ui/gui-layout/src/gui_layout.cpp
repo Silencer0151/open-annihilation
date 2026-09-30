@@ -585,4 +585,34 @@ std::optional<Rect> gadget_rectangle(std::span<const Gadget> gadgets, std::size_
     };
 }
 
+std::vector<SkinTile>
+skin_tiles(int32_t width, int32_t height, int32_t tile_width, int32_t tile_height) {
+    std::vector<SkinTile> tiles;
+    if (height < 1 || tile_width < 1 || tile_height < 1)
+        return tiles;
+    int32_t y = 0;
+    do {
+        std::size_t row = skin_frame::top_row;
+        if (y != 0)
+            row = height - tile_height + 1 <= y ? skin_frame::bottom_row : skin_frame::middle_row;
+        if (height < y + tile_height)
+            y = height - tile_height;
+        int32_t x = 0;
+        while (x < width) {
+            std::size_t column = skin_frame::left_column;
+            if (x + tile_width < width) {
+                if (x != 0)
+                    column = skin_frame::middle_column;
+            } else {
+                x = width - tile_width;
+                column = skin_frame::right_column;
+            }
+            tiles.push_back({row + column, x, y});
+            x += tile_width;
+        }
+        y += tile_height;
+    } while (y < height);
+    return tiles;
+}
+
 } // namespace oa::ui::gui_layout

@@ -23,6 +23,12 @@ rendering, event dispatch and frontend flow live elsewhere.
   the panel-relative rectangle, a type-zero record is not moved to `(0,0)`. A
   nonzero type at index 0 adds its own origin twice. An index outside the
   stored records is rejected rather than read past the span.
+- `skin_tiles` places a nine-frame skin (three rows of left, middle and right
+  frames, such as the common GUI art's BackTile) over a rectangle: tiles run
+  from the top-left, the column reaching the right edge moves left to end
+  flush with it, and the row that would run past the bottom moves up to end
+  flush with it. A rectangle a whole number of tiles high has no bottom row.
+  It gives frame numbers and positions only; the drawing lives elsewhere.
 
 The loader reads `help`, then immediately clears the complete destination
 buffer before translation. The public model retains the bounded source value as

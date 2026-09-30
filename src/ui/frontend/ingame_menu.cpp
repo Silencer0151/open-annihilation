@@ -221,12 +221,8 @@ void ingame_enter_exit_confirm(Panel& panel, const IngameContext& context) noexc
                 title, sizeof title, "%s", "Surrender this battle and return to main menu?"
             );
     } else if (context.exit_kind == ExitKind::leave_game) {
-        std::snprintf(
-            title,
-            sizeof title,
-            "%s",
-            context.spectating ? "Exit the Battle" : "Surrender this battle and exit to Windows?"
-        );
+        const std::string_view leave = context.spectating ? "Exit the Battle" : kLeaveGameTitle;
+        std::snprintf(title, sizeof title, "%.*s", static_cast<int>(leave.size()), leave.data());
     } else {
         has_title = false;
     }

@@ -138,6 +138,20 @@ oa::ui::display_layout::Point Runtime::hud_source_point(float x, float y) const 
             point.y < rows.y + rows.height)
             return point;
     }
+    if (const auto area = beside_hud_panel_area()) {
+        // Each canvas pixel maps to the source pixel the panel's draw shows
+        // there, rounding down, so a point left of or above it stays off it.
+        const auto& root = match_hud_->layout.gadgets.front().common;
+        const auto through = [](int canvas, int start, int length, int source, int source_length) {
+            return source + static_cast<int>(std::floor(
+                                static_cast<double>(canvas - start) * source_length / length
+                            ));
+        };
+        return {
+            through(canvas_x, area->x, area->width, root.x, root.width),
+            through(canvas_y, area->y, area->height, root.y, root.height)
+        };
+    }
     return oa::ui::display_layout::canvas_to_source(match_layout_, canvas_x, canvas_y);
 }
 

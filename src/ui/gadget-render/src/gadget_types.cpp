@@ -6,6 +6,7 @@
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/present/model/mesh_raster.hpp"
+#include "oa/ui/gui_layout.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -38,13 +39,6 @@ namespace {
 // A skin drawn over a record without its own grows this much past each edge.
 constexpr int32_t kFallbackSkinGrowth = 3;
 constexpr const char* kFallbackSkin = "Listbox";
-// Skin frames: one frame is drawn once; nine are tiled as three rows of
-// (left, middle, right) tiles starting at these frame indices.
-constexpr int32_t kSkinTopRow = 0;
-constexpr int32_t kSkinMiddleRow = 3;
-constexpr int32_t kSkinBottomRow = 6;
-constexpr int32_t kSkinMiddleColumn = 1;
-constexpr int32_t kSkinRightColumn = 2;
 
 // Attribute bits as these draws read them.
 constexpr uint32_t kCheckboxArt = 0x80;    // buttons: CHECKBOX art; a grayed frame is not shaded
@@ -337,31 +331,13 @@ void draw_skin(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index, cons
     const int32_t origin_y = index == 0 ? 0 : rect.y1;
     const int32_t height = rect.y2 - rect.y1 + 1;
     const int32_t width = rect.x2 - rect.x1 + 1;
-    if (height < 1)
-        return;
-    int32_t y = 0;
-    do {
-        int32_t row = kSkinTopRow;
-        if (y != 0)
-            row = height - tile_height + 1 <= y ? kSkinBottomRow : kSkinMiddleRow;
-        if (height < y + tile_height)
-            y = height - tile_height;
-        int32_t x = 0;
-        while (x < width) {
-            int32_t column = 0;
-            if (x + tile_width < width) {
-                column = x != 0 ? kSkinMiddleColumn : 0;
-            } else {
-                x = width - tile_width;
-                column = kSkinRightColumn;
-            }
-            present::draw_sprite(
-                face, art_frame(renderer, skin, row + column), origin_x + x, origin_y + y
-            );
-            x += tile_width;
-        }
-        y += tile_height;
-    } while (y < height);
+    for (const auto& tile : gui_layout::skin_tiles(width, height, tile_width, tile_height))
+        present::draw_sprite(
+            face,
+            art_frame(renderer, skin, static_cast<int32_t>(tile.frame)),
+            origin_x + tile.x,
+            origin_y + tile.y
+        );
 }
 
 void draw_button(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {

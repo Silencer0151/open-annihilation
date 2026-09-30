@@ -214,6 +214,52 @@ struct Rect {
 [[nodiscard]] std::optional<Rect>
 gadget_rectangle(std::span<const Gadget> gadgets, std::size_t index) noexcept;
 
+namespace skin_frame {
+// A tiled skin holds nine frames in three rows (top, middle, bottom) of three
+// (left, middle, right); a frame's number is its row plus its column.
+inline constexpr std::size_t count = 9;
+inline constexpr std::size_t top_row = 0;
+inline constexpr std::size_t middle_row = 3;
+inline constexpr std::size_t bottom_row = 6;
+inline constexpr std::size_t left_column = 0;
+inline constexpr std::size_t middle_column = 1;
+inline constexpr std::size_t right_column = 2;
+} // namespace skin_frame
+
+// One tile of a skin laid over a rectangle: the frame it takes and where the
+// frame's top-left corner lands, relative to the rectangle's top-left.
+struct SkinTile {
+    std::size_t frame = 0;
+    int32_t x = 0;
+    int32_t y = 0;
+
+    bool operator==(const SkinTile&) const = default;
+};
+
+/// Lays a nine-frame skin's tiles over a rectangle, in drawing order.
+///
+/// Tiles run across from the left edge and down from the top, row by row. The
+/// first column takes the left frames and the first row the top ones. The
+/// column that reaches the right edge is moved left to end flush with it and
+/// takes the right frames; the row that would run past the bottom edge is
+/// moved up to end flush with it and takes the bottom frames. The others take
+/// the middle frames.
+///
+/// @param width Rectangle width in pixels.
+/// @param height Rectangle height in pixels.
+/// @param tile_width Width of every frame.
+/// @param tile_height Height of every frame.
+/// @return The tiles, or none for a rectangle less than one pixel high or a
+///         frame size under one pixel.
+/// @quirk A rectangle a whole number of tiles high has no bottom row: its last
+///        row ends flush with the bottom edge unmoved and keeps the middle
+///        frames.
+/// @quirk A rectangle narrower than a tile has one column, moved left and
+///        taking the right frames; one shorter than a tile has one row, moved
+///        up and taking the top frames.
+[[nodiscard]] std::vector<SkinTile>
+skin_tiles(int32_t width, int32_t height, int32_t tile_width, int32_t tile_height);
+
 enum class ErrorCode {
     none,
     input_limit,
