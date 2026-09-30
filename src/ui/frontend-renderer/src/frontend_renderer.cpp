@@ -803,12 +803,6 @@ std::string_view staged_caption(std::string_view text, std::size_t stage) noexce
 }
 
 void bind_screen_buttons(ScreenResources& resources, std::size_t first) {
-    // The first panel draw commits the selected GAF frame dimensions back into
-    // each type-1 gadget without the checkbox or text_list attribute (NEWCAMP
-    // Side/Easy keep authored 159x49 / 107x41). Preserve that mutation so
-    // drawing and hit testing share the same rectangles.
-    constexpr uint32_t skip_default_button_gaf =
-        ui::gui_layout::attribute::checkbox | ui::gui_layout::attribute::text_list;
     for (auto index = first; index < resources.layout.gadgets.size(); ++index) {
         auto& gadget = resources.layout.gadgets[index];
         // The first panel draw clears a type-1 gadget's authored colorf and
@@ -817,12 +811,25 @@ void bind_screen_buttons(ScreenResources& resources, std::size_t first) {
         // unless a color table is installed at run time.
         if (gadget.common.type == ui::gui_layout::GadgetType::label) {
             gadget.common.foreground_color = 0;
-            continue;
+        } else if (gadget.common.type == ui::gui_layout::GadgetType::button) {
+            gadget.common.foreground_color = 0;
+            gadget.common.background_color = 0;
         }
+    }
+    fit_buttons_to_frames(resources, first);
+}
+
+void fit_buttons_to_frames(ScreenResources& resources, std::size_t first) {
+    // The first panel draw commits the selected GAF frame dimensions back into
+    // each type-1 gadget without the checkbox or text_list attribute (NEWCAMP
+    // Side/Easy keep authored 159x49 / 107x41). Preserve that mutation so
+    // drawing and hit testing share the same rectangles.
+    constexpr uint32_t skip_default_button_gaf =
+        ui::gui_layout::attribute::checkbox | ui::gui_layout::attribute::text_list;
+    for (auto index = first; index < resources.layout.gadgets.size(); ++index) {
+        auto& gadget = resources.layout.gadgets[index];
         if (gadget.common.type != ui::gui_layout::GadgetType::button)
             continue;
-        gadget.common.foreground_color = 0;
-        gadget.common.background_color = 0;
         if ((static_cast<uint32_t>(gadget.common.attributes) & skip_default_button_gaf) != 0)
             continue;
         const auto binding = resolve_button_sprite(resources, gadget);

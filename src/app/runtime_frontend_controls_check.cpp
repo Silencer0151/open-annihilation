@@ -631,11 +631,39 @@ void Runtime::check_frontend_controls() {
         click(tab);
         // The music panel brings its own GAF, so its transport buttons draw
         // MUSIC.GAF's frames rather than the shared fallback frame.
-        if (tab == "MUSIC")
+        if (tab == "MUSIC") {
             expect(
                 merged_art("CDPLAY") && merged_art("CDNEXT"),
                 "MUSIC did not merge MUSIC.GAF's transport art"
             );
+            // A transport button is hit where its frame is drawn: the record
+            // takes the frame's size, and the pointer on the frame's right
+            // edge, beyond the 16x16 the panel authors, is over the button.
+            const auto sequence = std::find_if(
+                resources_.sprites.sequences.begin(),
+                resources_.sprites.sequences.end(),
+                [](const oa::formats::gaf::Sequence& art) { return art.name == "CDPLAY"; }
+            );
+            const auto play = box_of("CDPLAY");
+            int32_t drawn_width = play.width;
+            if (sequence != resources_.sprites.sequences.end() && !sequence->frames.empty()) {
+                const auto& art = sequence->frames.front();
+                drawn_width = art.width;
+                expect(
+                    play.width == art.width && play.height == art.height,
+                    "CDPLAY is hit as " + std::to_string(play.width) + 'x' +
+                        std::to_string(play.height) + " but drawn " + std::to_string(art.width) +
+                        'x' + std::to_string(art.height)
+                );
+            }
+            send(SDL_EVENT_MOUSE_MOTION, play.x + drawn_width - 2, play.y + play.height / 2, 0);
+            expect(
+                hovered_ && resources_.layout.gadgets[*hovered_].common.name == "CDPLAY",
+                "the right edge of CDPLAY's frame does not hit CDPLAY"
+            );
+            std::cout << "frontend controls check: CDPLAY is hit at " << play.x << ',' << play.y
+                      << ' ' << play.width << 'x' << play.height << '\n';
+        }
         const auto pixels = pressed_pixels(tab);
         std::cout << "frontend controls check: tab " << tab << " pressed "
                   << (pressed(tab) ? "yes" : "no") << ", " << pixels << " pixels drawn pressed\n";

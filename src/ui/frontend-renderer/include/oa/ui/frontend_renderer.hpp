@@ -114,16 +114,28 @@ struct ScreenAssetNames {
 /// @throws std::runtime_error when a resource is missing or malformed.
 [[nodiscard]] ScreenResources load_screen(AssetStore& assets, const ScreenAssetNames& names);
 
-/// Binds a screen's buttons as the first draw of their panel does.
+/// Binds a screen's buttons and labels as the first draw of their panel does.
 ///
 /// Each button from `first` on loses its authored foreground and background
-/// colours, and one without the checkbox or text_list attribute takes the
-/// size of its GAF frame. load_screen() binds a loaded panel's buttons; a
-/// panel merged into it afterwards binds its own with this.
+/// colours and each label its foreground colour; then the buttons are fitted
+/// to their GAF frames (fit_buttons_to_frames()). load_screen() binds a loaded
+/// panel this way.
 ///
-/// @param[in,out] resources The screen's resources; its layout's buttons change.
+/// @param[in,out] resources The screen's resources; its layout's buttons and labels change.
 /// @param first First gadget bound.
 void bind_screen_buttons(ScreenResources& resources, std::size_t first);
+
+/// Gives a screen's buttons the size of their GAF frames, keeping their colours.
+///
+/// Each button from `first` on without the checkbox or text_list attribute
+/// takes the width and height of the frame its GAF sequence shows, so that it
+/// is hit where it is drawn. A sub-panel merged into a loaded one is fitted
+/// this way: its buttons keep the authored foreground colour they are drawn
+/// lit through.
+///
+/// @param[in,out] resources The screen's resources; its layout's buttons change.
+/// @param first First gadget fitted.
+void fit_buttons_to_frames(ScreenResources& resources, std::size_t first);
 
 // Which MAINMENU.GUI the main menu takes. An add-on archive may carry a
 // MAINMENU.GUI whose SINGLE/MULTI/INTRO/EXIT sit under the buttons of a

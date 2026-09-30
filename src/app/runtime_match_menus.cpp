@@ -1696,6 +1696,9 @@ void Runtime::activate_pause_gadget(std::string_view name) {
             append_gaf_file(
                 match_hud_->sprites, "anims/" + fs::path(file).stem().string() + ".GAF"
             );
+            // Its buttons take the size of the frames they draw, keeping their
+            // colours, so each is hit where it is drawn.
+            renderer::fit_buttons_to_frames(*match_hud_, first);
             // The sub-panel's picture is its image record, looked up in
             // PREFS.GAF (the merged panel's own) and then the shared GAF.
             oa::formats::gaf::Archive panel_art;
@@ -2805,6 +2808,7 @@ void Runtime::activate_options_gadget() {
                 );
             auto& gadgets = resources_.layout.gadgets;
             const auto& extra = parsed.layout->gadgets;
+            const auto merged_first = gadgets.size();
             if (!gadgets.empty() && !extra.empty()) {
                 const auto dx = extra.front().common.x - gadgets.front().common.x;
                 const auto dy = extra.front().common.y - gadgets.front().common.y;
@@ -2820,14 +2824,18 @@ void Runtime::activate_options_gadget() {
             // ship one (MUSIC.GAF), and a missing file is remembered and
             // skipped.
             append_gaf_file(resources_.sprites, "anims/" + fs::path(sub).stem().string() + ".GAF");
+            // Its buttons take the size of the frames they draw, so each is
+            // hit where it is drawn (MUSIC.GUI authors the transport buttons
+            // 16x16; MUSIC.GAF draws them 30x15).
+            renderer::fit_buttons_to_frames(resources_, merged_first);
         } catch (const std::exception& error) {
             status_ = "options panel unavailable: " + std::string(error.what());
             return;
         }
         // The sub-panel is merged and drawn. Its sliders bind as the first
-        // draw would; its buttons are not bound, so they keep the authored
-        // foreground colour the renderer draws the frame through. Only a
-        // loaded panel's first draw clears it.
+        // draw would; its buttons are fitted to their frames but keep the
+        // authored foreground colour the renderer draws the frame through.
+        // Only a loaded panel's first draw clears it.
         bind_frontend_scrolls("guis/startopt.gui", "anims/commongui.gaf");
         widget_gaf_frames_.clear();
         widget_text_stages_.clear();

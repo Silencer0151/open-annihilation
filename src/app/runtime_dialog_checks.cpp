@@ -763,6 +763,22 @@ void Runtime::check_match_dialogs() {
         ),
         "MUSIC did not merge MUSICRT.GAF's transport art"
     );
+    // Its transport buttons take the size of the frames they draw, so each is
+    // hit where it is drawn (MUSICRT.GUI authors them 16x16).
+    {
+        const auto* play = hud_gadget("CDPLAY");
+        const auto art = std::find_if(
+            match_hud_->sprites.sequences.begin(),
+            match_hud_->sprites.sequences.end(),
+            [](const oa::formats::gaf::Sequence& sequence) { return sequence.name == "CDPLAY"; }
+        );
+        require(
+            play != nullptr && art != match_hud_->sprites.sequences.end() && !art->frames.empty() &&
+                play->common.width == art->frames.front().width &&
+                play->common.height == art->frames.front().height,
+            "MUSIC's CDPLAY is not hit where its frame is drawn"
+        );
+    }
     // The buttons' quick keys press them: 's' is SOUND, 'c' Cancel. Leaving
     // the MUSIC tab leaves the music's panel.
     require(send(key(SDLK_S, SDL_SCANCODE_S)), "'s' ended the run");
