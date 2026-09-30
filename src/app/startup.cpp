@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -62,6 +63,106 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
     if (text == "arm-first-mission")
         return Showcase::arm_first_mission;
     throw std::runtime_error("--showcase knows one showcase: arm-first-mission");
+}
+
+/// Returns the chunks a --chunks value names: A-B, both included, or A alone.
+///
+/// Throws std::runtime_error for any other value.
+///
+/// @param text the option's value
+/// @return the first and last chunk, counted from 0
+[[nodiscard]] std::pair<uint32_t, uint32_t> parse_chunks(std::string_view text) {
+    const auto number = [&](std::string_view part) {
+        uint32_t value = 0;
+        const auto result = std::from_chars(part.data(), part.data() + part.size(), value);
+        if (part.empty() || result.ec != std::errc{} || result.ptr != part.data() + part.size())
+            throw std::runtime_error(
+                "--chunks expects A-B or A: chunk numbers from 0, the first not after the last"
+            );
+        return value;
+    };
+    const auto separator = text.find('-');
+    const uint32_t first = number(text.substr(0, separator));
+    const uint32_t last =
+        separator == std::string_view::npos ? first : number(text.substr(separator + 1));
+    if (last < first)
+        throw std::runtime_error(
+            "--chunks expects A-B or A: chunk numbers from 0, the first not after the last"
+        );
+    return {first, last};
+}
+
+/// Checks the director's options against the others, and has a director
+/// run headless: --generate-script and --render-script run on their own,
+/// on the fixed clock and seed, so that a script's analysis and its render
+/// replay the recording alike.
+///
+/// Throws std::runtime_error naming the options that cannot be used
+/// together.
+///
+/// @param[in,out] options the parsed options; a director run gets
+///        headless_check and skip_intro
+void check_director_options(Options& options) {
+    const bool generate = !options.generate_script.empty();
+    const bool render = !options.render_script.empty();
+    if (!generate && !render) {
+        if (!options.director_output.empty())
+            throw std::runtime_error("--output needs --generate-script or --render-script");
+        if (options.director_chunks)
+            throw std::runtime_error("--chunks needs --render-script");
+        return;
+    }
+    if (generate && render)
+        throw std::runtime_error("--generate-script and --render-script cannot be used together");
+    if (generate && options.director_chunks)
+        throw std::runtime_error("--chunks needs --render-script");
+    if (render && options.window_resolution)
+        throw std::runtime_error(
+            "--render-script takes the frame size from the script, not from --resolution"
+        );
+    const char* run = generate ? "--generate-script" : "--render-script";
+    // Options of other runs, and those that would change the match, its
+    // seed or its camera.
+    const std::pair<bool, const char*> refused[] = {
+        {options.seed.has_value(), "--seed"},
+        {!options.capture_video.empty(), "--capture-video"},
+        {options.showcase != Showcase::none, "--showcase"},
+        {options.benchmark_frames.has_value(), "--benchmark"},
+        {options.frame_limit.has_value(), "--frames"},
+        {!options.snapshot.empty(), "--snapshot"},
+        {options.match_ticks.has_value(), "--match-ticks"},
+        {!options.campaign.empty() || options.campaign_mission.has_value(), "--campaign"},
+        {!options.load_file.empty(), "--load"},
+        {options.save_after.has_value(), "--save-after"},
+        {!options.save_file.empty(), "--save-file"},
+        {options.camera.has_value(), "--camera"},
+        {options.match_zoom != kDefaultBattlefieldZoom, "--zoom"},
+        {options.combat_units != 0, "--combat"},
+        {options.reclaim_check, "--reclaim-check"},
+        {options.give_orders, "--give-orders"},
+        {options.check_navigation, "--check-navigation"},
+        {options.check_match_dialogs, "--check-match-dialogs"},
+        {options.check_load_save, "--check-load-save"},
+        {options.check_frontend_controls, "--check-frontend-controls"},
+        {options.check_scroll_bars, "--check-scroll-bars"},
+        {options.check_briefing_narration, "--check-briefing-narration"},
+        {options.check_match_layers, "--check-match-layers"},
+        {options.check_match_orders, "--check-match-orders"},
+        {options.check_factory_orders, "--check-factory-orders"},
+        {options.check_download_builds, "--check-download-builds"},
+        {options.check_kill_board, "--check-kill-board"},
+        {options.check_patrol_reclaim, "--check-patrol-reclaim"},
+        {options.check_reclaim_cursor, "--check-reclaim-cursor"},
+        {options.check_pointer_interfaces, "--check-pointer-interfaces"},
+        {options.check_multiplayer_menu, "--check-multiplayer-menu"},
+        {options.check_director_view, "--check-director-view"},
+        {options.check_director_render, "--check-director-render"},
+    };
+    for (const auto& [given, name] : refused)
+        if (given)
+            throw std::runtime_error(std::string(run) + " cannot be used with " + name);
+    options.headless_check = true;
+    options.skip_intro = true;
 }
 
 } // namespace
@@ -184,6 +285,18 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
             result.check_pointer_interfaces = true;
         else if (argument == "--check-multiplayer-menu")
             result.check_multiplayer_menu = true;
+        else if (argument == "--check-director-view")
+            result.check_director_view = true;
+        else if (argument == "--check-director-render")
+            result.check_director_render = true;
+        else if (argument == "--generate-script")
+            result.generate_script = path_from_utf8(value(argument));
+        else if (argument == "--render-script")
+            result.render_script = path_from_utf8(value(argument));
+        else if (argument == "--output")
+            result.director_output = path_from_utf8(value(argument));
+        else if (argument == "--chunks")
+            result.director_chunks = parse_chunks(value(argument));
         else if (argument == "--trace-input")
             result.trace_input = true;
         else if (argument == "--debug-order-lines")
@@ -214,7 +327,8 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
                          "[--check-multiplayer-menu] "
                          "[--check-load-save] [--check-frontend-controls] "
                          "[--check-scroll-bars] "
-                         "[--check-briefing-narration] "
+                         "[--check-briefing-narration] [--check-director-view] "
+                         "[--check-director-render] "
                          "[--trace-input] "
                       << extension_text(extension, ExtensionText::usage_checks, "")
                       << "[--debug-order-lines] "
@@ -227,10 +341,18 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
                          "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
                          "[--trace-digest FILE] [--trace-units FILE] "
                          "[--capture-video PATH.mp4] [--showcase arm-first-mission] "
+                         "[--generate-script RECORDING [--output PATH.oascript|PATH.oamovie] "
+                         "[--resolution WxH]] "
+                         "[--render-script PATH.oascript|PATH.oamovie [--output DIR] "
+                         "[--chunks A-B]] "
                          "[game switches such as "
                       << extension_text(extension, ExtensionText::usage_switches, "")
                       << "-d -s] "
                          "[LANGUAGE]\n"
+                         "--generate-script plans a director script from a recording an "
+                         "extension of this build replays;\n"
+                         "--render-script renders a director script, or a bundle of one and "
+                         "its recording, to video (docs/director.md).\n"
                       << extension_text(
                              extension,
                              ExtensionText::usage_note,
@@ -286,12 +408,19 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
         extension.check_options(extension.context);
     if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
         result.debug_order_lines = true;
+    // The director view check runs headless, where SDL is never started.
+    if (result.check_director_view || result.check_director_render) {
+        result.headless_check = true;
+        result.skip_intro = true;
+    }
+    check_director_options(result);
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_match_dialogs ||
         result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
         result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
         result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
-        result.check_pointer_interfaces;
+        result.check_pointer_interfaces || result.check_director_view ||
+        result.check_director_render;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

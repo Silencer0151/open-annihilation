@@ -218,6 +218,34 @@ struct Options {
     // closed by OK and by Enter, or the extension's own check when it has a
     // check_multiplayer_menu hook.
     bool check_multiplayer_menu = false;
+    // Plays the headless skirmish's first ticks in director mode, drawn and
+    // again undrawn, and checks the two reach one world, that director frames
+    // show the battlefield alone and move by a fraction of a map pixel, and
+    // that the match's sounds reach the director's sound hooks. Implies
+    // --headless-check and --skip-intro.
+    bool check_director_view = false;
+    // Renders a small director script over the headless skirmish's first
+    // ticks, with encoding off, twice (all of it, then its second chunk
+    // alone), and checks the files it writes, that neither the sound of a
+    // chunk nor the world depends on the chunks drawn before it, and that
+    // the render reaches the world the generator's undrawn replay of the
+    // same ticks reaches. Implies --headless-check and --skip-intro.
+    bool check_director_render = false;
+    // --generate-script RECORDING: the recording a director script is
+    // generated from; empty for none. Implies --headless-check and
+    // --skip-intro.
+    fs::path generate_script;
+    // --render-script FILE: the director script (.oascript) or bundle
+    // (.oamovie) to render; empty for none. Implies --headless-check and
+    // --skip-intro.
+    fs::path render_script;
+    // --output PATH: where --generate-script writes (a .oascript or
+    // .oamovie) or --render-script renders (a directory); empty for the
+    // default beside the input.
+    fs::path director_output;
+    // --chunks A-B (or A): the chunks --render-script draws and encodes,
+    // counted from 0, both included; unset for all.
+    std::optional<std::pair<uint32_t, uint32_t>> director_chunks;
     bool trace_input = false;
     bool debug_order_lines = false;
     // Set by the checks above: no wall-clock input reaches the match or the frame.

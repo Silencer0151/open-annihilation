@@ -52,6 +52,48 @@ add_library(oa::media::intro_player_null ALIAS oa-media-intro-player-null)
 target_include_directories(oa-media-intro-player-null PUBLIC include)
 target_link_libraries(oa-media-intro-player-null PUBLIC oa-formats-smacker PRIVATE oa-options)
 
+# The director's camera: views on a map, the engine camera that draws one,
+# a script's shots compiled to frames, transitions and the frame clock.
+add_library(oa-media-director src/director.cpp src/director_clock.cpp
+  src/director_transition.cpp)
+add_library(oa::media::director ALIAS oa-media-director)
+target_include_directories(oa-media-director PUBLIC include)
+target_link_libraries(oa-media-director PUBLIC oa-formats-oascript PRIVATE oa-options)
+target_compile_features(oa-media-director PUBLIC cxx_std_20)
+if(BUILD_TESTING)
+  add_executable(oa-media-director-test tests/director_test.cpp)
+  target_link_libraries(oa-media-director-test PRIVATE oa-media-director oa-base-sha256
+    oa-options)
+  add_test(NAME media-director COMMAND oa-media-director-test)
+  add_executable(oa-media-director-clock-test tests/director_clock_test.cpp)
+  target_link_libraries(oa-media-director-clock-test PRIVATE oa-media-director oa-options)
+  add_test(NAME media-director-clock COMMAND oa-media-director-clock-test)
+  add_executable(oa-media-director-transition-test tests/director_transition_test.cpp)
+  target_link_libraries(oa-media-director-transition-test PRIVATE oa-media-director
+    oa-options)
+  add_test(NAME media-director-transition COMMAND oa-media-director-transition-test)
+endif()
+
+# The director's planner: a replayed game's timeline, its recorder and the
+# shots planned from it.
+add_library(oa-media-director-planner src/timeline_recorder.cpp src/planner.cpp
+  src/planner_analysis.cpp src/planner_framing.cpp src/planner_subjects.cpp)
+add_library(oa::media::director_planner ALIAS oa-media-director-planner)
+target_include_directories(oa-media-director-planner PUBLIC include)
+target_link_libraries(oa-media-director-planner PUBLIC oa-media-director oa-formats-oascript
+  oa-sim-match-runtime oa-core-types PRIVATE oa-sim-simulation-state oa-options)
+target_compile_features(oa-media-director-planner PUBLIC cxx_std_20)
+if(BUILD_TESTING)
+  add_executable(oa-media-director-planner-recorder-test tests/timeline_recorder_test.cpp)
+  target_link_libraries(oa-media-director-planner-recorder-test PRIVATE
+    oa-media-director-planner oa-options)
+  add_test(NAME media-director-planner-recorder COMMAND oa-media-director-planner-recorder-test)
+  add_executable(oa-media-director-planner-test tests/planner_test.cpp)
+  target_link_libraries(oa-media-director-planner-test PRIVATE oa-media-director-planner
+    oa-base-sha256 oa-options)
+  add_test(NAME media-director-planner COMMAND oa-media-director-planner-test)
+endif()
+
 add_library(oa-media-movie-surface src/movie_surface.cpp)
 add_library(oa::media::movie_surface ALIAS oa-media-movie-surface)
 target_include_directories(oa-media-movie-surface PUBLIC include)

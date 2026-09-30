@@ -13,6 +13,27 @@ namespace oa::sim::match_runtime {
 
 namespace {
 
+/// Tells whether a burst spawner's target field holds the point it was aimed
+/// at. A mirrored player's ballistic or dropped shot, which apply_shot
+/// launches without its aim (the constructors picked in apply_shot's order),
+/// keeps an earlier shot's point there.
+///
+/// @param world the match's world
+/// @param shot the spawner
+/// @param flags its weapon's flags
+/// @return false for such a shot
+bool spawner_keeps_aim(const oa::World& world, const oa::Projectile& shot, uint32_t flags) {
+    const auto* owner = oa::world_player(&world, shot.owner_index);
+    if (owner == nullptr || owner->in_use == 0 || owner->status != OA_PLAYER_STATUS_MIRRORED)
+        return true;
+    if ((flags & OA_WEAPON_FLAG_BALLISTIC) != 0)
+        return false;
+    if ((flags &
+         (OA_WEAPON_FLAG_VLAUNCH | OA_WEAPON_FLAG_LINE_OF_SIGHT | OA_WEAPON_FLAG_SELF_PROP)) != 0)
+        return true;
+    return (flags & OA_WEAPON_FLAG_DROPPED) == 0;
+}
+
 /// Finds the height of the feature the shot contact test finds under a plot:
 /// a direct feature word only within the FeatureDef table, a continuation
 /// through its footprint origin's word without that check.
@@ -219,6 +240,10 @@ sim::unit_spawn::Slot* Match::projectile_source(const oa::Projectile& shot) {
 
 void Match::detonate(oa::Projectile& shot, sim::unit_spawn::Slot* direct) {
     auto& world = state();
+    if (event_hooks.shot_detonated != nullptr)
+        event_hooks.shot_detonated(
+            event_hooks.context, world, shot, direct != nullptr ? direct->unit_index : uint16_t{}
+        );
     const auto* definition = projectile_weapon(shot);
     const auto* weapon = oa::world_weapon_def(&world, shot.def);
     if (!definition || !weapon) {
@@ -511,6 +536,17 @@ void Match::update_projectiles() {
                 shot.velocity = {
                     burst.parent_velocity[0], burst.parent_velocity[1], burst.parent_velocity[2]
                 };
+                if (event_hooks.shot_placed != nullptr) {
+                    const auto aimed_unit = oa::oa_unit_slot_from_ref(child->target_unit);
+                    event_hooks.shot_placed(
+                        event_hooks.context,
+                        world,
+                        *child,
+                        ShotSource::burst,
+                        spawner_keeps_aim(world, *child, flags) ? &child->target : nullptr,
+                        aimed_unit < slots_.size() ? static_cast<uint16_t>(aimed_unit) : uint16_t{}
+                    );
+                }
             }
             if (shot.burst_remaining == 0)
                 sim::weapon_execution::retire_projectile(world, shot);

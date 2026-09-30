@@ -17,6 +17,24 @@ add_library(oa::audio ALIAS oa-audio)
 target_include_directories(oa-audio PUBLIC include)
 target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-data-unit-definitions oa-options oa-core-types)
 
+# The offline mix of the game's sound effects that director renders take
+# their sound from: integer decoding, resampling and mixing, with no sound
+# device and no clock.
+add_library(oa-audio-offline-mix src/offline_mix.cpp)
+add_library(oa::audio::offline_mix ALIAS oa-audio-offline-mix)
+target_include_directories(oa-audio-offline-mix PUBLIC include)
+target_link_libraries(oa-audio-offline-mix PUBLIC oa-audio PRIVATE oa-options)
+target_compile_features(oa-audio-offline-mix PUBLIC cxx_std_20)
+if(BUILD_TESTING)
+  # Decoding, resampling, gains, the voice policy, chunked rendering and a
+  # pinned mix; with --data, every sound file of the installed game.
+  add_executable(oa-audio-offline-mix-test tests/offline_mix_test.cpp)
+  target_link_libraries(oa-audio-offline-mix-test
+    PRIVATE oa-audio-offline-mix oa-base-sha256 oa-test-game-data)
+  add_test(NAME audio-offline-mix COMMAND oa-audio-offline-mix-test)
+  oa_add_game_data_test(audio-offline-mix-data oa-audio-offline-mix-test --data)
+endif()
+
 if(OA_BUILD_PLATFORM)
   find_package(SDL3 3.2 CONFIG REQUIRED)
   add_library(oa-audio-sdl src/sdl_audio.cpp src/sdl_music.cpp)

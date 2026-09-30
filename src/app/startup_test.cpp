@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -279,6 +280,119 @@ int main() {
         scripted.push_back("--choose-game-dir");
         expect(rejection(scripted).find("--choose-game-dir opens a dialog") == 0, scripted.front());
     }
+
+    // The director view check runs headless on the fixed clock, past the
+    // intro, with nobody there.
+    const auto director_view = parse({"--check-director-view"});
+    expect(
+        director_view.check_director_view && director_view.headless_check &&
+            director_view.skip_intro && director_view.fixed_clock && director_view.unattended,
+        "--check-director-view is a headless, fixed-clock and unattended run"
+    );
+    expect(!parse({"--headless-check"}).check_director_view, "no director view check unasked");
+    expect(
+        rejection({"--check-director-view", "--capture-video", "view.mp4"}) ==
+            "--capture-video captures the game or a --showcase, not a check or benchmark",
+        "the director view check is not captured"
+    );
+
+    // The director render check runs headless on the fixed clock too.
+    const auto director_render = parse({"--check-director-render"});
+    expect(
+        director_render.check_director_render && director_render.headless_check &&
+            director_render.skip_intro && director_render.fixed_clock && director_render.unattended,
+        "--check-director-render is a headless, fixed-clock and unattended run"
+    );
+
+    // --generate-script and --render-script run headless on the fixed clock
+    // and seed, with nobody there.
+    const auto generate = parse({"--generate-script", "game.rec", "--output", "game.oamovie"});
+    expect(
+        generate.generate_script == oa::app::path_from_utf8("game.rec") &&
+            generate.director_output == oa::app::path_from_utf8("game.oamovie") &&
+            generate.headless_check && generate.skip_intro && generate.fixed_clock &&
+            generate.unattended && !generate.seed && generate.render_script.empty(),
+        "--generate-script takes its recording and output and runs headless"
+    );
+    const auto generate_sized =
+        parse({"--generate-script", "game.rec", "--resolution", "3840x2160"});
+    expect(
+        generate_sized.match_width == 3840 && generate_sized.match_height == 2160 &&
+            generate_sized.window_resolution,
+        "--resolution sets the size a generated script plans for"
+    );
+    const auto render = parse({"--render-script", "game.oascript", "--chunks", "2-5"});
+    expect(
+        render.render_script == oa::app::path_from_utf8("game.oascript") &&
+            render.director_chunks == std::pair<uint32_t, uint32_t>{2, 5} &&
+            render.director_output.empty() && render.headless_check && render.fixed_clock &&
+            render.unattended,
+        "--render-script takes its script and chunks and runs headless"
+    );
+    expect(
+        parse({"--render-script", "game.oamovie", "--chunks", "7", "--output", "out"})
+                .director_chunks == std::pair<uint32_t, uint32_t>{7, 7},
+        "--chunks takes one chunk"
+    );
+    expect(!parse({}).director_chunks, "every chunk unless --chunks says otherwise");
+    expect(
+        parse({"--render-script", "game.oascript", "--mute", "--preferences-file", "p.conf"}).mute,
+        "a render can be silent"
+    );
+    for (const auto* chunks : {"3-2", "-1", "a-b", "1-", "4294967296", "1-2-3", ""})
+        expect(
+            rejection({"--render-script", "game.oascript", "--chunks", chunks}).find("--chunks") ==
+                0,
+            chunks
+        );
+    expect(
+        rejection({"--generate-script", "game.rec", "--render-script", "game.oascript"}) ==
+            "--generate-script and --render-script cannot be used together",
+        "one director run at a time"
+    );
+    expect(
+        rejection({"--output", "out"}) == "--output needs --generate-script or --render-script",
+        "--output belongs to a director run"
+    );
+    expect(
+        rejection({"--chunks", "1"}) == "--chunks needs --render-script" &&
+            rejection({"--generate-script", "game.rec", "--chunks", "1"}) ==
+                "--chunks needs --render-script",
+        "--chunks belongs to a render"
+    );
+    expect(
+        rejection({"--render-script", "game.oascript", "--resolution", "640x360"}) ==
+            "--render-script takes the frame size from the script, not from --resolution",
+        "a render's size is the script's"
+    );
+    const std::vector<std::vector<const char*>> refused_with_scripts{
+        {"--seed", "5"},
+        {"--capture-video", "game.mp4"},
+        {"--showcase", "arm-first-mission"},
+        {"--benchmark", "60"},
+        {"--frames", "60"},
+        {"--snapshot", "frame.ppm"},
+        {"--match-ticks", "60"},
+        {"--campaign", "Arm Campaign", "--mission", "0"},
+        {"--load", "game.sav"},
+        {"--save-after", "30"},
+        {"--camera", "10,20"},
+        {"--zoom", "2"},
+        {"--combat", "4"},
+        {"--check-navigation"},
+        {"--check-match-layers"},
+        {"--check-director-view"},
+        {"--check-director-render"},
+    };
+    for (const auto* run : {"--generate-script", "--render-script"})
+        for (const auto& other : refused_with_scripts) {
+            std::vector<const char*> arguments{run, "game.file"};
+            arguments.insert(arguments.end(), other.begin(), other.end());
+            expect(
+                rejection(arguments) == std::string(run) + " cannot be used with " + other.front(),
+                other.front()
+            );
+        }
 
     // --resolution sizes the window of a run that opens one.
     expect(!parse({}).window_resolution, "the window keeps its default size");

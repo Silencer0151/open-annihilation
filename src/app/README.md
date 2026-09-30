@@ -129,6 +129,23 @@ and `app-window-icon` that the embedded one decodes.
   video through the `ffmpeg` program; `runtime_showcase.cpp`: the scripted
   runs `--showcase` plays. [docs/capture.md](../../docs/capture.md)
   describes both.
+- Director scripts ([docs/director.md](../../docs/director.md)):
+  `runtime_director.cpp` runs `--generate-script` (the recording replayed
+  undrawn through the extension that replays it, its timeline recorded and
+  the shots planned) and `--render-script` (the recording replayed tick by
+  tick, the shots drawn, the sound mixed offline, the chunks written), and
+  `--check-director-render`, which renders a small script over the headless
+  skirmish. `runtime_director_view.cpp` and `director_state.hpp` are director
+  mode (`director_presentation.hpp`): the frame drawn from the director's
+  camera at the output size, the battlefield alone, the match's sounds and
+  every player's unit announcements sent to the director's sound hooks,
+  debris particles started once a tick, and each draw's rebuilt model
+  transforms put back so that the match never depends on what was drawn;
+  `--check-director-view` checks it. `director_output.hpp` and
+  `director_output.cpp` (`oa-app-director-output`) write a render's files
+  (each chunk's frame manifest and sound, the run manifest), run `ffmpeg` on
+  the chunks and join them, and read and write the `.oamovie` bundle;
+  `app-director-output` tests them without an encoder.
 
 ## Game folder
 
@@ -161,10 +178,10 @@ modes, per-frame work, match events, the Pause key, the speed keys and
 the GAME slider, the frontend's application modes, the loading's
 progress, the team panels' host (a tournament game withholds CONTROL),
 requests to close the window, the label a match's return names in its
-menus, whether the preferences keep the stored password, console commands
-and checks. Each such library is an extension. The project that builds the
-game registers it after adding the engine, with the function that fills
-its table:
+menus, whether the preferences keep the stored password, recordings to
+replay, console commands and checks. Each such library is an extension.
+The project that builds the game registers it after adding the engine,
+with the function that fills its table:
 
 ```cmake
 oa_add_extension(<target> INIT <function> [SWITCHES <letters>] [GAME_FILES <COMMAND ...>])
@@ -179,8 +196,8 @@ line is parsed, and `ExtensionList` (`extension_list.hpp`) combines the
 tables into the one table the runtime calls, by the rules `extension.hpp`
 states: most hooks are called for every extension in list order;
 `shutdown` in reverse; the hooks that take something (an option, a
-switch, a run, a close request) ask the last extension in the list first,
-since it builds on those before it; answers are combined; and
+switch, a run, a close request, a recording) ask the last extension in the
+list first, since it builds on those before it; answers are combined; and
 `frontend_game`, `frontend_states` and each entry of the hosts the
 extensions fill belong to one extension at most, so that a second one
 stops the start or the call with a message naming both. Every hook no
@@ -198,6 +215,25 @@ the table's contract; an extension checks its typed copy,
 the contract raises it (its comment says what counts). The recorder test
 extension checks it too, beside its count of the table's hooks.
 
+Version 9 adds `open_recording`, through which `--generate-script` and
+`--render-script` replay the recording a director script names. The
+engine hands the extensions the recording's name and bytes
+(`RecordingInput`), asking the last in the list first; the one that
+replays recordings of that kind starts the recording's match through the
+engine's own match start and returns what the recording holds
+(`RecordingInfo`: the tick after its last, when known, its length, the
+player it is watched from, how many players it holds and whether the
+installation's unit definitions differ from its own) and the replay's
+hooks (`ReplayHooks`). The engine then runs none of that match's ticks
+itself: it calls `step` once for each tick, `status` for where the replay
+stands (`RecordingStatus`: the tick, whether everything recorded has been
+replayed, whether the replay is clean and its periodic records paced, its
+errors and the last one's text) and `close` once, before it tears the
+match down. An extension that does not recognise the recording declines
+and the next is asked; one that recognises it but cannot replay it
+throws. Each extension asked starts from a zeroed replay and information,
+and only the one that takes the recording fills the caller's.
+
 `app-extension-list` checks each rule of the combined table over two test
 extensions, and `tests/extension/` tests the boundary itself.
 `extension-layout-mismatch` links a unit that sees `Runtime` with members
@@ -213,10 +249,11 @@ reaches (of `match_event`'s events they see `finished`, `torn_down` and
 `results_released`), in the order the rules set, and that a follower that
 fills `frontend_game` too stops the start; the navigation check's Pause
 key reaches `pause_changed`, its speed keys `speed_changed` and its menus
-`app_mode_set`, a skirmish's loading `load_progress`, `team_panel_host`
-and `return_label`, its preferences write `keep_stored_password`, and
-`--check-match-dialogs`'s
-close requests `close_requested` and its GAME slider `speed_changed`.
+`app_mode_set`, a skirmish's loading `load_progress`, `team_panel_host` and
+`return_label`, its preferences write `keep_stored_password`,
+`--check-match-dialogs`'s close requests `close_requested` and its GAME
+slider `speed_changed`, and a `--generate-script` run over a file no
+extension replays `open_recording`, asking the follower first.
 With `--record-quit STATUS` the recorder keeps the screen services an
 overlay is given, stops the sounds, plays BGM on the alternate route,
 asks for a frontend pass and ends the run through `quit`, which must exit

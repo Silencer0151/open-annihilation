@@ -13,8 +13,8 @@
 // recorder, it checks the recorder's counts and counts
 // "follower.order <hook>" when the order holds, or
 // "follower.misordered <hook>" when it does not: its startup after the
-// recorder's, its shutdown before, and its take_option, run_mode and
-// return_label each before the recorder's.
+// recorder's, its shutdown before, and its take_option, run_mode,
+// return_label and open_recording each before the recorder's.
 //
 // It includes extension.hpp alone, never runtime.hpp: an extension that
 // adds no Runtime members needs no more.
@@ -185,6 +185,14 @@ void fill(Extension* table) {
     };
     table->speed_changed = [](void*, Runtime&, uint16_t) { count("speed_changed"); };
     table->app_mode_set = [](void*, Runtime&, int32_t) { count("app_mode_set"); };
+    table->open_recording =
+        [](void*, Runtime&, const RecordingInput&, ReplayHooks&, RecordingInfo&) {
+            count("open_recording");
+            count_order(
+                "open_recording", calls("open_recording") + 1 == calls("follower.open_recording")
+            );
+            return false;
+        };
 }
 
 } // namespace

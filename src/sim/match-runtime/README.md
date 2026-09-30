@@ -71,6 +71,43 @@ builder's "Starting construction", reaches the application through
 `SpeechHooks` (`Match::set_speech_hooks`); without them the speech plays its
 category through `command_sound` and the category's own caption.
 
+## Event hooks
+
+`Match::event_hooks` (`EventHooks`, `event_hooks.hpp`) reports what happens
+in a match to a reader such as a director, whoever simulates the unit: this
+machine, another player's, or a recording the match replays. Each entry is
+null by default and is called only at the points every such event passes
+through:
+
+- `unit_created` at the end of `create` and `start_player`; a building
+  (bmcode 0) created finished is then reported finished by itself.
+- `unit_finished` from the builder link (`link_built_unit`), which build
+  progress reaching the end, a factory's cancelled frame and `finish_unit`
+  all take; from the resurrect order, by the unit that raised it; and for a
+  building created finished. Each unit is reported finished once from its
+  creation on, whichever comes first, so a copy another machine's state
+  record already marked finished is still reported when the builder link
+  arrives, and a building created finished is not reported again.
+- `shot_placed` from `place_shot` (weapon), the burst copy in
+  `update_projectiles` (burst) and `launch_meteor` (meteor, no aim). A shot
+  `apply_shot` launches reports the aim and target unit it was given, which
+  the record of a ballistic or dropped shot does not keep; a burst copy of
+  such a shot reports no aim.
+- `shot_detonated` at the top of every `detonate`, the stand-in blast of an
+  exploding unit included.
+- `unit_damaged` in `apply_damage_event` once the unit is known live and not
+  dying, before the event changes it.
+- `unit_died` as `teardown_dead_unit` starts on a live unit, before its
+  type, owner and position are cleared: each death once, settled here or
+  elsewhere.
+
+The hooks receive the world as const and must not change match state, draw
+from its random streams or call back into it; the match computes nothing
+differently with them set (`match-event-hooks` checks the synthetic
+skirmish's digests against `match-determinism`'s pins with and without
+them). A limitation: a unit only a state record from elsewhere finishes,
+with no builder link following, is not reported finished.
+
 ## Sharing with the other players
 
 A multiplayer match shares what it settles through `MultiplayerHooks`, and

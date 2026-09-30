@@ -6,6 +6,7 @@
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 
 #include <cstdint>
+#include <utility>
 
 namespace oa::sim::match_runtime {
 
@@ -345,6 +346,19 @@ void Match::place_shot(
     shot.burst_remaining = launch.burst_remaining;
     shot.target_unit = oa::oa_unit_ref_from_slot(target_unit);
     shot.intercept_target = intercept_target;
+    // A shot apply_shot places reports the aim and target unit it was fired
+    // with, which the record may not keep.
+    const auto* applied = std::exchange(applied_shot_, nullptr);
+    if (event_hooks.shot_placed != nullptr) {
+        const auto* aim = applied != nullptr ? &applied->target : target;
+        const auto aimed_unit =
+            applied != nullptr
+                ? (applied->target_unit < slots_.size() ? applied->target_unit : uint16_t{})
+                : target_unit;
+        event_hooks.shot_placed(
+            event_hooks.context, world, shot, ShotSource::weapon, aim, aimed_unit
+        );
+    }
     play_sound_at(definition.soundstart.c_str(), start);
 }
 
@@ -445,6 +459,7 @@ void Match::apply_shot(const ShotEvent& shot) {
     auto* unit = instance(shot.source_unit);
     if (unit != nullptr && unit->script() != nullptr && query_slot < OA_UNIT_WEAPON_COUNT)
         query_piece = static_cast<uint16_t>(unit->query_weapon_piece(query_slot));
+    applied_shot_ = &shot;
     place_shot(
         *projectile,
         source,

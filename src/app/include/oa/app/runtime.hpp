@@ -5,6 +5,7 @@
 #pragma once
 
 #include "app.hpp"
+#include "director_presentation.hpp"
 #include "extension.hpp"
 #include "match_model_draws.hpp"
 #include "offline_services.hpp"
@@ -94,6 +95,10 @@ struct FrontendHost;
 struct BriefingRegion;
 struct ScoreLayout;
 } // namespace oa::ui::campaign
+
+namespace oa::media::director {
+struct EngineView;
+} // namespace oa::media::director
 
 namespace oa::app {
 
@@ -698,6 +703,133 @@ class Runtime final : public menu::Host,
     /// @param ticks ticks to run at most
     /// @return the process exit status: nonzero when any tick failed
     [[nodiscard]] int run_headless_campaign(std::size_t ticks);
+
+    // Director scripts. Director mode presents the running match for a
+    // director script (runtime_director_view.cpp, director_presentation.hpp):
+    // a battlefield-only frame at the output size drawn from the director's
+    // camera, debris particles started once a tick whether or not the tick
+    // is drawn, and the match's sounds sent to the director's sound hooks.
+    // The runs that render and generate scripts drive it
+    // (runtime_director.cpp).
+    struct DirectorState;
+
+    /// Frees director mode's state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_director_state(DirectorState* state) noexcept;
+
+    /// Puts the running match into director mode.
+    ///
+    /// Lays the frame out at the presentation's size (the battlefield alone
+    /// unless it shows the interface), stops the player's camera paths
+    /// (zoom easing, tracking, edge and key scrolling, message recentring),
+    /// routes the match's point sounds and, when every player speaks, every
+    /// player's unit announcements to `sounds`, and starts debris particles
+    /// only through start_director_debris_particles. Throws
+    /// std::logic_error without a match.
+    ///
+    /// @param presentation the output size and what is drawn and heard
+    /// @param sounds where the match's sounds go; its context must outlive
+    ///        director mode
+    void
+    enter_director_mode(const DirectorPresentation& presentation, const DirectorSoundHooks& sounds);
+
+    /// Takes the running match out of director mode, if it is in it, and
+    /// restores the layout, camera paths and sound routes it replaced.
+    void leave_director_mode() noexcept;
+
+    /// Tells whether the running match is in director mode.
+    ///
+    /// @return true between enter_director_mode and leave_director_mode
+    [[nodiscard]] bool director_mode() const noexcept;
+
+    /// Sets the director's camera: the view the next bind and the next
+    /// draws use. Nothing is bound or drawn.
+    ///
+    /// @param view the engine camera of a clamped view at the output size
+    void set_director_view(const oa::media::director::EngineView& view);
+
+    /// Binds the director's camera into the Game block, as the match's
+    /// passes and its sound placement read it: the camera, the view's size in
+    /// cells and the battlefield rectangle, from the view's own map-pixel
+    /// size, so that the output resolution never changes them. Called before
+    /// each tick with the camera sounds are placed by.
+    void bind_director_view();
+
+    /// Starts the particles of the debris pieces the match holds, once for
+    /// the tick the match has just run, whether or not the tick is drawn.
+    /// Draws in director mode never start them. Called once after each tick.
+    void start_director_debris_particles();
+
+    /// Presents the unit announcements every player's units queued in the
+    /// tick just run: each speaking player's queue presents at most one,
+    /// its variant drawn from the director's own random stream, never the
+    /// match's, and plays through the sound hooks placed at the unit. Does
+    /// nothing unless every player speaks. Called once after each tick.
+    void present_director_announcements();
+
+    /// Draws the running match's current tick from the director's camera
+    /// into a frame.
+    ///
+    /// Without the interface the frame is the battlefield alone, drawn
+    /// EngineView::margin pixels larger and cut at the view's offset, with
+    /// the default gamma; the player's saved gamma never applies. No
+    /// overlay, label, panel, message or cursor is drawn. The Game block's
+    /// camera is left bound to the drawn view.
+    ///
+    /// @param[out] rgb the frame, width * height * 3 bytes, row by row
+    void draw_director_frame(std::span<uint8_t> rgb);
+
+    /// Runs --check-director-view: a headless skirmish drawn in director
+    /// mode, checked against the same skirmish replayed in director mode
+    /// with nothing drawn. Throws std::runtime_error when a check fails.
+    void check_director_view();
+
+    /// Runs --generate-script: opens the recording through the extension
+    /// that replays it, replays it to its end in director mode without
+    /// drawing, records its timeline, plans the shots and writes the script,
+    /// bundled with the recording when the output is a .oamovie.
+    ///
+    /// @return the process exit status: 0 when the script was written
+    [[nodiscard]] int run_generate_script();
+
+    /// Runs --render-script: reads the script or bundle, opens its recording
+    /// through the extension that replays it, and renders the chunks asked
+    /// for with their sound, frame hashes and, when every chunk is rendered,
+    /// the joined video.
+    ///
+    /// @return the process exit status: 0 when every chunk was rendered
+    [[nodiscard]] int run_render_script();
+
+    /// A render of a compiled director script: what it renders and where,
+    /// and what it did (runtime_director.cpp).
+    struct DirectorRender;
+
+    /// Renders a compiled director script's frames from the running match,
+    /// which a replay steps: puts the match into director mode, steps the
+    /// replay tick by tick to each frame's tick with the sound camera bound,
+    /// draws the frames of the chunks asked for, mixes every frame's sound,
+    /// and writes the chunks' files; then leaves director mode. Frames after
+    /// the last chunk asked for are neither stepped nor mixed.
+    ///
+    /// Throws std::runtime_error when the replay ends before the video does,
+    /// or a file or the encoder fails; director mode is left all the same.
+    ///
+    /// @param[in,out] render what to render; its results are filled
+    /// @param replay the replay that steps the running match
+    void render_director_frames(DirectorRender& render, const ReplayHooks& replay);
+
+    /// Digests the running match as match_world_digest does, the camera
+    /// left out: the director moves it, and it never changes the match.
+    ///
+    /// @return the 64-bit digest
+    [[nodiscard]] uint64_t director_world_digest();
+
+    /// Runs --check-director-render: a small director script rendered over
+    /// the headless skirmish with encoding off, in full and its second chunk
+    /// alone, checked for its files, its sound and the world it reaches.
+    /// Throws std::runtime_error when a check fails.
+    void check_director_render();
 
     /// Starts the --campaign mission --mission names through the Any Mission list, its briefing and
     /// Start.
@@ -7262,6 +7394,10 @@ class Runtime final : public menu::Host,
     };
     std::unique_ptr<EndgameState, void (*)(EndgameState*) noexcept> endgame_{
         nullptr, destroy_endgame_state
+    };
+    // Director mode's state; null outside director mode.
+    std::unique_ptr<DirectorState, void (*)(DirectorState*) noexcept> director_{
+        nullptr, destroy_director_state
     };
     SessionDisplay display_{};
     CapturedFrame captured_frame_{};

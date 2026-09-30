@@ -3,6 +3,7 @@
 
 // Composition of the match battlefield frame.
 #include "oa/app/runtime.hpp"
+#include "director_state.hpp"
 #include "oa/app/match_model_draws.hpp"
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
@@ -63,6 +64,49 @@ struct MatchModels {
 namespace {
 
 namespace model_render = oa::present::model;
+
+/// Copies the pieces of every unit's model: their transforms, which a draw
+/// rebuilds and the match reads.
+///
+/// @param[in,out] match the match
+/// @param[in,out] kept the copies, by unit slot; entries past `count` keep
+///        their memory for the next copy
+/// @param[out] count the entries that hold a copy
+void keep_unit_transforms(
+    oa::sim::match_runtime::Match& match,
+    std::vector<std::pair<uint16_t, oa::sim::model_runtime::Instance>>& kept,
+    size_t& count
+) {
+    count = 0;
+    const uint32_t slots = match.state().unit_slot_count;
+    for (uint32_t slot = 1; slot < slots; ++slot) {
+        auto* instance = match.instance(static_cast<uint16_t>(slot));
+        if (instance == nullptr)
+            continue;
+        if (count < kept.size()) {
+            kept[count].first = static_cast<uint16_t>(slot);
+            kept[count].second = instance->model();
+        } else {
+            kept.emplace_back(static_cast<uint16_t>(slot), instance->model());
+        }
+        ++count;
+    }
+}
+
+/// Puts back the pieces keep_unit_transforms copied.
+///
+/// @param[in,out] match the match
+/// @param kept the copies
+/// @param count the entries that hold a copy
+void restore_unit_transforms(
+    oa::sim::match_runtime::Match& match,
+    const std::vector<std::pair<uint16_t, oa::sim::model_runtime::Instance>>& kept,
+    size_t count
+) {
+    for (size_t index = 0; index < count && index < kept.size(); ++index)
+        if (auto* instance = match.instance(kept[index].first))
+            instance->model() = kept[index].second;
+}
 
 // Margin around the estimated screen extent of a model draw.
 constexpr int32_t kModelRegionMargin = 16;
@@ -433,29 +477,47 @@ void Runtime::render_match_surface() {
         throw std::logic_error("match renderer requires an initialized offline match");
     mark_profile(OA_PROFILE_MISC);
     sync_match_wrecks();
+    // Director mode draws from the director's camera, which it keeps on the
+    // map itself, and without the interface unless its presentation asks
+    // for it; its draws never start debris particles.
+    const bool directed = director_ != nullptr;
+    const bool bare = directed && !director_->presentation.show_interface;
     const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
     const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
     const auto bf_w = match_layout_.battlefield_width();
     const auto bf_h = match_layout_.battlefield_height();
     const auto vis_w = visible_map_width();
     const auto vis_h = visible_map_height();
-    const auto camera_x =
-        static_cast<uint32_t>(std::clamp(match_camera_x_, 0, std::max(0, map_width - vis_w)));
-    const auto camera_y =
-        static_cast<uint32_t>(std::clamp(match_camera_z_, 0, std::max(0, map_height - vis_h)));
+    const auto camera_x = static_cast<uint32_t>(
+        directed ? std::max(0, match_camera_x_)
+                 : std::clamp(match_camera_x_, 0, std::max(0, map_width - vis_w))
+    );
+    const auto camera_y = static_cast<uint32_t>(
+        directed ? std::max(0, match_camera_z_)
+                 : std::clamp(match_camera_z_, 0, std::max(0, map_height - vis_h))
+    );
     match_camera_x_ = static_cast<int32_t>(camera_x);
     match_camera_z_ = static_cast<int32_t>(camera_y);
     ensure_radar_surfaces();
-    bind_match_view();
+    if (directed)
+        bind_director_view();
+    else
+        bind_match_view();
     // The frame's on-screen list, after the ticks and before the drawing: the
     // pointer and the under-attack notice test the list the frame drawn last
-    // built.
+    // built. In director mode the notice tests the director's view instead,
+    // so that it does not hang on which frames were drawn.
     rebuild_on_screen_units();
-    track_match_drag();
+    if (directed)
+        offline_services_.set_on_screen_test(&DirectorState::unit_in_view, &match_->state());
+    else
+        track_match_drag();
     auto viewport = live_viewport(camera_x, camera_y);
     match_use_layers_ = sdl_.renderer != nullptr && !options_.headless_check;
     renderer::Surface hud;
-    if (match_hud_) {
+    if (bare) {
+        // No interface: the HUD layer stays empty.
+    } else if (match_hud_) {
         std::vector<renderer::ButtonPresentation> presentation;
         for (std::size_t index = 0; index < match_hud_->layout.gadgets.size(); ++index) {
             if (const auto frame = greyed_picture_frame(match_hud_->layout.gadgets[index])) {
@@ -553,8 +615,11 @@ void Runtime::render_match_surface() {
         match_terrain_cache_.rgb.resize(terrain_pixels);
         terrain_cache_cam_x_ = ~0u;
     }
+    // A director's camera redraws the terrain at any change of zoom, however
+    // small, so that what a frame shows never hangs on the frames before it.
     if (terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
-        std::abs(terrain_cache_zoom_ - match_zoom()) > 1.0e-4F) {
+        std::abs(terrain_cache_zoom_ - match_zoom()) > 1.0e-4F ||
+        (directed && terrain_cache_zoom_ != match_zoom())) {
         if (auto error = oa::present::world_renderer::fill_scaled_viewport(
                 *selected_tnt_,
                 match_palette_,
@@ -732,6 +797,27 @@ void Runtime::render_match_surface() {
         }
     };
     auto& models = match_models();
+
+    // The match reads its units' piece transforms, which drawing a unit
+    // rebuilds from the draw's own root rotation. A director's draw puts them
+    // back as it found them, so that what the match does never hangs on
+    // which frames were drawn or from where, and rebuilds for itself the
+    // transforms it draws with.
+    struct KeptTransforms {
+        oa::sim::match_runtime::Match* match{};
+        DirectorState* director{};
+
+        ~KeptTransforms() {
+            if (director != nullptr)
+                restore_unit_transforms(*match, director->kept_transforms, director->kept_count);
+        }
+    } kept_transforms{match_.get(), directed ? director_.get() : nullptr};
+
+    if (directed) {
+        keep_unit_transforms(*match_, director_->kept_transforms, director_->kept_count);
+        for (auto& unit : models.units)
+            unit.state.transforms_dirty = true;
+    }
     auto& world_record = match_->world().record;
     auto& renderer = models.renderer;
     renderer.world = &world_record;
@@ -873,8 +959,9 @@ void Runtime::render_match_surface() {
                 idle = movement->movement.speed == 0;
         } catch (const std::exception&) {
         }
-        // A selected unit's box is outlined before the unit draws.
-        if ((model.unit->flags & OA_UNIT_FLAG_SELECTED) != 0 &&
+        // A selected unit's box is outlined before the unit draws, unless the
+        // interface is not drawn.
+        if (!bare && (model.unit->flags & OA_UNIT_FLAG_SELECTED) != 0 &&
             !model.instance->model().objects.empty())
             oa::present::world_renderer::overlay_selection_box(
                 world_record.game,
@@ -1162,10 +1249,14 @@ void Runtime::render_match_surface() {
         oa::present::bind_display(outer_display);
     };
     // As with the texture animations, a tick drawn more than once starts the
-    // debris particles on its first draw only.
-    const bool start_debris_particles = !models.debris_drawn || models.debris_tick != renderer.tick;
-    models.debris_drawn = true;
-    models.debris_tick = renderer.tick;
+    // debris particles on its first draw only. In director mode no draw
+    // starts them: start_director_debris_particles does, once a tick.
+    const bool start_debris_particles =
+        !directed && (!models.debris_drawn || models.debris_tick != renderer.tick);
+    if (!directed) {
+        models.debris_drawn = true;
+        models.debris_tick = renderer.tick;
+    }
     oa::sim::effect_particles::draw_debris(
         match_->effects(),
         world_record.game,
@@ -1185,7 +1276,7 @@ void Runtime::render_match_surface() {
     draw_effect_layers(8, 8);
     // The overlay pass draws the local player's order overlays while Shift is
     // held (asked of the keyboard, not the pointer word).
-    if (control_key_down(oa::ui::gui_input::ControlKey::shift))
+    if (!bare && control_key_down(oa::ui::gui_input::ControlKey::shift))
         (void)draw_order_overlays(world_surface, viewport);
     draw_effect_layers(9, 9);
     oa::present::bind_display(bound_display);
@@ -1200,10 +1291,20 @@ void Runtime::render_match_surface() {
         bf_h
     );
     // The HUD overlay outlines the build site or the drag box after the fog tiles.
-    draw_build_ghost(world_surface, viewport);
-    draw_selection_band(world_surface, viewport);
+    if (!bare) {
+        draw_build_ghost(world_surface, viewport);
+        draw_selection_band(world_surface, viewport);
+    }
     mark_profile(OA_PROFILE_RENDER_FOG);
     match_world_cpu_ = {world_surface.width, world_surface.height, std::move(world_surface.rgb)};
+    // Without the interface the frame is the world alone: no panel, bar,
+    // label, message, board or overlay is painted over it.
+    if (bare) {
+        overlay_target_ = nullptr;
+        hud_source_space_ = false;
+        paint_origin_ = {};
+        return;
+    }
     // The HUD overlay: resource bars, bottom panel, then radar at
     // Game.radar_offset_x and radar_offset_y, then the GUI's child gadgets last.
     paint_on(PaintLayer::hud);
@@ -1271,8 +1372,31 @@ void Runtime::render_match_surface() {
     overlay_target_ = nullptr;
     hud_source_space_ = false;
     paint_origin_ = {};
-    if (!match_use_layers_)
+    // Director mode composes its own frame (draw_director_frame).
+    if (!match_use_layers_ && !directed)
         compose_match_frame(surface_);
+}
+
+void Runtime::start_director_debris_particles() {
+    if (director_ == nullptr || !match_)
+        throw std::logic_error("debris particles start through the director in director mode only");
+    auto& models = match_models();
+    const uint32_t tick = match_->simulation().tick;
+    if (models.debris_drawn && models.debris_tick == tick)
+        throw std::logic_error(
+            "the debris particles of tick " + std::to_string(tick) + " have started already"
+        );
+    oa::sim::effect_particles::draw_debris(
+        match_->effects(),
+        match_->world().record.game,
+        match_->effect_host(),
+        true,
+        nullptr,
+        nullptr
+    );
+    // A draw of the same tick after director mode ends starts none again.
+    models.debris_drawn = true;
+    models.debris_tick = tick;
 }
 
 } // namespace oa::app

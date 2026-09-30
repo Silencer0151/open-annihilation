@@ -148,6 +148,8 @@ uint32_t TickHost::GroundMissions::resurrect() {
         }
         raised->record.build_remaining = 0.0F;
         raised->record.health = 1;
+        // The raised unit is finished by the unit that raised it.
+        host.match.report_finished(host.slot(*raised).unit_index, s.unit_index);
         ConstructionAdapter(host, s, record).refresh_selected();
         return ground::next_phase;
     }

@@ -58,8 +58,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 8;
-constexpr std::size_t kHookCount = 38;
+constexpr uint32_t kExtensionApiVersionRecorded = 9;
+constexpr std::size_t kHookCount = 39;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -891,6 +891,25 @@ struct RuntimeExtension {
     static void app_mode_set(void* /*context*/, Runtime& /*runtime*/, int32_t /*mode*/) {
         record("app_mode_set");
     }
+
+    /// Leaves a recording to the other extensions (Extension::open_recording).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param[in,out] runtime the running app; left as it is
+    /// @param input the recording (unused)
+    /// @param[out] replay the replay; left null
+    /// @param[out] info what the recording holds; left zero
+    /// @return false
+    static bool open_recording(
+        void* /*context*/,
+        Runtime& /*runtime*/,
+        const RecordingInput& /*input*/,
+        ReplayHooks& /*replay*/,
+        RecordingInfo& /*info*/
+    ) {
+        record("open_recording");
+        return false;
+    }
 };
 
 } // namespace oa::app
@@ -936,6 +955,7 @@ void oa_extension_init_recorder(oa::app::Extension* table) {
     table->return_label = return_label;
     table->speed_changed = RuntimeExtension::speed_changed;
     table->app_mode_set = RuntimeExtension::app_mode_set;
+    table->open_recording = RuntimeExtension::open_recording;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs.
     uintptr_t words[1 + kHookCount]{};

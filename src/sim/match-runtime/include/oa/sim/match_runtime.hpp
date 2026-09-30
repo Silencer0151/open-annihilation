@@ -5,6 +5,7 @@
 
 #include "oa/sim/match_runtime/attack_orders.hpp"
 #include "oa/sim/match_runtime/construction_orders.hpp"
+#include "oa/sim/match_runtime/event_hooks.hpp"
 #include "oa/sim/match_runtime/match_trace.hpp"
 #include "oa/sim/match_runtime/spawn_bridge.hpp"
 #include "oa/sim/combat_state.hpp"
@@ -1458,6 +1459,12 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     ObserverHook observer{};
 
+    /// Read-only reports of units created, finished, damaged and dying and
+    /// of shots placed and detonating, for units simulated here and those a
+    /// recording or another machine settles alike; each null entry reports
+    /// nothing, and setting them changes nothing the match computes.
+    EventHooks event_hooks{};
+
     // The order panel closed back to its root page, even while a modal state
     // holds it, as a commander's death under the commander rule does before
     // its player's units self-destruct.
@@ -2593,6 +2600,10 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     OfflineInputs input_;
     OfflineServices& services_;
     SpeechHooks speech_hooks_{};
+    // The shot apply_shot is placing, whose aim and target unit place_shot
+    // reports to event_hooks.shot_placed in place of its own; place_shot
+    // clears it. Null otherwise.
+    const ShotEvent* applied_shot_{};
 
     // Canonical World, its tables, the native side tables indexed by unit slot or
     // player, and the legacy views bound over them. Addresses are stable.
@@ -2941,6 +2952,20 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param unit Finished unit; must be live.
     /// @param builder Unit whose work finished it, or the unit itself.
     void link_built_unit(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder);
+    /// Reports a unit the spawn placed to event_hooks.unit_created, then, for
+    /// a building (bmcode 0) created finished, to unit_finished as finished
+    /// by itself, as the spawn shares it.
+    ///
+    /// @param slot The new unit's slot; null reports nothing.
+    /// @param finished Whether the request created the unit finished.
+    void report_created(const sim::unit_spawn::Slot* slot, bool finished);
+    /// Reports a unit finished to event_hooks.unit_finished, once from its
+    /// creation on, whichever path finishes it first.
+    ///
+    /// @param unit Finished unit slot.
+    /// @param builder Slot of the unit whose work finished it; `unit` for a
+    ///     building created finished.
+    void report_finished(uint16_t unit, uint16_t builder);
     /// Tests set_carry_link's checks: the child is a live unit, not a
     /// building, carrying nothing; a parent is another live unit, not
     /// carried itself.

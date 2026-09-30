@@ -20,6 +20,10 @@ struct SlotRuntime {
     // the freed instance's memory. Draw state is kept per generation; the
     // simulation never reads it.
     uint32_t instance_generation{};
+    // Whether Match::event_hooks reported the slot's unit finished since its
+    // creation was reported, so no path reports it twice; the simulation
+    // never reads it.
+    bool finished_reported{};
 };
 
 // Engine operations unit creation calls out to. These are required

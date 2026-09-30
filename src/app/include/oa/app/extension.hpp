@@ -30,7 +30,9 @@
 //   extension's effects), the switch handlers (a letter goes to the first
 //   handler that takes it; every handler's reset runs), run_mode (for each
 //   phase), start_scene, simulation_step, give_resources, player_gone,
-//   close_requested and select_multiplayer (the first answer other than
+//   close_requested, open_recording (each extension asked is given replay
+//   and info all zero, and only the one that takes the recording fills the
+//   caller's) and select_multiplayer (the first answer other than
 //   unavailable);
 // - the first answer, asking the last extension in the list first: the
 //   first that is not null for disconnect_text and for text's usage_note
@@ -122,8 +124,11 @@
 /// two version 6 hooks with return_label, whose label alone now decides
 /// what the match's menus show, and keep_stored_password, which only the
 /// preferences write asks; and refuses a reserved game switch no extension
-/// takes with "-<switch> is not handled by this build".
-#define OA_EXTENSION_API_VERSION 8
+/// takes with "-<switch> is not handled by this build". Version 9 adds
+/// open_recording, which hands an extension a recording's bytes to replay
+/// into a match the engine steps one tick at a time, with the types
+/// RecordingInput, RecordingInfo, RecordingStatus and ReplayHooks.
+#define OA_EXTENSION_API_VERSION 9
 
 namespace oa {
 struct Game;
@@ -284,6 +289,62 @@ struct MatchOverlay {
     /// @param height its height; 0 or less fills nothing
     /// @param palette_index the colour, a palette index
     void (*fill_rect)(void* painter, int x, int y, int width, int height, uint8_t palette_index){};
+};
+
+// A recording the engine asks an extension to replay: a file a director
+// script names, handed over as bytes so that a bundle's entries are never
+// written out.
+struct RecordingInput {
+    const char* name{};     // the recording's file name as the script gives it, UTF-8; read at once
+    const uint8_t* bytes{}; // the recording's contents; valid for the call only
+    size_t byte_count{};    // bytes at `bytes`
+    bool strict{};          // refuse a recording this installation cannot replay exactly
+};
+
+// What an extension says about a recording it opened.
+struct RecordingInfo {
+    uint32_t expected_end_tick{}; // the tick after the recording's last; 0 when not known
+    uint64_t duration_ms{};       // the recording's length by its own clock; 0 when not known
+    uint8_t viewer_player{};      // the player index of the slot the replay is watched from
+    uint8_t player_count{};       // players the recording holds, the viewer's slot not counted
+    bool content_differs{};       // the installation's unit definitions differ from the recording's
+};
+
+// Where a replay stands (ReplayHooks::status).
+struct RecordingStatus {
+    uint32_t tick{};          // the running match's game tick
+    bool finished{};          // everything recorded has been replayed
+    bool clean{};             // no error so far: every record applied and no tick failed
+    bool paced{};             // the recording's periodic records came at the spacing it states
+    uint32_t errors{};        // errors so far: records refused or failed, and ticks that failed
+    const char* last_error{}; // the last error's text, or null; valid until the next call
+};
+
+// A recording an extension replays into the running match, which the engine
+// steps one tick at a time. The extension fills every member in
+// open_recording, so none is null once it returns true, and keeps what its
+// context names until close.
+struct ReplayHooks {
+    void* context{}; // passed back to step, status and close; owned by the extension
+    /// Runs the running match's next tick from the recording.
+    ///
+    /// A failed tick or a record that cannot be applied does not throw: it
+    /// counts in RecordingStatus::errors and the replay goes on.
+    ///
+    /// @param context ReplayHooks::context
+    /// @return true when a tick ran; false when the replay can go no further
+    bool (*step)(void* context){};
+    /// Tells where the replay stands; it must not change the runtime.
+    ///
+    /// @param context ReplayHooks::context
+    /// @param[out] status the replay's state, all zero and false on entry
+    void (*status)(void* context, RecordingStatus& status){};
+    /// Ends the replay and frees what the extension kept for it. The match
+    /// stays the engine's to tear down. Called once; the hooks are not used
+    /// again.
+    ///
+    /// @param context ReplayHooks::context
+    void (*close)(void* context){};
 };
 
 struct Extension {
@@ -852,6 +913,38 @@ struct Extension {
     /// @param[in,out] runtime the running app
     /// @param mode the mode set
     void (*app_mode_set)(void* context, Runtime& runtime, int32_t mode){};
+
+    /// Opens a recording to replay into a new match, which the engine then steps.
+    ///
+    /// Called when --render-script or --generate-script needs the recording a
+    /// director script names, in a headless run before any match starts. An
+    /// extension that replays recordings of that kind starts the recording's
+    /// match through the engine's own match start, with the engine's match
+    /// hooks installed, fills `replay` and `info` and returns true. The
+    /// engine then runs no tick of that match itself: it calls replay.step
+    /// once for each tick, replay.status whenever it needs to know where the
+    /// replay stands, and replay.close once, before it tears the match down.
+    /// An extension that does not recognise the recording returns false and
+    /// the next one is asked; when none takes it the run stops with "no
+    /// extension of this build replays <name>". Throws std::runtime_error
+    /// for a recording it recognises but cannot replay: one it cannot read,
+    /// whose map is not installed, with no free slot to watch from, or, when
+    /// input.strict is set, whose unit definitions differ from the
+    /// installation's; the error ends oa-game.
+    ///
+    /// @param context Extension::context
+    /// @param[in,out] runtime the running app, headless, with no match running
+    /// @param input the recording's name and bytes, valid for this call only
+    /// @param[out] replay the replay's step, status and close, all null on entry
+    /// @param[out] info what the recording holds, all zero on entry
+    /// @return true when the extension opened the recording
+    bool (*open_recording)(
+        void* context,
+        Runtime& runtime,
+        const RecordingInput& input,
+        ReplayHooks& replay,
+        RecordingInfo& info
+    ){};
 };
 
 } // namespace oa::app

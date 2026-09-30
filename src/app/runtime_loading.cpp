@@ -219,6 +219,9 @@ void Runtime::draw_loading_screen() {
 }
 
 void Runtime::teardown_match() {
+    // Director mode holds the match's sound hooks and camera paths; it
+    // gives them back before the match goes.
+    leave_director_mode();
     if (extension_.match_event != nullptr)
         extension_.match_event(extension_.context, *this, MatchEvent::torn_down);
     // A team panel open as the match ended goes with it, and so do the

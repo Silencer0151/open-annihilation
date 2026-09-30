@@ -145,6 +145,29 @@ int Runtime::run() {
     if (extension_run(RunPhase::start))
         return exit_code;
     if (options_.headless_check) {
+        // The director's runs come before the extension's headless runs,
+        // which never see them; an extension takes part only through
+        // open_recording.
+        if (!options_.generate_script.empty()) {
+            const int status = run_generate_script();
+            flush_preferences();
+            return status;
+        }
+        if (!options_.render_script.empty()) {
+            const int status = run_render_script();
+            flush_preferences();
+            return status;
+        }
+        if (options_.check_director_view) {
+            check_director_view();
+            flush_preferences();
+            return 0;
+        }
+        if (options_.check_director_render) {
+            check_director_render();
+            flush_preferences();
+            return 0;
+        }
         if (extension_run(RunPhase::headless_first))
             return exit_code;
         if (options_.check_navigation)

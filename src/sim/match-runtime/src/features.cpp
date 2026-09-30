@@ -359,6 +359,10 @@ bool Match::launch_meteor(
         sim::weapon_execution::spawn_free_projectile(state(), weapon, position, velocity);
     if (shot == nullptr)
         return false;
+    if (event_hooks.shot_placed != nullptr)
+        event_hooks.shot_placed(
+            event_hooks.context, state(), *shot, ShotSource::meteor, nullptr, 0
+        );
     // The weapon's soundstart plays where the shot starts.
     if (const auto* definition = projectile_weapon(*shot))
         play_sound_at(definition->soundstart.c_str(), position);

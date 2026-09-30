@@ -587,6 +587,34 @@ void combine_hooks(ExtensionListState& state) {
     combine(state, &Extension::app_mode_set, [](void* context, Runtime& runtime, int32_t mode) {
         call_every(context, &Extension::app_mode_set, runtime, mode);
     });
+    combine(
+        state,
+        &Extension::open_recording,
+        [](void* context,
+           Runtime& runtime,
+           const RecordingInput& input,
+           ReplayHooks& replay,
+           RecordingInfo& info) {
+            const auto& extensions = state_of(context).extensions;
+            for (auto extension = extensions.rbegin(); extension != extensions.rend();
+                 ++extension) {
+                if (extension->table.open_recording == nullptr)
+                    continue;
+                // Each extension starts from zero, whatever one that
+                // declined wrote; the caller's are filled only on a take.
+                ReplayHooks opened{};
+                RecordingInfo opened_info{};
+                if (extension->table.open_recording(
+                        extension->table.context, runtime, input, opened, opened_info
+                    )) {
+                    replay = opened;
+                    info = opened_info;
+                    return true;
+                }
+            }
+            return false;
+        }
+    );
 }
 
 } // namespace

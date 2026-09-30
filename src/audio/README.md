@@ -75,3 +75,79 @@ whole mood (activity ring, applied kind, switch timer and last update tick)
 resets at match start and end, so each game's music is independent of the
 last; in 3.1c the applied kind, switch timer and last update tick carry over
 from one game to the next.
+
+## Offline mix
+
+`oa-audio-offline-mix` (`oa/audio/offline_mix.hpp`, namespace
+`oa::audio::offline_mix`) mixes the game's sound effects for director
+renders: clips started at exact sample frames, mixed on demand into 16-bit
+stereo at 48 kHz, with no sound device, no clock and no SDL. It reads sound
+files only through its `ClipFileHooks` table and writes nothing but the
+samples it returns; it never reads or writes simulation state.
+
+Entry points: `decode_clip` (a sound file to a 48 kHz mono clip),
+`centibel_gain` and `voice_gains` (a volume and a placement to Q15 gains),
+`OfflineMix` (`start` queues a clip at a sample frame, `render` mixes the
+next sample frames, `position`, `voices_playing`, `errors`) and
+`wave_header` (the 44-byte header of a 48 kHz 16-bit stereo WAVE file).
+
+Every step after decoding is integer arithmetic, so the same starts give the
+same samples on every platform, and a mix rendered in several calls equals
+one rendered in one call:
+
+- Decoding takes the raw, DIGI and RIFF layouts `describe_wave` finds: 8-bit
+  unsigned or 16-bit signed, mono or stereo, 4000 to 96000 Hz. 8-bit samples
+  widen as `(x - 128) * 256`; stereo averages its two channels, rounding
+  down. The clip is resampled to 48 kHz by exact rational phase: output
+  sample n reads input position `n * rate / 48000` and interpolates linearly
+  to the next input sample (0 past the end), rounding down; a clip of N
+  input frames gives `ceil(N * 48000 / rate)` samples. A file larger than
+  `max_clip_file_bytes`, a data span that runs past the file's end, no whole
+  sample frame, or a clip of more than `max_clip_file_bytes` samples at
+  48 kHz is refused with a message.
+- `centibel_gain` turns hundredths of a decibel below `full_scale_volume`
+  (0, the device's full volume, so the game's near volume of -585 plays
+  5.85 dB below full scale, as in the game) into a Q15 gain from two tables typed into
+  the source: `10^(-h/20)` for whole decibels 0 to 19 and `10^(-u/2000)` for
+  hundredths 0 to 99, both Q30 and rounded to nearest; each further 20 dB
+  divides by ten. Louder volumes play at full scale. `voice_gains` takes
+  `spatial_stereo_gain`'s levels (float, with + - * / and square root only),
+  rounds each down to Q15 and multiplies it by that gain.
+- Each output sample is the sum over playing clips of
+  `(clip sample * gain) >> 15`, times the master gain (Q15; by default the
+  game's default effects volume, 27 << 10 over 65535) `>> 15`, saturated to
+  16 bits.
+
+The voice policy is the game's mixer's: at most eight voices; a start that
+finds them all taken stops the voice that started first; each clip has up
+to four buffers, made as starts need them, and a start reuses an idle one,
+else makes one while fewer than four exist (the highest free index first),
+else restarts the one that has played furthest (the lowest index among
+equals). A restarted buffer keeps the voice it had and takes a second one,
+so it counts twice toward the eight until it stops; when the older of its
+two voices is the one evicted, the buffer stops, and its other voice is
+freed at the next start. A clip that plays to its end frees its voices
+before any start on the sample frame it ends on. Starts apply in the order
+of their sample frames, and starts on one frame in the order they were
+queued; a start queued for a frame already mixed applies at `position()`.
+
+Clips are decoded once and cached under their path, with backslashes turned
+into slashes and ASCII letters lowered; the hooks are asked for the path
+with slashes and its letters as given. The cache holds `max_cached_clips`
+clips; a full cache drops the least recently started clip that no voice
+plays. A clip that cannot be read or decoded plays nothing, and its message
+is kept once in `errors()`.
+
+Tests: `audio-offline-mix` decodes synthetic 8-bit, 16-bit, stereo, DIGI,
+headerless, 11025 Hz and 22254 Hz files to exact samples, refuses malformed
+ones (a data span past the end, no data, a four-gigabyte count, unsupported
+widths, channels and rates, oversized files and clips), checks the decibel
+tables against a power function to one Q15 step, pins voice gains, the
+voice limit, the restart bookkeeping, start order, saturation, errors and
+the cache, checks that rendering in pieces (with starts queued ahead or just
+in time) equals one render, pins the SHA-256 of a two-second synthetic
+scene, and pins `wave_header`'s bytes. `audio-offline-mix-data` decodes
+every sound file of the installed game.
+
+Limitations: the mix plays each clip once. The looping sound, the stream and
+the music are not mixed, so no voice is ever exempt from eviction.

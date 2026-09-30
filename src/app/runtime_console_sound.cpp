@@ -5,6 +5,7 @@
 // plays at a point, wave files played by path, and the "Sound3D" and "Sing"
 // console commands.
 #include "oa/app/runtime.hpp"
+#include "director_state.hpp"
 
 #include "oa/sim/match_runtime.hpp"
 #include "oa/platform/preferences.hpp"
@@ -29,6 +30,25 @@ constexpr uint32_t novelty_honk_windows = 8; // honk on one window in eight
 } // namespace
 
 void Runtime::play_point_sound(const char* name, const PointSound& sound) {
+    // Director mode hears every point sound through its hooks, whatever the
+    // sound options say, and never through the sound device.
+    if (director_ != nullptr) {
+        const auto resource = oa::audio::game_audio::sound_resource(name);
+        ++director_->tally.point_sounds;
+        director_->send(
+            {resource.c_str(),
+             sound.volume,
+             sound.placed,
+             sound.x,
+             sound.y,
+             sound.z,
+             sound.min_distance,
+             sound.max_distance,
+             0,
+             match_ ? match_->simulation().tick : 0U}
+        );
+        return;
+    }
     if (options_.mute || options_.launch.playback_suppressed != 0 || preferences_.fx_volume == 0 ||
         (preferences_.sound_flags & init::preference_flags::sound_mode) == 0)
         return;

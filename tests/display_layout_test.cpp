@@ -114,5 +114,23 @@ int main() {
         const auto back = canvas_to_source(layout, layout.left, layout.bottom_bar_y());
         CHECK(back.x == kSourceLeft && back.y == kSourceBottomBarY);
     }
+
+    // A battlefield-only frame: no chrome at any size, the battlefield the
+    // whole frame, drawn at scale 1 with no HUD.
+    for (const auto& pair : cases) {
+        const auto layout = make_battlefield_layout(pair[0], pair[1]);
+        CHECK(layout.width == pair[0] && layout.height == pair[1]);
+        CHECK(layout.left == 0 && layout.top == 0 && layout.bottom == 0);
+        CHECK(layout.battlefield_x() == 0 && layout.battlefield_y() == 0);
+        CHECK(layout.battlefield_width() == pair[0] && layout.battlefield_height() == pair[1]);
+        CHECK(layout.bottom_bar_y() == layout.height);
+        CHECK(layout.hud_width == 0 && layout.hud_height == 0 && layout.scale == 1.0);
+    }
+    // Sizes the chrome layout would raise stay as asked, down to one pixel.
+    const auto small = make_battlefield_layout(33, 17);
+    CHECK(small.battlefield_width() == 33 && small.battlefield_height() == 17);
+    const auto empty = make_battlefield_layout(0, -4);
+    CHECK(empty.width == 1 && empty.height == 1);
+    CHECK(empty.battlefield_width() == 1 && empty.battlefield_height() == 1);
     return 0;
 }

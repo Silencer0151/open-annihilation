@@ -79,6 +79,21 @@ struct MatchLayout {
     return {pixel_width, pixel_height, left, top, bottom, hud_width, hud_height, scale};
 }
 
+/// Lays out a frame that shows the battlefield alone, with no interface.
+///
+/// Director mode draws its frames this way: no side column, top bar or
+/// bottom bar, and no HUD, so the battlefield is the whole frame and every
+/// pixel is the world's.
+///
+/// @param pixel_width frame width in pixels; at least 1 is used
+/// @param pixel_height frame height in pixels; at least 1 is used
+/// @return the layout: left, top and bottom 0, a HUD of 0 by 0 pixels and
+///         scale 1
+[[nodiscard]] inline MatchLayout
+make_battlefield_layout(int pixel_width, int pixel_height) noexcept {
+    return {std::max(pixel_width, 1), std::max(pixel_height, 1), 0, 0, 0, 0, 0, 1.0};
+}
+
 struct Point {
     int x = 0;
     int y = 0;

@@ -51,6 +51,30 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
         on_screen_context_ = context;
     }
 
+    /// Hears the unit announcements every player's units ask for, whoever
+    /// owns them: director mode's listener (director_presentation.hpp).
+    struct AnnouncementHooks {
+        void* context{};
+        /// Takes an announcement a unit asks for, before the match's own
+        /// queue sees it; null hears none.
+        ///
+        /// @param context AnnouncementHooks::context
+        /// @param owner the speaking unit's player
+        /// @param request the request as the match's queue gets it; its
+        ///        views are valid for the call only
+        void (*heard)(
+            void* context, uint8_t owner, const oa::audio::game_audio::AnnouncementRequest& request
+        ){};
+    };
+
+    /// Sets the listener that hears every unit's announcement requests.
+    ///
+    /// The match's own queue still gets every request afterwards, so what it
+    /// queues and what it draws from the match's LCG stream do not change.
+    ///
+    /// @param hooks the listener; a null `heard` hears none
+    void set_announcement_hooks(AnnouncementHooks hooks) noexcept { announcement_hooks_ = hooks; }
+
     /// Binds the unit sound catalog and the match for unit announcements.
     ///
     /// Maps each type's simulation record to its definition's sound category.
@@ -256,9 +280,10 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
 
     /// Queues a unit announcement for a game sound category.
     ///
-    /// A category with no announcement is dropped. When the queue was full and the
-    /// record is queued, the record it evicted is presented at once, with a draw
-    /// from the match's LCG stream. Throws
+    /// A category with no announcement is dropped. The announcement listener,
+    /// when one is set, hears the request first, whoever owns the unit. When
+    /// the queue was full and the record is queued, the record it evicted is
+    /// presented at once, with a draw from the match's LCG stream. Throws
     /// std::runtime_error when nothing is bound or the unit's type is not in the
     /// catalog.
     ///
@@ -280,20 +305,25 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
         const auto found = sound_categories_.find(slot.unit->type);
         if (found == sound_categories_.end())
             throw std::runtime_error("unit announcement type is not in the loaded catalog");
+        const oa::audio::game_audio::AnnouncementRequest request{
+            slot.unit_index,
+            found->second,
+            *category,
+            match_->simulation().tick,
+            slot.owner_index == viewpoint_,
+            (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0 &&
+                (slot.unit->flags & OA_UNIT_FLAG_DEATH_PENDING) == 0,
+            // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
+            (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
+            caption
+        };
+        // Before the queue is touched, so that it, and the draws it makes
+        // from the match's LCG stream, are the same with a listener or without.
+        if (announcement_hooks_.heard != nullptr)
+            announcement_hooks_.heard(announcement_hooks_.context, slot.owner_index, request);
         const bool was_full =
             announcement_queue_.size() == oa::audio::game_audio::AnnouncementQueue::capacity;
-        const auto result = announcement_queue_.enqueue(
-            {slot.unit_index,
-             found->second,
-             *category,
-             match_->simulation().tick,
-             slot.owner_index == viewpoint_,
-             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0 &&
-                 (slot.unit->flags & OA_UNIT_FLAG_DEATH_PENDING) == 0,
-             // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
-             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
-             caption}
-        );
+        const auto result = announcement_queue_.enqueue(request);
         if (was_full && result == oa::audio::game_audio::AnnouncementEnqueueStatus::queued) {
             const auto random = static_cast<uint16_t>(match_->lcg_rand());
             if (auto event = announcement_queue_.present_evicted(
@@ -313,6 +343,7 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     uint8_t viewpoint_{};
     OnScreenTest on_screen_test_{};
     const void* on_screen_context_{};
+    AnnouncementHooks announcement_hooks_{};
 };
 
 class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycle,

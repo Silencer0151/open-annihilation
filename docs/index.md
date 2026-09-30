@@ -36,6 +36,11 @@ Every document in the repository, by what you want to do.
 - [capture.md](capture.md): capturing the game as an MP4 video with
   `--capture-video` (it needs the `ffmpeg` program), and the scripted run
   `--showcase` plays for showcase videos.
+- [director.md](director.md): director scripts (`.oascript`) and bundles
+  (`.oamovie`): planning a script's camera shots from a recorded game with
+  `--generate-script`, rendering it to video with its sound with
+  `--render-script`, the script format, the files a render writes, and what
+  stays the same on every platform.
 - [platform.md](platform.md): `oa-platform`, the SDL3 presentation and audio
   smoke tool.
 - [resolution-proofs/](resolution-proofs): diagrams of the match screen's

@@ -59,6 +59,8 @@ void Match::link_built_unit(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& 
         static_cast<uint16_t>(unit.unit->events | sim::unit_health::construction_event);
     if (simulated_here)
         notify_finished(unit, builder);
+    // Every build that reaches the end passes here.
+    report_finished(unit.unit_index, builder.unit_index);
 }
 
 void Match::finish_unit(uint16_t unit, uint16_t builder) {

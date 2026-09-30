@@ -223,6 +223,9 @@ void Runtime::apply_zoom_anchor() {
 }
 
 void Runtime::step_match_zoom() {
+    // The director sets the zoom of every frame itself, off the wall clock.
+    if (director_mode())
+        return;
     const auto now = std::chrono::steady_clock::now();
     float dt = 1.0F / 120.0F;
     if (zoom_clock_valid_) {
@@ -274,7 +277,8 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
 }
 
 void Runtime::pan_match_camera() {
-    if (screen_ != Screen::match || !selected_tnt_)
+    // Neither keys nor the pointer move the director's camera.
+    if (screen_ != Screen::match || !selected_tnt_ || director_mode())
         return;
     // Paced as the game paces it: the map pixels moved in a frame are the
     // scroll speed times the whole 30 Hz clock units since the previous frame,

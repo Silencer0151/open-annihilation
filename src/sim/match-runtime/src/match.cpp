@@ -443,7 +443,9 @@ const RuntimeTypeFields& Match::fields(sim::unit_spawn::Slot& slot) const {
 }
 
 sim::unit_spawn::Slot* Match::create(const sim::unit_spawn::Request& request) {
-    return bridge_->create(request);
+    auto* slot = bridge_->create(request);
+    report_created(slot, request.finished);
+    return slot;
 }
 
 sim::unit_spawn::StartResult Match::start_player(
@@ -455,9 +457,35 @@ sim::unit_spawn::StartResult Match::start_player(
     int32_t height,
     sim::unit_spawn::StartHost& host
 ) {
-    return bridge_->start_player(
+    const auto started = bridge_->start_player(
         player, setup, markers, index, input_.viewpoint_player, width, height, host
     );
+    // The commander is created finished.
+    if (started.unit != nullptr)
+        report_created(&slots_.at(oa::world_unit_slot(&state(), started.unit)), true);
+    return started;
+}
+
+void Match::report_created(const sim::unit_spawn::Slot* slot, bool finished) {
+    if (slot == nullptr || slot->unit == nullptr)
+        return;
+    const auto unit = slot->unit_index;
+    bridge_->runtime(slots_.at(unit)).finished_reported = false;
+    const auto& world = state();
+    if (event_hooks.unit_created != nullptr)
+        event_hooks.unit_created(event_hooks.context, world, unit);
+    const auto type = world.units[unit].type_index;
+    if (finished && type < world.unit_def_count && world.unit_defs[type].bm_code == 0)
+        report_finished(unit, unit);
+}
+
+void Match::report_finished(uint16_t unit, uint16_t builder) {
+    auto& reported = bridge_->runtime(slots_.at(unit)).finished_reported;
+    if (reported)
+        return;
+    reported = true;
+    if (event_hooks.unit_finished != nullptr)
+        event_hooks.unit_finished(event_hooks.context, state(), unit, builder);
 }
 
 UnitInstance* Match::instance(uint16_t index) {

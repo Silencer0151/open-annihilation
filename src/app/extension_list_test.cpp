@@ -64,6 +64,9 @@ struct Probe {
     bool sets_tournament_game{};
     bool sets_play_sound{};
     bool sets_share_chat{};
+    bool fills_open_recording{true};
+    bool throws_open_recording{}; // open_recording throws instead of answering
+    bool opened_from_zero{};      // open_recording's last call was given replay and info all zero
 };
 
 Probe base_probe;
@@ -118,6 +121,25 @@ void derived_sight(void*, uint8_t, uint8_t) {
 
 bool never(void*) {
     return false;
+}
+
+// The replay an extension's open_recording gives, whether or not it takes
+// the recording.
+bool step_nothing(void*) {
+    return false;
+}
+
+void status_nothing(void*, RecordingStatus&) {
+}
+
+void close_nothing(void*) {
+}
+
+// Whether a replay and its information are all zero, as the engine passes them.
+bool all_zero(const ReplayHooks& replay, const RecordingInfo& info) {
+    return replay.context == nullptr && replay.step == nullptr && replay.status == nullptr &&
+           replay.close == nullptr && info.expected_end_tick == 0 && info.duration_ms == 0 &&
+           info.viewer_player == 0 && info.player_count == 0 && !info.content_differs;
 }
 
 void fill(Extension* table, Probe& probe) {
@@ -278,6 +300,27 @@ void fill(Extension* table, Probe& probe) {
         record(context, "speed_changed");
     };
     table->app_mode_set = [](void* context, Runtime&, int32_t) { record(context, "app_mode_set"); };
+    if (probe.fills_open_recording)
+        table->open_recording = [](void* context,
+                                   Runtime&,
+                                   const RecordingInput& input,
+                                   ReplayHooks& replay,
+                                   RecordingInfo& info) {
+            record(context, "open_recording");
+            auto& self = probe_of(context);
+            self.opened_from_zero = all_zero(replay, info);
+            if (self.throws_open_recording)
+                throw std::runtime_error(std::string(self.name) + " cannot replay " + input.name);
+            // Written whether or not it takes the recording, so that a
+            // declining extension's answer would show if it were passed on.
+            replay = {context, step_nothing, status_nothing, close_nothing};
+            info.expected_end_tick = static_cast<uint32_t>(self.name[0]);
+            info.duration_ms = input.byte_count;
+            info.viewer_player = 2;
+            info.player_count = 2;
+            info.content_differs = true;
+            return self.takes;
+        };
 }
 
 void init_base(Extension* table) {
@@ -341,6 +384,12 @@ void test_null_hooks_stay_null() {
         table.frontend_game == nullptr && table.frontend_states == nullptr, "so do the single ones"
     );
     expect(table.startup != nullptr, "a hook one extension fills is combined");
+    derived_probe.fills_open_recording = false;
+    const ExtensionList without(one);
+    expect(
+        without.combined().open_recording == nullptr,
+        "no extension fills open_recording: the hook stays null, and no extension replays"
+    );
 }
 
 void test_every_in_order() {
@@ -696,6 +745,70 @@ void test_host_entries() {
     );
 }
 
+// open_recording over both extensions, the derived asked first: neither
+// takes the recording, the base or the derived takes it, or the derived
+// throws.
+void test_open_recording() {
+    reset_probes();
+    const ExtensionList list(kBoth);
+    const auto& table = list.combined();
+    void* context = table.context;
+    auto& runtime = opaque<Runtime>();
+    const uint8_t bytes[] = {1, 2, 3};
+    const RecordingInput input{"game.rec", bytes, sizeof bytes, true};
+    ReplayHooks replay{};
+    RecordingInfo info{};
+    const auto open = [&] { return table.open_recording(context, runtime, input, replay, info); };
+
+    expect(!open(), "no extension opens the recording");
+    expect(
+        called({"derived open_recording", "base open_recording"}),
+        "the derived extension is asked first, then the base"
+    );
+    expect(
+        derived_probe.opened_from_zero && base_probe.opened_from_zero,
+        "each extension asked is given replay and info all zero"
+    );
+    expect(
+        all_zero(replay, info), "the caller's replay and info stay zero when every one declines"
+    );
+
+    base_probe.takes = true;
+    expect(open(), "the base opens the recording");
+    expect(called({"derived open_recording", "base open_recording"}), "after the derived declined");
+    expect(
+        base_probe.opened_from_zero, "the base starts from zero after the derived wrote its own"
+    );
+    expect(
+        replay.context == &base_probe && replay.step == step_nothing &&
+            replay.status == status_nothing && replay.close == close_nothing &&
+            info.expected_end_tick == static_cast<uint32_t>('b') &&
+            info.duration_ms == sizeof bytes && info.viewer_player == 2 && info.player_count == 2 &&
+            info.content_differs,
+        "the caller holds the base's replay and information"
+    );
+
+    replay = {};
+    info = {};
+    derived_probe.takes = true;
+    expect(open(), "the derived opens the recording");
+    expect(called({"derived open_recording"}), "and the base is not asked");
+    expect(
+        replay.context == &derived_probe && info.expected_end_tick == static_cast<uint32_t>('d'),
+        "the caller holds the derived's replay and information"
+    );
+
+    replay = {};
+    info = {};
+    derived_probe.throws_open_recording = true;
+    expect(
+        call_refusal(open) == "derived cannot replay game.rec",
+        "an exception of the extension asked reaches the caller"
+    );
+    expect(called({"derived open_recording"}), "and no other extension is asked");
+    expect(all_zero(replay, info), "the caller's replay and info stay zero");
+}
+
 } // namespace
 
 int main() {
@@ -710,6 +823,7 @@ int main() {
     test_switches();
     test_single_owners();
     test_host_entries();
+    test_open_recording();
     if (failures != 0)
         return 1;
     std::puts("extension list: every rule of combining two extensions' hooks");

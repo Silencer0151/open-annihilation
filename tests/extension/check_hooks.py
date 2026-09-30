@@ -26,7 +26,8 @@ when it did not, which fails the run. --runs picks the runs:
            --check-multiplayer-menu (after which the recorder drives a round
            of the main menu through the check host), --check-match-dialogs
            (whose close requests reach close_requested and whose GAME slider
-           speed_changed) and a run the recorder ends through
+           speed_changed), a --generate-script run whose recording no
+           extension replays (open_recording) and a run the recorder ends through
            ScreenServices::quit (--record-quit) with status 3, through SDL's
            dummy drivers. When OA_GAME_DIR is unset,
            empty or names no directory it exits with --skip-code
@@ -35,11 +36,11 @@ when it did not, which fails the run. --runs picks the runs:
 
 HOOKS must name the hooks src/app/include/oa/app/extension.hpp declares, in its order.
 With every run of both sets, each of them is reached except those UNREACHED
-lists, which only a shared match reaches; so are match_event's left,
-results_reported and watching_kept, which these runs do not ask for. A new
-hook must be added to the recorder, to the follower (or, when one extension
-at most may fill it, to FOLLOWER_UNFILLED), to HOOKS and to a run here or
-to UNREACHED.
+lists, which only a shared match or a run these sets do not make reaches;
+so are match_event's left, results_reported and watching_kept, which these
+runs do not ask for. A new hook must be added to the recorder, to the
+follower (or, when one extension at most may fill it, to
+FOLLOWER_UNFILLED), to HOOKS and to a run here or to UNREACHED.
 """
 import argparse
 import os
@@ -71,7 +72,7 @@ HOOKS = [
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
-    "close_requested", "return_label", "speed_changed", "app_mode_set",
+    "close_requested", "return_label", "speed_changed", "app_mode_set", "open_recording",
 ]
 # The hooks one extension at most may fill, which the follower leaves to the
 # recorder, and what the recorder alone records.
@@ -80,7 +81,7 @@ FOLLOWER_UNFILLED = {"frontend_game", "frontend_states", "runtime_member"}
 FOLLOWER_NOTE = "The recorder test extensions record every hook's calls."
 # The environment variable that has the follower fill frontend_game too.
 DOUBLE_FRONTEND_GAME = "OA_RECORDER_FOLLOWER_FRONTEND_GAME"
-# Hooks only a match played with other machines reaches.
+# Hooks no run here reaches, and why.
 UNREACHED = {
     "disconnect_text": "the end-of-game screen asks for it only after a shared match",
 }
@@ -93,11 +94,12 @@ class Run:
     the fewest times it must be recorded, for a hook every run reaches
     once through --record-hooks itself. output is a text, or a list of
     texts, the run's output must hold; environment adds variables to the
-    run's environment.
+    run's environment; files maps the names of files the run reads to the
+    text written into them in the scratch directory first.
     """
 
     def __init__(self, name, arguments, expected, *, at_least=None, game=False, status=0, output="",
-                 dummy=False, environment=None):
+                 dummy=False, environment=None, files=None):
         self.name = name
         self.arguments = arguments
         self.expected = expected
@@ -107,6 +109,7 @@ class Run:
         self.output = output
         self.dummy = dummy
         self.environment = environment or {}
+        self.files = files or {}
 
 
 # Every run passes --record-hooks first, which take_option takes, asking
@@ -164,6 +167,12 @@ RUNS = {
         Run("match-dialogs", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-match-dialogs"],
             ["close_requested", "return_label", "speed_changed"], game=True,
             dummy=True, output="match close check:"),
+        # A director script's recording is offered to the extensions, the
+        # follower first; neither replays it, so the run stops.
+        Run("generate-script",
+            ["--game-dir", "{game}", "--generate-script", "{scratch}/none.rec"],
+            ["open_recording", "follower.order open_recording"], game=True, status=1,
+            output="no extension of this build replays none.rec", files={"none.rec": "no recording\n"}),
         # The recorder uses the screen services it keeps on the fifth frame
         # and ends the run through quit on the tenth, long before 60.
         Run("quit", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "60", "--record-quit", "3"],
@@ -201,6 +210,8 @@ def run_game(game, run, scratch, game_dir):
     """Starts open-annihilation for a run; returns the failures it found and the hooks it recorded."""
     record = scratch / f"{run.name}.hooks"
     preferences = scratch / f"{run.name}.conf"
+    for name, text in run.files.items():
+        (scratch / name).write_text(text, encoding="utf-8")
     arguments = [argument.format(game=game_dir, scratch=scratch) for argument in run.arguments]
     command = [*RUNNER, str(game), "--record-hooks", str(record), *arguments]
     if run.game:

@@ -59,6 +59,13 @@ A capture does not include movies (the opening movies and the campaign's
 ending), which a movie player shows, nor any headless run, check or
 benchmark: those options cannot be used with `--capture-video`.
 
+A capture keeps to the wall clock, so what it shows depends on how fast the
+machine runs. To make a video of a recorded game that is the same on every
+run, at any size and frame rate, from a camera that follows the game's
+moments, use a director script instead ([director.md](director.md)):
+`--generate-script` plans one from the recording and `--render-script`
+renders it frame by frame, headless, with its sound mixed offline.
+
 The code is `src/app/video_capture.cpp` (`oa-app-video-capture`), with its
 header `video_capture.hpp`. The runtime hands it each frame from
 `Runtime::capture_render_target()`, which every presented frame passes

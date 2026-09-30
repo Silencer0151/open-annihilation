@@ -105,6 +105,8 @@ add_subdirectory(src/formats/gaf)
 add_subdirectory(src/formats/fnt)
 add_subdirectory(src/formats/png)
 add_subdirectory(src/formats/pe)
+add_subdirectory(src/formats/oascript)
+add_subdirectory(src/formats/zip)
 add_subdirectory(src/sim/sprite-animation)
 add_subdirectory(src/formats/tnt)
 add_subdirectory(src/formats/ota)
@@ -209,6 +211,23 @@ if(OA_BUILD_PLATFORM)
     add_test(NAME app-check-host COMMAND oa-app-check-host-test)
   endif()
 endif()
+# The files a director render writes (--render-script), the ffmpeg runs that
+# encode them, and the director bundle (.oamovie) that carries a script with
+# its recording (director_output.hpp, docs/director.md).
+if(OA_BUILD_PLATFORM)
+  add_library(oa-app-director-output src/app/director_output.cpp)
+  add_library(oa::app::director_output ALIAS oa-app-director-output)
+  target_link_libraries(oa-app-director-output PUBLIC oa-app-headers oa-formats-zip oa-formats-oascript
+    oa-base-sha256 SDL3::SDL3 PRIVATE oa-audio-offline-mix oa-options)
+  if(BUILD_TESTING)
+    # File names, encoder arguments, the files of a render with encoding
+    # off, the environment's settings and bundles, malformed ones included.
+    add_executable(oa-app-director-output-test src/app/director_output_test.cpp)
+    target_link_libraries(oa-app-director-output-test PRIVATE oa-app-director-output
+      oa-audio-offline-mix oa-formats-zip oa-base-sha256 oa-options)
+    add_test(NAME app-director-output COMMAND oa-app-director-output-test)
+  endif()
+endif()
 if(BUILD_TESTING)
   add_executable(oa-app-window-icon-test src/app/window_icon_test.cpp)
   target_link_libraries(oa-app-window-icon-test PRIVATE oa-app-window-icon oa-formats-png oa-options)
@@ -272,7 +291,11 @@ set(oa_game_sources src/app/main.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
-  src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp)
+  src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
+  src/app/runtime_director_view.cpp src/app/runtime_director.cpp)
+# The run manifest of a director render names the engine's version.
+set_property(SOURCE src/app/runtime_director.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
   oa-app-video-capture
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
@@ -322,6 +345,8 @@ if(OA_BUILD_PLATFORM)
     target_sources(oa-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc")
   endif()
   target_link_libraries(oa-game PRIVATE oa-ui-display-layout)
+  target_link_libraries(oa-game PRIVATE oa-media-director oa-media-director-planner oa-audio-offline-mix
+    oa-formats-oascript oa-formats-zip oa-app-director-output)
   target_link_libraries(oa-game PRIVATE ${oa_game_intro_player} SDL3::SDL3 ${oa_game_libraries}
     oa-ui-frontend-dialogs)
   if(BUILD_TESTING)
@@ -411,6 +436,37 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-kill-board PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_kill_board_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The headless skirmish's first ticks played in director mode, drawn,
+      # reach the world the same ticks replayed there undrawn reach; director
+      # frames show the battlefield alone, move by half a map pixel and zoom
+      # past the player's range, and the fight's sounds reach the director's
+      # hooks.
+      set(oa_director_view_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-view")
+      file(MAKE_DIRECTORY "${oa_director_view_dir}")
+      add_test(NAME native-director-view COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --check-director-view
+        --snapshot "${oa_director_view_dir}/director-view.ppm"
+        --preferences-file "${oa_director_view_dir}/director-view.conf")
+      set_tests_properties(native-director-view PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_director_view_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
+      # A small director script rendered over the headless skirmish with
+      # encoding off, whole and its second chunk alone: every chunk's frames,
+      # sound and manifests are written, neither a chunk's sound nor the
+      # world depends on the chunks drawn before it, and the render reaches
+      # the world the generator's undrawn replay reaches. The frames and the
+      # sound are pinned.
+      set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
+      file(MAKE_DIRECTORY "${oa_director_render_dir}")
+      add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --check-director-render
+        --preferences-file "${oa_director_render_dir}/director-render.conf")
+      set_tests_properties(native-director-render PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_director_render_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        PASS_REGULAR_EXPRESSION
+          "director render: frames c70634a9984e59d0d954978f235d634f1b6b75d6e74b04cee25c7a543079f001 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d"
+        FAIL_REGULAR_EXPRESSION "director render check:")
       # native-intro-switch, which starts the game with -y, is registered
       # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order
