@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 cmake_minimum_required(VERSION 3.24)
-project(open_annihilation VERSION 0.3.1 LANGUAGES C CXX)
+project(open_annihilation VERSION 0.4.0 LANGUAGES C CXX)
 # The Check build type, the build the test suite is validated in
 # (cmake/OaBuildTypes.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaBuildTypes.cmake")
