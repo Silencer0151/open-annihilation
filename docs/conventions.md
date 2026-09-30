@@ -643,12 +643,13 @@ it rather than starting an older executable. Keep it that way as the application
 it start another executable or a mock game. State current limitations
 plainly instead.
 
-Multiplayer is not part of the engine. An extension library adds optional
-features through the table of hooks in `src/app/include/oa/app/extension.hpp`, filled once
-at startup by `oa_extensions_init()`. The engine links
-`oa-extensions-default`, which leaves those features unavailable, and
-`OA_EXTENSIONS_TARGET` names another implementation. Engine code never
-refers to any particular extension. An extension reaches the engine only
+Multiplayer is not part of the engine. Extension libraries add optional
+features through the table of hooks in `src/app/include/oa/app/extension.hpp`:
+a project that builds the game registers each with `oa_add_extension`
+(`cmake/OaExtensions.cmake`) and the function that fills its table at
+startup, and the engine combines their tables by the rules that header
+states. With none registered those features are unavailable. Engine code
+never refers to any particular extension. An extension reaches the engine only
 through that table and declared headers: meet a new need with a hook or a
 declared header, never with a new `Runtime` member or friend or another use
 of a private `Runtime` name. The `Runtime` members an extension still adds
@@ -659,11 +660,12 @@ describes the table and the frozen members.
 - **Why:** the engine must build, test and ship on its own, and an extension
   must be able to tell, at compile time, whether the engine it builds against
   offers the contract it expects.
-- **Applies to:** `src/app`, `run.sh`.
+- **Applies to:** `src/app`, `cmake/OaExtensions.cmake`, `run.sh`.
 - **Checked by:** `runtime-surface-names` and `runtime-surface-selftest`
   (`tools/check_runtime_surface.py`, within
-  `tools/runtime-surface-baseline.json`); the extension tests in
-  `tests/extension`; CI builds and starts `open-annihilation`.
+  `tools/runtime-surface-baseline.json`); `app-extension-list` and the
+  extension tests in `tests/extension`; CI builds and starts
+  `open-annihilation`.
 
 Game data never enters the repository: no archives, maps, sounds, movies,
 or captures of them.

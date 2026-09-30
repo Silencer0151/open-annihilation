@@ -11,7 +11,7 @@
 # its target's OUTPUT_NAME. Elsewhere the game is the executable alone.
 #
 # The files that travel with the game, such as the licence notices and what
-# an extension adds (OA_EXTENSION_GAME_FILES), go in the folder
+# the extensions add (their GAME_FILES, cmake/OaExtensions.cmake), go in the folder
 # SDL_GetBasePath() names at run time: the bundle's Contents/Resources on
 # macOS, the executable's own folder elsewhere. oa_game_bundle() stores that
 # folder, as a generator expression, in the target's OA_GAME_FILES_DIR

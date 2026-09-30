@@ -2,16 +2,22 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Check that open-annihilation calls the hooks of its extension table.
+"""Check that open-annihilation calls the hooks of its extension tables.
 
-Runs an open-annihilation built with the recorder test extension
-(-DOA_EXTENSIONS_TARGET=oa-extension-recorder) and reads the counts each run
-leaves in its --record-hooks file. Every run must record at least the calls
-RUNS lists for it; a hook recorded with an enumerator ("frame pump") names
-that call only. --runs picks the runs:
+Runs an open-annihilation built with the recorder test extensions
+(-DOA_RECORD_EXTENSION_HOOKS=ON) and reads the counts each run leaves in its
+--record-hooks file. Every run must record at least the calls RUNS lists for
+it; a hook recorded with an enumerator ("frame pump") names that call only.
+The follower, the extension built on the recorder, counts its own calls as
+"follower.<hook>": across the runs of a set it must be called for every hook
+the recorder is called for, but the two it does not fill, and at each point
+where the combined table calls the two in a set order it counts
+"follower.order <hook>" when the order held and "follower.misordered <hook>"
+when it did not, which fails the run. --runs picks the runs:
 
   options  the option hooks, without game data: --help, the -r switch, an
-           unknown option and a game directory that does not exist;
+           unknown option, a game directory that does not exist and a
+           follower that fills frontend_game too, which stops the start;
   game     the rest, over the installation OA_GAME_DIR names: a headless
            skirmish, the headless --check-navigation run (whose speed keys
            reach speed_changed and whose menus app_mode_set), and
@@ -28,8 +34,9 @@ HOOKS must name the hooks src/app/include/oa/app/extension.hpp declares, in its 
 With every run of both sets, each of them is reached except those UNREACHED
 lists, which only a shared match reaches; so are match_event's left,
 results_reported and watching_kept, which these runs do not ask for. A new
-hook must be added to the recorder, to HOOKS and to a run here or to
-UNREACHED.
+hook must be added to the recorder, to the follower (or, when one extension
+at most may fill it, to FOLLOWER_UNFILLED), to HOOKS and to a run here or
+to UNREACHED.
 """
 import argparse
 import os
@@ -57,12 +64,19 @@ HOOK_RE = re.compile(r"\(\*(\w+)\)\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*
 HOOKS = [
     "take_option", "check_options", "switch_handler", "text", "startup", "register_screens", "ready",
     "frontend_entry", "frontend_states", "run_mode", "start_scene", "shutdown", "select_multiplayer",
-    "frontend_game", "launched_by_service", "check_multiplayer_menu", "state", "frame",
+    "frontend_game", "keep_stored_password", "check_multiplayer_menu", "state", "frame",
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
-    "close_requested", "service_label", "speed_changed", "app_mode_set",
+    "close_requested", "return_label", "speed_changed", "app_mode_set",
 ]
+# The hooks one extension at most may fill, which the follower leaves to the
+# recorder, and what the recorder alone records.
+FOLLOWER_UNFILLED = {"frontend_game", "frontend_states", "runtime_member"}
+# The follower's usage note, which --help prints in place of the engine's.
+FOLLOWER_NOTE = "The recorder test extensions record every hook's calls."
+# The environment variable that has the follower fill frontend_game too.
+DOUBLE_FRONTEND_GAME = "OA_RECORDER_FOLLOWER_FRONTEND_GAME"
 # Hooks only a match played with other machines reaches.
 UNREACHED = {
     "disconnect_text": "the end-of-game screen asks for it only after a shared match",
@@ -75,11 +89,12 @@ class Run:
     expected names calls recorded at least once; at_least maps a call to
     the fewest times it must be recorded, for a hook every run reaches
     once through --record-hooks itself. output is a text, or a list of
-    texts, the run's output must hold.
+    texts, the run's output must hold; environment adds variables to the
+    run's environment.
     """
 
     def __init__(self, name, arguments, expected, *, at_least=None, game=False, status=0, output="",
-                 dummy=False):
+                 dummy=False, environment=None):
         self.name = name
         self.arguments = arguments
         self.expected = expected
@@ -88,30 +103,41 @@ class Run:
         self.status = status
         self.output = output
         self.dummy = dummy
+        self.environment = environment or {}
 
 
-# Every run passes --record-hooks first, which take_option takes; a run that
-# checks take_option passes another option the engine does not know.
+# Every run passes --record-hooks first, which take_option takes, asking
+# the follower first; a run that checks take_option passes another option
+# the engine does not know.
 RUNS = {
     "options": [
+        # The follower's usage note is asked for first and answers, so the
+        # recorder is not asked for one.
         Run("help", ["--help"],
-            ["text usage_checks", "text usage_runs", "text usage_switches", "text usage_note"],
-            output="usage: open-annihilation"),
+            ["text usage_checks", "text usage_runs", "text usage_switches", "follower.text",
+             "follower.order take_option"],
+            output=["usage: open-annihilation", FOLLOWER_NOTE]),
         Run("register-switch", ["-r"], ["switch_handler", "text register_switch"],
             status=1, output="registers the game for multiplayer"),
         Run("unknown-option", ["--not-an-option"], [], at_least={"take_option": 2}, status=1,
             output="unknown option: --not-an-option"),
         Run("missing-game-dir", ["--game-dir", "{scratch}/no-such-game"],
             ["switch_handler", "check_options"], status=1, output="game directory does not exist"),
+        Run("double-frontend-game", ["--help"], [], status=1,
+            output="the extensions oa-extension-recorder and oa-extension-recorder-follower both fill "
+                   "frontend_game, which one extension at most may fill",
+            environment={DOUBLE_FRONTEND_GAME: "1"}),
     ],
     "game": [
         Run("headless-skirmish",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--match-ticks", "60"],
             ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "frontend_states",
-             "frontend_game", "launched_by_service", "run_mode start",
+             "frontend_game", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
              "draw_loading", "draw_match_hud", "draw_match_overlay", "state", "load_progress",
-             "team_panel_host", "service_label"],
+             "team_panel_host", "return_label", "keep_stored_password", "follower.order startup",
+             "follower.order run_mode",
+             "follower.order return_label"],
             game=True),
         Run("headless-navigation",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],
@@ -120,12 +146,13 @@ RUNS = {
              "pause_changed on", "pause_changed off", "speed_changed", "app_mode_set"],
             game=True),
         Run("main-menu-frames", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "30"],
-            ["start_scene", "frame pump", "frame after_pump", "shutdown", "state"], game=True, dummy=True),
+            ["start_scene", "frame pump", "frame after_pump", "shutdown", "state",
+             "follower.order shutdown"], game=True, dummy=True),
         Run("multiplayer-menu", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-multiplayer-menu"],
             ["check_multiplayer_menu", "select_multiplayer"], game=True, dummy=True,
             output="recorder: --check-multiplayer-menu"),
         Run("match-dialogs", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-match-dialogs"],
-            ["close_requested", "service_label", "launched_by_service", "speed_changed"], game=True,
+            ["close_requested", "return_label", "speed_changed"], game=True,
             dummy=True, output="match close check:"),
         # The recorder uses the screen services it keeps on the fifth frame
         # and ends the run through quit on the tenth, long before 60.
@@ -171,6 +198,7 @@ def run_game(game, run, scratch, game_dir):
     environment = dict(os.environ)
     if run.dummy:
         environment.update(DUMMY_DRIVERS)
+    environment.update(run.environment)
     result = subprocess.run(command, cwd=scratch, env=environment, capture_output=True, text=True,
                             errors="replace", timeout=RUN_TIMEOUT_SECONDS, check=False)
     output = result.stdout + result.stderr
@@ -188,6 +216,9 @@ def run_game(game, run, scratch, game_dir):
         calls = recorded(counts, expected)
         if calls < fewest:
             failures.append(f"'{expected}' was recorded {calls} times, expected at least {fewest}")
+    for key in sorted(counts):
+        if key.startswith("follower.misordered"):
+            failures.append(f"the follower was called out of order: '{key}'")
     if failures:
         tail = "\n".join(output.splitlines()[-20:])
         failures.append(f"its output ended:\n{tail}")
@@ -230,6 +261,13 @@ def main():
             if not failures:
                 print(f"check_hooks: {run.name}: recorded {len(run.expected) + len(run.at_least)} expected "
                       f"calls among {len(counts)} kinds")
+    # The follower is called wherever the recorder is, for every hook it fills.
+    prefix = "follower."
+    followed = {key[len(prefix):] for key in reached if key.startswith(prefix)}
+    recorder_reached = {key for key in reached if not key.startswith(prefix)}
+    for hook in sorted(recorder_reached - followed - FOLLOWER_UNFILLED):
+        print(f"check_hooks: the runs reached the recorder's {hook} but not the follower's")
+        failed = True
     if args.runs == "game":
         # The option runs reach the option hooks; together they reach the rest.
         options = {key.split(" ", 1)[0] for run in RUNS["options"] for key in [*run.expected, *run.at_least]}

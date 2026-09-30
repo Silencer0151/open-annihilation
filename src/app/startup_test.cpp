@@ -125,12 +125,10 @@ int main() {
         parse({"--check-multiplayer-menu"}).check_multiplayer_menu,
         "the multiplayer menu check is still an option"
     );
-    // Nor do the game's multiplayer switches: the first one stops the start.
+    // Nor the game's reserved switches: the first one stops the start.
     for (const char* flag : {"-n1", "-hHost", "-y", "-t60", "-e5", "-p12", "-c"})
         expect(
-            rejection({"-s", flag}) ==
-                std::string("-") + flag[1] +
-                    " is a multiplayer switch, which this release does not include",
+            rejection({"-s", flag}) == std::string("-") + flag[1] + " is not handled by this build",
             flag
         );
     expect(parse({"-s", "-w"}).launch.system_sound == 1, "the other game switches still apply");
@@ -189,8 +187,7 @@ int main() {
             "the extension takes -y and asks for the intro skip"
         );
         expect(
-            rejection({"-t60"}, table) ==
-                "-t is a multiplayer switch, which this release does not include",
+            rejection({"-t60"}, table) == "-t is not handled by this build",
             "a reserved switch the extension leaves is refused"
         );
         expect(rejection({"-rkey"}, table) == "-r is the extension's", "the extension words -r");

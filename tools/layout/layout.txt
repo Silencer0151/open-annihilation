@@ -191,6 +191,7 @@ file src/app/match_console.hpp src/app/include/oa/app/match_console.hpp -
 file src/app/offline_services.hpp src/app/include/oa/app/offline_services.hpp -
 file src/app/runtime.hpp src/app/include/oa/app/runtime.hpp -
 file src/app/match_model_draws.hpp src/app/include/oa/app/match_model_draws.hpp - runtime.hpp includes it, so it goes where runtime.hpp goes
+file src/app/include/oa/app/extension_list.hpp src/app/include/oa/app/extension_list.hpp - added after the pass: the combined extension table, beside extension.hpp
 
 # ---- tools -------------------------------------------------------------------
 # The module tools (the inspectors of formats/gaf, hpi and tnt and of
@@ -283,7 +284,7 @@ target oa-ui-campaign - -
 target oa-command-line oa-app-command-line -
 target oa-game-options oa-app-game-options -
 target oa-app-headers - - new: the app's headers, src/app/include
-target oa-extensions-default - - the default extension library, named by OA_EXTENSIONS_TARGET and the extension boundary's documentation
+target oa-app-extensions - - added after the pass, in place of the default extension library: the table that combines the registered extensions' tables
 target oa-extension-sdk - - the extension SDK, exported as oa::extension-sdk
 target oa-options - - global compile options
 target oa-formats-ota - - new: the OTA schema split from formats/tnt

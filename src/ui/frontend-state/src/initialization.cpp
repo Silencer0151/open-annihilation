@@ -471,7 +471,7 @@ void save_preferences(
     number("Difficulty", p.difficulty);
     number("Gamma", p.gamma);
     bit("SwitchAlt", p.graphics_flags, flag::switch_alt);
-    if (h.launched_by_service() == 0)
+    if (h.keep_stored_password() == 0)
         h.write_string(general_section, "Password", p.password);
     h.write_string(general_section, "Nickname", p.nickname);
     h.write_string(general_section, "Game Name", p.game_name);

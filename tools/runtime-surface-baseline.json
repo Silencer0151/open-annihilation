@@ -30,7 +30,7 @@
     "game_settings_view": 1,
     "handle_sdl_event": 2,
     "idle_tick": 1,
-    "launched_by_service": 3,
+    "keep_stored_password": 3,
     "leave_match": 2,
     "local_player_watches": 2,
     "map_player_capacity": 1,

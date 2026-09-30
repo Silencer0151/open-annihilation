@@ -184,15 +184,15 @@ void end_mission_enter(Panel& panel, EndMissionContext& context) noexcept {
     }
     context.victory_title = context.world != nullptr && context.world->game.victory != 0 &&
                             !local_watcher(*context.world);
-    if (online_session(context) || context.service_launch) {
+    if (online_session(context) || context.return_label[0] != '\0') {
         const std::size_t length =
-            ::strnlen(context.service_label.data(), context.service_label.size());
-        const bool fits = length != 0 && length < kMaxServiceLabelLength + 1;
+            ::strnlen(context.return_label.data(), context.return_label.size());
+        const bool fits = length != 0 && length < kMaxReturnLabelLength + 1;
         panel_set_text(
             panel,
             "MainMenu",
-            fits ? std::string_view(context.service_label.data(), length)
-                 : std::string_view(kServiceReturnLabel)
+            fits ? std::string_view(context.return_label.data(), length)
+                 : std::string_view(kReturnLabelFallback)
         );
     }
     panel.dirty = true;
@@ -275,7 +275,7 @@ EndMissionAction end_mission_on_click(Panel& panel, EndMissionContext& context) 
             );
             frontend->set_app_mode(*state, app_mode::leave_to_frontend);
             frontend->set_cursor_visible(*state, 1);
-            if (!context.service_launch)
+            if (context.return_label[0] == '\0')
                 frontend->set_cursor(*state, kCursorPanelLeaving);
         }
         return EndMissionAction::main_menu;

@@ -25,8 +25,8 @@ inline constexpr int32_t kEndMissionMessageWidth = 200;
 // Palette screens of the panel: a campaign that continues, or any other end.
 inline constexpr const char* kContinuePalette = "outcome1";
 inline constexpr const char* kFinishedPalette = "outcome0";
-// Label the Main Menu button falls back to over a launcher-started game.
-inline constexpr const char* kServiceReturnLabel = "OK";
+// Label the Main Menu button takes when the return label is too long to show.
+inline constexpr const char* kReturnLabelFallback = "OK";
 
 // Byte placed before a mission name in the list, then a space.
 namespace mission_marker {
@@ -69,8 +69,9 @@ struct EndMissionContext {
     World* world = nullptr;
     int32_t difficulty = 0;          // Game.difficulty
     int32_t skirmish_difficulty = 0; // Preferences.skirmish_difficulty
-    bool service_launch = false;     // low byte of the context flags
-    std::array<char, kServiceLabelBytes> service_label{};
+    // The label the game's return names in place of the main menu,
+    // zero-terminated; empty for none.
+    std::array<char, kReturnLabelBytes> return_label{};
     // The game data holds LOADGAME.GUI, the dialog LoadGame and SaveGame open.
     bool saved_games_offered = true;
     // Written by end_mission_enter.
@@ -92,8 +93,8 @@ struct EndMissionContext {
 /// difficulty caption. The title shows victory unless the local player is a
 /// watcher. LoadGame and SaveGame are greyed when the game data has no dialog
 /// for them. When Game.gui_flags bit 4 (a multiplayer game?) is set or the game
-/// was launcher-started, Main Menu takes the launcher's label when it has 1 to
-/// kMaxServiceLabelLength characters and kServiceReturnLabel otherwise.
+/// has a return label, Main Menu takes the return label when it has 1 to
+/// kMaxReturnLabelLength characters and kReturnLabelFallback otherwise.
 ///
 /// @param[in,out] panel The loaded ENDMSN.GUI.
 /// @param[in,out] context Campaign, finished game and host; continuing,

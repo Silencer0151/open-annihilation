@@ -271,10 +271,11 @@ class PreferencesHost {
     /// @return The packed volume, 0xffffffff when no device answers.
     virtual uint32_t cd_audio_volume() = 0;
 
-    /// Reports whether a launcher started the game; the password is then not saved.
+    /// Reports whether the preferences write keeps the stored password; the
+    /// frontend's password is then not written.
     ///
-    /// @return Nonzero when launched externally.
-    virtual uint8_t launched_by_service() = 0;
+    /// @return Nonzero to keep the stored password.
+    virtual uint8_t keep_stored_password() = 0;
 };
 
 /// Stores the all-missions unlock bit under AllMissions.
@@ -309,7 +310,8 @@ void load_preferences(
 ///
 /// Device volumes are saved only with RestoreVolume set; the image directory
 /// and movie rate only after a change, whose flags it then clears. The
-/// password is skipped when a launcher started the game.
+/// password is skipped while the host keeps the stored one
+/// (PreferencesHost::keep_stored_password).
 ///
 /// @param state Dispatcher state; play_intro_movie is saved.
 /// @param settings Skirmish map and slots.

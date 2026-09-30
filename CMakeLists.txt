@@ -271,13 +271,22 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
   oa-ui-hud oa-present-model oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
-  oa-data-campaign-assets oa-sim-profile oa-sim-state-hash)
-# The library whose oa_extensions_init fills oa-game's extension table: the
-# default one leaves every hook empty, a game without multiplayer.
-add_library(oa-extensions-default src/app/extensions_default.cpp)
-target_link_libraries(oa-extensions-default PRIVATE oa-app-headers oa-options)
-set(OA_EXTENSIONS_TARGET oa-extensions-default CACHE STRING
-  "Library that defines oa_extensions_init for oa-game")
+  oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions)
+# The table that combines the extensions' tables of oa-game
+# (extension_list.hpp); the extensions themselves are registered with
+# oa_add_extension (cmake/OaExtensions.cmake).
+add_library(oa-app-extensions src/app/extension_list.cpp)
+add_library(oa::app::extensions ALIAS oa-app-extensions)
+target_link_libraries(oa-app-extensions PUBLIC oa-app-headers
+  PRIVATE oa-app-command-line oa-ui-console oa-ui-hud oa-sim-messages oa-options)
+if(BUILD_TESTING)
+  # Each rule by which it combines two extensions' hooks.
+  add_executable(oa-app-extension-list-test src/app/extension_list_test.cpp)
+  target_link_libraries(oa-app-extension-list-test PRIVATE oa-app-extensions oa-app-command-line
+    oa-ui-console oa-ui-hud oa-sim-messages oa-options)
+  add_test(NAME app-extension-list COMMAND oa-app-extension-list-test)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaExtensions.cmake")
 # Without FFmpeg, oa-game links the intro player that skips each movie with
 # one logged line, so the game builds wherever the SDL3 shell does.
 if(TARGET oa-media-intro-player)
@@ -394,12 +403,8 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-kill-board PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_kill_board_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # The game's -y switch (like -c and -n) skips both opening movies;
-      # unless the extension takes it, it is refused before anything plays
-      # (its pass expression is set once the extension is known).
-      add_test(NAME native-intro-switch COMMAND oa-game --game-dir "${OA_GAME_DIR}"
-        --mute --headless-check --frames 1 -y
-        --preferences-file "${CMAKE_CURRENT_BINARY_DIR}/native-checks/intro-switch.conf")
+      # native-intro-switch, which starts the game with -y, is registered
+      # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order
       # page's standing order and toggle buttons clicked through SDL show the
       # selection's orders and the units carry them out.
@@ -550,14 +555,11 @@ if(OA_BUILD_PLATFORM)
         --native $<TARGET_FILE:oa-game> --verifier $<TARGET_FILE:oa-demo-installer-test>
         --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
       # oa-game's own checks over the demo, started the same way: the
-      # navigation check's notices, grayed-out entries and campaign, the
-      # grayed-out save and load entries, and MULTI's notice. An extension
-      # that offers multiplayer checks its own screens instead, so MULTI's
-      # is checked only with the default extension.
+      # navigation check's notices, grayed-out entries and campaign, and the
+      # grayed-out save and load entries. MULTI's notice, which an extension
+      # replaces with its own screens, is checked once the extensions are
+      # known (cmake/OaExtensions.cmake).
       set(oa_demo_game_checks navigation saved-games)
-      if(OA_EXTENSIONS_TARGET STREQUAL "oa-extensions-default")
-        list(APPEND oa_demo_game_checks multiplayer-menu)
-      endif()
       foreach(check IN LISTS oa_demo_game_checks)
         add_test(NAME native-demo-${check} COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_demo_installer.py"
@@ -704,23 +706,18 @@ if(TARGET oa-game)
   target_sources(oa-game PRIVATE src/app/runtime_dialog_checks.cpp)
 endif()
 
-# A project that adds this engine with add_subdirectory may set
-# OA_EXTENSIONS_TARGET, OA_EXTENSION_LAUNCH_SWITCHES,
-# OA_EXTENSION_GAME_FILES and OA_RUNTIME_EXTENSION_MEMBERS first; it
-# defines that library itself and links oa::extension-sdk.
-# OA_EXTENSION_GAME_FILES holds COMMAND arguments of add_custom_command,
-# run after the game builds, that copy the files the extension needs at run
-# time into the folder SDL_GetBasePath() names then, which the engine
-# creates first: $<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>.
-#
+# A project that adds this engine with add_subdirectory registers its
+# extension libraries with oa_add_extension afterwards
+# (cmake/OaExtensions.cmake); a library that includes runtime.hpp links
+# oa::extension-sdk. Before adding the engine, one of those projects may set
 # OA_RUNTIME_EXTENSION_MEMBERS, the absolute path of a header of members
-# runtime.hpp includes inside class Runtime, is frozen: it may only shrink
+# runtime.hpp includes inside class Runtime. It is frozen: it may only shrink
 # (tools/check_runtime_surface.py) until hooks and declared headers replace
 # it. oa-game's own sources and, through the SDK, the extension's see the
 # same Runtime; a unit that sees another fails to link
 # (src/app/extension_members.cpp). tests/extension checks that it does, and
-# holds the recorder test extension, which names its own members header
-# here when OA_EXTENSIONS_TARGET is oa-extension-recorder.
+# holds the recorder test extensions, which name their own members header
+# here when OA_RECORD_EXTENSION_HOOKS is on.
 add_subdirectory(tests/extension)
 if(TARGET oa-game)
   set(oa_runtime_members_definition "")
@@ -743,7 +740,8 @@ if(TARGET oa-game)
   target_compile_definitions(oa-extension-sdk INTERFACE ${oa_runtime_members_definition})
   target_compile_definitions(oa-game PRIVATE ${oa_runtime_members_definition})
   target_sources(oa-game PRIVATE src/app/extension_members.cpp)
-  target_link_libraries(oa-game PRIVATE ${OA_EXTENSIONS_TARGET})
+  # The registered extensions are listed and linked when the configure ends.
+  oa_schedule_extension_list()
 endif()
 # tools/check_runtime_surface.py, which holds an extension's members header
 # and its use of Runtime's private names to tools/runtime-surface-baseline.json,
@@ -763,8 +761,9 @@ endif()
 # The project's licence, the attributions and the licence texts they link to
 # travel beside every executable the packages ship; with the game they go in
 # its OA_GAME_FILES_DIR, the bundle's Resources on macOS, and follow
-# whatever the extension adds there (OA_EXTENSION_GAME_FILES). The
-# executables may share a directory, so the copies take turns on one lock.
+# whatever the extensions add there (their GAME_FILES, which the script
+# cmake/OaExtensions.cmake writes runs). The executables may share a
+# directory, so the copies take turns on one lock.
 foreach(target IN ITEMS oa-game oa-intro oa-tool)
   if(NOT TARGET ${target})
     continue()
@@ -772,7 +771,8 @@ foreach(target IN ITEMS oa-game oa-intro oa-tool)
   set(oa_extension_files "")
   set(oa_notices_dir "$<TARGET_FILE_DIR:${target}>")
   if(target STREQUAL "oa-game")
-    set(oa_extension_files ${OA_EXTENSION_GAME_FILES})
+    set(oa_extension_files COMMAND ${CMAKE_COMMAND}
+      -P "${CMAKE_CURRENT_BINARY_DIR}/generated/extension-game-files-$<CONFIG>.cmake")
     set(oa_notices_dir "$<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>")
   endif()
   add_custom_command(TARGET ${target} POST_BUILD
@@ -784,17 +784,6 @@ foreach(target IN ITEMS oa-game oa-intro oa-tool)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_notices.cmake"
     VERBATIM)
 endforeach()
-if(TEST native-intro-switch)
-  # The extension names the game's switches it takes
-  # (OA_EXTENSION_LAUNCH_SWITCHES); without -y among them the start is refused.
-  if(OA_EXTENSION_LAUNCH_SWITCHES MATCHES "y")
-    set(oa_intro_switch_result "native check")
-  else()
-    set(oa_intro_switch_result "-y is a multiplayer switch")
-  endif()
-  set_tests_properties(native-intro-switch PROPERTIES
-    PASS_REGULAR_EXPRESSION "${oa_intro_switch_result}" FAIL_REGULAR_EXPRESSION "zrb")
-endif()
 # oa-doc-check compiles the public headers with Clang's documentation
 # warnings as errors (cmake/OaDocumentationCheck.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaDocumentationCheck.cmake")

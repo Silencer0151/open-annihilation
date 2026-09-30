@@ -228,12 +228,12 @@ struct ModeState {
     std::optional<ModeCallback> callback; // Game.mode_callback
 };
 
-// The state of the online service's window that set_mode reads.
+// The state of a screen package's window that set_mode reads.
 struct ModeEnvironment {
-    bool present{}; // the online service's window exists
+    bool present{}; // the window exists
     uint8_t enabled{};
     uint8_t resource_open{}; // ? cleared when the frontend resource shuts down
-    // Nonzero from the launch of a battle through the online service until the
+    // Nonzero from the launch of a battle through the window until the
     // return to the main menu.
     uint8_t game_launched{};
 };
@@ -253,13 +253,13 @@ class ModeHost {
 /// Selects the application mode's tick handler and installs the matching close handler.
 ///
 /// The mode is stored before the handler is installed. The exit-to-Windows prompt
-/// is used while the online service's window is present, enabled and has its
+/// is used while the screen package's window is present, enabled and has its
 /// resource open, and no battle it launched is running; otherwise the game mode
 /// (6) asks to confirm and every other mode leaves the game.
 ///
 /// @param[in,out] state stored mode and tick handler; modes outside 0..7 get none
 /// @param mode application mode 0..7
-/// @param environment state of the online service's window
+/// @param environment state of the screen package's window
 /// @param host installs the close handler
 void set_mode(ModeState& state, int32_t mode, const ModeEnvironment& environment, ModeHost& host);
 } // namespace oa::base::game_loop

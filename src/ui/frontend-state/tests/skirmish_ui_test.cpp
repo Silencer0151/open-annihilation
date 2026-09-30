@@ -440,7 +440,7 @@ struct Prefs final : initialization::PreferencesHost {
 
     uint32_t cd_audio_volume() override { return 0; }
 
-    uint8_t launched_by_service() override { return 0; }
+    uint8_t keep_stored_password() override { return 0; }
 };
 
 ui::TypedKeys typed(std::string_view tail) {

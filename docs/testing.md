@@ -164,7 +164,7 @@ Continuous integration builds the tree on macOS, Windows and Linux, starts
 `open-annihilation` on each, builds the FFmpeg intro player on macOS and Linux, runs
 every test that needs no game data, and runs the suite once more under
 AddressSanitizer and UndefinedBehaviorSanitizer and once with the recorder
-test extension. CI has no game installation: the game-data tests and the
+test extensions (`-DOA_RECORD_EXTENSION_HOOKS=ON`). CI has no game installation: the game-data tests and the
 native checks run only on contributors' machines, so run them before asking
 for review.
 

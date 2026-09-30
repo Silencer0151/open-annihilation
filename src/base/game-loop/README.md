@@ -23,7 +23,7 @@ callback belongs to the idle-frame loop.
 
 Where a timing, frame or mode value in the public header stands for a field of
 the canonical `Game` or `Player` record, its comment names that field;
-`ModeEnvironment` holds what `set_mode` reads of the online service's window.
+`ModeEnvironment` holds what `set_mode` reads of a screen package's window.
 These structures are views of the fields the loop reads, not replacements for
 those packed records. Clock values are in the game clock's own units;
 `scaled_clock` keeps its 32-bit product wrap before the division by 1000.

@@ -132,8 +132,7 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     OA_CHECK(calls.sounds.back() == "Exit");
 
     context.exit_kind = ExitKind::main_menu;
-    context.service_launch = true;
-    std::strcpy(context.service_label.data(), "Portal");
+    std::strcpy(context.return_label.data(), "Portal");
     ingame_enter_exit_confirm(confirm, context);
     OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and return to Portal?");
     select(confirm, "CHOICE1");
@@ -147,17 +146,16 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::closed);
 }
 
-OA_GAME_DATA_TEST(exit_menu_service_label_replaces_button) {
+OA_GAME_DATA_TEST(exit_menu_return_label_replaces_button) {
     Panel panel;
     if (!load_panel(panel, "exitmenu.gui"))
         return;
     Calls calls;
     auto context = make_context(calls, SessionKind::multiplayer);
-    context.service_launch = true;
-    std::strcpy(context.service_label.data(), "Launcher");
+    std::strcpy(context.return_label.data(), "Harbour");
     ingame_enter_exit_menu(panel, context);
     OA_CHECK(panel_control(panel, "EXITGAME")->active == 0);
-    OA_CHECK(text_of(panel, "MAINMENU") == "Launcher");
+    OA_CHECK(text_of(panel, "MAINMENU") == "Harbour");
 }
 
 OA_GAME_DATA_TEST(restart_dialog_disc_gate_and_difficulty) {

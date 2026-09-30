@@ -92,14 +92,14 @@ struct SettingsHost final : init::PreferencesHost {
 
     uint32_t cd_audio_volume() override { return cd; }
 
-    uint8_t launched_by_service() override { return service; }
+    uint8_t keep_stored_password() override { return keep_password; }
 
     void number(std::string_view key, uint32_t value) {
         numbers[SettingsHost::key(init::general_section, key)] = value;
     }
 
     uint32_t buffers{}, wave{}, cd{};
-    uint8_t service{};
+    uint8_t keep_password{};
 };
 
 void preference_writers() {
@@ -481,13 +481,13 @@ void save_preferences() {
     );
 
     SettingsHost launched;
-    launched.service = 1;
+    launched.keep_password = 1;
     p.sound_flags = 0;
     p.movie_output_rate_changed = 1;
     init::save_preferences(state, settings, p, launched);
     require(
         launched.strings.count(SettingsHost::key(init::general_section, "Password")) == 0,
-        "a service launch keeps the password out"
+        "a write that keeps the stored password leaves it out"
     );
     require(
         launched.written.count(SettingsHost::key(init::general_section, "WaveOutVolume")) == 0,

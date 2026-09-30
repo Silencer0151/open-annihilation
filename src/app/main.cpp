@@ -3,6 +3,7 @@
 
 // oa-game entry point: display setup, intro playback and runtime launch.
 #include "oa/app/runtime.hpp"
+#include "oa/app/extension_list.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
@@ -202,8 +203,10 @@ int main(int argc, char** argv) {
     error_log_folder = oa::platform::error_log_directory(SDL_GetBasePath());
     std::set_new_handler(handle_out_of_memory);
     try {
-        Extension extension{};
-        oa_extensions_init(&extension);
+        // Every registered extension fills its table before the command
+        // line is parsed; the runtime gets the table that combines them.
+        const ExtensionList extensions(registered_extensions());
+        const Extension& extension = extensions.combined();
         auto options = parse_options(argc, argv, extension);
         // A game started for play, from a terminal or the desktop, logs to the
         // logs folder. Checks, benchmarks and other scripted runs keep their

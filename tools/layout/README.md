@@ -75,8 +75,8 @@ does before the pass (the rename record's checks read `HEAD`):
   whole ctest, which then includes
   `engine-layout`, `engine-layout-selftest` and `layout-pass-selftest`;
   build `oa-doc-check` too.
-- The engine with the recorder extension, as CI builds it: configure with
-  `-DOA_EXTENSIONS_TARGET=oa-extension-recorder`, build, and run the whole
+- The engine with the recorder extensions, as CI builds it: configure with
+  `-DOA_RECORD_EXTENSION_HOOKS=ON`, build, and run the whole
   ctest (`extension-hooks-options` and `extension-hooks-game` read the
   table's header).
 - Every test's command line against the one before the pass (`ctest

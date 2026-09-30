@@ -140,8 +140,7 @@ struct ServiceProbe {
     int entry_calls{};       // frontend_entry calls
     const char* nickname{};  // FrontendEntry::nickname given
     const char* game_name{}; // FrontendEntry::game_name given
-    bool launched{};         // launched_by_service's answer
-    const char* label{};     // service_label's answer
+    const char* label{};     // return_label's answer
     int left_events{};       // MatchEvent::left heard
     int setup_runs{};        // runs of the main menu's setup step
     uint32_t query_value{};  // what the probe query answers
@@ -176,17 +175,10 @@ void probe_frontend_entry(void* /*context*/, FrontendEntry& entry) {
     entry.game_name = probe.game_name;
 }
 
-/// Answers whether a launcher started the game as the probe says (Extension::launched_by_service).
-///
-/// @return the probe's answer
-bool probe_launched_by_service(void* /*context*/) {
-    return service_probe().launched;
-}
-
-/// Answers the launcher's label as the probe says (Extension::service_label).
+/// Answers the return label as the probe says (Extension::return_label).
 ///
 /// @return the probe's label
-const char* probe_service_label(void* /*context*/) {
+const char* probe_return_label(void* /*context*/) {
     return service_probe().label;
 }
 
@@ -1379,11 +1371,11 @@ void Runtime::check_screen_services() {
         // The preferences load takes the launch's nickname and game name, and
         // asks for them once.
         extension_.frontend_entry = probe_frontend_entry;
-        probe.nickname = "Launcher";
+        probe.nickname = "Visitor";
         probe.game_name = "Room";
         step(frontend::Step::load_preferences, state_);
         require(
-            preferences_.nickname == "Launcher" && preferences_.game_name == "Room" &&
+            preferences_.nickname == "Visitor" && preferences_.game_name == "Room" &&
                 probe.entry_calls == 1,
             "the preferences load did not take the launch's nickname and game name once"
         );
@@ -1435,32 +1427,29 @@ void Runtime::check_launch_services() {
         quit_reason_.clear();
         frontend_pass_requested_ = false;
     };
-    constexpr std::size_t kLabelLength = oa::ui::frontend::kServiceLabelBytes - 1U;
+    constexpr std::size_t kLabelLength = oa::ui::frontend::kReturnLabelBytes - 1U;
     try {
-        // The match start keeps whether a launcher started the game and its label.
-        extension_.launched_by_service = probe_launched_by_service;
-        extension_.service_label = probe_service_label;
+        // The match start keeps the return label.
+        extension_.return_label = probe_return_label;
         extension_.match_event = probe_match_event;
-        probe.launched = true;
-        probe.label = "Launcher";
+        probe.label = "Portal";
         exercise_click(skirmish::resource_name(skirmish::Button::start));
         require(screen_ == Screen::match && match_, "Start did not enter a match");
         require(
-            service_launch_ && std::string_view(service_label_.data()) == "Launcher",
-            "the match start did not keep the launcher and its label"
+            std::string_view(return_label_.data()) == "Portal",
+            "the match start did not keep the return label"
         );
         // A label longer than the menus take is cut; none leaves it empty.
         const std::string long_label(kLabelLength + 9U, 'L');
         probe.label = long_label.c_str();
-        take_launcher_label();
+        take_return_label();
         require(
-            ::strnlen(service_label_.data(), service_label_.size()) == kLabelLength,
+            ::strnlen(return_label_.data(), return_label_.size()) == kLabelLength,
             "a long label was not cut to the menus' length"
         );
-        probe.launched = false;
         probe.label = nullptr;
-        take_launcher_label();
-        require(!service_launch_ && service_label_[0] == '\0', "no label left one kept");
+        take_return_label();
+        require(return_label_[0] == '\0', "no label left one kept");
 
         // A close request the extension answers asks nothing in the match; one
         // it declines asks whether to surrender.
@@ -1525,7 +1514,7 @@ void Runtime::check_launch_services() {
     }
     restore();
     return_to_skirmish_menu();
-    std::cout << "launch service check: the launcher's label kept at the match start and cut to "
+    std::cout << "launch service check: the return label kept at the match start and cut to "
               << kLabelLength
               << " characters, close requests in the match, no frontend pass there, and quit "
                  "leaving the match first with its preferences\n";

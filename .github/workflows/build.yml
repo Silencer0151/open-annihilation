@@ -93,14 +93,16 @@ jobs:
         if: runner.os == 'Windows'
         run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error -E '^audio-sdl-music$'
 
-  # oa-game linked with the test extension that fills every hook of its
-  # extension table with a recorder (tests/extension) and adds a Runtime
-  # member through the members header. CI has no game installation, so
-  # this job checks the option hooks, the hook list, the members mechanism's
-  # build and the layout check; extension-hooks-game, which finds a dropped
-  # call of any other hook, skips here and runs only where OA_GAME_DIR names
-  # an installation (a local or private run). The rest of the suite runs as
-  # in the build job.
+  # oa-game linked with the two test extensions of tests/extension: the
+  # recorder, which fills every hook of the extension table with a recorder
+  # and adds a Runtime member through the members header, and the follower
+  # built on it, which the engine combines with it. CI has no game
+  # installation, so this job checks the option hooks of both, a start
+  # refused for a hook one extension at most may fill, the hook list, the
+  # members mechanism's build and the layout check; extension-hooks-game,
+  # which finds a dropped or misordered call of any other hook, skips here
+  # and runs only where OA_GAME_DIR names an installation (a local or
+  # private run). The rest of the suite runs as in the build job.
   extension-recorder:
     name: extension recorder (ubuntu-latest)
     runs-on: ubuntu-latest
@@ -114,10 +116,10 @@ jobs:
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_EXTENSIONS_TARGET=oa-extension-recorder -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_RECORD_EXTENSION_HOOKS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Build
         run: cmake --build build --parallel 4
-      - name: Tests with the recorder extension
+      - name: Tests with the recorder extensions
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
   sanitizers:

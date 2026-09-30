@@ -1,12 +1,55 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// oa-game's extension table: the hooks through which a library linked into
-// oa-game adds launch options and switches, screens, per-frame work, match
-// events and checks. That library defines oa_extensions_init, which main()
-// calls once before the command line is parsed; one that includes
-// runtime.hpp builds against oa::extension-sdk. Every hook left null keeps
-// the engine's own behaviour, which is the game without multiplayer.
+// oa-game's extension table: the hooks through which libraries linked into
+// oa-game add launch options and switches, screens, per-frame work, match
+// events and checks. Each such library is an extension: the project that
+// builds the game registers it (oa_add_extension, cmake/OaExtensions.cmake)
+// with its init function, void <init>(oa::app::Extension* table), which
+// fills a zeroed table of its own. main() calls every registered init once,
+// before the command line is parsed, and combines the tables into the one
+// the engine calls (ExtensionList, extension_list.hpp). A library that
+// includes runtime.hpp builds against oa::extension-sdk. Every hook no
+// extension fills keeps the engine's own behaviour, which is the game
+// without multiplayer; with no extension registered that is the whole game.
+//
+// The extensions are listed in dependency order: one whose library links
+// another registered extension comes after it, and the rest keep the order
+// they were registered in. An extension later in the list builds on those
+// before it. When several extensions fill a hook, the combined table calls
+// them by these rules:
+// - every extension, in list order: check_options, startup,
+//   register_screens, ready, check_multiplayer_menu, frame, match_game,
+//   match_event, check_console, draw_loading, draw_match_hud,
+//   draw_match_overlay, pause_changed, load_progress, speed_changed and
+//   app_mode_set; also message_hooks, console_host and team_panel_host,
+//   whose entries are single owners (below);
+// - every extension, in reverse list order: shutdown;
+// - the first that takes it, asking the last extension in the list first:
+//   take_option (the option goes to the first that takes it, with that
+//   extension's effects), the switch handlers (a letter goes to the first
+//   handler that takes it; every handler's reset runs), run_mode (for each
+//   phase), start_scene, simulation_step, give_resources, player_gone,
+//   close_requested and select_multiplayer (the first answer other than
+//   unavailable);
+// - the first answer, asking the last extension in the list first: the
+//   first that is not null for disconnect_text and for text's usage_note
+//   and register_switch (an empty text is an answer), and the first that
+//   is neither null nor empty for return_label and for each field of
+//   frontend_entry;
+// - joined in list order: text's usage_checks, usage_runs and
+//   usage_switches;
+// - every extension asked, the answers combined: state (their bits OR'd),
+//   keep_stored_password (true when any answers true) and outcome_ready
+//   (true when every one answers true);
+// - at most one extension: frontend_game and frontend_states. A second
+//   extension that fills either stops the start, before the command line is
+//   parsed, with a message that names both. Each entry of the hosts that
+//   message_hooks, console_host and team_panel_host fill is likewise one
+//   extension's: an extension that changes an entry another extension has
+//   set, in that call or an earlier one, stops the call with a message
+//   that names both.
+// With one extension the combined table behaves as that extension's own.
 //
 // The engine calls every hook on the thread that runs main(), and passes
 // Extension::context back unchanged; the extension owns it and keeps it
@@ -25,10 +68,9 @@
 //   "Restart failed: <message>", which stderr also receives, and a failed
 //   restart returns to the main menu. Other starts (a skirmish from the
 //   menus or a headless run, a saved skirmish a --load run loads) are not
-//   caught. frontend_game, state, match_game, match_event,
-//   launched_by_service, console_host, team_panel_host, service_label,
-//   load_progress, draw_loading, draw_match_hud and draw_match_overlay are
-//   reached there;
+//   caught. frontend_game, state, match_game, match_event, console_host,
+//   team_panel_host, return_label, load_progress, draw_loading,
+//   draw_match_hud and draw_match_overlay are reached there;
 // - a simulation tick of the main loop or of a headless run (--match-ticks,
 //   a --campaign mission, a --save-after or --load run), which reports the
 //   error as a simulation error and runs the match on: simulation_step,
@@ -62,15 +104,22 @@
 /// pause bit is set, whoever set it; a shared match's clock keeps running
 /// while its in-game menu, or the preferences that menu opens, are up
 /// (Runtime::match_running) and while outcome_ready holds it on its
-/// outcome. Version 6 adds close_requested and service_label,
-/// FrontendEntry::nickname, TeamPanelHost::tournament_game, the
-/// ScreenServices entries quit, stop_sounds, play_sound_alternate and
-/// run_frontend, and query_register; launched_by_service is also asked as
-/// each match starts, and a ScreenContext's host and services may be kept
-/// while the runtime lives. Version 7 adds speed_changed, which the speed
-/// keys and the GAME slider call, and app_mode_set, which every application
-/// mode the frontend sets calls.
-#define OA_EXTENSION_API_VERSION 7
+/// outcome. Version 6 adds close_requested and the hook that named the
+/// match's return, FrontendEntry::nickname, TeamPanelHost::tournament_game,
+/// the ScreenServices entries quit, stop_sounds, play_sound_alternate and
+/// run_frontend, and query_register; the hook that told whether the stored
+/// password is kept is also asked as each match starts, and a
+/// ScreenContext's host and services may be kept while the runtime lives.
+/// Version 7 adds speed_changed, which the speed keys and the GAME slider
+/// call, and app_mode_set, which every application mode the frontend sets
+/// calls. Version 8 lets several extensions fill tables of their own, each
+/// through the init function its registration names in place of the one
+/// global init, and combines their hooks by the rules above; replaces those
+/// two version 6 hooks with return_label, whose label alone now decides
+/// what the match's menus show, and keep_stored_password, which only the
+/// preferences write asks; and refuses a reserved game switch no extension
+/// takes with "-<switch> is not handled by this build".
+#define OA_EXTENSION_API_VERSION 8
 
 namespace oa {
 struct Game;
@@ -241,14 +290,16 @@ struct Extension {
     ///
     /// Called while the command line is parsed, before the game directory
     /// is looked up, once for each argument that starts with "--" and is not
-    /// the engine's, in command-line order. Null rejects every such option.
+    /// the engine's, in command-line order, until an extension takes it. An
+    /// extension that does not take the option leaves its values untaken. An
+    /// option no extension takes stops the start with "unknown option: <name>".
     ///
     /// @param context Extension::context
     /// @param name the option as given ("--name"); lives as long as the process
     /// @param values takes the arguments that follow the option; valid for this call
     /// @param[out] effects option_effect bits the option implies; 0 on entry
-    /// @return false when the option is not the extension's, which stops the
-    ///         start with "unknown option: <name>"
+    /// @return true when the extension took the option; false when it is not
+    ///         the extension's
     bool (*take_option)(
         void* context, const char* name, const OptionValues& values, uint32_t& effects
     ){};
@@ -265,11 +316,14 @@ struct Extension {
     /// @param context Extension::context
     void (*check_options)(void* context){};
 
-    /// Returns the handler of the game switches the engine reserves.
+    /// Returns the handler of the game switches the extension takes.
     ///
     /// Called once, after the long options, while the game switches are
-    /// parsed. Null, or a null handler, refuses those switches with
-    /// "-<switch> is a multiplayer switch, which this release does not include".
+    /// parsed. Each letter the engine does not handle itself is offered to
+    /// the handlers until one takes it; one of the game's reserved letters
+    /// (command_line::kReservedSwitches) that no handler takes stops the
+    /// start with "-<switch> is not handled by this build". Null, or a null
+    /// handler, takes no switch.
     ///
     /// @param context Extension::context
     /// @return the handler, kept by the extension; valid until the switches
@@ -334,7 +388,7 @@ struct Extension {
     ///
     /// Called once while the runtime is built, after the game switches'
     /// fields are set and before the frontend's first dispatch. Null leaves
-    /// every state to the engine.
+    /// every state to the engine. At most one extension may fill it.
     ///
     /// @param context Extension::context
     /// @param[out] handler the runtime's handler, empty on entry, which the
@@ -400,7 +454,8 @@ struct Extension {
     ///
     /// Called each time the engine uses the frontend's block; it asks again
     /// for every use, so the extension may replace the block between calls.
-    /// The engine keeps a block of its own only while this hook is null. An
+    /// The engine keeps a block of its own only while this hook is null. At
+    /// most one extension may fill it. An
     /// exception it throws takes the path of the code that asked: a match
     /// start the file header lists abandons the start, the in-game options
     /// panel reports "options panel unavailable: <message>", and elsewhere
@@ -410,25 +465,22 @@ struct Extension {
     /// @return the block; never null
     oa::Game* (*frontend_game)(void* context){};
 
-    /// Tells whether a launcher the extension recognises started the game.
+    /// Tells whether the preferences write keeps the stored password.
     ///
-    /// Called when the frontend writes the preferences, and as each match
-    /// starts: a game such a launcher started keeps the stored password, its
-    /// in-game menus and end-of-game screen take the launcher's label
-    /// (service_label), and the end-of-game screen's MAIN MENU leaves the
-    /// pointer's picture as it is. An exception it throws during a match
-    /// start the file header lists abandons the start; elsewhere it ends
-    /// oa-game.
+    /// Called each time the frontend writes the preferences. While it
+    /// answers true the write leaves the password the preferences file
+    /// holds as it is; otherwise it writes the frontend's password.
     ///
     /// @param context Extension::context
-    /// @return true when such a launcher started the game; a null hook means false
-    bool (*launched_by_service)(void* context){};
+    /// @return true to keep the stored password; a null hook means false
+    bool (*keep_stored_password)(void* context){};
 
     /// Runs --check-multiplayer-menu in place of the engine's check.
     ///
     /// Called once, with the SDL renderer up, when --check-multiplayer-menu
-    /// was given. Throws to fail the check. Null runs the engine's check,
-    /// which clicks MULTI and requires the "not available" message box.
+    /// was given. Throws to fail the check. When no extension fills it the
+    /// engine's check runs, which clicks MULTI and requires the "not
+    /// available" message box.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -565,7 +617,8 @@ struct Extension {
     /// it ends oa-game. The hook cannot tell the two apart, and where the
     /// tick's path reports a simulation error it posts that line through the
     /// message log, which calls the hook again: a hook that throws there too
-    /// ends oa-game.
+    /// ends oa-game. Each of the hooks is one extension's: an extension that
+    /// changes one an earlier extension set stops the call.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -602,8 +655,11 @@ struct Extension {
     /// context is the runtime. The host keeps its address for as long as the
     /// runtime lives, so the extension may keep it and call its callbacks
     /// while a match runs: post_message, for one, posts to the running
-    /// match's message log. An exception it throws during a match start the
-    /// file header lists abandons the start; elsewhere it ends oa-game.
+    /// match's message log. Each entry of the host, such as extend and
+    /// player_info_changed, is one extension's: an extension that changes
+    /// one an earlier extension set stops the call. An exception it throws
+    /// during a match start the file header lists abandons the start;
+    /// elsewhere it ends oa-game.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -709,9 +765,11 @@ struct Extension {
     /// CONTROL.GUI) open only in a multiplayer game
     /// (extension_state::multiplayer); the engine makes their changes here
     /// itself and the host tells the other players' machines. The host keeps
-    /// its address for as long as the runtime lives. An exception it throws
-    /// during a match start the file header lists abandons the start;
-    /// elsewhere it ends oa-game.
+    /// its address for as long as the runtime lives. Each entry of the host
+    /// is one extension's: an extension that changes one an earlier
+    /// extension set stops the call. An exception it throws during a match
+    /// start the file header lists abandons the start; elsewhere it ends
+    /// oa-game.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -727,8 +785,8 @@ struct Extension {
     /// does anything for it; a request that arrives while a match loads is
     /// not offered, and the load stops at once. The extension may answer
     /// with a box of its own, or leave its session and end the run through
-    /// ScreenServices::quit. Declining keeps the engine's handling: in a
-    /// running match, or a page opened over one, the surrender confirmation
+    /// ScreenServices::quit. When every extension declines, the engine
+    /// handles it: in a running match, or a page opened over one, the surrender confirmation
     /// (YESORNO.GUI) with its second choice preselected; anywhere else the
     /// run ends at once.
     ///
@@ -738,22 +796,24 @@ struct Extension {
     ///         hook, keeps the engine's handling
     bool (*close_requested)(void* context, Runtime& runtime){};
 
-    /// Returns the label of the launcher that started the game.
+    /// Returns the label the match's return names, in place of the main menu.
     ///
-    /// Called as each match starts, beside launched_by_service; the runtime
-    /// copies up to 31 characters at once and keeps them for that match's
-    /// in-game menus and end-of-game screen. While launched_by_service answers
-    /// true and the label holds 1 to 9 characters, the end-of-game screen's
-    /// MAIN MENU entry and the in-game exit menu's MAIN MENU entry read it
-    /// (the exit menu then hides EXIT GAME), and the exit confirmation asks
-    /// "Surrender this battle and return to <label>?". An exception it throws
-    /// during a match start the file header lists abandons the start;
+    /// Called as each match starts; the runtime copies up to 31 characters
+    /// at once and keeps them for that match's in-game menus and end-of-game
+    /// screen. While the match has a label: the in-game exit menu hides EXIT
+    /// GAME; the end-of-game screen's MAIN MENU leaves the pointer's picture
+    /// as it is; and when the label holds 1 to 9 characters, the exit menu's
+    /// and the end-of-game screen's MAIN MENU entries read it, and the exit
+    /// confirmation asks "Surrender this battle and return to <label>?". A
+    /// longer label leaves the exit menu's entry and the confirmation as they
+    /// are and gives the end-of-game screen's entry "OK". An exception it
+    /// throws during a match start the file header lists abandons the start;
     /// elsewhere it ends oa-game.
     ///
     /// @param context Extension::context
     /// @return the label, kept by the extension and read at once; null, an
     ///         empty label or a null hook means none
-    const char* (*service_label)(void* context){};
+    const char* (*return_label)(void* context){};
 
     /// Reports a game speed the local player set with the speed keys or the
     /// GAME slider.
@@ -791,11 +851,3 @@ struct Extension {
 };
 
 } // namespace oa::app
-
-/// Fills oa-game's extension table.
-///
-/// Defined by the one extension library oa-game links; main() calls it once,
-/// before the command line is parsed.
-///
-/// @param[out] table the table, zeroed on entry, which main() keeps until it returns
-void oa_extensions_init(oa::app::Extension* table);

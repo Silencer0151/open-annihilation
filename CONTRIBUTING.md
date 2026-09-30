@@ -201,13 +201,14 @@ test (`tools/check_layout.py`) holds the tree to this order.
 
 ## Extending the engine
 
-The game takes optional features through one table of function pointers,
-`src/app/include/oa/app/extension.hpp`, which the linked extension library
-fills once at startup (`oa_extensions_init`). The engine links
-`oa-extensions-default`, which leaves those features unavailable. A project
-that adds the engine with `add_subdirectory` can set `OA_EXTENSIONS_TARGET`
-to its own implementation. [src/app/README.md](src/app/README.md) describes
-the table and how it changes.
+The game takes optional features through a table of function pointers,
+`src/app/include/oa/app/extension.hpp`, which each extension library fills
+once at startup. A project that adds the engine with `add_subdirectory`
+registers its extension libraries with `oa_add_extension`
+(`cmake/OaExtensions.cmake`), and the engine combines their tables; with
+none registered those features are unavailable.
+[src/app/README.md](src/app/README.md) describes the table and how it
+changes.
 
 ## Documenting code
 

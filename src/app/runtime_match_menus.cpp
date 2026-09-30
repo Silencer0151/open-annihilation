@@ -1150,9 +1150,8 @@ void Runtime::show_match_pause_menu() {
             campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
         );
         session.ingame.saved_games_offered = offers_saved_games();
-        // A launcher's game names the launcher in the exit menus.
-        session.ingame.service_launch = service_launch_;
-        session.ingame.service_label = service_label_;
+        // A match with a return label names it in the exit menus.
+        session.ingame.return_label = return_label_;
         panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
         ui::ingame_enter_options(session.panel, session.ingame);
         panel_to_widgets(
@@ -1279,10 +1278,9 @@ void Runtime::enter_campaign_end() {
     // (keep_finished_match), so the closing call has no session to leave.
     context.state = &state_;
     context.frontend = this;
-    // A launcher's game names the launcher on MAIN MENU and leaves the
+    // A match with a return label names it on MAIN MENU and leaves the
     // pointer's picture as it is.
-    context.service_launch = service_launch_;
-    context.service_label = service_label_;
+    context.return_label = return_label_;
     context.campaign = endgame_game_options();
     context.env = &session.env;
     context.world = endgame_world();
@@ -1810,8 +1808,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
     );
     context.in_game = true;
-    context.service_launch = service_launch_;
-    context.service_label = service_label_;
+    context.return_label = return_label_;
     const auto show = [this, &session](const char* layout, IngamePanel which) {
         if (!load_match_hud_layout(layout))
             return false;
@@ -2004,8 +2001,7 @@ void Runtime::request_match_close() {
         campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
     );
     context.in_game = true;
-    context.service_launch = service_launch_;
-    context.service_label = service_label_;
+    context.return_label = return_label_;
     panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
     ui::ingame_open_leave_confirm(session.panel, context);
     panel_to_widgets(session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_);

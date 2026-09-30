@@ -123,15 +123,16 @@ constexpr std::string_view kInGameMenuLayout = "guis/ARMOPT.GUI";
 // Frames the OPTIONS lightbar check draws: the sweep's thirteen steps and
 // three held frames.
 constexpr int kSweepFrames = 16;
-// The pointer's picture ENDMSN's MAIN MENU selects outside a launched game.
+// The pointer's picture ENDMSN's MAIN MENU selects in a match without a
+// return label.
 constexpr uint8_t kLeavingPanelCursor = 0x14;
 // Ticks a skirmish swept of its opponents is given to end in victory.
 constexpr uint32_t kVictoryTicks = 600;
 
-/// Returns the label the launcher probe answers (Extension::service_label).
+/// Returns the label the return label probe answers (Extension::return_label).
 ///
 /// @return the label, kept for the whole run
-const char*& probe_launcher_label() {
+const char*& probe_return_label() {
     static const char* label = nullptr;
     return label;
 }
@@ -837,20 +838,19 @@ void Runtime::check_match_dialogs() {
         "another player's unit spoke in the viewer's log"
     );
 
-    // A game a launcher started takes the launcher's label: the exit
-    // confirmation returns to the launcher, and so does the end-of-game
-    // screen's MAIN MENU, which leaves the pointer's picture as it is.
+    // A match with a return label names it: the exit confirmation returns
+    // to it, and so does the end-of-game screen's MAIN MENU, which leaves
+    // the pointer's picture as it is.
     const auto kept_extension = extension_;
     try {
-        probe_launcher_label() = "Launcher";
-        extension_.launched_by_service = [](void*) { return true; };
-        extension_.service_label = [](void*) { return probe_launcher_label(); };
+        probe_return_label() = "Portal";
+        extension_.return_label = [](void*) { return probe_return_label(); };
         load(Screen::main_menu);
         start_benchmark_skirmish();
         require(
-            screen_ == Screen::match && match_ && service_launch_ &&
-                std::string_view(service_label_.data()) == "Launcher",
-            "the launched skirmish did not keep the launcher's label"
+            screen_ == Screen::match && match_ &&
+                std::string_view(return_label_.data()) == "Portal",
+            "the skirmish did not keep the return label"
         );
         const auto ask_main_menu = [&] {
             show_match_pause_menu();
@@ -863,18 +863,18 @@ void Runtime::check_match_dialogs() {
             return title;
         };
         require(
-            ask_main_menu() == "Surrender this battle and return to Launcher?",
-            "the confirmation does not return to the launcher"
+            ask_main_menu() == "Surrender this battle and return to Portal?",
+            "the confirmation does not return to the label"
         );
         // A label longer than nine characters leaves the wording as it is.
-        probe_launcher_label() = "LauncherXY";
-        take_launcher_label();
+        probe_return_label() = "PortalGate";
+        take_return_label();
         require(
             ask_main_menu() == "Surrender this battle and return to main menu?",
             "a ten-character label changed the confirmation"
         );
-        probe_launcher_label() = "Launcher";
-        take_launcher_label();
+        probe_return_label() = "Portal";
+        take_return_label();
         resume_match_pause();
         for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player)
             if (player != match_local_player_ &&
@@ -886,19 +886,19 @@ void Runtime::check_match_dialogs() {
             match_->tick();
             present_match_outcome();
         }
-        require(match_finished_, "the launched skirmish swept of its opponents did not end");
+        require(match_finished_, "the skirmish swept of its opponents did not end");
         finish_match_outcome();
         require(
             screen_ == Screen::campaign_end && step_end_screen_to_panel().panel,
-            "the launched skirmish did not end on ENDMSN.GUI"
+            "the skirmish did not end on ENDMSN.GUI"
         );
         const auto* main_menu = widget("MainMenu");
         const auto* caption =
             main_menu != nullptr ? std::get_if<oa::ui::gui_layout::ButtonFields>(&main_menu->fields)
                                  : nullptr;
         require(
-            caption != nullptr && caption->text == "Launcher",
-            "ENDMSN.GUI's MAIN MENU does not read the launcher's label"
+            caption != nullptr && caption->text == "Portal",
+            "ENDMSN.GUI's MAIN MENU does not read the return label"
         );
         const auto cursor = cursor_index_;
         click_end_panel(static_cast<std::size_t>(main_menu - resources_.layout.gadgets.data()));
@@ -907,14 +907,14 @@ void Runtime::check_match_dialogs() {
         );
         require(
             cursor_index_ == cursor && cursor_index_ != kLeavingPanelCursor,
-            "ENDMSN.GUI's MAIN MENU changed the pointer's picture after a launch"
+            "ENDMSN.GUI's MAIN MENU changed the pointer's picture with a return label"
         );
     } catch (...) {
         extension_ = kept_extension;
         throw;
     }
     extension_ = kept_extension;
-    std::cout << "launcher label check: the exit confirmation and ENDMSN.GUI name the launcher\n";
+    std::cout << "return label check: the exit confirmation and ENDMSN.GUI name the label\n";
     start_benchmark_skirmish();
     if (match_paused_)
         resume_match_pause();
@@ -931,7 +931,7 @@ void Runtime::check_match_dialogs() {
         "closing the window on the main menu did not end the run"
     );
     std::cout << "match close check: YESORNO.GUI on close, OPTIONS lightbar over " << moving
-              << " frames, captioned speech, the launcher's label\n";
+              << " frames, captioned speech, the return label\n";
 }
 
 void Runtime::check_in_game_briefing(const fs::path& report_directory) {

@@ -15,7 +15,7 @@ names a bundle after its executable, so the bundle keeps the executable's
 name (`cmake/OaGameBundle.cmake`).
 
 The files that travel with the game (`LICENSE`, `ATTRIBUTIONS.md`,
-`licenses/` and what an extension adds through `OA_EXTENSION_GAME_FILES`)
+`licenses/` and what the extensions add through their `GAME_FILES`)
 go in the folder `SDL_GetBasePath()` names at run time: the bundle's
 `Contents/Resources` on macOS, the executable's folder elsewhere. The
 target's `OA_GAME_FILES_DIR` property names it for build commands. The
@@ -150,62 +150,89 @@ that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
 
 ## Extensions
 
-`extension.hpp` is the table of hooks through which one library linked into
-`oa-game` extends it: long options and game switches, start-up and
+`extension.hpp` is the table of hooks through which libraries linked into
+`oa-game` extend it: long options and game switches, start-up and
 shutdown, screens, the frontend's entry (its game name and nickname), run
 modes, per-frame work, match events, the Pause key, the speed keys and
 the GAME slider, the frontend's application modes, the loading's
 progress, the team panels' host (a tournament game withholds CONTROL),
-requests to close the window, the launcher's label in the match menus,
-console commands and checks. `main()` has the library's
-`oa_extensions_init` fill it before the command line is parsed; every hook
-left null keeps the engine's behaviour, the game without multiplayer, which
-is what `oa-extensions-default` gives. The CMake cache variable
-`OA_EXTENSIONS_TARGET` names the library `oa-game` links; one that
-includes `runtime.hpp` builds against `oa::extension-sdk`, the include
-directories and libraries an extension may use. An exception a hook
-throws ends the game except on the paths `extension.hpp` lists: a match
-start the frontend falls back from, and a simulation tick.
-`OA_EXTENSION_API_VERSION` in `extension.hpp` numbers the table's
-contract; an extension checks its typed copy,
+requests to close the window, the label a match's return names in its
+menus, whether the preferences keep the stored password, console commands
+and checks. Each such library is an extension. The project that builds the
+game registers it after adding the engine, with the function that fills
+its table:
+
+```cmake
+oa_add_extension(<target> INIT <function> [SWITCHES <letters>] [GAME_FILES <COMMAND ...>])
+```
+
+`cmake/OaExtensions.cmake` describes the arguments. When the configure
+ends, the engine lists the registered extensions, each after every
+registered extension its library links and otherwise in registration
+order, compiles the list into `oa-game` and links the libraries.
+`main()` has every extension fill a table of its own before the command
+line is parsed, and `ExtensionList` (`extension_list.hpp`) combines the
+tables into the one table the runtime calls, by the rules `extension.hpp`
+states: most hooks are called for every extension in list order;
+`shutdown` in reverse; the hooks that take something (an option, a
+switch, a run, a close request) ask the last extension in the list first,
+since it builds on those before it; answers are combined; and
+`frontend_game`, `frontend_states` and each entry of the hosts the
+extensions fill belong to one extension at most, so that a second one
+stops the start or the call with a message naming both. Every hook no
+extension fills keeps the engine's behaviour, the game without
+multiplayer, which is the whole game when no extension is registered. A
+reserved game switch no extension takes is refused as "not handled by
+this build". An extension that includes `runtime.hpp` builds against
+`oa::extension-sdk`, the include directories and libraries an extension
+may use; one that needs only the table links `oa::app::headers`. An
+exception a hook throws ends the game except on the paths
+`extension.hpp` lists: a match start the frontend falls back from, and a
+simulation tick. `OA_EXTENSION_API_VERSION` in `extension.hpp` numbers
+the table's contract; an extension checks its typed copy,
 `oa::app::extension_api_version`, with `static_assert`, and any change to
 the contract raises it (its comment says what counts). The recorder test
 extension checks it too, beside its count of the table's hooks.
 
-`tests/extension/` tests the boundary itself. `extension-layout-mismatch`
-links a unit that sees `Runtime` with members `oa-game` does not have and
-expects the link to fail. A build configured with
-`-DOA_EXTENSIONS_TARGET=oa-extension-recorder` links a test extension that
-fills every hook with a recorder and adds one `Runtime` member;
-`extension-hooks-options` and, over the installed game,
-`extension-hooks-game` check that the game calls every hook but
-`disconnect_text`, which only a shared match reaches (of `match_event`'s
-events they see `finished`, `torn_down` and `results_released`); the
-navigation check's Pause key reaches `pause_changed`, its speed keys
-`speed_changed` and its menus `app_mode_set`, a skirmish's loading
-`load_progress`, `team_panel_host` and `service_label`, and
-`--check-match-dialogs`'s close requests `close_requested` and its GAME
-slider `speed_changed`. With
-`--record-quit STATUS` the recorder keeps the screen services an overlay
-is given, stops the sounds, plays BGM on the alternate route, asks for a
-frontend pass and ends the run through `quit`, which must exit with
-STATUS. The navigation check itself puts probes in place of the hooks to
-check what the engine does with their answers: a close request answered
-or declined, quit's status, one frontend pass for two requests, a query
-binding, the launch's nickname, the launcher's label kept as a match
-starts and quit leaving a match, with the preferences open over it, first. CI builds
-that configuration as a job of its own, but has no game installation:
-there `extension-hooks-game` skips, and only the option hooks and the hook
-list are checked. The rest of the hook coverage runs only where
-`OA_GAME_DIR` is set, locally or in a private run; run it there before an
-extension moves its engine pin.
+`app-extension-list` checks each rule of the combined table over two test
+extensions, and `tests/extension/` tests the boundary itself.
+`extension-layout-mismatch` links a unit that sees `Runtime` with members
+`oa-game` does not have and expects the link to fail. A build configured
+with `-DOA_RECORD_EXTENSION_HOOKS=ON` registers two test extensions: the
+recorder, which fills every hook with a recorder and adds one `Runtime`
+member, and the follower, whose library links the recorder's and which
+fills every hook but `frontend_game` and `frontend_states`; the follower
+is registered first and listed second. `extension-hooks-options` and, over
+the installed game, `extension-hooks-game` check that the game calls
+every hook of both but `disconnect_text`, which only a shared match
+reaches (of `match_event`'s events they see `finished`, `torn_down` and
+`results_released`), in the order the rules set, and that a follower that
+fills `frontend_game` too stops the start; the navigation check's Pause
+key reaches `pause_changed`, its speed keys `speed_changed` and its menus
+`app_mode_set`, a skirmish's loading `load_progress`, `team_panel_host`
+and `return_label`, its preferences write `keep_stored_password`, and
+`--check-match-dialogs`'s
+close requests `close_requested` and its GAME slider `speed_changed`.
+With `--record-quit STATUS` the recorder keeps the screen services an
+overlay is given, stops the sounds, plays BGM on the alternate route,
+asks for a frontend pass and ends the run through `quit`, which must exit
+with STATUS. The navigation check itself puts probes in place of the
+hooks to check what the engine does with their answers: a close request
+answered or declined, quit's status, one frontend pass for two requests,
+a query binding, the launch's nickname, the return label kept as a match
+starts and quit leaving a match, with the preferences open over it,
+first. CI builds that configuration as a job of its own, but has no game
+installation: there `extension-hooks-game` skips, and only the option
+hooks and the hook list are checked. The rest of the hook coverage runs
+only where `OA_GAME_DIR` is set, locally or in a private run; run it there
+before an extension moves its engine pin.
 
 An extension reaches `oa-game` only through these hooks and declared
 headers. When it needs something the table does not offer, add a hook or
 declare a header for it here; never give it a new `Runtime` member or
 friend, or another of `Runtime`'s private names.
 
-Until hooks and declared headers cover everything, an extension may still
+Until hooks and declared headers cover everything, one extension may still
 add members to `Runtime`: the project that adds the engine names a header
 of them in the `OA_RUNTIME_EXTENSION_MEMBERS` CMake variable, the engine
 compiles `oa-game` and, through the SDK, the extension with that

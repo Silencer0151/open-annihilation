@@ -63,7 +63,7 @@ FORBIDDEN = {("sim", "platform")}
 GROUP_LEVEL = {"core", "platform", "present", "audio", "media", "app"}
 LIBRARY_TYPES = {"STATIC_LIBRARY", "SHARED_LIBRARY", "MODULE_LIBRARY", "OBJECT_LIBRARY", "INTERFACE_LIBRARY"}
 # Targets that are build infrastructure rather than modules.
-INFRASTRUCTURE = {"oa-options", "oa-extension-sdk", "oa-extensions-default", "oa-test-game-data"}
+INFRASTRUCTURE = {"oa-options", "oa-extension-sdk", "oa-test-game-data"}
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".mm", ".m"}
 INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*(["<])([^">\n]+)[">]', re.M)
 COMMAND_RE = re.compile(r"(?m)^[ \t]*(add_subdirectory|target_include_directories|add_library|add_executable|"

@@ -32,10 +32,10 @@ void play(const IngameContext& context, std::string_view name) {
         context.host.play_sound(context.host.context, name.data());
 }
 
-std::string_view service_label_text(const IngameContext& context) noexcept {
+std::string_view return_label_text(const IngameContext& context) noexcept {
     return {
-        context.service_label.data(),
-        ::strnlen(context.service_label.data(), context.service_label.size())
+        context.return_label.data(),
+        ::strnlen(context.return_label.data(), context.return_label.size())
     };
 }
 
@@ -164,11 +164,12 @@ void ingame_enter_exit_menu(Panel& panel, IngameContext& context) noexcept {
     if (context.session == SessionKind::campaign || context.session == SessionKind::skirmish) {
         panel_set_active(panel, "RESTART", 1);
         panel_set_text(panel, "RESTART", "Restart");
-    } else if (context.spectating || context.service_launch) {
-        const auto label = service_label_text(context);
-        const bool has_label = !label.empty() && label.size() < kMaxServiceLabelLength + 1;
+    } else if (
+        const auto label = return_label_text(context); context.spectating || !label.empty()
+    ) {
+        const bool has_label = !label.empty() && label.size() < kMaxReturnLabelLength + 1;
         const char* target = nullptr;
-        if (!context.service_launch) {
+        if (label.empty()) {
             panel_set_active(panel, "MAINMENU", 0);
             target = "EXITGAME";
         } else {
@@ -206,8 +207,8 @@ void ingame_enter_exit_confirm(Panel& panel, const IngameContext& context) noexc
     char title[0x81] = {};
     bool has_title = true;
     if (context.exit_kind == ExitKind::main_menu) {
-        const auto label = service_label_text(context);
-        if (context.service_launch && !label.empty() && label.size() <= kMaxServiceLabelLength)
+        const auto label = return_label_text(context);
+        if (!label.empty() && label.size() <= kMaxReturnLabelLength)
             std::snprintf(
                 title,
                 sizeof title,
@@ -246,7 +247,8 @@ IngameAction ingame_on_exit_confirm_click(Panel& panel, IngameContext& context) 
         return IngameAction::none;
     play(context, kExitSound);
     if (panel_selected_is(panel, "CHOICE1")) {
-        if (context.exit_kind == ExitKind::main_menu || context.exit_kind == ExitKind::service)
+        if (context.exit_kind == ExitKind::main_menu ||
+            context.exit_kind == ExitKind::labelled_return)
             return IngameAction::return_to_main_menu;
         if (context.exit_kind == ExitKind::leave_game) {
             context.quit_flags |= quit_flag::leave_application;

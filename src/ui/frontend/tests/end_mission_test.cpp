@@ -217,22 +217,24 @@ OA_GAME_DATA_TEST(end_mission_after_a_defeat_and_outside_campaigns) {
     OA_CHECK(panel_control(fixture->panel, "Missions")->list_selection == 3);
 
     fixture->campaign->kind = oa::data::campaign::SessionKind::skirmish;
-    context.service_launch = true;
-    std::strcpy(context.service_label.data(), "Portal");
+    std::strcpy(context.return_label.data(), "Portal");
     end_mission_enter(fixture->panel, context);
     OA_CHECK(!context.continuing);
     OA_CHECK(std::strcmp(context.palette, "outcome0") == 0);
     OA_CHECK(std::string(context.focus.data()) == "MainMenu");
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "Portal");
-    std::strcpy(context.service_label.data(), "PortalGate");
+    std::strcpy(context.return_label.data(), "PortalGate");
     end_mission_enter(fixture->panel, context);
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "OK");
-    // A game with the online flag shows the label as well.
-    context.service_launch = false;
-    std::strcpy(context.service_label.data(), "BY");
+    // A game with the online flag shows the label as well, and "OK"
+    // without one.
+    std::strcpy(context.return_label.data(), "Hall");
     fixture->world->game.gui_flags = 0x10;
     end_mission_enter(fixture->panel, context);
-    OA_CHECK(text_of(fixture->panel, "MainMenu") == "BY");
+    OA_CHECK(text_of(fixture->panel, "MainMenu") == "Hall");
+    context.return_label = {};
+    end_mission_enter(fixture->panel, context);
+    OA_CHECK(text_of(fixture->panel, "MainMenu") == "OK");
 }
 
 // ENDMSN.GUI places MainMenu at 460,395, 120 by 20: the MainMenu slot of
@@ -315,17 +317,16 @@ OA_GAME_DATA_TEST(end_mission_clicks) {
     OA_CHECK(context.mission_count == 0);
 }
 
-// After a launcher started the game, MAIN MENU leaves for the main menu as
-// it always does but leaves the pointer's picture as it is.
-OA_GAME_DATA_TEST(end_mission_main_menu_after_a_launch) {
+// With a return label, MAIN MENU leaves for the main menu as it always
+// does but leaves the pointer's picture as it is.
+OA_GAME_DATA_TEST(end_mission_main_menu_with_a_return_label) {
     auto fixture = std::make_unique<Fixture>();
     if (!fixture->load())
         return;
     auto& context = fixture->context;
     auto& panel = fixture->panel;
     fixture->world->game.victory = 1;
-    context.service_launch = true;
-    std::strcpy(context.service_label.data(), "Launcher");
+    std::strcpy(context.return_label.data(), "Harbour");
     end_mission_enter(panel, context);
     const auto cursors = fixture->frontend.cursors.size();
     fixture->frontend.cursor_visible = -1;
@@ -337,8 +338,8 @@ OA_GAME_DATA_TEST(end_mission_main_menu_after_a_launch) {
     OA_CHECK(fixture->frontend.cursor_visible == 1);
     OA_CHECK(fixture->frontend.cursors.size() == cursors);
 
-    // Without the launch the same press selects the leaving cursor.
-    context.service_launch = false;
+    // Without the label the same press selects the leaving cursor.
+    context.return_label = {};
     end_mission_enter(panel, context);
     const auto before = fixture->frontend.cursors.size();
     select(panel, "MainMenu");

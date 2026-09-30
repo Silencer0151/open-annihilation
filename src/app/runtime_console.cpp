@@ -295,8 +295,8 @@ console::Console* Runtime::match_console() {
         team_panel_host_.context = this;
         if (extension_.team_panel_host != nullptr)
             extension_.team_panel_host(extension_.context, *this, team_panel_host_);
-        // The match's menus and end-of-game screen take the launcher's label.
-        take_launcher_label();
+        // The match's menus and end-of-game screen take the return label.
+        take_return_label();
         host.issue_group_mission =
             [](void* context, uint8_t kind, int32_t parameter_1, int32_t parameter_2) {
                 runtime_of(context)->issue_group_mission(kind, parameter_1, parameter_2);
@@ -336,14 +336,12 @@ console::Console* Runtime::match_console() {
     return &console_->state;
 }
 
-void Runtime::take_launcher_label() {
-    service_launch_ = launched_by_service() != 0;
-    service_label_.fill('\0');
-    const char* label = extension_.service_label != nullptr
-                            ? extension_.service_label(extension_.context)
-                            : nullptr;
+void Runtime::take_return_label() {
+    return_label_.fill('\0');
+    const char* label =
+        extension_.return_label != nullptr ? extension_.return_label(extension_.context) : nullptr;
     if (label != nullptr)
-        std::copy_n(label, ::strnlen(label, service_label_.size() - 1U), service_label_.begin());
+        std::copy_n(label, ::strnlen(label, return_label_.size() - 1U), return_label_.begin());
 }
 
 oa::data::campaign::SessionKind Runtime::match_session_kind() const {

@@ -6,7 +6,9 @@
 // that takes one, the enumerator it was given; every answer is the one a
 // null hook stands for, so the game behaves as it does without an
 // extension. When oa-game exits, the counts go to the file --record-hooks
-// names, one "<hook>[ <enumerator>] <count>" line each in name order.
+// names, one "<hook>[ <enumerator>] <count>" line each in name order,
+// together with the follower's (follower.cpp), whose hooks start with
+// "follower.".
 //
 // The frontend's Game block, which frontend_game must return, is the
 // recorder's own zeroed block, as the engine's own would be, and
@@ -20,6 +22,8 @@
 // given, and on the fifth frame the recorder stops the sounds, plays BGM on
 // the alternate route and asks for a frontend pass, and on the tenth ends
 // the run through quit with STATUS. Without the option none of this runs.
+#include "recorder.hpp"
+
 #include "oa/app/runtime.hpp"
 
 #include <cstddef>
@@ -42,7 +46,7 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 7;
+constexpr uint32_t kExtensionApiVersionRecorded = 8;
 constexpr std::size_t kHookCount = 38;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
@@ -83,16 +87,19 @@ Recorder& recorder() {
     return state;
 }
 
-/// Counts one call of a hook.
+/// Returns the key a hook's calls are counted under.
 ///
 /// @param hook the hook's name
 /// @param detail the enumerator it was given; null for none
-void record(const char* hook, const char* detail = nullptr) {
+/// @return "<hook>[ <detail>]"
+std::string record_key(const char* hook, const char* detail) {
     std::string key = hook;
     if (detail != nullptr)
         key += std::string(" ") + detail;
-    ++recorder().counts[key];
+    return key;
 }
+
+using hook_recorder::record;
 
 /// Writes the counts to the file --record-hooks named; nothing without one.
 void write_record() {
@@ -308,12 +315,12 @@ oa::Game* frontend_game(void* /*context*/) {
     return &recorder().frontend_game;
 }
 
-/// Tells that no launcher started the game (Extension::launched_by_service).
+/// Leaves the preferences write to write the password (Extension::keep_stored_password).
 ///
 /// @param context Extension::context (unused)
 /// @return false
-bool launched_by_service(void* /*context*/) {
-    record("launched_by_service");
+bool keep_stored_password(void* /*context*/) {
+    record("keep_stored_password");
     return false;
 }
 
@@ -335,16 +342,26 @@ const char* disconnect_text(void* /*context*/, uint8_t /*reason*/) {
     return nullptr;
 }
 
-/// Names no launcher (Extension::service_label).
+/// Gives no return label (Extension::return_label).
 ///
 /// @param context Extension::context (unused)
 /// @return null
-const char* service_label(void* /*context*/) {
-    record("service_label");
+const char* return_label(void* /*context*/) {
+    record("return_label");
     return nullptr;
 }
 
 } // namespace
+
+void hook_recorder::record(const char* hook, const char* detail) {
+    ++recorder().counts[record_key(hook, detail)];
+}
+
+uint64_t hook_recorder::calls(const char* hook, const char* detail) {
+    const auto& counts = recorder().counts;
+    const auto found = counts.find(record_key(hook, detail));
+    return found != counts.end() ? found->second : 0;
+}
 
 // The recorder's hooks that take the runtime.
 struct RuntimeExtension {
@@ -624,9 +641,8 @@ struct RuntimeExtension {
 
 } // namespace oa::app
 
-void oa_extensions_init(oa::app::Extension* table) {
+void oa_extension_init_recorder(oa::app::Extension* table) {
     using namespace oa::app;
-    *table = {};
     table->context = &recorder();
     table->take_option = take_option;
     table->check_options = check_options;
@@ -642,7 +658,7 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->shutdown = RuntimeExtension::shutdown;
     table->select_multiplayer = select_multiplayer;
     table->frontend_game = frontend_game;
-    table->launched_by_service = launched_by_service;
+    table->keep_stored_password = keep_stored_password;
     table->check_multiplayer_menu = RuntimeExtension::check_multiplayer_menu;
     table->state = RuntimeExtension::state;
     table->frame = RuntimeExtension::frame;
@@ -663,7 +679,7 @@ void oa_extensions_init(oa::app::Extension* table) {
     table->load_progress = RuntimeExtension::load_progress;
     table->team_panel_host = RuntimeExtension::team_panel_host;
     table->close_requested = RuntimeExtension::close_requested;
-    table->service_label = service_label;
+    table->return_label = return_label;
     table->speed_changed = RuntimeExtension::speed_changed;
     table->app_mode_set = RuntimeExtension::app_mode_set;
     // A hook left unset here would fall back to the engine's behaviour

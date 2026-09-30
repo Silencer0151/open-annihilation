@@ -320,9 +320,9 @@ uint32_t Runtime::cd_audio_volume() {
     return cd_volume_;
 }
 
-uint8_t Runtime::launched_by_service() {
-    return extension_.launched_by_service != nullptr &&
-                   extension_.launched_by_service(extension_.context)
+uint8_t Runtime::keep_stored_password() {
+    return extension_.keep_stored_password != nullptr &&
+                   extension_.keep_stored_password(extension_.context)
                ? 1
                : 0;
 }

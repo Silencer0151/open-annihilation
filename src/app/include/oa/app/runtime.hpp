@@ -219,7 +219,9 @@ class Runtime final : public menu::Host,
     ///
     /// @param options parsed command line
     /// @param assets mounted game files; must outlive the runtime
-    /// @param extension extension hooks; must outlive the runtime
+    /// @param extension the extension hooks (ExtensionList::combined); the
+    ///        runtime keeps a copy, and what its context names must outlive
+    ///        the runtime
     /// @param window SDL window to borrow instead of creating one; null for none
     /// @param renderer SDL renderer of `window` to borrow; null for none
     Runtime(
@@ -571,9 +573,9 @@ class Runtime final : public menu::Host,
     /// SPEEDSRT, VISUALRT, MUSICRT) merged beside the tabs, the FXVOL and GAME
     /// sliders, Cancel, Enter, Escape, the quick keys and F2, and a close
     /// request over them whose CHOICE2 returns to the in-game menu; a unit's
-    /// speech with its order's caption; a launcher's label in the exit menus
-    /// and on ENDMSN.GUI, whose MAIN MENU then leaves the pointer's picture as
-    /// it is; and the system's quit, whose CHOICE1 surrenders and ends the
+    /// speech with its order's caption; a return label in the exit menus and
+    /// on ENDMSN.GUI, whose MAIN MENU then leaves the pointer's picture as it
+    /// is; and the system's quit, whose CHOICE1 surrenders and ends the
     /// run. Throws std::runtime_error on a failure.
     void check_match_dialogs();
 
@@ -840,8 +842,9 @@ class Runtime final : public menu::Host,
     void rebuild_surface();
 
     friend struct BuiltinScreens;
-    // Defined by the extension library, whose hooks reach the runtime through
-    // it; to be replaced by hooks and declared headers (src/app/README.md).
+    // Defined by the one extension that adds Runtime members, whose hooks
+    // reach the runtime through it; to be replaced by hooks and declared
+    // headers (src/app/README.md).
     friend struct RuntimeExtension;
 
     /// Registers the screen packages of screens.inc and the extension's.
@@ -1535,12 +1538,12 @@ class Runtime final : public menu::Host,
     /// game name. Throws std::runtime_error at the first failure.
     void check_screen_services();
 
-    /// Checks the launcher's label and quit in a match, over a new skirmish,
+    /// Checks the return label and quit in a match, over a new skirmish,
     /// which it leaves for the skirmish menu.
     ///
-    /// Probe hooks answer that a launcher started the game and name it: the
-    /// match start keeps both, a long label is cut to kServiceLabelBytes - 1
-    /// characters, a frontend pass requested in the match does not run, and
+    /// A probe hook gives a return label: the match start keeps it, a long
+    /// label is cut to kReturnLabelBytes - 1 characters, none leaves it
+    /// empty, a frontend pass requested in the match does not run, and
     /// quit, once its callback has returned, leaves the match first
     /// (MatchEvent::left) and closes the preferences open over it. Throws
     /// std::runtime_error at the first failure.
@@ -4656,13 +4659,12 @@ class Runtime final : public menu::Host,
     /// @return the console, or null without a match
     oa::ui::console::Console* match_console();
 
-    /// Asks the extension, as each match starts, whether a launcher started
-    /// the game and for that launcher's label.
+    /// Asks the extension, as each match starts, for the label the match's
+    /// return names (Extension::return_label).
     ///
-    /// Keeps the answers for the match's in-game menus and end-of-game
-    /// screen: service_launch_, and in service_label_ up to
-    /// kServiceLabelBytes - 1 characters of the label, empty for none.
-    void take_launcher_label();
+    /// Keeps up to kReturnLabelBytes - 1 characters of it in return_label_
+    /// for the match's in-game menus and end-of-game screen, empty for none.
+    void take_return_label();
 
     /// Returns what kind of session the running match is (the map context's object state); a replay
     /// plays back the multiplayer game it recorded.
@@ -6006,13 +6008,11 @@ class Runtime final : public menu::Host,
     /// @return the packed volume
     uint32_t cd_audio_volume() override;
 
-    /// Reports whether a launcher the extension recognises started the game.
-    ///
-    /// Asked when the preferences are written, and as each match starts
-    /// (take_launcher_label).
+    /// Reports whether the preferences write keeps the stored password
+    /// (Extension::keep_stored_password).
     ///
     /// @return 1 when the extension says so, else 0
-    uint8_t launched_by_service() override;
+    uint8_t keep_stored_password() override;
 
     /// Returns the selector a map-list object was built for.
     ///
@@ -7146,11 +7146,10 @@ class Runtime final : public menu::Host,
     // What the team panels tell the other players' machines, filled by the
     // extension (Extension::team_panel_host) as each match starts.
     oa::ui::hud::TeamPanelHost team_panel_host_{};
-    // Whether a launcher the extension recognises started the game, and its
-    // label, zero-terminated; asked as each match starts (take_launcher_label)
-    // for its in-game menus and end-of-game screen.
-    bool service_launch_{};
-    std::array<char, oa::ui::frontend::kServiceLabelBytes> service_label_{};
+    // The label the running match's return names, zero-terminated and empty
+    // for none; asked as each match starts (take_return_label) for its
+    // in-game menus and end-of-game screen.
+    std::array<char, oa::ui::frontend::kReturnLabelBytes> return_label_{};
     // The nickname and game name the extension gave at the last preferences
     // load (Extension::frontend_entry); empty for none.
     std::string entry_nickname_{};
@@ -7245,7 +7244,7 @@ class Runtime final : public menu::Host,
     bool menu_music_playing_ = false;
     std::unique_ptr<MusicHost, void (*)(MusicHost*) noexcept> music_{nullptr, destroy_music_host};
 #ifdef OA_RUNTIME_EXTENSION_MEMBERS
-    // The members of the extension oa-game links, from the header its
+    // The members of the one extension that adds any, from the header its
     // project names in OA_RUNTIME_EXTENSION_MEMBERS; frozen, and only to
     // shrink (src/app/README.md). Declared after match_, they go
     // before the match they bind.

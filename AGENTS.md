@@ -6,8 +6,8 @@ computer players, simulation, unit scripts, rendering, sound and save/load,
 matching the 3.1c game's behaviour and its save files. Intro, menus and first
 gameplay are checkpoints, not completion.
 
-This repository is the engine alone. Multiplayer is not part of it: an
-extension library adds optional features through the hook table in
+This repository is the engine alone. Multiplayer is not part of it:
+extension libraries add optional features through the hook table in
 `src/app/include/oa/app/extension.hpp`, and engine code never refers to any particular
 extension. Projects that build on the engine, such as an extension or suites
 built on recorded data, live in their own repositories. Checkouts of them may

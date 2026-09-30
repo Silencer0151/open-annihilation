@@ -20,10 +20,12 @@ namespace oa::ui::frontend {
 enum class SessionKind : uint8_t { none = 0, campaign = 1, skirmish = 2, multiplayer = 3 };
 
 // What the exit confirmation leads to.
-enum class ExitKind : int32_t { main_menu = 0, service = 1, leave_game = 2 };
+enum class ExitKind : int32_t { main_menu = 0, labelled_return = 1, leave_game = 2 };
 
-inline constexpr std::size_t kServiceLabelBytes = 0x20;
-inline constexpr std::size_t kMaxServiceLabelLength = 9;
+// Room for a return label, its terminator included, and the longest label
+// the menus show (IngameContext::return_label).
+inline constexpr std::size_t kReturnLabelBytes = 0x20;
+inline constexpr std::size_t kMaxReturnLabelLength = 9;
 
 struct IngameHost {
     void* context = nullptr;
@@ -49,8 +51,9 @@ struct IngameContext {
     bool hold_game = false;        // Game.sim_run_flags bit 0
     bool realtime_panels = false;  // Game.frame_flags bit 0
     bool spectating = false;       // Game.gui_flags bit 4
-    bool service_launch = false;   // low byte of the context flags
-    std::array<char, kServiceLabelBytes> service_label{};
+    // The label the game's return names in place of the main menu,
+    // zero-terminated; empty for none.
+    std::array<char, kReturnLabelBytes> return_label{};
     uint8_t quit_flags = 0;         // Game.outcome_flags
     bool restart_requested = false; // Game.restart_requested
     // The game data holds LOADGAME.GUI, the dialog SAVEGAME and LOADGAME open.
@@ -104,13 +107,13 @@ IngameAction ingame_on_options_click(Panel& panel, IngameContext& context) noexc
 
 /// Sets up EXITMENU.
 ///
-/// Campaign and skirmish show RESTART. Otherwise, for a spectator or a
-/// launcher-started game, one of MAINMENU (spectator) or EXITGAME
-/// (launcher-started) is hidden and the other takes the launcher's label when
-/// it has 1 to kMaxServiceLabelLength characters.
+/// Campaign and skirmish show RESTART. Otherwise, for a spectator or a game
+/// with a return label, one of MAINMENU (a spectator without a label) or
+/// EXITGAME (a game with a label) is hidden and the other takes the return
+/// label when it has 1 to kMaxReturnLabelLength characters.
 ///
 /// @param[in,out] panel The loaded EXITMENU panel.
-/// @param context Session, spectator and launcher state.
+/// @param context Session, spectator and return label.
 void ingame_enter_exit_menu(Panel& panel, IngameContext& context) noexcept;
 
 /// Handles a click on EXITMENU.
@@ -130,12 +133,12 @@ inline constexpr std::string_view kExitConfirmDefault = "CHOICE2";
 /// Sets up YESORNO as the exit confirmation, titled from the exit kind.
 ///
 /// Main menu asks "Surrender this battle and return to main menu?" (the
-/// launcher's label instead of "main menu" when it fits); leaving asks
+/// return label instead of "main menu" when it fits); leaving asks
 /// "Surrender this battle and exit to Windows?", or "Exit the Battle" for a
 /// spectator. Enter and Escape both answer kExitConfirmDefault.
 ///
 /// @param[in,out] panel The loaded YESORNO panel.
-/// @param context Exit kind, spectator and launcher state.
+/// @param context Exit kind, spectator and return label.
 void ingame_enter_exit_confirm(Panel& panel, const IngameContext& context) noexcept;
 
 /// Opens the exit confirmation directly for leaving the game.

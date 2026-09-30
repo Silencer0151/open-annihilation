@@ -273,8 +273,7 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
         throw std::runtime_error("the language argument is too long");
     case oa::app::command_line::Status::unavailable_switch:
         throw std::runtime_error(
-            std::string("-") + result.launch.unavailable_switch +
-            " is a multiplayer switch, which this release does not include"
+            std::string("-") + result.launch.unavailable_switch + " is not handled by this build"
         );
     }
     if (result.campaign_mission.has_value() != !result.campaign.empty())
