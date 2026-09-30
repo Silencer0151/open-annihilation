@@ -4373,6 +4373,21 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_attack_command();
 
+    /// Checks that a turret built during the match draws its current pieces as it turns.
+    ///
+    /// In a new skirmish from the skirmish menu, an ARMHLT is placed as a
+    /// nanoframe away from the local commander, drawn over a few frames and
+    /// finished. Its turret is then aimed three times, each tick of each turn
+    /// drawn, at zoom 1, at zoom 2 and at zoom 1 after the camera looks away
+    /// and back; after each turn the turret and its ground shadow must be drawn
+    /// exactly as a fresh draw of the same state, with every cached model image
+    /// dropped. Writes native-turret-unfinished.ppm and, for each turn,
+    /// native-turret-drawn-N.ppm and native-turret-fresh-N.ppm, then returns to
+    /// the skirmish menu; throws std::runtime_error on a failure.
+    ///
+    /// @param report_directory directory the frames are written to
+    void check_turret_draws(const fs::path& report_directory);
+
     /// Checks that the ghost and placement click refuse and accept ARMMEX sites as the match does.
     ///
     /// Throws std::runtime_error on a failure.

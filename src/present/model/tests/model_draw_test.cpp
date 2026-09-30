@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -47,6 +48,31 @@ std::shared_ptr<oa::formats::objects3d::Model> square_model() {
     return model;
 }
 
+constexpr uint8_t barrel_ink = 0x66;
+
+// A building with a turret: the square as its base, and as the base's child
+// a 4x12 barrel two units up that reaches from beside the base's centre
+// towards one edge, so that a turn about the vertical axis moves it on
+// screen.
+std::shared_ptr<oa::formats::objects3d::Model> turret_model() {
+    auto model = square_model();
+    oa::formats::objects3d::Object barrel;
+    const int32_t w = 2 * unit_fixed;
+    const int32_t y = 2 * unit_fixed;
+    const int32_t near = 2 * unit_fixed;
+    const int32_t far = 14 * unit_fixed;
+    barrel.vertices = {{-w, y, near}, {w, y, near}, {w, y, far}, {-w, y, far}};
+    oa::formats::objects3d::Primitive primitive;
+    primitive.vertex_indices = {0, 3, 2, 1};
+    primitive.color_index = barrel_ink;
+    primitive.is_colored = 1;
+    barrel.primitives.push_back(primitive);
+    barrel.parent = 0;
+    model->objects[0].first_child = 1;
+    model->objects.push_back(barrel);
+    return model;
+}
+
 oa::Palette gray_palette() {
     oa::Palette palette{};
     for (int i = 0; i < OA_PALETTE_COLORS; ++i)
@@ -67,7 +93,10 @@ struct Scene {
     oa::present::SurfaceBuffer screen = oa::present::create_surface(200, 200);
     oa::Unit* unit{};
 
-    Scene() {
+    Scene() : Scene(square_model()) {}
+
+    explicit Scene(std::shared_ptr<const oa::formats::objects3d::Model> shape)
+        : model(std::move(shape)) {
         const oa::WorldCapacity capacity{4, 2, 0};
         oa::world_alloc_tables(world, &capacity);
         unit = &world->units[1];
@@ -276,6 +305,60 @@ void test_piece_changes() {
     CHECK(scene.state.image.sprite.data == nullptr);
 }
 
+constexpr uint16_t piece_cached_flag =
+    static_cast<uint16_t>(oa::sim::model_runtime::PieceFlag::cached);
+
+// Makes the scene's unit a shaded, shadowed turret building whose barrel
+// (piece 1) is drawn per frame, as a turret's Create script leaves it.
+void make_turret_building(Scene& scene) {
+    scene.renderer.graphics_flags = graphics_shadows | graphics_shading;
+    scene.unit->flags |= OA_UNIT_FLAG_BUILDING;
+    scene.unit->type_index = 1;
+    scene.instance.pieces()[1].flags &= static_cast<uint16_t>(~piece_cached_flag);
+}
+
+// Turns the barrel to `heading` and draws the scene on bare ground, as a
+// frame does. The script's turn marks the instance's transforms dirty; the
+// test marks the draw state's.
+void draw_turret(Scene& scene, int16_t heading) {
+    scene.instance.pieces()[1].rotation.xz = heading;
+    scene.state.transforms_dirty = true;
+    std::fill(scene.screen.pixels.begin(), scene.screen.pixels.end(), ground);
+    oa::present::bind_display(&scene.display.context);
+    const ModelRef model = scene.ref();
+    note_piece_changes(model);
+    draw_linked_model(scene.renderer, &scene.screen.surface, model, false);
+}
+
+// A turret building drawn while it was unfinished, then finished and its
+// barrel turned over several draws, draws each time as a building drawn
+// afresh in the same state: the image built while it was unfinished held the
+// barrel, which must not stay behind where it pointed then.
+void test_finished_turret_draws_as_fresh() {
+    Scene built(turret_model());
+    make_turret_building(built);
+    built.unit->build_remaining = 0.5F;
+    draw_turret(built, 0);
+    CHECK(built.state.image_unfinished);
+    CHECK(built.state.image.sprite.aux != nullptr);
+    built.unit->build_remaining = 0.0F;
+    built.unit->flags |= OA_UNIT_FLAG_CONSTRUCTION_DIRTY;
+    for (const int16_t heading :
+         {int16_t{0}, int16_t{0x2000}, int16_t{0x4000}, static_cast<int16_t>(0x8000)}) {
+        draw_turret(built, heading);
+        Scene fresh(turret_model());
+        make_turret_building(fresh);
+        draw_turret(fresh, heading);
+        CHECK(built.screen.pixels == fresh.screen.pixels);
+    }
+    // Half a turn on, the barrel reaches beyond the base's far edge and
+    // nothing is left beyond its near edge, where it pointed at first.
+    CHECK(!built.state.image_unfinished);
+    CHECK(built.state.image.sprite.aux == nullptr);
+    CHECK(built.pixel(100, 88) == barrel_ink);
+    CHECK(built.pixel(100, 111) == ground);
+}
+
 void test_sparse_depth() {
     uint8_t source_depth[16];
     for (int i = 0; i < 16; ++i)
@@ -424,6 +507,7 @@ int main() {
     test_build_effect();
     test_shift_threshold();
     test_piece_changes();
+    test_finished_turret_draws_as_fresh();
     test_sparse_depth();
     test_projectile_and_debris();
     test_shatter_fragment();

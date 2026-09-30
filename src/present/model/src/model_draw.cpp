@@ -490,6 +490,7 @@ bool prepare_model_image(
         allocate_depth_image(state.image, frame.width, frame.height);
     if (!has_image(state))
         return false;
+    state.image_unfinished = unit.build_remaining != 0.0F;
     state.image.sprite.origin_x = static_cast<int16_t>(frame.origin_x);
     state.image.sprite.origin_y = static_cast<int16_t>(frame.origin_y);
     if (!is_building(unit) || (renderer.graphics_flags & graphics_shading) == 0)
@@ -1133,6 +1134,12 @@ void draw_linked_model(
             update_model_transforms(carried);
     }
     ModelState& state = *model.state;
+    // The build finished since the image was built: the image goes, as the
+    // build's end drops it.
+    if (state.image_unfinished && unit.build_remaining == 0.0F) {
+        state.image = {};
+        state.image_unfinished = false;
+    }
     state.cache.has_image = has_image(state);
     state.cache.image_has_mask = state.image.sprite.aux != nullptr;
     const ui::hud::UnitSpriteDraw draw =

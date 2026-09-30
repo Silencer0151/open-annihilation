@@ -99,7 +99,10 @@ struct ModelBounds {
 struct ModelState {
     ui::hud::UnitSpriteCache cache{}; // draw count and image presence
     bool transforms_dirty{true};
-    present::SpriteBuffer image{};             // cached model image
+    present::SpriteBuffer image{}; // cached model image
+    // The cached image was built while the unit was unfinished, so it holds
+    // every visible piece, the ones drawn per frame among them.
+    bool image_unfinished{};
     present::SpriteBuffer shadow{};            // building silhouette (row RLE)
     sim::model_runtime::RotationWords shift{}; // root rotation used by the transforms
 
@@ -249,7 +252,8 @@ void draw_piece_flat(
 ///
 /// Plain finished units get an image without a depth plane; attached,
 /// z-buffered or unfinished units get one with a depth plane. Buildings with
-/// shading on use the shaded builder.
+/// shading on use the shaded builder. The state notes whether the unit was
+/// unfinished, for draw_linked_model to drop the image once it is finished.
 ///
 /// @param[in,out] renderer drawing context
 /// @param model model whose state receives the image
@@ -411,6 +415,12 @@ void note_piece_changes(const ModelRef& model);
 /// Updates the transforms of the unit and its carried units, refreshes the
 /// image cache and draws the model at the renderer's camera. Carried units
 /// are drawn by their carrier, so a carried unit draws nothing here.
+///
+/// Finishing a build drops the unit's cached image: an image built while the
+/// unit was unfinished holds every piece, and once the unit is finished the
+/// pieces its script turns and moves are drawn over the image each frame. So
+/// such an image goes before the image cache is refreshed, and a building
+/// builds its image again, of its cached pieces alone.
 ///
 /// @param[in,out] renderer drawing context
 /// @param target surface to draw on; null for the locked display surface

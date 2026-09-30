@@ -1287,6 +1287,7 @@ void Runtime::check_navigation() {
     check_deathmatch_respawn();
     check_dgun_order();
     check_attack_command();
+    check_turret_draws(report_directory);
     check_launch_services();
     exercise_click(skirmish::resource_name(skirmish::Button::select_map));
     if (screen_ != Screen::map_selection || bound_map_names_.empty())
