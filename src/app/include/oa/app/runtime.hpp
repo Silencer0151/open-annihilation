@@ -4363,6 +4363,16 @@ class Runtime final : public menu::Host,
     /// the skirmish menu; throws std::runtime_error on a failure.
     void check_dgun_order();
 
+    /// Checks the attack command the pointer and an area attack give.
+    ///
+    /// With the local commander selected and walking past a CORAK that holds
+    /// its fire, a click on the CORAK replaces the move with a single
+    /// Attack_Chase that keeps the ground under the pointer, and the commander
+    /// comes to rest. Walking again, an area attack over two CORAKs leaves it one
+    /// attack on each. Returns to the skirmish menu; throws
+    /// std::runtime_error on a failure.
+    void check_attack_command();
+
     /// Checks that the ghost and placement click refuse and accept ARMMEX sites as the match does.
     ///
     /// Throws std::runtime_error on a failure.
@@ -4547,6 +4557,9 @@ class Runtime final : public menu::Host,
     void box_select_units(int x0, int y0, int x1, int y1, bool add);
 
     /// Gives the selection an order on each unit whose projected position lies in a canvas box.
+    ///
+    /// Each selected unit's first order from the box replaces its orders, unless shift is held,
+    /// and the box's later orders queue behind it.
     ///
     /// @param x0 one corner's column
     /// @param y0 one corner's row
@@ -5850,12 +5863,12 @@ class Runtime final : public menu::Host,
     /// @param id target unit id
     void issue_resume_or_repair(uint16_t id);
 
-    /// Gives a unit HelpBuild on an unfinished target or Repair on a finished one, queued while
-    /// shift is held.
+    /// Gives a unit HelpBuild on an unfinished target or Repair on a finished one.
     ///
     /// @param source ordered unit
     /// @param id target unit id; 0 or `source` does nothing
-    void issue_resume_or_repair_from(uint16_t source, uint16_t id);
+    /// @param queue true to queue the order behind the unit's orders
+    void issue_resume_or_repair_from(uint16_t source, uint16_t id, bool queue);
 
     /// Moves the selection to the ground under a canvas point, or gives the radar's orders over the
     /// radar.

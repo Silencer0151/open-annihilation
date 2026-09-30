@@ -173,6 +173,7 @@ struct ComputerHost {
     int32_t surface_metal{}; // scenario SurfaceMetal
     bool (*order_move)(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue){};
     bool (*order_patrol)(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue){};
+    /// Gives a unit the attack command on a target, in place of its orders.
     bool (*order_attack)(void* context, uint16_t unit, uint16_t target){};
     bool (*order_build)(void* context, uint16_t unit, uint16_t type, const oa::FixedVec3* at){};
     bool (*order_factory)(void* context, uint16_t factory, uint16_t type, int32_t count){};
@@ -425,6 +426,12 @@ namespace oa::sim::ai {
 /// @param match match that owns the state
 /// @return the state
 ComputerPlayers* match_computer_players(sim::match_runtime::Match& match);
+/// Returns the host through which a match's computer players read the match and give their
+/// orders.
+///
+/// @param match match the host reads and orders; it must outlive the host
+/// @return the host
+ComputerHost match_computer_host(sim::match_runtime::Match& match) noexcept;
 /// Configures a match's computer players as the session starts (computer_players_configure).
 ///
 /// @param match match that owns the state

@@ -285,7 +285,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
-  src/app/runtime_dgun_check.cpp
+  src/app/runtime_dgun_check.cpp src/app/runtime_attack_command_check.cpp
   src/app/runtime_selection.cpp src/app/runtime_skirmish_host.cpp
   src/app/runtime_skirmish_start.cpp src/app/runtime_world_draw.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp

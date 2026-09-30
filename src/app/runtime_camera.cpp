@@ -154,7 +154,9 @@ bool Runtime::issue_radar_orders(float x, float y) {
                         }
                         (void)match_->issue_attack_special(source, dest, queueing(), enemy);
                     } else
-                        (void)match_->issue_attack(source, enemy, queueing());
+                        (void)match_->issue_attack_command(
+                            source, enemy, queueing(), world ? &*world : nullptr
+                        );
                 });
                 status_ = match_command_ == MatchCommand::dgun ? "D-Gun" : "Attack";
             } else if (world) {
@@ -176,7 +178,9 @@ bool Runtime::issue_radar_orders(float x, float y) {
         if (enemy != 0) {
             for_each_selected([&](uint16_t id) {
                 if (!cancels_queued_command(id, armed, enemy, world, queueing()))
-                    (void)match_->issue_attack(id, enemy, queueing());
+                    (void)match_->issue_attack_command(
+                        id, enemy, queueing(), world ? &*world : nullptr
+                    );
             });
             status_ = "Attack";
             finish_issued_command();
@@ -343,19 +347,19 @@ void Runtime::pan_match_camera() {
 }
 
 void Runtime::issue_resume_or_repair(uint16_t id) {
-    issue_resume_or_repair_from(selected_match_unit_, id);
+    issue_resume_or_repair_from(selected_match_unit_, id, queueing());
 }
 
-void Runtime::issue_resume_or_repair_from(uint16_t source, uint16_t id) {
+void Runtime::issue_resume_or_repair_from(uint16_t source, uint16_t id, bool queue) {
     if (source == 0 || id == 0 || source == id)
         return;
     auto& slot = match_->world().slots[id];
     const auto unfinished = slot.unit && std::bit_cast<float>(slot.build_remaining_bits) != 0.0F;
     if (unfinished) {
-        (void)match_->issue_help_build(source, id, queueing());
+        (void)match_->issue_help_build(source, id, queue);
         status_ = "Resume construction";
     } else {
-        (void)match_->issue_repair(source, id, queueing());
+        (void)match_->issue_repair(source, id, queue);
         status_ = "Repair";
     }
 }

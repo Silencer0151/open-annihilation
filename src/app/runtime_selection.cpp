@@ -319,9 +319,12 @@ bool Runtime::issue_force_attack(float x, float y) {
         return false;
     update_pointer(x, y);
     if (const auto id = hovered_match_unit_; id != 0 && id != selected_match_unit_) {
+        const auto ground = match_world_point(x, y);
         try {
             for_each_selected([&](uint16_t source) {
-                (void)match_->issue_attack(source, id, true);
+                (void)match_->issue_attack_command(
+                    source, id, queueing(), ground ? &*ground : nullptr
+                );
             });
             status_ = "Force attack";
             return true;

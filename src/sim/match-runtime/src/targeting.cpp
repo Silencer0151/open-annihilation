@@ -20,10 +20,6 @@ int16_t high_word(uint32_t value) {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(value >> 16));
 }
 
-int32_t signed_word(uint32_t value) {
-    return std::bit_cast<int32_t>(value);
-}
-
 constexpr uint32_t fire_at_will = 2u << OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
 } // namespace
 
@@ -383,22 +379,9 @@ bool Match::issue_automatic_attack(
     return issue_attack(from->unit_index, to->unit_index, false);
 }
 
-bool Match::issue_attack(uint16_t source_index, uint16_t target_index, bool forced, bool queue) {
+bool Match::issue_attack(uint16_t source_index, uint16_t target_index, bool forced) {
     auto& from = slots_.at(source_index);
     auto& source = *from.unit;
-    auto& target = units_.at(target_index);
-    sim::ground_orders::Point here{
-        signed_word(target.position[0]),
-        signed_word(target.position[1]),
-        signed_word(target.position[2])
-    };
-    if (queue) {
-        auto& order = issue_queued_command(source_index, 6, here, true, 0x280u);
-        for (auto& candidate : orders_)
-            if (&candidate->order == &order)
-                link_target_observer(*candidate, &target);
-        return true;
-    }
     TargetHost host(*this);
     sim::combat_state::AttackSource request{
         source_index,
@@ -409,6 +392,31 @@ bool Match::issue_attack(uint16_t source_index, uint16_t target_index, bool forc
     return sim::combat_state::issue_attack_order(
         request, *host.resolve(target_index), forced, host
     );
+}
+
+bool Match::issue_attack_command(
+    uint16_t source_index, uint16_t target_index, bool queue, const sim::ground_orders::Point* point
+) {
+    if (source_index == target_index)
+        return false;
+    auto& from = slots_.at(source_index);
+    TargetHost host(*this);
+    const auto* aimed = host.resolve(target_index);
+    if (aimed == nullptr)
+        return false;
+    // The command itself carries no leash: that belongs to the attacks a
+    // unit starts on its own.
+    const sim::combat_state::AttackSource request{
+        source_index, from.unit->flags, from.unit->position, 0
+    };
+    const auto kind =
+        host.resolve_order(sim::combat_state::attack_order_kind, request, aimed, nullptr);
+    if (kind == 0)
+        return false;
+    // The order keeps the target only when its kind takes one: a Suppress
+    // order on an allied unit fires at the point alone.
+    (void)issue_order(source_index, kind, queue, target_index, point, 0, 0);
+    return true;
 }
 
 void Match::retarget_weapon_slot(sim::unit_spawn::Slot& unit, uint8_t slot) {

@@ -426,6 +426,9 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
         static_cast<uint32_t>(std::max(0, match_camera_z_))
     );
     int count = 0;
+    // Each selected unit takes the box's first order in place of its orders
+    // (or after them, with shift held) and queues the rest behind it.
+    std::vector<uint16_t> ordered;
     for (auto& slot : match_->world().slots) {
         if (slot.unit_index == 0 || slot.unit == nullptr || !match_->selectable(slot.unit_index))
             continue;
@@ -441,15 +444,23 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
         for_each_selected([&](uint16_t source) {
             if (source == slot.unit_index)
                 return;
+            const bool queue =
+                queueing() || std::find(ordered.begin(), ordered.end(), source) != ordered.end();
+            bool issued = true;
             try {
                 if (kind == "attack")
-                    (void)match_->issue_attack(source, slot.unit_index, queueing());
+                    issued = match_->issue_attack_command(source, slot.unit_index, queue, nullptr);
                 else if (kind == "reclaim")
-                    (void)match_->issue_reclaim(source, slot.unit_index, queueing());
+                    (void)match_->issue_reclaim(source, slot.unit_index, queue);
                 else if (kind == "repair")
-                    issue_resume_or_repair_from(source, slot.unit_index);
+                    issue_resume_or_repair_from(source, slot.unit_index, queue);
+                else
+                    issued = false;
             } catch (const std::exception&) {
+                issued = false;
             }
+            if (issued && !queue)
+                ordered.push_back(source);
         });
         ++count;
     }

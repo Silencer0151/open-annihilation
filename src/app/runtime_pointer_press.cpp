@@ -320,7 +320,9 @@ std::string_view Runtime::issue_selection_orders(
             case input::UnitOrder::air_to_ground:
             case input::UnitOrder::air_to_ground_hover:
                 if (bound != 0) {
-                    (void)match_->issue_attack(source, bound, false, queue);
+                    (void)match_->issue_attack_command(
+                        source, bound, queue, ground ? &*ground : nullptr
+                    );
                     issued = "Attack";
                 } else if (ground) {
                     (void)match_->issue_attack_ground(source, *ground, queue);

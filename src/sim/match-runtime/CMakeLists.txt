@@ -149,6 +149,12 @@ if(BUILD_TESTING)
  add_test(NAME match-naval COMMAND oa-match-naval-test)
  # The installed game's ships, submarines, amphibians and shipyard.
  oa_add_game_data_test(match-naval-data oa-match-naval-test --data)
+ add_executable(oa-match-attack-command-test tests/attack_command_test.cpp)
+ target_link_libraries(oa-match-attack-command-test PRIVATE oa-sim-match-runtime oa-formats-hpi
+   oa-test-game-data)
+ add_test(NAME match-attack-command COMMAND oa-match-attack-command-test)
+ # The installed game's kbots and vehicles, commanded on the move and from rest.
+ oa_add_game_data_test(match-attack-command-data oa-match-attack-command-test --data)
  add_executable(oa-match-transports-test tests/transports_test.cpp)
  target_link_libraries(oa-match-transports-test PRIVATE oa-sim-match-runtime oa-sim-gameplay-input oa-formats-hpi
    oa-test-game-data)

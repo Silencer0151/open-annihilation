@@ -132,9 +132,11 @@ bool host_order_patrol(void* context, uint16_t unit, const oa::FixedVec3* to, bo
     }
 }
 
+/// Gives a squad member the attack command on a target, not queued: in place of
+/// its orders, as a player's attack command.
 bool host_order_attack(void* context, uint16_t unit, uint16_t target) {
     try {
-        return match_of(context).issue_attack(unit, target, true, false);
+        return match_of(context).issue_attack_command(unit, target, false, nullptr);
     } catch (const std::exception&) {
         return false;
     }
@@ -316,6 +318,10 @@ void destroy_players(ComputerPlayers* state) noexcept {
 }
 
 } // namespace
+
+ComputerHost match_computer_host(Match& match) noexcept {
+    return make_host(match);
+}
 
 ComputerPlayers* match_computer_players(Match& match) {
     auto& slot = match.computer_player_state();

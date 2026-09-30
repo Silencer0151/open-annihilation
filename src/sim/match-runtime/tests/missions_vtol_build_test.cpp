@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "../src/tick_internal.hpp"
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -386,7 +388,15 @@ int main() {
         &match.issue_capture(builder_id, victim_id, true),
         &match.issue_guard(builder_id, victim_id, true),
     };
-    CHECK(match.issue_attack(builder_id, victim_id, false, true));
+    const std::array<uint32_t, 3> victim_at = victim->unit->position;
+    const sim::ground_orders::Point victim_point{
+        std::bit_cast<int32_t>(victim_at[0]),
+        std::bit_cast<int32_t>(victim_at[1]),
+        std::bit_cast<int32_t>(victim_at[2])
+    };
+    (void)match.issue_order(
+        builder_id, sim::match_runtime::attack_chase_kind, true, victim_id, &victim_point, 0, 0
+    );
     const auto* queued_attack = queue.primary;
     while (queued_attack && queued_attack->next)
         queued_attack = queued_attack->next;

@@ -205,6 +205,21 @@ scripts queue through it (`mission_unit_binding.hpp`, ctest
 `match-mission-units`). The 68-entry mission descriptor table is
 `mission_descriptor_table`.
 
+`issue_attack_command` is the attack command a player's order or a computer
+player's squad order gives: the attack mission the command resolver picks for
+the target (Attack_Chase for a ground unit, Suppress for a unit of the
+unit's own side), issued through `issue_order`, which keeps the target only
+when the mission takes one and the point the command was given at (the
+ground under the pointer; none for a computer player). Unqueued, it replaces
+the orders under way, so a move the unit was making no longer steers it: a
+unit commanded on the move with its target in reach brakes and fires from
+where it stops. `issue_attack` is the attack a unit starts on its own, from
+its standby, patrol or guard mission or a hit's reaction: it goes ahead of
+the orders the unit has and, unforced, on the manoeuvre order, carries the
+unit's leash and a move back to where it stood (ctests `match-attack-command`
+and `match-attack-command-data`; the pointer and area attacks in
+`native-navigation`).
+
 `command.cpp` resolves the move and attack commands with the water-weapon,
 aircraft, alliance, availability and capability gates; targeted moves go
 through `can_repair_target` and `can_load_target` and the capture, reclaim,

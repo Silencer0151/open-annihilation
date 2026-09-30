@@ -1144,21 +1144,43 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         return strategic_states_.at(player);
     }
 
-    /// Orders a unit to attack another.
+    /// Sends a unit after another on its own account: the attack its missions
+    /// (standby, patrol, guard) and a hit's reaction start, not a command.
     ///
-    /// Queued, an Attack_Chase order on the target follows the queue-tail
-    /// mark. Otherwise the attack order the command resolver picks goes to
-    /// the head of the orders; unforced, a unit on standing move order 1 also
-    /// queues a move back to where it stands.
+    /// The attack order the command resolver picks goes to the head of the
+    /// orders, ahead of the orders the unit already has; unforced, a unit on
+    /// standing move order 1 also queues a move back to where it stands, and
+    /// gives up the chase once it strays its manoeuvre leash from there. A
+    /// player's or computer player's attack command is issue_attack_command.
     ///
     /// @param source Attacker slot.
     /// @param target Target slot.
-    /// @param forced Whether the attack was commanded rather than chosen by
-    ///     the unit; unforced it is refused while the standing move or fire
-    ///     order is zero.
-    /// @param queue Whether the command was queued (shift held).
+    /// @param forced Whether the unit must attack whatever its standing orders;
+    ///     unforced it is refused while the standing move or fire order is zero.
     /// @return False when the attack was refused or no attack resolves.
-    bool issue_attack(uint16_t source, uint16_t target, bool forced, bool queue = false);
+    bool issue_attack(uint16_t source, uint16_t target, bool forced);
+    /// Gives a unit the attack command on another unit, as a player's order
+    /// or a computer player's squad order gives it.
+    ///
+    /// The attack command resolves against the target to the unit's attack
+    /// mission (Attack_Chase for a ground unit, Suppress for an allied
+    /// target), issued as issue_order issues it: unqueued, the order replaces
+    /// the unit's orders, so an order under way no longer steers the unit;
+    /// queued, it follows the queue-tail mark. The order keeps the target
+    /// only when its mission takes one. It carries no leash and no move back,
+    /// and a unit holding its fire or its position takes it.
+    ///
+    /// @param source Attacker slot.
+    /// @param target Target slot.
+    /// @param queue Whether the command was queued (shift held).
+    /// @param point Signed 16.16 map point the command was given at (the
+    ///     ground under the pointer), or null for none, as a computer
+    ///     player's squad order gives it.
+    /// @return False when the source is the target or no attack resolves
+    ///     against it.
+    bool issue_attack_command(
+        uint16_t source, uint16_t target, bool queue, const sim::ground_orders::Point* point
+    );
     /// Flips state flags as the HUD On/Off button does: sets them when none of
     /// the mask is set, else clears them.
     ///

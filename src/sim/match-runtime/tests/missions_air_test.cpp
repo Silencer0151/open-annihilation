@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "../src/tick_internal.hpp"
+#include <array>
+#include <bit>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -190,7 +192,21 @@ struct Fixture {
     // An attack order from `from` at `to` rewritten to `kind`.
     sim::simulation_state::Order&
     attack(sim::unit_spawn::Slot& from, sim::unit_spawn::Slot& to, uint8_t kind) {
-        CHECK(match->issue_attack(from.unit_index, to.unit_index, true, true));
+        const std::array<uint32_t, 3> at = to.unit->position;
+        const sim::ground_orders::Point point{
+            std::bit_cast<int32_t>(at[0]),
+            std::bit_cast<int32_t>(at[1]),
+            std::bit_cast<int32_t>(at[2])
+        };
+        (void)match->issue_order(
+            from.unit_index,
+            sim::match_runtime::attack_chase_kind,
+            true,
+            to.unit_index,
+            &point,
+            0,
+            0
+        );
         auto* order = from.unit->primary;
         while (order && order->next)
             order = order->next;
