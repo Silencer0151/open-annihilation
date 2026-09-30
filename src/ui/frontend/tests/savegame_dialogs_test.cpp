@@ -5,12 +5,14 @@
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace oa::ui::frontend::test {
 namespace {
@@ -19,7 +21,20 @@ namespace {
 struct Summary {
     std::map<std::string, int32_t> ints;
     std::map<std::string, std::string> strings;
+    int32_t radar_width = 0; // no radar image while 0
+    int32_t radar_height = 0;
+    std::vector<uint8_t> radar; // rows of radar_width bytes
 };
+
+// A radar image of `width` by `height` whose pixels count up from `first`.
+Summary with_radar(Summary summary, int32_t width, int32_t height, uint8_t first) {
+    summary.radar_width = width;
+    summary.radar_height = height;
+    summary.radar.resize(static_cast<std::size_t>(width * height));
+    for (std::size_t index = 0; index < summary.radar.size(); ++index)
+        summary.radar[index] = static_cast<uint8_t>(first + index);
+    return summary;
+}
 
 struct Fixture {
     std::vector<std::string> files; // listing order
@@ -81,6 +96,15 @@ SaveDialogContext make_context(Fixture& fixture) {
     context.reader.has_field = [](void*, void* bank, const char* field) {
         return static_cast<Summary*>(bank)->ints.count(field) != 0;
     };
+    context.reader.load_radar = [](void*, void* bank, present::SurfaceBuffer& picture) {
+        const auto& summary = *static_cast<Summary*>(bank);
+        if (summary.radar_width == 0)
+            return false;
+        picture = present::create_surface(summary.radar_width, summary.radar_height);
+        picture.pixels = summary.radar;
+        picture.surface.pixels = picture.pixels.data();
+        return true;
+    };
     context.reader.close = [](void*, void*) {};
     context.host.context = &fixture;
     context.host.play_sound = [](void* c, const char* name) {
@@ -118,7 +142,11 @@ Fixture saves_fixture() {
     };
     Summary broken; // no Description: dropped from the list
     broken.ints = {{"Gametype", 2}};
-    fixture.saves = {{"first.SAV", campaign}, {"second.SAV", skirmish}, {"broken.SAV", broken}};
+    fixture.saves = {
+        {"first.SAV", with_radar(campaign, 5, 4, 0x20)},
+        {"second.SAV", skirmish},
+        {"broken.SAV", broken}
+    };
     return fixture;
 }
 
@@ -189,6 +217,42 @@ OA_GAME_DATA_TEST(load_dialog_preview_and_load) {
     OA_CHECK(fixture.messages.back() == "Invalid savegame file");
     select(panel, "CANCEL");
     OA_CHECK(savegame_on_load_click(panel, context).action == SaveDialogAction::cancelled);
+}
+
+// The preview shows the radar image saved with the selected game and the
+// name of the side it was saved on, as the load and save dialogs both do.
+OA_GAME_DATA_TEST(preview_shows_saved_radar_and_side) {
+    const std::string_view sides[] = {"Arm", "Core"};
+    for (const bool save_role : {false, true}) {
+        Panel panel;
+        if (!loadgame_panel(panel))
+            return;
+        auto fixture = saves_fixture();
+        auto context = make_context(fixture);
+        context.side_names = sides;
+        if (save_role)
+            savegame_enter_save(panel, context);
+        else
+            OA_CHECK(savegame_enter_load(panel, context));
+        OA_CHECK(text_of(panel, "SIDE") == "Core");
+        OA_CHECK(panel_control(panel, "RADAR")->active == 1);
+        OA_CHECK(context.radar_picture.surface.width == 5);
+        OA_CHECK(context.radar_picture.surface.height == 4);
+        OA_CHECK(context.radar_picture.pixels == fixture.saves["first.SAV"].radar);
+
+        // A save without a radar image hides RADAR and drops the picture.
+        panel_control(panel, "GAMES")->list_selection = 1;
+        savegame_on_games_selected(panel, context);
+        OA_CHECK(text_of(panel, "SIDE") == "Arm");
+        OA_CHECK(panel_control(panel, "RADAR")->active == 0);
+        OA_CHECK(context.radar_picture.pixels.empty());
+
+        panel_control(panel, "GAMES")->list_selection = 0;
+        savegame_on_games_selected(panel, context);
+        OA_CHECK(panel_control(panel, "RADAR")->active == 1);
+        savegame_release_lists(context);
+        OA_CHECK(context.radar_picture.pixels.empty() && context.list.entries.empty());
+    }
 }
 
 OA_GAME_DATA_TEST(load_dialog_without_saves_reports) {
@@ -302,13 +366,29 @@ OA_GAME_DATA_TEST(restrict_list_dialogs) {
 namespace oa::ui::frontend::test {
 namespace {
 
-// Writes a real HAPIBANK summary with src/data/persist and a file that is not a
-// bank under a fresh SAVEGAME folder.
-std::filesystem::path write_real_saves(const char* folder) {
-    const auto root = std::filesystem::temp_directory_path() / folder;
-    std::error_code error;
-    std::filesystem::remove_all(root, error);
-    std::filesystem::create_directories(root / "SAVEGAME");
+// The radar image the real save holds: 7 by 3, its bytes counting up from 0x40.
+constexpr uint32_t kRealRadarWidth = 7;
+constexpr uint32_t kRealRadarHeight = 3;
+
+// `width` by `height` radar pixels counting up from 0x40.
+std::vector<uint8_t>
+real_radar_pixels(uint32_t width = kRealRadarWidth, uint32_t height = kRealRadarHeight) {
+    std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height);
+    for (std::size_t index = 0; index < pixels.size(); ++index)
+        pixels[index] = static_cast<uint8_t>(0x40 + index);
+    return pixels;
+}
+
+// Writes a Summary account through src/data/persist as the game writes one;
+// `radar` adds a `width` by `height` radar image blob, `radar_bytes` then cuts
+// it short.
+void write_real_save(
+    const std::filesystem::path& path,
+    bool radar,
+    std::size_t radar_bytes = SIZE_MAX,
+    uint32_t width = kRealRadarWidth,
+    uint32_t height = kRealRadarHeight
+) {
     data::persist::Bank bank{};
     data::persist::bank_init(&bank);
     data::persist::bank_reset(&bank);
@@ -317,15 +397,35 @@ std::filesystem::path write_real_saves(const char* folder) {
     data::persist::bank_set_int(&bank, "Gametype", 2);
     data::persist::bank_set_int(&bank, "Players", 3);
     data::persist::bank_set_int(&bank, "Game Time", 30 * 90);
+    data::persist::bank_set_int(&bank, "Side", 1);
     data::persist::bank_set_text(&bank, "Map", "Lava Run");
+    if (radar) {
+        const auto pixels = real_radar_pixels(width, height);
+        std::vector<uint8_t> blob(8);
+        blob[0] = static_cast<uint8_t>(width);
+        blob[4] = static_cast<uint8_t>(height);
+        blob.insert(blob.end(), pixels.begin(), pixels.end());
+        blob.resize(std::min(blob.size(), radar_bytes));
+        data::persist::bank_open_blob_name(&bank, "Radar Image");
+        data::persist::bank_blob_write(&bank, blob.data(), static_cast<uint32_t>(blob.size()));
+    }
     const auto sink = data::persist::stdio_file_sink();
-    const auto path = (root / "SAVEGAME" / "outpost.SAV").string();
     OA_CHECK(
         data::persist::bank_write_file(
-            &bank, path.c_str(), data::persist::savegame_description, true, false, &sink
+            &bank, path.string().c_str(), data::persist::savegame_description, true, false, &sink
         )
     );
     data::persist::bank_destroy(&bank);
+}
+
+// Writes a real HAPIBANK summary with a radar image and a file that is not a
+// bank under a fresh SAVEGAME folder.
+std::filesystem::path write_real_saves(const char* folder) {
+    const auto root = std::filesystem::temp_directory_path() / folder;
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "SAVEGAME");
+    write_real_save(root / "SAVEGAME" / "outpost.SAV", true);
     std::ofstream(root / "SAVEGAME" / "junk.SAV") << "not a bank";
     return root;
 }
@@ -344,6 +444,62 @@ OA_TEST(persist_reader_lists_real_saves) {
     std::filesystem::remove_all(root, error);
 }
 
+// The persist-backed reader reads the "Radar Image" blob of a save's Summary
+// as the image's width, height and rows, and nothing from a save without a
+// whole image or with one too small to draw from inside its edges.
+OA_TEST(persist_reader_reads_radar_image) {
+    const auto root = std::filesystem::temp_directory_path() / "oa-ui-frontend-radar-saves";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "SAVEGAME");
+    write_real_save(root / "SAVEGAME" / "radar.SAV", true);
+    write_real_save(root / "SAVEGAME" / "plain.SAV", false);
+    write_real_save(root / "SAVEGAME" / "short.SAV", true, 8 + kRealRadarWidth * 2);
+    write_real_save(root / "SAVEGAME" / "smallest.SAV", true, SIZE_MAX, 2, 2);
+    write_real_save(root / "SAVEGAME" / "one-row.SAV", true, SIZE_MAX, 20, 1);
+    write_real_save(root / "SAVEGAME" / "one-column.SAV", true, SIZE_MAX, 1, 2);
+    write_real_save(root / "SAVEGAME" / "one-pixel.SAV", true, SIZE_MAX, 1, 1);
+    write_real_save(root / "SAVEGAME" / "empty.SAV", true, SIZE_MAX, 0, 0);
+    write_real_save(root / "SAVEGAME" / "no-rows.SAV", true, SIZE_MAX, 5, 0);
+    const auto reader = savegame_persist_reader(&root);
+    OA_CHECK(reader.load_radar != nullptr);
+    const auto read = [&](const char* path, present::SurfaceBuffer& picture) {
+        void* bank = reader.open(reader.context, path);
+        OA_CHECK(bank != nullptr);
+        if (bank == nullptr)
+            return false;
+        const bool loaded = reader.load_radar(reader.context, bank, picture);
+        reader.close(reader.context, bank);
+        return loaded;
+    };
+    present::SurfaceBuffer picture;
+    OA_CHECK(read("SAVEGAME\\radar.SAV", picture));
+    OA_CHECK(picture.surface.width == static_cast<int32_t>(kRealRadarWidth));
+    OA_CHECK(picture.surface.height == static_cast<int32_t>(kRealRadarHeight));
+    OA_CHECK(picture.pixels == real_radar_pixels());
+    present::SurfaceBuffer none;
+    OA_CHECK(!read("SAVEGAME\\plain.SAV", none));
+    OA_CHECK(none.pixels.empty());
+    present::SurfaceBuffer cut;
+    OA_CHECK(!read("SAVEGAME\\short.SAV", cut));
+    OA_CHECK(cut.pixels.empty());
+    present::SurfaceBuffer smallest;
+    OA_CHECK(read("SAVEGAME\\smallest.SAV", smallest));
+    OA_CHECK(smallest.surface.width == 2 && smallest.surface.height == 2);
+    OA_CHECK(smallest.pixels == real_radar_pixels(2, 2));
+    for (const char* path :
+         {"SAVEGAME\\one-row.SAV",
+          "SAVEGAME\\one-column.SAV",
+          "SAVEGAME\\one-pixel.SAV",
+          "SAVEGAME\\empty.SAV",
+          "SAVEGAME\\no-rows.SAV"}) {
+        present::SurfaceBuffer small;
+        OA_CHECK(!read(path, small));
+        OA_CHECK(small.pixels.empty() && small.surface.width == 0);
+    }
+    std::filesystem::remove_all(root, error);
+}
+
 // The installed LOADGAME.GUI entered over that listing shows the save.
 OA_GAME_DATA_TEST(load_panel_shows_real_saves) {
     const auto root = write_real_saves("oa-ui-frontend-options-saves-data");
@@ -354,10 +510,15 @@ OA_GAME_DATA_TEST(load_panel_shows_real_saves) {
     Panel panel;
     if (auto layout = load_gui("loadgame.gui")) {
         panel_load_layout(panel, *layout);
+        const std::string_view sides[] = {"Arm", "Core"};
+        context.side_names = sides;
         OA_CHECK(savegame_enter_load(panel, context));
         OA_CHECK(text_of(panel, "GAMETYPE") == "Skirmish (3 players)");
         OA_CHECK(text_of(panel, "MISSION") == "Lava Run");
         OA_CHECK(text_of(panel, "TIME") == "00:01:30");
+        OA_CHECK(text_of(panel, "SIDE") == "Core");
+        OA_CHECK(panel_control(panel, "RADAR")->active == 1);
+        OA_CHECK(context.radar_picture.pixels == real_radar_pixels());
     }
     std::error_code error;
     std::filesystem::remove_all(root, error);

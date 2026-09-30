@@ -9,6 +9,7 @@
 #pragma once
 
 #include "oa/data/campaign/directory_list.hpp"
+#include "oa/present/surface.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 
 #include <array>
@@ -30,6 +31,9 @@ inline constexpr int32_t kSaveTicksPerSecond = 30;
 inline constexpr int32_t kNoSavesMessageWidth = 0x140;
 inline constexpr int32_t kRestrictNoLimit = -1;
 inline constexpr int32_t kRestrictLimitCeiling = 100;
+/// Smallest width and height, in pixels, of a saved radar image the preview
+/// shows: the image is drawn from one pixel inside each of its edges.
+inline constexpr int32_t kSaveRadarMinimumSize = 2;
 
 struct SaveEntry {
     std::array<char, kSaveFileBytes> file{};               // name in the save directory
@@ -58,18 +62,28 @@ struct SaveFiles {
     bool (*write_file)(void* context, const char* path, std::span<const uint8_t> bytes) = nullptr;
 };
 
-// Summary-record boundary over a save file (hapibank "Summary" record).
+/// Summary-record boundary over a save file (hapibank "Summary" record).
 struct SaveSummaryReader {
     void* context = nullptr;
-    void* (*open)(void* context, const char* path) = nullptr; // null when unreadable
+    /// Opens the save at a path under the root; returns null when it cannot
+    /// be read. A null hook reads no save.
+    void* (*open)(void* context, const char* path) = nullptr;
+    /// Returns the integer field, or `fallback` when it is absent. A null
+    /// hook reads no integer field.
     int32_t (*get_int)(void* context, void* bank, const char* field, int32_t fallback) = nullptr;
-    // Copies the field (NUL-terminated, truncated to capacity); false when absent.
+    /// Copies the text field (NUL-terminated, truncated to capacity); false
+    /// when absent. A null hook reads no text field.
     bool (*get_string)(
         void* context, void* bank, const char* field, char* out, std::size_t capacity
     ) = nullptr;
+    /// Reports whether the field is present. A null hook reports none.
     bool (*has_field)(void* context, void* bank, const char* field) = nullptr;
-    // Loads the "Radar Image" blob as the RADAR picture; false when absent.
-    bool (*load_radar)(void* context, void* bank) = nullptr;
+    /// Reads the "Radar Image" blob (its width and height, then its rows) into
+    /// `picture`; false, leaving it empty, when the blob holds no whole image
+    /// of at least kSaveRadarMinimumSize by kSaveRadarMinimumSize pixels. A
+    /// null hook reads no picture, so RADAR stays hidden.
+    bool (*load_radar)(void* context, void* bank, present::SurfaceBuffer& picture) = nullptr;
+    /// Releases a bank `open` returned. A null hook releases nothing.
     void (*close)(void* context, void* bank) = nullptr;
 };
 
@@ -80,6 +94,9 @@ struct SaveDialogContext {
     std::string_view directory = kSaveDirectory;
     // Side names shown for the saved "Side" field; empty prints "???".
     std::span<const std::string_view> side_names;
+    // The RADAR picture: the radar image saved with the previewed game, as
+    // palette indices; empty when none is loaded.
+    present::SurfaceBuffer radar_picture;
     bool in_game = false;
     bool hold_game = false; // Game.sim_run_flags bit 0
     SaveList list;
@@ -111,14 +128,19 @@ void savegame_format_time(int32_t ticks, char* out, std::size_t capacity) noexce
 
 /// Fills the save preview from the summary of the selected GAMES entry, or clears it.
 ///
-/// GAMENAME takes the description; RADAR shows the saved radar image;
+/// GAMENAME takes the description; the radar image saved with the game
+/// replaces context.radar_picture and RADAR shows while it has one;
 /// GAMETYPE reads "Single", "Skirmish (<n> players)" or "???"; a campaign save
 /// shows CAMPAIGN and its mission, a skirmish save hides CAMPAIGN and shows
-/// its map; TIME, SIDE ("???" without side names) and DIFF follow. An entry
-/// without a description or an unreadable file clears the text fields.
+/// its map; TIME, SIDE (the side name at the saved "Side" index, "???"
+/// without side names) and DIFF follow. An entry without a description or an
+/// unreadable file clears the text fields.
 ///
 /// @param[in,out] panel The loaded dialog; nothing happens without a GAMES list.
 /// @param[in,out] context List and summary reader.
+/// @quirk Selecting an entry without a description, or a save that cannot be
+///        read, leaves RADAR showing the picture of the save previewed before
+///        it, as 3.1c does.
 void savegame_fill_preview(Panel& panel, SaveDialogContext& context);
 
 /// Refreshes the preview when the GAMES list selection of the load or save dialog changes.
@@ -333,18 +355,16 @@ SaveFiles savegame_host_files(const std::filesystem::path* root);
 
 /// Builds the summary reader over src/data/persist.
 ///
-/// The reader opens only the "Summary" account of a HAPIBANK save; it loads
-/// no radar image.
+/// The reader opens only the "Summary" account of a HAPIBANK save and reads
+/// the radar image from its "Radar Image" blob.
 ///
 /// @param root Directory that holds SAVEGAME; must outlive the reader.
 /// @return The reader, with `root` as its context.
 SaveSummaryReader savegame_persist_reader(const std::filesystem::path* root);
 
-/// Releases the name and description lists.
+/// Releases the name and description lists and the radar picture.
 ///
-/// The load and save dialogs' radar preview belongs to the summary reader.
-///
-/// @param[in,out] context Its list is emptied and its storage freed.
+/// @param[in,out] context Its list is emptied, its radar picture cleared and their storage freed.
 void savegame_release_lists(SaveDialogContext& context) noexcept;
 
 } // namespace oa::ui::frontend

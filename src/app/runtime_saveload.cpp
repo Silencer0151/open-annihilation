@@ -894,6 +894,7 @@ bool Runtime::write_saved_game(
         oa::World* world{};
         missions::CampaignFile* campaign{}; // null for a skirmish
         missions::CampaignEnv env{};
+        persist::ImageRows radar{}; // Game.radar_final_surface's rows
     } summary_bindings{
         this, save.world, campaign ? &campaign_object() : nullptr, campaign_object_env()
     };
@@ -928,8 +929,23 @@ bool Runtime::write_saved_game(
                 b->campaign, &b->env, b->world->game.mission_index
             );
     };
-    // The radar thumbnail (Game.radar_final_surface) is not rendered for saves yet.
-    summary.radar_image = [](void*) -> const persist::ImageRows* { return nullptr; };
+    // The radar image the match shows (Game.radar_final_surface), which the
+    // load and save dialogs show for the save; none until the match is drawn.
+    summary.radar_image = [](void* context) -> const persist::ImageRows* {
+        auto* b = static_cast<SummaryBindings*>(context);
+        const auto& radar = b->runtime->radar_state_;
+        const oa::Surface* image = radar.surfaces.final_image;
+        if (radar.built_for != b->world || image == nullptr || image->pixels == nullptr ||
+            image->width <= 0 || image->height <= 0)
+            return nullptr;
+        b->radar = {
+            static_cast<uint32_t>(image->width),
+            static_cast<uint32_t>(image->height),
+            static_cast<uint32_t>(image->pitch),
+            image->pixels
+        };
+        return &b->radar;
+    };
     summary.write_stats_panel = [](void* context, persist::Bank* bank) {
         hud::save_players_section(*static_cast<SummaryBindings*>(context)->world, *bank);
     };

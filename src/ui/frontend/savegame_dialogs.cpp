@@ -7,6 +7,7 @@
 #include "oa/ui/frontend_state/dispatcher.hpp"
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/data/persist/save_sections.hpp"
+#include "oa/present/pcx.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -202,6 +203,7 @@ bool read_i32(std::span<const uint8_t> bytes, std::size_t& at, int32_t& value) {
 void savegame_release_lists(SaveDialogContext& context) noexcept {
     context.list.entries.clear();
     context.list.entries.shrink_to_fit();
+    context.radar_picture = {};
 }
 
 std::size_t savegame_build_list(SaveDialogContext& context) {
@@ -292,7 +294,12 @@ void savegame_fill_preview(Panel& panel, SaveDialogContext& context) {
         return reader.get_string != nullptr &&
                reader.get_string(reader.context, bank, field, out, capacity);
     };
-    const bool radar = reader.load_radar != nullptr && reader.load_radar(reader.context, bank);
+    // The previous picture goes before the saved one is read.
+    context.radar_picture = {};
+    const bool radar = reader.load_radar != nullptr &&
+                       reader.load_radar(reader.context, bank, context.radar_picture);
+    if (!radar)
+        context.radar_picture = {};
     panel_set_active(panel, "RADAR", radar ? 1 : 0);
     const auto players = get_int(save_key::players, 0);
     const auto game_type = get_int(save_key::game_type, 0);
@@ -760,6 +767,52 @@ void* open_summary_bank(void* context, const char* path) {
     return bank;
 }
 
+/// Reads the open blob of a bank as a stream from its start.
+///
+/// @param bank bank with an open account and blob; must outlive the stream
+/// @return a read-only stream over the blob
+present::ByteStream blob_stream(data::persist::Bank* bank) {
+    present::ByteStream stream;
+    stream.user = bank;
+    stream.read = [](void* user, void* data, int32_t size) {
+        if (size <= 0)
+            return 0;
+        return static_cast<int32_t>(data::persist::bank_blob_read(
+            static_cast<data::persist::Bank*>(user), data, static_cast<uint32_t>(size)
+        ));
+    };
+    stream.seek = [](void* user, int32_t position) {
+        data::persist::bank_blob_seek(static_cast<data::persist::Bank*>(user), position);
+        return 0;
+    };
+    stream.length = [](void* user) {
+        return data::persist::bank_blob_size(static_cast<const data::persist::Bank*>(user));
+    };
+    return stream;
+}
+
+/// Reads the radar image a save's Summary holds.
+///
+/// An image narrower or shorter than kSaveRadarMinimumSize counts as none, as
+/// the preview draws it from one pixel inside each of its edges.
+///
+/// @param bank Bank open_summary_bank returned.
+/// @param[out] picture The image; empty when the blob holds no whole image
+///     of at least the minimum size.
+/// @return true when the image was read.
+bool load_summary_radar(void* /*context*/, void* bank, present::SurfaceBuffer& picture) {
+    auto* summary = static_cast<data::persist::Bank*>(bank);
+    data::persist::bank_open_blob_name(summary, save_key::radar_image);
+    auto stream = blob_stream(summary);
+    if (!present::read_surface_rows(stream, picture) ||
+        picture.surface.width < kSaveRadarMinimumSize ||
+        picture.surface.height < kSaveRadarMinimumSize) {
+        picture = {};
+        return false;
+    }
+    return true;
+}
+
 /// Releases a bank open_summary_bank returned.
 ///
 /// @param context Reader context; unused.
@@ -876,6 +929,7 @@ SaveSummaryReader savegame_persist_reader(const std::filesystem::path* root) {
     reader.has_field = [](void*, void* bank, const char* field) {
         return data::persist::bank_has_field(static_cast<data::persist::Bank*>(bank), field);
     };
+    reader.load_radar = load_summary_radar;
     reader.close = close_summary_bank;
     return reader;
 }

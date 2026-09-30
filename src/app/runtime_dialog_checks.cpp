@@ -10,6 +10,10 @@
 #include "oa/ui/frontend/options.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/audio/unit_announcements.hpp"
+#include "oa/data/persist/hapibank.hpp"
+#include "oa/data/persist/save_sections.hpp"
+#include "oa/present/model/mesh_raster.hpp"
+#include "oa/present/surface.hpp"
 #include "oa/sim/speed.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -18,6 +22,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -113,6 +118,13 @@ constexpr const char* kLoadBitmap = "bitmaps/dloadgame2.pcx";
 constexpr const char* kSaveBitmap = "bitmaps/dsavegame2.pcx";
 constexpr const char* kCheckSaveName = "LSCHECK1";
 constexpr const char* kCheckSecondSaveName = "LSCHECK2";
+// A save written as the game writes one, its Summary holding a radar image
+// of kCheckRadarWidth by kCheckRadarHeight and the Core side.
+constexpr const char* kCheckRadarSaveFile = "LSRADAR.SAV";
+constexpr const char* kCheckRadarSaveDescription = "Radar picture check";
+constexpr int32_t kCheckRadarWidth = 94;
+constexpr int32_t kCheckRadarHeight = 70;
+constexpr int32_t kCheckRadarSide = 1;
 constexpr const char* kBriefingGui = "guis/briefing.gui";
 constexpr const char* kBriefingBitmap = "bitmaps/igmbrief.pcx";
 // The ARM campaign's third mission, whose briefing runs to a second page.
@@ -128,6 +140,116 @@ constexpr int kSweepFrames = 16;
 constexpr uint8_t kLeavingPanelCursor = 0x14;
 // Ticks a skirmish swept of its opponents is given to end in victory.
 constexpr uint32_t kVictoryTicks = 600;
+
+/// Returns the side name the load and save dialogs show for a saved side index.
+///
+/// @param side the Summary's "Side"
+/// @return "Arm" for 0, "Core" for 1, else an empty name
+std::string_view saved_side_name(int32_t side) {
+    return side == 0 ? "Arm" : side == 1 ? "Core" : "";
+}
+
+/// Returns the radar picture of the check save: palette indices in diagonal bands.
+///
+/// @return the picture
+oa::present::SurfaceBuffer check_radar_picture() {
+    auto picture = oa::present::create_surface(kCheckRadarWidth, kCheckRadarHeight);
+    for (int32_t y = 0; y < kCheckRadarHeight; ++y)
+        for (int32_t x = 0; x < kCheckRadarWidth; ++x)
+            picture.pixels[static_cast<std::size_t>(y * kCheckRadarWidth + x)] =
+                static_cast<uint8_t>(16 + (x / 3 + y / 2) % 200);
+    return picture;
+}
+
+/// Writes the check save into SAVEGAME: a Summary account of a two-player
+/// skirmish on the Core side with `picture` in its "Radar Image" blob.
+///
+/// @param root directory that holds SAVEGAME
+/// @param picture the radar image
+void write_radar_check_save(const fs::path& root, const oa::present::SurfaceBuffer& picture) {
+    namespace persist = oa::data::persist;
+    namespace save_key = persist::save_key;
+    std::error_code error;
+    fs::create_directories(root / oa::ui::frontend::kSaveDirectory, error);
+    persist::Bank bank{};
+    persist::bank_init(&bank);
+    persist::bank_reset(&bank);
+    persist::bank_open_account(&bank, save_key::summary);
+    persist::bank_set_text(&bank, save_key::description, kCheckRadarSaveDescription);
+    persist::bank_set_int(&bank, save_key::game_type, persist::game_type_skirmish);
+    persist::bank_set_int(&bank, save_key::players, 2);
+    persist::bank_set_text(&bank, save_key::map, "Radar Check");
+    persist::bank_set_text(&bank, save_key::mission, "Radar Check");
+    persist::bank_set_int(&bank, save_key::side, kCheckRadarSide);
+    persist::bank_set_int(&bank, save_key::difficulty, 1);
+    persist::bank_set_int(&bank, save_key::game_time, 30 * 65);
+    persist::bank_open_blob_name(&bank, save_key::radar_image);
+    const persist::ImageRows rows{
+        static_cast<uint32_t>(picture.surface.width),
+        static_cast<uint32_t>(picture.surface.height),
+        static_cast<uint32_t>(picture.surface.pitch),
+        picture.pixels.data()
+    };
+    persist::save_write_image_rows(&rows, &bank);
+    const auto sink = persist::stdio_file_sink();
+    const auto path = (root / oa::ui::frontend::kSaveDirectory / kCheckRadarSaveFile).string();
+    const bool written = persist::bank_write_file(
+        &bank, path.c_str(), persist::savegame_description, true, false, &sink
+    );
+    persist::bank_destroy(&bank);
+    if (!written)
+        throw std::runtime_error("load/save check: cannot write " + path);
+}
+
+/// Counts the pixels of a RADAR record that do not show `picture` as a hot
+/// surface's image is drawn.
+///
+/// The picture is stretched by a quad over the record's corners that samples
+/// it from one texel inside its edges; the record's last row and column are
+/// not compared, and neither are pixels the cursor may cover.
+///
+/// @param frame frame the dialog is drawn on
+/// @param radar the RADAR record on the frame
+/// @param picture the radar image, as palette indices
+/// @param palette palette the frame's colours come from
+/// @param cursor area the software cursor may cover
+/// @return the number of pixels that differ
+std::size_t radar_mismatches(
+    renderer::Surface& frame,
+    const Rect& radar,
+    const oa::present::SurfaceBuffer& picture,
+    const oa::PaletteBytes& palette,
+    const Rect& cursor
+) {
+    const int32_t right = radar.width - 1;
+    const int32_t bottom = radar.height - 1;
+    auto stretched = oa::present::create_surface(radar.width, radar.height);
+    oa::Sprite texture{};
+    texture.width = picture.surface.width;
+    texture.height = picture.surface.height;
+    texture.encoding = OA_SPRITE_RAW;
+    texture.data = const_cast<uint8_t*>(picture.pixels.data());
+    const oa::present::PolygonVertex quad[4] = {{0, 0}, {right, 0}, {right, bottom}, {0, bottom}};
+    const int32_t u = texture.width - 1;
+    const int32_t v = texture.height - 1;
+    const oa::present::model::TexturePoint uv[4] = {{1, 1}, {u, 1}, {u, v}, {1, v}};
+    oa::present::model::texture_quad(&stretched.surface, &texture, quad, uv);
+    std::size_t differing = 0;
+    for (int32_t y = 0; y < bottom; ++y)
+        for (int32_t x = 0; x < right; ++x) {
+            if (inside(cursor, radar.x + x, radar.y + y))
+                continue;
+            const auto index = stretched.pixels[static_cast<std::size_t>(y * radar.width + x)];
+            const auto* shown = pixel(frame, radar.x + x, radar.y + y);
+            if (!std::equal(
+                    shown,
+                    shown + 3,
+                    &palette[static_cast<std::size_t>(index) * oa::palette_entry_bytes]
+                ))
+                ++differing;
+        }
+    return differing;
+}
 
 /// Returns the label the return label probe answers (Extension::return_label).
 ///
@@ -1154,6 +1276,82 @@ void Runtime::check_load_save() {
         const auto rect = record(name);
         click(rect.x + rect.width / 2, rect.y + rect.height / 2);
     };
+    // GAMES row `index` on the frame, the list's first row showing.
+    const auto games_row = [&](int32_t index) {
+        const auto games = record("GAMES");
+        const auto* fields =
+            std::get_if<oa::ui::gui_layout::ListBoxFields>(&widget("GAMES")->fields);
+        const int32_t step = fields != nullptr && fields->item_height != 0
+                                 ? fields->item_height
+                                 : oa::formats::fnt::line_height(resources_.font) + 1;
+        return Rect{games.x + 2, games.y + 2 + index * step, games.width - 3, step};
+    };
+    const auto label_text = [&](std::string_view name) {
+        const auto* gadget = widget(name);
+        const auto* label = gadget != nullptr
+                                ? std::get_if<oa::ui::gui_layout::LabelFields>(&gadget->fields)
+                                : nullptr;
+        return label != nullptr ? label->text : std::string{};
+    };
+    // The saves as the dialogs list them, newest first, read back through
+    // the save directory and each Summary.
+    const fs::path save_root = save_game_root();
+    const auto listed_saves = [&] {
+        oa::ui::frontend::SaveDialogContext saves;
+        saves.files = oa::ui::frontend::savegame_host_files(&save_root);
+        saves.reader = oa::ui::frontend::savegame_persist_reader(&save_root);
+        (void)oa::ui::frontend::savegame_build_list(saves);
+        return saves;
+    };
+
+    // The saved side and radar image of GAMES row `index`.
+    struct SavedPreview {
+        int32_t side = -1;
+        oa::present::SurfaceBuffer radar;
+    };
+
+    const auto saved_preview = [&](std::size_t index) {
+        auto saves = listed_saves();
+        if (index >= saves.list.entries.size())
+            throw std::runtime_error("load/save check: GAMES has no row " + std::to_string(index));
+        char path[oa::ui::frontend::kSaveFileBytes * 2];
+        oa::ui::frontend::savegame_entry_path(saves, index, path, sizeof path);
+        const auto& reader = saves.reader;
+        void* bank = reader.open(reader.context, path);
+        if (bank == nullptr)
+            throw std::runtime_error(std::string("load/save check: cannot read ") + path);
+        SavedPreview preview;
+        preview.side =
+            reader.get_int(reader.context, bank, oa::data::persist::save_key::side, preview.side);
+        if (!reader.load_radar(reader.context, bank, preview.radar))
+            preview.radar = {};
+        reader.close(reader.context, bank);
+        return preview;
+    };
+    // The previewed save's side name beside Side, and its radar image over
+    // RADAR in the palette the dialog is drawn in.
+    const auto check_preview =
+        [&](const SavedPreview& saved, const oa::PaletteBytes& palette, const std::string& what) {
+            const auto side = label_text("SIDE");
+            if (side != saved_side_name(saved.side))
+                throw std::runtime_error(
+                    "load/save check: " + what + " shows side \"" + side + "\" for saved side " +
+                    std::to_string(saved.side)
+                );
+            if (saved.radar.pixels.empty())
+                throw std::runtime_error("load/save check: " + what + " save holds no radar image");
+            const auto* radar = widget("RADAR");
+            if (radar == nullptr || radar->common.active == 0)
+                throw std::runtime_error("load/save check: " + what + " hides RADAR");
+            const auto reach = cursor_reach(pointer_x_, pointer_y_);
+            if (const auto differing =
+                    radar_mismatches(surface_, record("RADAR"), saved.radar, palette, reach);
+                differing != 0)
+                throw std::runtime_error(
+                    "load/save check: " + what + " RADAR does not show the saved radar image (" +
+                    std::to_string(differing) + " pixels differ)"
+                );
+        };
     std::size_t save_files = 0;
     std::error_code listing;
     for (const auto& entry :
@@ -1211,6 +1409,41 @@ void Runtime::check_load_save() {
         );
     std::cout << "load/save check: load dialog at " << panel.x << ',' << panel.y
               << " over Single Player\n";
+
+    // A save as the game writes one, with a radar image in its Summary: LOAD
+    // GAME lists it and, when its row is chosen, shows that image stretched
+    // over RADAR and "Core" beside Side.
+    const auto radar_picture = check_radar_picture();
+    write_radar_check_save(save_root, radar_picture);
+    std::optional<std::size_t> radar_row;
+    {
+        const auto saves = listed_saves();
+        for (std::size_t index = 0; index < saves.list.entries.size(); ++index)
+            if (std::string_view(saves.list.entries[index].file.data()) == kCheckRadarSaveFile)
+                radar_row = index;
+    }
+    if (!radar_row)
+        throw std::runtime_error("load/save check: the radar check save is not listed");
+    exercise_click(entry::resource_name(entry::Button::load_game));
+    if (screen_ != Screen::load_game || save_dialog_open())
+        throw std::runtime_error("load/save check: LOAD GAME did not list the radar check save");
+    tick_screen_packages();
+    {
+        const auto row = games_row(static_cast<int32_t>(*radar_row));
+        click(row.x + 8, row.y + row.height / 2);
+    }
+    tick_screen_packages();
+    rebuild_surface();
+    write_ppm(report_directory / "native-loadsave-load-radar.ppm", surface_);
+    SavedPreview radar_save;
+    radar_save.side = kCheckRadarSide;
+    radar_save.radar = check_radar_picture();
+    check_preview(radar_save, single_palette, "LOAD GAME over Single Player");
+    if (saved_preview(*radar_row).radar.pixels != radar_picture.pixels)
+        throw std::runtime_error("load/save check: the radar check save reads back changed");
+    click_record("CANCEL");
+    if (screen_ != Screen::single_player)
+        throw std::runtime_error("load/save check: CANCEL did not leave the second load dialog");
 
     // A paused skirmish: the save dialog at the authored root over the match.
     exercise_click(entry::resource_name(entry::Button::skirmish));
@@ -1300,6 +1533,34 @@ void Runtime::check_load_save() {
             "load/save check: CANCEL at its drawn position did not close the save dialog"
         );
     Rect save_panel{};
+    // Each save holds the radar image the match shows as it is saved, and
+    // the local player's side.
+    const auto check_saved_radar = [&](const char* name, const std::vector<uint8_t>& shown) {
+        const auto reader = oa::ui::frontend::savegame_persist_reader(&save_root);
+        const auto path = std::string(oa::ui::frontend::kSaveDirectory) + '\\' + name + '.' +
+                          std::string(oa::ui::frontend::kSaveExtension);
+        void* bank = reader.open(reader.context, path.c_str());
+        if (bank == nullptr)
+            throw std::runtime_error("load/save check: cannot read " + path);
+        oa::present::SurfaceBuffer saved;
+        const bool radar = reader.load_radar(reader.context, bank, saved);
+        const auto side =
+            reader.get_int(reader.context, bank, oa::data::persist::save_key::side, -1);
+        reader.close(reader.context, bank);
+        const auto& game = match_->state().game;
+        if (!radar || saved.surface.width != game.radar_width ||
+            saved.surface.height != game.radar_height || saved.pixels != shown)
+            throw std::runtime_error(
+                "load/save check: " + path + " does not hold the radar image the match shows"
+            );
+        const auto* info = oa::world_player_info(
+            &match_->state(), oa::world_player(&match_->state(), match_local_player_)
+        );
+        if (info == nullptr || side != info->side)
+            throw std::runtime_error(
+                "load/save check: " + path + " does not hold the local player's side"
+            );
+    };
     for (const auto* name : {kCheckSaveName, kCheckSecondSaveName}) {
         auto paused = open_over_match("SAVEGAME", true);
         SDL_Event key{};
@@ -1316,12 +1577,34 @@ void Runtime::check_load_save() {
             write_ppm(report_directory / "native-loadsave-save-match.ppm", surface_);
             save_panel = check_over_match(paused, save_bitmap, authored, "save");
         }
+        const auto* final_image = radar_state_.surfaces.final_image;
+        if (radar_state_.built_for != &match_->state() || final_image == nullptr)
+            throw std::runtime_error("load/save check: the match has no radar image to save");
+        std::vector<uint8_t> shown;
+        for (int32_t y = 0; y < final_image->height; ++y) {
+            const auto* line =
+                final_image->pixels + static_cast<std::ptrdiff_t>(y) * final_image->pitch;
+            shown.insert(shown.end(), line, line + final_image->width);
+        }
         key.key.key = SDLK_RETURN;
         dispatch_event(key, running);
         if (screen_ != Screen::match || save_dialog_open())
             throw std::runtime_error(
                 "load/save check: Return did not save and close the save dialog"
             );
+        check_saved_radar(name, shown);
+    }
+
+    // Opened again, the save dialog previews its first save: the radar image
+    // saved with it and the name of the side it was saved on.
+    {
+        auto reopened = open_over_match("SAVEGAME", true);
+        present(reopened, "save");
+        write_ppm(report_directory / "native-loadsave-save-preview.ppm", surface_);
+        check_preview(saved_preview(0), reopened.palette, "the save dialog");
+        click_record("CANCEL");
+        if (screen_ != Screen::match || save_dialog_open())
+            throw std::runtime_error("load/save check: CANCEL did not close the save dialog");
     }
 
     // The load dialog centred on the match frame; a click on the second
@@ -1333,15 +1616,9 @@ void Runtime::check_load_save() {
     };
     present(paused, "match load");
     auto listed = surface_;
-    const auto games = record("GAMES");
-    const auto* fields = std::get_if<oa::ui::gui_layout::ListBoxFields>(&widget("GAMES")->fields);
-    const int32_t step = fields != nullptr && fields->item_height != 0
-                             ? fields->item_height
-                             : oa::formats::fnt::line_height(resources_.font) + 1;
-    const auto row = [&](int32_t index) {
-        return Rect{games.x + 2, games.y + 2 + index * step, games.width - 3, step};
-    };
-    click(row(1).x + 8, row(1).y + step / 2);
+    const auto row = games_row;
+    click(row(1).x + 8, row(1).y + row(1).height / 2);
+    tick_screen_packages();
     present(paused, "match load");
     if (brightness(surface_, row(1)) <= brightness(listed, row(1)) ||
         brightness(surface_, row(0)) >= brightness(listed, row(0)))
@@ -1349,6 +1626,7 @@ void Runtime::check_load_save() {
             "load/save check: a click on the second GAMES row did not light it"
         );
     write_ppm(report_directory / "native-loadsave-load-match.ppm", surface_);
+    check_preview(saved_preview(1), paused.palette, "the load dialog over the match");
     const auto load_panel = check_over_match(paused, load_bitmap, match_centred, "match load");
     click_record("CANCEL");
     if (screen_ != Screen::match || !match_paused_)

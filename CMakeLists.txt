@@ -384,7 +384,8 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # LOADGAME.GUI from Single Player and, through the SDL presenter, as the
       # save and load dialogs over a paused skirmish: each placed as its loader
-      # places it over the darkened panel below, its bitmap in that palette.
+      # places it over the darkened panel below, its bitmap in that palette,
+      # and each previewing the chosen save's radar image and side.
       set(oa_loadsave_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/loadsave")
       file(MAKE_DIRECTORY "${oa_loadsave_check_dir}")
       add_test(NAME native-loadsave-screens COMMAND oa-game --game-dir "${OA_GAME_DIR}"

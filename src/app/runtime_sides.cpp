@@ -10,6 +10,7 @@
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
+#include "oa/ui/campaign/single_player.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace oa::app {
 namespace {
@@ -60,6 +62,23 @@ void Runtime::load_side_table() {
     if (side_table_.count == 0)
         throw std::runtime_error("gamedata/sidedata.tdf contains no side definitions");
     skirmish_ui_.side_count = static_cast<int32_t>(side_table_.count);
+}
+
+std::vector<std::string> Runtime::saved_game_side_names() const {
+    namespace campaign = oa::ui::campaign;
+    static_assert(sizeof(oa::Side::name) == campaign::kSideNameBytes);
+    char names[OA_SIDE_COUNT][campaign::kSideNameBytes] = {};
+    const auto count = std::min<uint32_t>(side_table_.count, OA_SIDE_COUNT);
+    for (uint32_t side = 0; side < count; ++side)
+        std::memcpy(names[side], side_table_.sides[side].name, campaign::kSideNameBytes);
+    // The dialogs' side list: the names one after another, each ended by a
+    // NUL, and one more NUL after the last.
+    char list[OA_SIDE_COUNT * campaign::kSideNameBytes + 1] = {};
+    (void)campaign::build_side_name_list(names, count, list, sizeof list);
+    std::vector<std::string> shown;
+    for (const char* name = list; *name != '\0'; name += std::strlen(name) + 1)
+        shown.emplace_back(name);
+    return shown;
 }
 
 void Runtime::bind_player_records(oa::World& world) {

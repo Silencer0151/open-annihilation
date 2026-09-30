@@ -10,6 +10,9 @@
 #include "oa/ui/frontend/options.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/formats/fnt.hpp"
+#include "oa/present/blit.hpp"
+#include "oa/present/model/mesh_raster.hpp"
+#include "oa/present/surface.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_input.hpp"
@@ -286,8 +289,10 @@ struct LoadGameOverlay {
     ui::SaveDialogContext saves;
     fs::path root;
     std::optional<oa::formats::fnt::Font> font;
-    std::vector<std::string> rows;    // GAMES list text
-    ScreenContext* context = nullptr; // valid during a hook
+    std::vector<std::string> rows;            // GAMES list text
+    std::vector<std::string> side_names;      // shown for a save's "Side" index
+    std::vector<std::string_view> side_views; // saves.side_names, over side_names
+    ScreenContext* context = nullptr;         // valid during a hook
 };
 
 LoadGameOverlay& load_overlay() {
@@ -309,8 +314,14 @@ void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     }
     ui::panel_load_layout(overlay.panel, overlay.layout);
     // Saves are listed where the runtime writes and loads them.
-    overlay.root = static_cast<const Runtime*>(ctx->host)->save_game_root();
+    const auto& runtime = *static_cast<const Runtime*>(ctx->host);
+    overlay.root = runtime.save_game_root();
     auto& saves = overlay.saves;
+    // A dialog opens without the lists and picture a previous one kept.
+    ui::savegame_release_lists(saves);
+    overlay.side_names = runtime.saved_game_side_names();
+    overlay.side_views.assign(overlay.side_names.begin(), overlay.side_names.end());
+    saves.side_names = overlay.side_views;
     saves.files = ui::savegame_host_files(&overlay.root);
     saves.reader = ui::savegame_persist_reader(&overlay.root);
     saves.host = {};
@@ -539,12 +550,76 @@ void load_overlay_text(
     }
 }
 
-// GAMENAME is a text box, which the built-in screen leaves empty.
+/// Draws the RADAR picture as a hot surface's image.
+///
+/// The picture is stretched by a quad over the record's corners that samples
+/// it from one texel inside its edges, which leaves the record's last row and
+/// column as they were. Its palette indices show in the palette the dialog is
+/// drawn in. Nothing is drawn while RADAR is hidden or the picture is smaller
+/// than kSaveRadarMinimumSize in either direction.
+///
+/// @param[in,out] ctx screen being drawn; its surface takes the picture
+/// @param overlay the bound dialog and its radar picture
+/// @param origin screen position of the dialog's top-left corner, in pixels
+void load_overlay_radar(
+    ScreenContext* ctx, const LoadGameOverlay& overlay, oa::ui::display_layout::Point origin
+) {
+    auto* surface = ctx->surface;
+    const auto* radar = ui::panel_control(overlay.panel, "RADAR");
+    const auto rect = load_overlay_rect(overlay, "RADAR");
+    const auto& picture = overlay.saves.radar_picture;
+    if (surface == nullptr || radar == nullptr || radar->active == 0 || !rect ||
+        picture.surface.width < ui::kSaveRadarMinimumSize ||
+        picture.surface.height < ui::kSaveRadarMinimumSize ||
+        picture.pixels.size() < static_cast<std::size_t>(picture.surface.width) *
+                                    static_cast<std::size_t>(picture.surface.height))
+        return;
+    const int32_t right = rect->right - rect->left;
+    const int32_t bottom = rect->bottom - rect->top;
+    if (right <= 0 || bottom <= 0)
+        return;
+    auto stretched = oa::present::create_surface(right + 1, bottom + 1);
+    oa::Sprite texture{};
+    oa::present::sprite_from_surface(texture, picture.surface);
+    constexpr int32_t texel_inset = 1;
+    const oa::present::PolygonVertex quad[4] = {{0, 0}, {right, 0}, {right, bottom}, {0, bottom}};
+    const int32_t u = texture.width - texel_inset;
+    const int32_t v = texture.height - texel_inset;
+    const oa::present::model::TexturePoint uv[4] = {
+        {texel_inset, texel_inset}, {u, texel_inset}, {u, v}, {texel_inset, v}
+    };
+    oa::present::model::texture_quad(&stretched.surface, &texture, quad, uv);
+    const auto& palette = static_cast<const Runtime*>(ctx->host)->screen_palette();
+    for (int32_t y = 0; y < bottom; ++y)
+        for (int32_t x = 0; x < right; ++x) {
+            const auto screen_x = origin.x + rect->left + x;
+            const auto screen_y = origin.y + rect->top + y;
+            if (screen_x < 0 || screen_y < 0 || screen_x >= static_cast<int32_t>(surface->width) ||
+                screen_y >= static_cast<int32_t>(surface->height))
+                continue;
+            const auto index =
+                stretched.pixels
+                    [static_cast<std::size_t>(y) * static_cast<std::size_t>(right + 1) +
+                     static_cast<std::size_t>(x)];
+            const auto* colour =
+                &palette[static_cast<std::size_t>(index) * oa::palette_entry_bytes];
+            const auto out = (static_cast<std::size_t>(screen_y) * surface->width +
+                              static_cast<std::size_t>(screen_x)) *
+                             3U;
+            if (out + 2 >= surface->rgb.size())
+                continue;
+            std::copy_n(colour, 3, surface->rgb.begin() + static_cast<std::ptrdiff_t>(out));
+        }
+}
+
+// GAMENAME is a text box, which the built-in screen leaves empty; RADAR is a
+// hot surface given its picture at run time.
 void load_overlay_draw(ScreenContext* ctx, void*) {
     auto& overlay = load_overlay();
     if (!overlay.bound)
         return;
     const auto origin = static_cast<const Runtime*>(ctx->host)->panel_origin();
+    load_overlay_radar(ctx, overlay, origin);
     const auto* name = ui::panel_control(overlay.panel, "GAMENAME");
     if (const auto rect = load_overlay_rect(overlay, "GAMENAME");
         name != nullptr && name->active != 0 && rect)

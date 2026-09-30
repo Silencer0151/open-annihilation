@@ -317,6 +317,12 @@ class Runtime final : public menu::Host,
     /// @return that directory
     [[nodiscard]] fs::path save_game_root() const;
 
+    /// Returns the side names the load and save dialogs show for a save's "Side" index.
+    ///
+    /// @return SIDEDATA.TDF's side names in order, every character after the
+    ///         first shifted to lower case ("Arm", "Core")
+    [[nodiscard]] std::vector<std::string> saved_game_side_names() const;
+
     /// Returns the palette the current frontend screen is drawn in.
     ///
     /// @return the background's palette, else the GUI palette
@@ -3102,9 +3108,14 @@ class Runtime final : public menu::Host,
     /// paused skirmish, the save dialog at its authored position and the load
     /// dialog centred, each darkening only the options panel and showing its
     /// bitmap in the match palette, with CANCEL, typed names, Return and a GAMES
-    /// row reached at their drawn positions. Game data with no save and load
-    /// dialog runs check_saved_games_unavailable() instead. Throws
-    /// std::runtime_error on a failure.
+    /// row reached at their drawn positions. A save written as the game writes
+    /// one, chosen in the load dialog over Single Player, and the saves the
+    /// match writes, which hold the radar image the match shows and the local
+    /// player's side, are previewed with that image stretched over RADAR and
+    /// the side's name beside Side, in the save dialog and in the load dialog
+    /// over the match. Game data with no save and load dialog runs
+    /// check_saved_games_unavailable() instead. Throws std::runtime_error on a
+    /// failure.
     void check_load_save();
 
     /// Checks, over game data with no save and load dialog such as the Total Annihilation demo
