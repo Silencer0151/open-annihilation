@@ -26,25 +26,40 @@ FFMPEG_VERSION = "9.0.2"
 FFMPEG_SHA256 = "84960df915059e8754fef2cd7c9afeb614062b1b5458ec471eecee619ee04e98"
 FFMPEG_URL = f"https://ffmpeg.org/releases/ffmpeg-{FFMPEG_VERSION}.tar.gz"
 FFMPEG_LICENCE = "COPYING.LGPLv2.1"
-# Only what the intro player and the music decoder open: Smacker (.ZRB)
-# movies and the numbered .mp3/.ogg/.wav/.flac disc tracks. Shared libraries
-# match the build_windows.sh --ffmpeg contract (import libraries in lib/, DLLs
-# in bin/); nasm is not required because the x86 assembly is left out. The GCC
-# runtime and winpthread (clock_gettime, nanosleep) are linked into the DLLs so
-# they need nothing beyond system DLLs.
-FFMPEG_OPTIONS = [
-    "--enable-shared", "--disable-static",
-    "--disable-programs", "--disable-doc", "--disable-debug",
-    "--disable-autodetect", "--enable-w32threads", "--disable-network",
-    "--disable-avdevice", "--disable-avfilter", "--disable-x86asm",
-    "--disable-everything",
-    "--enable-protocol=file",
-    "--enable-demuxer=smacker,mp3,ogg,wav,flac",
-    "--enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8",
-    "--enable-parser=mpegaudio,vorbis,flac",
-    "--extra-ldflags=-static-libgcc",
-    "--extra-libs=-Wl,-Bstatic,-lwinpthread,-Bdynamic",
-]
+
+
+def ffmpeg_options(library_options, thread_option, extra_options=()):
+    """Returns the configure options of one package's FFmpeg.
+
+    They are library_options (shared or static libraries), the selection
+    every package shares with the target's thread_option in it, then
+    extra_options. The selection is only what the intro player and the
+    music decoder open: Smacker (.ZRB) movies and the numbered
+    .mp3/.ogg/.wav/.flac disc tracks. nasm is not required because the x86
+    assembly is left out. tools/bootstrap_macos_deps.py builds the macOS
+    release's FFmpeg with these options too.
+    """
+    return [
+        *library_options,
+        "--disable-programs", "--disable-doc", "--disable-debug",
+        "--disable-autodetect", thread_option, "--disable-network",
+        "--disable-avdevice", "--disable-avfilter", "--disable-x86asm",
+        "--disable-everything",
+        "--enable-protocol=file",
+        "--enable-demuxer=smacker,mp3,ogg,wav,flac",
+        "--enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8",
+        "--enable-parser=mpegaudio,vorbis,flac",
+        *extra_options,
+    ]
+
+
+# Shared libraries match the build_windows.sh --ffmpeg contract (import
+# libraries in lib/, DLLs in bin/). The GCC runtime and winpthread
+# (clock_gettime, nanosleep) are linked into the DLLs so they need nothing
+# beyond system DLLs.
+FFMPEG_OPTIONS = ffmpeg_options(
+    ["--enable-shared", "--disable-static"], "--enable-w32threads",
+    ["--extra-ldflags=-static-libgcc", "--extra-libs=-Wl,-Bstatic,-lwinpthread,-Bdynamic"])
 
 
 def zlib_source(deps):

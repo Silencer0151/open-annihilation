@@ -729,6 +729,15 @@ if(BUILD_TESTING)
       if(OA_BASH_EXECUTABLE)
         add_test(NAME launcher COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_launcher.py)
       endif()
+      # tools/release_macos.sh packages the built game as the macOS release
+      # does, as the zip and the installer package, and checks both; the
+      # test signs ad hoc, and sends nothing to Apple.
+      if(APPLE AND OA_BASH_EXECUTABLE AND TARGET oa-game)
+        add_test(NAME release-macos-package COMMAND ${OA_BASH_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/release_macos.sh --app $<TARGET_BUNDLE_DIR:oa-game> --unsigned
+          --out ${CMAKE_CURRENT_BINARY_DIR}/release-macos-package)
+        set_tests_properties(release-macos-package PROPERTIES TIMEOUT 300)
+      endif()
     endif()
     # The icons made from the Open Annihilation icon (tools/make_icons.py)
     # have the sizes the builds and the platforms want.

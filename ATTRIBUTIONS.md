@@ -35,12 +35,13 @@ repository with CMake links these components as follows:
   as `run.sh` and the README do, SDL 3.4.16 is linked statically. Otherwise
   the build takes whichever SDL 3.2 or later CMake finds, which may be a
   shared library.
-- On macOS and Linux, zlib and FFmpeg are the system's: the executables link
-  the libraries CMake finds (Homebrew's FFmpeg on macOS when it is
-  installed), and the build copies none of them beside the executables. The
-  [FFmpeg](#ffmpeg) section below does not describe such a build: the
-  licence and configuration of the FFmpeg it found apply to it. Homebrew's
-  FFmpeg, for example, is built under the GPL version 3 with x264 and x265.
+- On macOS and Linux, zlib and FFmpeg are the system's, except in the macOS
+  release build below: the executables link the libraries CMake finds
+  (Homebrew's FFmpeg on macOS when it is installed), and the build copies
+  none of them beside the executables. The [FFmpeg](#ffmpeg) section below
+  does not describe such a build: the licence and configuration of the
+  FFmpeg it found apply to it. Homebrew's FFmpeg, for example, is built
+  under the GPL version 3 with x264 and x265.
 - The native Windows build that the README describes, with vcpkg's
   `zlib:x64-windows`, links that zlib as a DLL and copies it beside
   `oa-tool.exe`. It uses FFmpeg only when CMake finds one; without it, as in
@@ -53,6 +54,10 @@ repository with CMake links these components as follows:
   [FFmpeg](#ffmpeg) section describes an FFmpeg given with `--ffmpeg` only
   when it is itself an LGPL build, configured without `--enable-gpl` and
   `--enable-nonfree`.
+- The macOS release build, `tools/release_macos.sh`, builds zlib 1.3.1,
+  SDL 3.4.16 and FFmpeg 9.0.2 for arm64 and x86_64 as static libraries with
+  `tools/bootstrap_macos_deps.py` and links them into the application, as
+  the macOS package in the table above has them.
 
 ## SDL
 
@@ -129,7 +134,8 @@ libraries (`--enable-static --disable-shared`). Windows adds the
 cross-compilation, `--enable-w32threads` and static runtime options for
 mingw-w64, and macOS and Linux add `--enable-pthreads`. The Windows
 cross-build in this repository takes its options from
-`tools/bootstrap_windows_deps.py`. The exact options of each package are in
+`tools/bootstrap_windows_deps.py`, and the macOS release build from
+`tools/bootstrap_macos_deps.py`. The exact options of each package are in
 [`licenses/FFmpeg-SOURCE.txt`](licenses/FFmpeg-SOURCE.txt).
 
 On Windows and Linux the libraries are separate files, so you can replace

@@ -84,7 +84,12 @@ with these options besides the installation --prefix:
 The script copies the resulting DLLs and COPYING.LGPLv2.1 beside
 open-annihilation.exe and oa-intro.exe.
 
-On macOS and Linux a build from source links the FFmpeg that CMake finds on
+The macOS release build (tools/release_macos.sh) builds FFmpeg 9.0.2 from
+the same archive with tools/bootstrap_macos_deps.py, with the macOS
+(universal) options above, and links the combined libraries into the
+application.
+
+Any other build on macOS and Linux links the FFmpeg that CMake finds on
 the system. To build against a modified FFmpeg on any platform, set these
 CMake cache variables to its headers and libraries when configuring the
 source: OA_FFMPEG_INCLUDE_DIR, OA_AVFORMAT_LIBRARY, OA_AVCODEC_LIBRARY,

@@ -27,6 +27,9 @@ Every document in the repository, by what you want to do.
 - [CONTRIBUTORS.md](../CONTRIBUTORS.md): the people behind the project.
 - [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
   rules it points to are in [conventions.md](conventions.md).
+- [releasing.md](releasing.md): building, signing, notarizing and checking
+  the macOS release packages with `tools/release_macos.sh`, on the
+  maintainer's Mac.
 
 ## Reference
 

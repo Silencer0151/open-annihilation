@@ -8,7 +8,9 @@
 # (src/app/Info.plist.in) gives it the name the Dock, the application
 # switcher and the menu bar show, "Open Annihilation", and its identifier.
 # The bundle takes the executable's name because CMake names a bundle after
-# its target's OUTPUT_NAME. Elsewhere the game is the executable alone.
+# its target's OUTPUT_NAME; the macOS release packages (tools/release_macos.sh)
+# name it as its Info.plist does, "Open Annihilation.app". Elsewhere the game
+# is the executable alone.
 #
 # The files that travel with the game, such as the licence notices and what
 # the extensions add (their GAME_FILES, cmake/OaExtensions.cmake), go in the folder
