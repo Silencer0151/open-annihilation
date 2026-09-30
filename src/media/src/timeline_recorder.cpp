@@ -473,7 +473,10 @@ void TimelineRecorder::finish(const oa::World& world, const ReplayVerdict& verdi
     if (failure_)
         std::rethrow_exception(failure_);
     TimelineHeader& header{timeline_.header};
-    header.last_tick = std::max(header.first_tick, world.game.tick);
+    // Copied out: std::max takes references, and the packed tick field cannot
+    // be bound to one.
+    const uint32_t tick{world.game.tick};
+    header.last_tick = std::max(header.first_tick, tick);
     timeline_.verdict = verdict;
     const uint32_t after_last{
         header.last_tick < std::numeric_limits<uint32_t>::max() ? header.last_tick + 1u

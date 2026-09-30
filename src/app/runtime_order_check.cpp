@@ -624,7 +624,9 @@ void Runtime::check_hud_buttons_under_pointer(uint16_t peewee, uint16_t commande
             build = index;
     }
     require(build.has_value(), "the commander's build page has no unit button");
-    const auto& build_name = match_hud_->layout.gadgets[*build].common.name;
+    // Copied: selecting another unit below loads another layout, which frees
+    // this one's gadgets.
+    const std::string build_name = match_hud_->layout.gadgets[*build].common.name;
     send(SDL_EVENT_MOUSE_MOTION, away);
     const auto idle_build = hud_pixels(*build);
     send(SDL_EVENT_MOUSE_MOTION, centre(*build));
