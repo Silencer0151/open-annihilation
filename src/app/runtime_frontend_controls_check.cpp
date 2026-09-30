@@ -678,6 +678,37 @@ void Runtime::check_frontend_controls() {
     click("CANCEL");
     require(screen_ == Screen::single_player, "CANCEL did not leave the options");
 
+    // Alt+Enter switches the window to full screen and back again.
+    const auto alt_enter = [&] {
+        SDL_Event press{};
+        press.type = SDL_EVENT_KEY_DOWN;
+        press.key.windowID = SDL_GetWindowID(sdl_.window);
+        press.key.key = SDLK_RETURN;
+        press.key.scancode = SDL_SCANCODE_RETURN;
+        press.key.mod = SDL_KMOD_LALT;
+        press.key.down = true;
+        dispatch_event(press, running);
+        SDL_Event release = press;
+        release.type = SDL_EVENT_KEY_UP;
+        release.key.down = false;
+        dispatch_event(release, running);
+        (void)SDL_SyncWindow(sdl_.window);
+    };
+    const auto full_screen = [&] {
+        return (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0;
+    };
+    const bool started_full_screen = full_screen();
+    alt_enter();
+    const bool switched = full_screen() != started_full_screen;
+    alt_enter();
+    const bool switched_back = full_screen() == started_full_screen;
+    expect(switched, "Alt+Enter did not switch the window's mode");
+    expect(switched_back, "a second Alt+Enter did not switch it back");
+    expect(screen_ == Screen::single_player, "Alt+Enter left the screen it was pressed on");
+    if (switched && switched_back)
+        std::cout << "frontend controls check: Alt+Enter switched to "
+                  << (started_full_screen ? "a window" : "full screen") << " and back\n";
+
     if (!problems.empty()) {
         std::string report;
         for (const auto& problem : problems)

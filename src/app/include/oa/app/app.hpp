@@ -226,6 +226,9 @@ struct Options {
     // frame limits, snapshots, and the extension's): nobody is there to answer
     // a dialog.
     bool unattended = false;
+    // On Windows, a player's run without the -d switch opens its window full
+    // screen; unattended runs and video captures keep a window.
+    bool start_full_screen = false;
     // Trace stream (oa/sim/match_runtime/match_trace.hpp) of each match the run starts,
     // and its optional per-slot unit dump; a new match rewrites both files.
     fs::path trace_digest;

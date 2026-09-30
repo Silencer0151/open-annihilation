@@ -314,6 +314,14 @@ void Runtime::run_frame(bool& running) {
 
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     note_window_activation(event);
+    // Alt+Enter switches between full screen and a window on every screen,
+    // before the screen or a screen package sees the key.
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) &&
+        (event.key.mod & SDL_KMOD_ALT) != 0) {
+        toggle_full_screen();
+        return;
+    }
     if (!dispatch_screen_input(event))
         handle_sdl_event(event, running);
     apply_screen_request();

@@ -3295,6 +3295,11 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error when SDL refuses.
     void initialize_sdl();
 
+    /// Switches the window between full screen and a window (Alt+Enter).
+    ///
+    /// A switch SDL refuses leaves the window as it is and is reported on stderr.
+    void toggle_full_screen();
+
     /// Returns an XRGB8888 streaming texture of a size, recreating it when the size changed.
     ///
     /// Throws std::runtime_error when SDL cannot create it.

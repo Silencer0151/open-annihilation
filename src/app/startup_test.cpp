@@ -242,6 +242,26 @@ int main() {
         !parse({}).unattended && !parse({"--skip-intro", "--mute"}).unattended,
         "an interactive start may ask for the folder"
     );
+#ifdef _WIN32
+    expect(
+        parse({}).start_full_screen && parse({"--skip-intro", "--mute"}).start_full_screen,
+        "a player's run on Windows starts full screen"
+    );
+    expect(
+        !parse({"-d"}).start_full_screen && !parse({"-dx"}).start_full_screen,
+        "-d keeps a player's run in a window"
+    );
+    expect(
+        !parse({"--headless-check"}).start_full_screen &&
+            !parse({"--frames", "10"}).start_full_screen,
+        "an unattended run keeps a window"
+    );
+#else
+    expect(
+        !parse({}).start_full_screen && !parse({"-d"}).start_full_screen,
+        "only a run on Windows starts full screen"
+    );
+#endif
     std::vector<std::vector<const char*>> scripted_runs{
         {"--headless-check"},
         {"--check-navigation"},

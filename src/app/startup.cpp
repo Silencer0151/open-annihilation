@@ -229,7 +229,7 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
                          "[--capture-video PATH.mp4] [--showcase arm-first-mission] "
                          "[game switches such as "
                       << extension_text(extension, ExtensionText::usage_switches, "")
-                      << "-s] "
+                      << "-d -s] "
                          "[LANGUAGE]\n"
                       << extension_text(
                              extension,
@@ -312,6 +312,12 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
                         result.showcase != Showcase::none;
     if ((extension_effects & option_effect::unattended) != 0)
         result.unattended = true;
+#ifdef _WIN32
+    // On Windows a player's run starts full screen; -d, with any suffix, keeps
+    // a window, and so do unattended runs and video captures.
+    result.start_full_screen =
+        result.launch.display_option == 0 && !result.unattended && result.capture_video.empty();
+#endif
     if (result.choose_game_dir && !result.game_dir.empty())
         throw std::runtime_error("--choose-game-dir and --game-dir cannot be used together");
     if (result.choose_game_dir && result.unattended)

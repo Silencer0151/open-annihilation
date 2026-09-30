@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -173,8 +174,11 @@ void Runtime::initialize_sdl() {
             throw std::runtime_error("SDL last-window quit hint was rejected");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
+        // A player's run on Windows opens full screen (Options::start_full_screen).
+        const SDL_WindowFlags window_flags =
+            SDL_WINDOW_RESIZABLE | (options_.start_full_screen ? SDL_WINDOW_FULLSCREEN : 0);
         sdl_.window = SDL_CreateWindow(
-            "Open Annihilation", kDefaultWindowWidth, kDefaultWindowHeight, SDL_WINDOW_RESIZABLE
+            "Open Annihilation", kDefaultWindowWidth, kDefaultWindowHeight, window_flags
         );
         if (sdl_.window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
@@ -186,6 +190,15 @@ void Runtime::initialize_sdl() {
     load_game_cursors();
     if (cursors_loaded_)
         SDL_HideCursor();
+}
+
+void Runtime::toggle_full_screen() {
+    if (sdl_.window == nullptr)
+        return;
+    const bool full_screen = (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (!SDL_SetWindowFullscreen(sdl_.window, !full_screen))
+        std::cerr << "open-annihilation: " << (full_screen ? "leaving" : "entering")
+                  << " full screen failed: " << SDL_GetError() << '\n';
 }
 
 SDL_Texture* Runtime::ensure_xrgb_texture(
