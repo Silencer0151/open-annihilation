@@ -25,6 +25,11 @@ using oa::sim::match_runtime::DeathKind;
 constexpr size_t slot_count{size_t{1} << 16};
 /// Weapon flags that make a missile: launched vertically, or stockpiled.
 constexpr uint32_t missile_flags{OA_WEAPON_FLAG_VLAUNCH | OA_WEAPON_FLAG_STOCKPILE};
+/// The death kind of the unit a new unit displaces from its slot
+/// (KillOutcome::kind 0). A replay can create a commander, displace it this
+/// way with a new commander of the same player on the same tick, and play
+/// on with the new one.
+constexpr uint8_t displaced_death_kind{0};
 
 /// Tells whether a death is one a battle shows: not a capture, a reclaim, a
 /// dismissal or a cancelled frame.
@@ -36,6 +41,40 @@ bool battle_death(uint8_t kind) noexcept {
            kind != static_cast<uint8_t>(DeathKind::reclaim) &&
            kind != static_cast<uint8_t>(DeathKind::dismissed) &&
            kind != static_cast<uint8_t>(DeathKind::cancelled);
+}
+
+/// Tells whether a commander's death is its replacement: it is displaced
+/// from its slot, and another commander of its player is created in that
+/// slot on the same tick.
+///
+/// @param analysis the analysis; its lives are followed
+/// @param event the death, of a player below player_slots
+/// @param life the life the death names
+/// @return true for a commander replaced
+bool commander_replaced(
+    const Analysis& analysis, const TimelineEvent& event, uint32_t life
+) noexcept {
+    if (event.damage_kind != displaced_death_kind)
+        return false;
+    const std::vector<uint32_t>& commanders{analysis.commanders[event.owner]};
+    return std::any_of(commanders.begin(), commanders.end(), [&](uint32_t other) {
+        const Life& record{analysis.lives[other]};
+        return other != life && record.slot == event.unit && record.born == event.tick;
+    });
+}
+
+/// Tells whether a death is a combatant's loss of a commander: a
+/// commander's life ends, owned by a player with a team, and no commander
+/// of that player replaces it.
+///
+/// @param analysis the analysis; its lives are followed
+/// @param event the death
+/// @param life the life the death names, or no_index
+/// @return true for a commander lost
+bool commander_lost(const Analysis& analysis, const TimelineEvent& event, uint32_t life) noexcept {
+    return event.kind == EventKind::death && life != no_index && analysis.lives[life].commander &&
+           event.owner < player_slots && analysis.team[event.owner] != no_player &&
+           !commander_replaced(analysis, event, life);
 }
 
 /// Tells whether a weapon's shots are long-range fire.
@@ -400,7 +439,9 @@ void find_engagement(Analysis& analysis) {
 }
 
 /// Finds the deciding commander death: the first after which at most one
-/// team has a live commander, else the last commander death.
+/// team has a live commander. A death that leaves two teams or more with
+/// one decides nothing, so a game that ends that way, or whose usable end
+/// comes before its deciding death, has none and is directed to its end.
 ///
 /// @param[in,out] analysis the analysis; its lives are followed
 void find_deciding_death(Analysis& analysis) {
@@ -413,33 +454,31 @@ void find_deciding_death(Analysis& analysis) {
                     live[analysis.team[player]] = true;
         return std::count(live.begin(), live.end(), true);
     }};
-    // The commander deaths, each ending its life, in tick order.
+    // The commanders lost, each death ending its life, in tick order.
     std::vector<uint32_t> deaths{};
     for (const uint32_t index : analysis.event_order) {
         const TimelineEvent& event{timeline.events[index]};
         const uint32_t life{analysis.event_lives[index].unit};
-        if (event.kind == EventKind::death && life != no_index && analysis.lives[life].commander &&
-            event.owner < player_slots && analysis.team[event.owner] != no_player &&
-            analysis.lives[life].died == event.tick)
+        if (commander_lost(analysis, event, life) && analysis.lives[life].died == event.tick)
             deaths.push_back(index);
     }
-    uint32_t last_death{no_index};
-    for (size_t order{}; order < deaths.size(); ++order) {
-        const uint32_t tick{timeline.events[deaths[order]].tick};
-        if (last_death == no_index || timeline.events[last_death].tick != tick)
-            last_death = deaths[order];
-        // Every death of the tick counts before the teams are.
-        if (order + 1u < deaths.size() && timeline.events[deaths[order + 1u]].tick == tick)
-            continue;
+    uint32_t deciding{no_index};
+    for (size_t order{}; order < deaths.size() && deciding == no_index; ++order) {
+        // Every death of the tick counts before the teams are; the tick's
+        // first names the deciding death.
+        const size_t first{order};
+        const uint32_t tick{timeline.events[deaths[first]].tick};
+        while (order + 1u < deaths.size() && timeline.events[deaths[order + 1u]].tick == tick)
+            ++order;
         if (teams_with_commanders(tick) <= 1)
-            break;
+            deciding = deaths[first];
     }
-    if (last_death == no_index)
+    if (deciding == no_index)
         return;
-    const TimelineEvent& death{timeline.events[last_death]};
+    const TimelineEvent& death{timeline.events[deciding]};
     analysis.deciding_tick = death.tick;
     analysis.deciding_at = ground_of(death.at);
-    const uint32_t life{analysis.event_lives[last_death].unit};
+    const uint32_t life{analysis.event_lives[deciding].unit};
     analysis.deciding_score = analysis.lives[life].value * tuning::commander_death_moment_factor;
 }
 
@@ -553,8 +592,7 @@ void weigh_events(Analysis& analysis) {
             if (lives.unit == no_index)
                 continue;
             const Life& life{analysis.lives[lives.unit]};
-            if (life.commander && event.owner < player_slots &&
-                analysis.team[event.owner] != no_player)
+            if (commander_lost(analysis, event, lives.unit))
                 found.push_back(
                     Moment{
                         event.tick,

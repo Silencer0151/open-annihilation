@@ -472,6 +472,8 @@ if(OA_BUILD_PLATFORM)
       # the world the generator's undrawn replay reaches. The frames and the
       # sound are pinned.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
+      set(oa_director_render_hashes
+        "director render: frames c70634a9984e59d0d954978f235d634f1b6b75d6e74b04cee25c7a543079f001 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render
@@ -479,9 +481,22 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-director-render PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_director_render_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
-        PASS_REGULAR_EXPRESSION
-          "director render: frames c70634a9984e59d0d954978f235d634f1b6b75d6e74b04cee25c7a543079f001 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d"
+        PASS_REGULAR_EXPRESSION "${oa_director_render_hashes}"
         FAIL_REGULAR_EXPRESSION "director render check:")
+      # The same render with its files and preferences named relative to the
+      # working directory, without a folder: the run writes them there and
+      # gives the same frames and sound.
+      set(oa_director_relative_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render-relative")
+      file(MAKE_DIRECTORY "${oa_director_relative_dir}")
+      add_test(NAME native-director-render-relative COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --check-director-render --snapshot director-render.ppm
+        --preferences-file director-render.conf)
+      set_tests_properties(native-director-render-relative PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_director_relative_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        PASS_REGULAR_EXPRESSION "${oa_director_render_hashes}"
+        FAIL_REGULAR_EXPRESSION "director render check:|filesystem error")
       # native-intro-switch, which starts the game with -y, is registered
       # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order

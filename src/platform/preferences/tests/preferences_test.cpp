@@ -83,6 +83,25 @@ int main() {
         require(
             oa::platform::preferences::load(file) == changed
         ); // Escaping counts toward file cap.
+        {
+            // A file named without a folder, as `--preferences-file
+            // prefs.conf` names one, is written in the current directory.
+            const auto working = std::filesystem::current_path();
+            const auto folder = temporary / "working";
+            std::filesystem::create_directories(folder);
+            std::filesystem::current_path(folder);
+            const std::filesystem::path bare{"bare.conf"};
+            bool saved = false;
+            try {
+                oa::platform::preferences::save(bare, values);
+                saved = oa::platform::preferences::load(bare) == values;
+            } catch (const std::exception&) {
+                saved = false;
+            }
+            std::filesystem::current_path(working);
+            require(saved);
+            require(oa::platform::preferences::load(folder / bare) == values);
+        }
         std::ofstream(
             file
         ) << "open-annihilation-preferences 1\n\"duplicate\" \"a\"\n\"duplicate\" \"b\"\n";

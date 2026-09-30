@@ -3,7 +3,8 @@
 
 // The director render's files: their names, the ffmpeg arguments that
 // encode, join and stitch the chunks, the frame manifests, the chunks' sound
-// and the run manifest written with encoding off, the encoder settings the
+// and the run manifest written with encoding off, into a directory named
+// relative to the working directory too, the encoder settings the
 // environment gives, and the bundle's reader and writer, malformed bundles
 // included.
 #include "oa/app/director_output.hpp"
@@ -405,6 +406,53 @@ void test_render_without_encoder() {
     fs::remove_all(directory, error);
 }
 
+// Paths named relative to the working directory, without a folder, as
+// `--generate-script game.rec --output game.oascript` and `--render-script
+// game.oascript --output 4k` name them: the script names its recording by
+// its file name, and the render makes its directory there and writes every
+// file into it.
+void test_relative_paths() {
+    const fs::path root{fresh_temporary("oa-director-relative")};
+    std::error_code error;
+    fs::create_directories(root, error);
+    CHECK(!error);
+    std::ofstream(root / "game.rec", std::ios::binary) << "recording";
+    const fs::path working{fs::current_path()};
+    fs::current_path(root);
+    try {
+        CHECK(script_recording_key("game.rec", "game.oascript") == "game.rec");
+        CHECK(script_recording_key("game.rec", fs::path("4k") / "game.oascript") != "game.rec");
+        const DirectorPaths paths{fs::path("4k"), "game"};
+        EncoderSettings encoder{};
+        encoder.enabled = false;
+        {
+            DirectorOutput output({paths, kWidth, kHeight, Decimal{60, 0}, encoder, true});
+            output.begin_chunk(0, 0);
+            output.add_frame(0, 10, test_frame(0));
+            (void)output.end_chunk();
+            RunDescription run{};
+            run.script_name = "game.oascript";
+            run.recording_name = "game.rec";
+            run.width = kWidth;
+            run.height = kHeight;
+            run.framerate = Decimal{60, 0};
+            run.tickrate = Decimal{30, 0};
+            run.first_tick = 10;
+            run.end_tick = 11;
+            run.frame_count = 1;
+            run.chunk_count = 1;
+            output.finish(run);
+        }
+    } catch (const std::exception& caught) {
+        std::fprintf(stderr, "relative paths: %s\n", caught.what());
+        CHECK(false);
+    }
+    fs::current_path(working);
+    for (const char* name : {"game-000.frames", "game-000.wav", "game.manifest"})
+        CHECK(fs::is_regular_file(root / "4k" / name));
+    fs::remove_all(root, error);
+}
+
 void test_bundles() {
     const auto script = std::string("oascript: 1\n");
     const auto recording = bytes_of("recorded game");
@@ -493,6 +541,7 @@ int main() {
     test_environment();
     test_missing_encoder();
     test_render_without_encoder();
+    test_relative_paths();
     test_bundles();
     if (failures != 0) {
         std::fprintf(stderr, "%d director output checks failed\n", failures);

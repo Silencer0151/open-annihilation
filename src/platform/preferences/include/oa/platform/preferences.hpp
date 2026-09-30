@@ -54,8 +54,10 @@ std::filesystem::path apple_data_directory(const std::filesystem::path& applicat
 Values load(const std::filesystem::path& file);
 /// Writes a preferences file, replacing it from a temporary file in the same directory.
 ///
-/// A failed write preserves the last complete file. Throws std::runtime_error
-/// on failure or when the values exceed the size limits.
+/// The file's folder is made when it is missing; a file named without a
+/// folder is written in the current directory. A failed write preserves the
+/// last complete file. Throws std::runtime_error on failure or when the
+/// values exceed the size limits.
 ///
 /// @param file preferences file
 /// @param values key/value map to store

@@ -49,7 +49,10 @@ advancing on an enemy base, cuts to where most damage lands in the next
 seconds and stays with a battle while it goes on, frames long-range fire
 wide from launch to impact or shows a gun firing and then its shell
 landing, interrupts for commander deaths and large blasts, and ends on the
-commander death that decides the game, held and pulled back. A subject
+commander death that decides the game, held and pulled back: the first
+after which at most one side has a commander. A game no commander death
+decides is directed to its end; a commander the replay replaces in its
+slot with another of its player's on the same tick is no loss. A subject
 whose view overlaps one shown in the last minute counts for less, so the
 camera does not go back and forth between the same places; views are
 placed to show land rather than water, and the camera moves only when its
@@ -255,9 +258,11 @@ A script and its render are the same on every platform and every run:
 
 `native-director-render` renders a small script over the headless skirmish
 with encoding off, whole and its second chunk alone, and pins the frames'
-and the sound's hashes; `native-director-view` checks the frames director
-mode draws; `app-director-output` checks the files, the encoder's arguments
-and bundles.
+and the sound's hashes; `native-director-render-relative` renders it with
+its files and preferences named relative to the working directory and pins
+the same hashes; `native-director-view` checks the frames director mode
+draws; `app-director-output` checks the files, the encoder's arguments and
+bundles.
 
 ## Limits
 

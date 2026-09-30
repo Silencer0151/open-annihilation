@@ -5,7 +5,10 @@
 // taking turns of varied lengths with wide drifts between them, a fight
 // arrived at early and faded into, big moments interrupting with a
 // checkerboard, the deciding commander death faded into, held and pulled
-// back from, pans and cuts in, cloaked commanders skipped, one player's
+// back from, games without one (a replaced commander, a failed replay, a
+// loss that leaves two sides) directed to their end, a commander replaced
+// mid-game shown no more than before and one displaced by another unit
+// lost, pans and cuts in, cloaked commanders skipped, one player's
 // commander and base in turn, the switch ratio, long-range fire, armies
 // with lead room, the quiet turns' sides, kinds, lengths, factories and
 // memory, armies that must advance, framing around the heaviest damage and
@@ -65,6 +68,14 @@ enum : uint16_t {
 
 /// Weapons.
 enum : uint8_t { laser = 1, cannon, blast, bertha, missile };
+
+/// Death kinds (TimelineEvent::damage_kind of a death): by a weapon, and
+/// the unit in a slot a new unit takes.
+constexpr uint8_t weapon_death = 1;
+constexpr uint8_t replaced_death = 0;
+/// How long before and after a replaced commander the camera must not cut
+/// to its place, ticks.
+constexpr uint32_t replaced_watch_ticks = 150;
 
 /// The player the replays are watched from.
 constexpr uint8_t viewer = 9;
@@ -258,16 +269,23 @@ class Builder {
         timeline_.events.push_back(event);
     }
 
-    /// Adds a death.
-    void
-    death(uint32_t tick, uint16_t slot, uint8_t owner, uint16_t type, Spot at, bool commander) {
+    /// Adds a death, by a weapon unless `kind` names another death kind.
+    void death(
+        uint32_t tick,
+        uint16_t slot,
+        uint8_t owner,
+        uint16_t type,
+        Spot at,
+        bool commander,
+        uint8_t kind = weapon_death
+    ) {
         director::TimelineEvent event{};
         event.tick = tick;
         event.kind = director::EventKind::death;
         event.unit = slot;
         event.owner = owner;
         event.unit_type = type;
-        event.damage_kind = 1;
+        event.damage_kind = kind;
         if (commander)
             event.flags = director::event_flag::commander;
         event.at = director::WorldPoint{at.x, 0, at.z};
@@ -916,6 +934,124 @@ void test_ending() {
     const director::Plan early_plan{planned(early_timeline, "early ending")};
     expect(early_plan.script.director.shots.size() == 2, "hold and pull back");
     expect(early_plan.script.director.shots[0].tick == 0, "held from the first tick");
+}
+
+/// Tells whether a plan ends on a deciding commander death.
+bool has_ending(const director::Plan& plan) {
+    return std::any_of(plan.notes.begin(), plan.notes.end(), [](const std::string& note) {
+        return note.find(": ending:") != std::string::npos;
+    });
+}
+
+// A game without a deciding commander death is directed to its usable end:
+// a commander replaced on the first tick is no loss, deaths after the
+// replay's first error lie past the usable end, and a commander death that
+// leaves two sides with commanders decides nothing.
+void test_no_deciding_death() {
+    // Two sides far apart on a large map; the second side's commander is
+    // replaced in its slot on the first tick, before or as the first side's
+    // commander comes, and dies on tick 5500.
+    const auto replaced_commander{[](uint32_t first_side_born) {
+        Builder builder{9216, 9216, 6000};
+        builder.player(0, Spot{1800, 1000});
+        builder.player(1, Spot{7800, 8400});
+        builder.unit(1, commander_type, 1, 1, Spot{7800, 8400}, true, 1);
+        builder.death(1, 1, 1, commander_type, Spot{7800, 8400}, true, replaced_death);
+        builder.unit(1, commander_type, 1, 1, Spot{7800, 8400}, true, 5500);
+        builder.unit(1501, commander_type, 0, first_side_born, Spot{1800, 1000}, true);
+        builder.death(5500, 1, 1, commander_type, Spot{7800, 8400}, true);
+        return builder.done();
+    }};
+    // The replay fails on tick 5000, before the commander dies.
+    director::Timeline failed{replaced_commander(1)};
+    failed.verdict.clean = false;
+    failed.verdict.errors = 1;
+    failed.verdict.first_error_tick = 5000;
+    failed.usable_end_tick = 5000;
+    const director::Plan plan{planned(failed, "replaced commander")};
+    expect(plan.script.director.end_tick == 5000u, "directed to the replay's first error");
+    expect(!has_ending(plan), "a replaced commander ends nothing");
+    const std::vector<Switch> switches{switches_of(plan)};
+    expect(
+        !switches.empty() && switches.back().tick + director::max_shot_ticks >= 5000,
+        "turns to the end"
+    );
+    // The first side's commander comes a tick after the replacement, when
+    // the second side alone has one; the commander's death on tick 5500
+    // decides the game.
+    const director::Plan later_plan{planned(replaced_commander(2), "replaced before the other")};
+    expect(
+        !later_plan.notes.empty() &&
+            later_plan.notes.back().find(": ending:5500 ") != std::string::npos,
+        "the real loss ends the video"
+    );
+    expect(
+        later_plan.script.director.end_tick ==
+            5500u + director::ending_hold_ticks + director::ending_pull_back_ticks,
+        "held and pulled back"
+    );
+
+    // Three sides: the first commander death leaves two with commanders,
+    // the second one side, which decides the game.
+    const auto three_sides{[](bool second_loss) {
+        Builder sides{4096, 4096, 4000};
+        sides.player(0, Spot{600, 600});
+        sides.player(1, Spot{3400, 3400});
+        sides.player(2, Spot{600, 3400});
+        sides.unit(1, commander_type, 0, 0, Spot{600, 600}, true);
+        sides.unit(2, commander_type, 1, 0, Spot{3400, 3400}, true, second_loss ? 3000 : 0);
+        sides.unit(3, commander_type, 2, 0, Spot{600, 3400}, true, 1500);
+        sides.death(1500, 3, 2, commander_type, Spot{600, 3400}, true);
+        if (second_loss)
+            sides.death(3000, 2, 1, commander_type, Spot{3400, 3400}, true);
+        return sides.done();
+    }};
+    // The second side's commander leaves its slot mid-game on tick 3000,
+    // to another commander of its side or to a tank: the camera does not
+    // go to the replacement, which ends nothing, and the tank's arrival
+    // loses the commander and decides the game.
+    const auto mid_game{[](uint16_t successor) {
+        Builder builder{4096, 4096, 6000};
+        builder.player(0, Spot{600, 600});
+        builder.player(1, Spot{3400, 3400});
+        builder.unit(1, commander_type, 0, 0, Spot{600, 600}, true);
+        builder.unit(2, commander_type, 1, 0, Spot{3400, 3400}, true, 3000);
+        builder.death(3000, 2, 1, commander_type, Spot{3400, 3400}, true, replaced_death);
+        builder.unit(2, successor, 1, 3000, Spot{3400, 3400}, successor == commander_type);
+        return builder.done();
+    }};
+    const director::Plan replaced{planned(mid_game(commander_type), "replaced mid-game")};
+    expect(replaced.script.director.end_tick == 6000u, "a replacement mid-game ends nothing");
+    expect(!has_ending(replaced), "a replacement mid-game is no loss");
+    for (const Switch& entry : switches_of(replaced)) {
+        const bool near{
+            entry.tick + replaced_watch_ticks >= 3000u && entry.tick <= 3000u + replaced_watch_ticks
+        };
+        expect(
+            !near || (entry.key.rfind("moment:", 0) != 0 && entry.key.rfind("hot:", 0) != 0),
+            "the camera does not go to a replacement"
+        );
+    }
+    const director::Plan displaced{planned(mid_game(tank_type), "displaced by a tank")};
+    expect(
+        !displaced.notes.empty() &&
+            displaced.notes.back().find(": ending:3000 ") != std::string::npos,
+        "a commander displaced by another unit is lost"
+    );
+
+    const director::Plan undecided{planned(three_sides(false), "undecided")};
+    expect(undecided.script.director.end_tick == 4000u, "directed to the recording's end");
+    expect(!has_ending(undecided), "the first loss decides nothing");
+    const director::Plan decided{planned(three_sides(true), "decided by the second loss")};
+    expect(
+        decided.script.director.end_tick ==
+            3000u + director::ending_hold_ticks + director::ending_pull_back_ticks,
+        "the second loss ends the video"
+    );
+    expect(
+        !decided.notes.empty() && decided.notes.back().find(": ending:3000 ") != std::string::npos,
+        "the ending is the second loss"
+    );
 }
 
 // A quiet turn pans with a spring to a subject whose middle the camera
@@ -1703,6 +1839,7 @@ int main() {
     test_fight();
     test_big_blast();
     test_ending();
+    test_no_deciding_death();
     test_pan();
     test_hidden_commander();
     test_watchers();

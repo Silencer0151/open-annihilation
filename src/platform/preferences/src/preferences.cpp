@@ -192,7 +192,10 @@ void save(const std::filesystem::path& file, const Values& values) {
     const auto bytes = stream.str();
     if (bytes.size() > maximum_file_bytes)
         throw std::runtime_error("game preferences file exceeds size limit");
-    std::filesystem::create_directories(file.parent_path());
+    // A file named without a folder is written in the current directory:
+    // there is no folder to make, and making an empty path fails.
+    if (file.has_parent_path())
+        std::filesystem::create_directories(file.parent_path());
 #ifdef _WIN32
     const auto process = GetCurrentProcessId();
 #else

@@ -18,7 +18,10 @@
 // long-range fire, framed wide from launch to impact, or a gun firing and
 // its shell landing, cut to one after the other; a commander dying, a
 // nuclear blast or another large one interrupting the shot; and the
-// commander death that decides the game, held, then a pull back.
+// commander death that decides the game, the first after which at most one
+// side has a commander, held, then a pull back. A game no commander death
+// decides is followed to its end; a commander replaced in its slot by
+// another of its player's on the same tick is no loss.
 //
 // Shots last min_shot_ticks to max_shot_ticks with at least min_cut_ticks
 // between cuts; a new subject must score switch_ratio times the current
