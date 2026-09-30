@@ -1691,6 +1691,11 @@ void Runtime::activate_pause_gadget(std::string_view name) {
                                       : MatchGadgetState{}
                 );
             }
+            // The sub-panel's own art, as PREFS.GAF is the panel's:
+            // MUSICRT.GAF gives CDPREV/CDSTOP/CDPLAY/CDNEXT their frames.
+            append_gaf_file(
+                match_hud_->sprites, "anims/" + fs::path(file).stem().string() + ".GAF"
+            );
             // The sub-panel's picture is its image record, looked up in
             // PREFS.GAF (the merged panel's own) and then the shared GAF.
             oa::formats::gaf::Archive panel_art;
@@ -2810,13 +2815,19 @@ void Runtime::activate_options_gadget() {
                     gadgets.push_back(std::move(gadget));
                 }
             }
+            // The sub-panel's own art draws its buttons; without it the shared
+            // GUI GAF leaves them on its fallback frame. Only the music panels
+            // ship one (MUSIC.GAF), and a missing file is remembered and
+            // skipped.
+            append_gaf_file(resources_.sprites, "anims/" + fs::path(sub).stem().string() + ".GAF");
         } catch (const std::exception& error) {
             status_ = "options panel unavailable: " + std::string(error.what());
             return;
         }
-        // The sub-panel is merged and drawn: the first draw binds its buttons
-        // and its sliders.
-        renderer::bind_screen_buttons(resources_, 1);
+        // The sub-panel is merged and drawn. Its sliders bind as the first
+        // draw would; its buttons are not bound, so they keep the authored
+        // foreground colour the renderer draws the frame through. Only a
+        // loaded panel's first draw clears it.
         bind_frontend_scrolls("guis/startopt.gui", "anims/commongui.gaf");
         widget_gaf_frames_.clear();
         widget_text_stages_.clear();
