@@ -7,6 +7,7 @@
 #include "app.hpp"
 #include "director_presentation.hpp"
 #include "extension.hpp"
+#include "full_screen.hpp"
 #include "match_model_draws.hpp"
 #include "offline_services.hpp"
 #include "video_capture.hpp"
@@ -267,6 +268,15 @@ class Runtime final : public menu::Host,
     ///
     /// @param capture the capture; null for none
     void take_video_capture(std::unique_ptr<VideoCapture> capture);
+
+    /// Hands the runtime the full-screen switch of the window it borrows, as the intro movies left it.
+    ///
+    /// A switch Alt+Enter asked for during the movies that the window has not
+    /// finished yet, and an Enter key still held from it, carry on into the
+    /// game.
+    ///
+    /// @param full_screen the switch the movies used
+    void take_full_screen_switch(const FullScreenSwitch& full_screen) noexcept;
 
     /// Starts the saved game the load dialog chose.
     ///
@@ -1502,6 +1512,14 @@ class Runtime final : public menu::Host,
     /// @param row row selected
     void select_frontend_list_row(std::string_view name, std::size_t row);
 
+    /// Moves a frontend list's selection one row, as the Up and Down keys do,
+    /// and brings it into view.
+    ///
+    /// @param name list gadget
+    /// @param forward True to move toward the list's end.
+    /// @return the row selected afterwards, or nothing when the list is not bound or has none
+    std::optional<std::size_t> step_frontend_list_row(std::string_view name, bool forward);
+
     /// Tells whether a panel whose first draw binds its scroll bars only once
     /// its setup has run: NEWGAME.GUI, which loads undrawn.
     ///
@@ -1774,6 +1792,24 @@ class Runtime final : public menu::Host,
     /// every mission unplayed and opens the chosen mission's briefing.
     void activate_campaign_gadget();
 
+    /// Starts NEWGAME.GUI's choice, as its Start button does.
+    ///
+    /// Every mission is marked unplayed and the chosen mission's briefing
+    /// opens: a new campaign's first mission of the Campaign list's selected
+    /// campaign, or the Missions list's selected mission for any mission.
+    void start_campaign_setup();
+
+    /// Moves the selection of NEWGAME.GUI's focused list one row, as the Up and Down keys do.
+    ///
+    /// The Campaign list's new selection loads its campaign; on Any Mission
+    /// every step refills the Missions list from its first row, even one at
+    /// either end of the list. The Missions list's selects its mission. When
+    /// a button has the focus, as after a press on Difficulty or a side,
+    /// nothing moves.
+    ///
+    /// @param forward True to move toward the list's end.
+    void step_campaign_list(bool forward);
+
     /// Compares two TDF names ignoring ASCII case.
     ///
     /// @param left first name
@@ -1939,11 +1975,13 @@ class Runtime final : public menu::Host,
     ///
     /// Two campaign files or fewer leave the new-campaign screen to the side
     /// alone, over newcampaign4x with no campaign list; more show the list over
-    /// newcampaign4.
+    /// newcampaign4. A Campaign row other than the selected one lists its
+    /// campaign's missions; the selected one keeps the chosen mission.
     ///
     /// @param gadget_name "Campaign" or the missions list
     /// @param canvas_y pointer row in canvas pixels
-    void select_campaign_list_row(std::string_view gadget_name, float canvas_y);
+    /// @return Whether the row picked a listed campaign or mission; a press off the rows picks none.
+    bool select_campaign_list_row(std::string_view gadget_name, float canvas_y);
 
     /// Returns the selected mission's file, listing the campaigns first when none are listed.
     ///
@@ -2487,8 +2525,8 @@ class Runtime final : public menu::Host,
 
     struct PendingBuildSite {
         oa::sim::ground_orders::Point world{};
-        int32_t cell_x{};
-        int32_t cell_z{};
+        int32_t cell_x{}; ///< footprint's first column; negative left of the map
+        int32_t cell_z{}; ///< footprint's first row; negative above the map
         int16_t footprint_x{};
         int16_t footprint_z{};
         bool legal{};
@@ -2498,11 +2536,32 @@ class Runtime final : public menu::Host,
     static constexpr uint8_t kBuildSiteClearColor = 10;
     static constexpr uint8_t kBuildSiteRefusedColor = 4;
 
+    /// Nested outlines of the build rectangle, drawn side by side in one colour.
+    static constexpr int kBuildSiteOutlineCount = 2;
+
+    /// Screen pixels each outline of the build rectangle gains per step of battlefield zoom.
+    ///
+    /// The unzoomed view draws each outline one pixel wide, as the game does.
+    /// Zoomed in, each is as many pixels wide as the zoom rounded to the
+    /// nearest whole step (two from zoom 1.5, three from zoom 2.5), so the
+    /// rectangle stays as easy to see over the magnified terrain; zoomed out,
+    /// each stays one pixel wide.
+    static constexpr int kBuildSiteOutlinePixelsPerZoomStep = 1;
+
+    /// Returns how many screen pixels wide each outline of the build rectangle is drawn.
+    ///
+    /// @param zoom battlefield zoom, screen pixels per map pixel
+    /// @return kBuildSiteOutlinePixelsPerZoomStep for each step of zoom, the zoom
+    ///         rounded to the nearest step, and at least 1
+    [[nodiscard]] static int build_site_outline_width(float zoom);
+
     /// Returns the build ghost's site under a battlefield point.
     ///
     /// The footprint cell the snapped point falls on, whether the local player
     /// may place the pending building there, and the height it would stand at
     /// (the yard height of the site when not). A footprint of 0 counts as 2.
+    /// A footprint that hangs over the left or top edge of the map starts at a
+    /// negative cell, and such a site is refused.
     ///
     /// @param world 16.16 world point
     /// @return the site, or nullopt without a match or pending building
@@ -2555,9 +2614,11 @@ class Runtime final : public menu::Host,
 
     /// Outlines the pending building's footprint under the pointer at the height it would stand at.
     ///
-    /// Two nested rectangles, green where it may be placed and red where not.
-    /// Nothing is drawn while the pointer is off the battlefield or no building
-    /// is armed.
+    /// Two nested rectangles, green where it may be placed and red where not,
+    /// each build_site_outline_width() pixels wide at the view's zoom. Only the
+    /// part on the battlefield is drawn, so a footprint that hangs over an edge
+    /// of the map is cut off there. Nothing is drawn while the pointer is off
+    /// the battlefield or no building is armed.
     ///
     /// @param[in,out] destination battlefield frame
     /// @param viewport battlefield viewport
@@ -2588,6 +2649,9 @@ class Runtime final : public menu::Host,
 
     /// Projects a 16.16 world position onto the battlefield frame, raised by half its height at the
     /// view's scale.
+    ///
+    /// x and z are signed, so a point left of or above the map lands left of
+    /// or above the map's edge on the frame.
     ///
     /// @param viewport battlefield viewport
     /// @param position 16.16 x, height and z
@@ -3098,8 +3162,10 @@ class Runtime final : public menu::Host,
     /// @param type SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN or SDL_EVENT_MOUSE_BUTTON_UP
     /// @param canvas canvas point
     /// @param button SDL button of a press or release
-    void
-    send_check_pointer(SDL_EventType type, oa::ui::display_layout::Point canvas, uint8_t button);
+    /// @param clicks click count of a press or release: 2 for a double-click's second click
+    void send_check_pointer(
+        SDL_EventType type, oa::ui::display_layout::Point canvas, uint8_t button, uint8_t clicks = 1
+    );
 
     /// Returns a bound scroll bar of the screen's panel, or of the match HUD's panel in a match.
     ///
@@ -3427,10 +3493,17 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error when SDL refuses.
     void initialize_sdl();
 
-    /// Switches the window between full screen and a window (Alt+Enter).
+    /// Handles an event of the full-screen switch before any screen sees it
+    /// (oa::app::take_full_screen_event), with the game's window.
     ///
-    /// A switch SDL refuses leaves the window as it is and is reported on stderr.
-    void toggle_full_screen();
+    /// Alt+Enter switches the mode and its repeats do nothing; the window's
+    /// entering or leaving full screen is noted and still reaches the screens,
+    /// which lay themselves out at the window's new size.
+    ///
+    /// @param event event just received
+    /// @return true when the event was Alt+Enter or one of its repeats, which
+    ///         no screen may see
+    bool take_full_screen_event(const SDL_Event& event);
 
     /// Returns an XRGB8888 streaming texture of a size, recreating it when the size changed.
     ///
@@ -4302,11 +4375,31 @@ class Runtime final : public menu::Host,
     /// outlined in the refused colour and the click must leave build mode armed
     /// and the builder without an order; over the clear site the outline must be
     /// the clear colour and the click must give the builder MobileBuild there.
-    /// Throws std::runtime_error on a failure.
+    /// Then checks the outline over the map's edges (check_build_site_edges),
+    /// for ARMSOLAR when the game has it. Throws std::runtime_error on a
+    /// failure.
     ///
     /// @param builder local mobile builder
     /// @param type building type to place
     void check_build_site_pointer(uint16_t builder, uint16_t type);
+
+    /// Checks the build ghost's outline at every edge and corner of the map and at several zooms.
+    ///
+    /// A site over the top left corner must start at negative cells and be
+    /// placed left of and above the battlefield. With the pointer just inside
+    /// each edge and corner of the map at zoom 1, and on the first low ground
+    /// along the top edge where it reaches a site over that edge, the frame
+    /// must differ from the frame without the ghost only inside the
+    /// footprint's own rectangle, in the outline's colour, and a site at the
+    /// left edge must start at a negative column. In the middle of the map at
+    /// zooms 1, 1.5, 2 and 3 the outline must be kBuildSiteOutlineCount times
+    /// build_site_outline_width() pixels deep, and each outline 1 pixel wide
+    /// up to zoom 1 and the zoom rounded to the nearest pixel above it. Frames go to local/reports as
+    /// native-build-ghost-*.ppm. Restores the camera and the zoom; throws
+    /// std::runtime_error listing every failure.
+    ///
+    /// @param type building type to place
+    void check_build_site_edges(uint16_t type);
 
     /// Returns the world point under a canvas point: the radar's map point, else the terrain the
     /// battlefield shows there.
@@ -4604,6 +4697,20 @@ class Runtime final : public menu::Host,
     /// @param frame_of composes the frame to test
     void check_selection_visuals(const std::function<void(renderer::Surface&)>& frame_of);
 
+    /// Checks the square a pixel particle fills on the battlefield frame.
+    ///
+    /// A nano stream started below the local unit puts its first spray at its
+    /// nozzle; drawn through render_match_surface(), the frame must show the
+    /// spray's top particle as a square of its palette colour with its top
+    /// left corner at the projected point, 2 pixels on a side at zoom 1 and 4
+    /// at zoom 2, and nothing else may change. Frames go to
+    /// `report_directory` as native-pixel-particle-zoom-*.ppm. The match's
+    /// effects, the camera and the zoom are restored. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param report_directory directory the frames are written to
+    void check_pixel_particles(const fs::path& report_directory);
+
     /// Checks the loading screen through the SDL display sink.
     ///
     /// Each pixel of the 8-bit frame, sampled at the centre of its block in the
@@ -4614,7 +4721,9 @@ class Runtime final : public menu::Host,
     /// Checks the match presented through SDL layers: every presented frame must equal
     /// compose_match_frame outside the software cursor.
     ///
-    /// The loading sink check runs first, and the won match's end
+    /// The loading sink check runs first, then the selection visuals
+    /// (check_selection_visuals()) and the pixel particles
+    /// (check_pixel_particles()), and the won match's end
     /// (check_presented_match_end()) last. Throws std::runtime_error on a
     /// failure.
     void check_match_layers();
@@ -4641,6 +4750,17 @@ class Runtime final : public menu::Host,
     /// @param peewee local ARMPW
     /// @param commander local commander
     void check_command_buttons(uint16_t peewee, uint16_t commander);
+    /// Checks that a HUD button under the pointer is drawn as it is without
+    /// it: a build button of the commander's build page and ATTACK of the
+    /// ARMPW's order page. A press held over ATTACK draws it pressed, the
+    /// pointer leaving it raises it and coming back presses it again, and a
+    /// release away from it arms no order; a press begun off it and released
+    /// over it neither presses nor arms it, and a click on it arms it. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param peewee local ARMPW
+    /// @param commander local commander
+    void check_hud_buttons_under_pointer(uint16_t peewee, uint16_t commander);
 
     /// Checks the unit readout's damage bar.
     ///
@@ -6864,6 +6984,8 @@ class Runtime final : public menu::Host,
     // SDL outlives audio_player_: reverse member destruction closes streams
     // before the final SDL_Quit.
     SdlObjects sdl_;
+    // The mode Alt+Enter last asked the window for.
+    FullScreenSwitch full_screen_switch_{};
     oa::ui::display_layout::MatchLayout match_layout_{};
     int output_texture_w_ = 0;
     int output_texture_h_ = 0;
@@ -7190,6 +7312,10 @@ class Runtime final : public menu::Host,
     Screen screen_ = Screen::main_menu;
     std::optional<std::size_t> hovered_;
     int32_t selected_ = -1;
+    // The match HUD button a held pointer button was pressed on, until either
+    // pointer button comes up on any screen; it shows pressed while the
+    // pointer is over it, and only its release over it acts on it.
+    std::optional<std::size_t> match_hud_held_;
     bool exit_requested_ = false;
     // The status run() returns after the application loop (ScreenServices::quit).
     int exit_status_{};
@@ -7215,6 +7341,9 @@ class Runtime final : public menu::Host,
     std::size_t selected_mission_index_ = 0;
     std::size_t campaign_first_visible_ = 0;
     std::size_t campaign_mission_first_visible_ = 0;
+    // NEWGAME.GUI's gadget with the keyboard focus: the one its setup
+    // focuses, then the control last pressed.
+    std::string campaign_setup_focus_{};
     Screen briefing_parent_ = Screen::new_campaign;
     bool briefing_from_pause_ = false;
     std::string briefing_text_{};

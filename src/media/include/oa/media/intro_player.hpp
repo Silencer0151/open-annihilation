@@ -14,6 +14,7 @@
 
 struct SDL_Window;
 struct SDL_Renderer;
+union SDL_Event;
 
 namespace oa::media {
 
@@ -29,6 +30,14 @@ struct PlayerLimits {
     std::size_t max_video_pixels = kDefaultMaxVideoPixels;
 };
 
+/// What playback leaves to the application while a movie plays.
+struct PlaybackHooks {
+    void* context{};
+    /// Receives each window event playback does not act on itself, such as
+    /// the application's Alt+Enter; null discards them.
+    void (*window_event)(void* context, const SDL_Event& event){};
+};
+
 struct PlaybackOptions {
     // Zero means decode until the stream ends, subject to PlayerLimits.
     std::size_t frame_limit = 0;
@@ -40,6 +49,7 @@ struct PlaybackOptions {
     // creating and destroying a transient intro window.
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    PlaybackHooks hooks{};
 };
 
 struct VideoInfo {

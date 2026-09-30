@@ -4,15 +4,18 @@
 // The order page's FIRE ORDERS, MOVE ORDERS, ON/OFF and CLOAK buttons in a
 // live match, clicked through the SDL presenter.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/hud/order_panel.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,6 +39,10 @@ constexpr uint32_t roam = 2;
 // Ticks for a sighting refresh and a weapon sweep to bring a unit in range
 // under a fire-at-will unit's guns.
 constexpr int kTargetTicks = 240;
+// A point of the top bar, in the game's 640x480 HUD coordinates, that no
+// button covers: where the pointer rests off the buttons.
+constexpr int kAwaySourceX = 300;
+constexpr int kAwaySourceY = 8;
 
 uint32_t fire_order(const oa::Unit& unit) {
     return (unit.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK) >> OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
@@ -393,8 +400,8 @@ void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
             dispatch_event(event, running);
         }
     };
-    // A click at the button, then the pointer over the top bar so the hover
-    // does not draw the button pressed.
+    // A click at the button, then the pointer over the top bar, off the
+    // buttons.
     const auto click = [&](std::string_view action) {
         const auto& common = match_hud_->layout.gadgets[index_of(action)].common;
         const auto rect = oa::ui::display_layout::source_rect_to_canvas(
@@ -480,6 +487,8 @@ void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
         }
     };
 
+    check_hud_buttons_under_pointer(peewee, commander);
+
     clear_local_selection();
     adopt_selection(peewee);
     selected_match_unit_ = peewee;
@@ -513,6 +522,158 @@ void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
         );
     }
     clear_local_selection();
+}
+
+void Runtime::check_hud_buttons_under_pointer(uint16_t peewee, uint16_t commander) {
+    namespace layout = oa::ui::display_layout;
+    const fs::path report_directory = "local/reports";
+    bool running = true;
+    std::vector<std::string> problems;
+    const auto expect = [&](bool condition, std::string what) {
+        if (!condition) {
+            std::cerr << "hud pointer check: " << what << '\n';
+            problems.push_back(std::move(what));
+        }
+    };
+    const auto send = [&](SDL_EventType type, layout::Point canvas) {
+        float window_x = 0;
+        float window_y = 0;
+        if (!SDL_RenderCoordinatesToWindow(
+                sdl_.renderer,
+                static_cast<float>(canvas.x),
+                static_cast<float>(canvas.y),
+                &window_x,
+                &window_y
+            ))
+            throw std::runtime_error(
+                std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError()
+            );
+        SDL_Event event{};
+        event.type = type;
+        if (type == SDL_EVENT_MOUSE_MOTION) {
+            event.motion.windowID = SDL_GetWindowID(sdl_.window);
+            event.motion.x = window_x;
+            event.motion.y = window_y;
+        } else {
+            event.button.windowID = SDL_GetWindowID(sdl_.window);
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.clicks = 1;
+            event.button.x = window_x;
+            event.button.y = window_y;
+        }
+        dispatch_event(event, running);
+    };
+    const auto centre = [&](std::size_t index) {
+        const auto& common = match_hud_->layout.gadgets[index].common;
+        const auto rect = layout::source_rect_to_canvas(
+            match_layout_, common.x, common.y, common.width, common.height
+        );
+        return layout::Point{rect.x + rect.width / 2, rect.y + rect.height / 2};
+    };
+    const auto away = layout::source_to_canvas(match_layout_, kAwaySourceX, kAwaySourceY);
+    // The HUD layer's pixels over a gadget's rectangle, freshly drawn.
+    const auto hud_pixels = [&](std::size_t index) {
+        render_match_surface();
+        const auto& common = match_hud_->layout.gadgets[index].common;
+        std::vector<uint8_t> pixels;
+        for (int row = std::max(0, static_cast<int>(common.y));
+             row < std::min(common.y + common.height, static_cast<int>(match_hud_cpu_.height));
+             ++row)
+            for (int column = std::max(0, static_cast<int>(common.x));
+                 column < std::min(common.x + common.width, static_cast<int>(match_hud_cpu_.width));
+                 ++column) {
+                const auto* shown = match_hud_cpu_.rgb.data() +
+                                    (static_cast<std::size_t>(row) * match_hud_cpu_.width +
+                                     static_cast<std::size_t>(column)) *
+                                        3U;
+                pixels.insert(pixels.end(), shown, shown + 3);
+            }
+        return pixels;
+    };
+    // The frame as presented, the pointer drawn.
+    const auto snapshot = [&](const char* name) {
+        renderer::Surface presented;
+        capture_frame_ = &presented;
+        render();
+        capture_frame_ = nullptr;
+        write_ppm(report_directory / name, presented);
+    };
+    const auto select = [&](uint16_t id) {
+        clear_local_selection();
+        adopt_selection(id);
+        selected_match_unit_ = id;
+        apply_match_hud_for_selection();
+        reset_match_command();
+    };
+    const auto index_of = [&](std::string_view action) {
+        for (std::size_t index = 0; index < match_hud_->layout.gadgets.size(); ++index)
+            if (match_hud_action(match_hud_->layout.gadgets[index].common.name) == action)
+                return index;
+        throw std::runtime_error("hud pointer check: the order page has no " + std::string(action));
+    };
+
+    // A build button of the commander's build page under the pointer is drawn
+    // as it is without it.
+    select(commander);
+    std::optional<std::size_t> build;
+    for (std::size_t index = 0; index < match_hud_->layout.gadgets.size() && !build; ++index) {
+        const auto& gadget = match_hud_->layout.gadgets[index];
+        if ((gadget.common.common_attributes & oa::ui::hud::kCommonUnitButton) != 0 &&
+            gadget_command_available(gadget))
+            build = index;
+    }
+    require(build.has_value(), "the commander's build page has no unit button");
+    const auto& build_name = match_hud_->layout.gadgets[*build].common.name;
+    send(SDL_EVENT_MOUSE_MOTION, away);
+    const auto idle_build = hud_pixels(*build);
+    send(SDL_EVENT_MOUSE_MOTION, centre(*build));
+    require(hovered_ == *build, "the pointer is not over " + build_name);
+    snapshot("native-match-orders-build-hover.ppm");
+    expect(hud_pixels(*build) == idle_build, build_name + " changes under the pointer");
+
+    // ATTACK of the ARMPW's order page: drawn as it is under the pointer,
+    // pressed while a press is held over it, raised while the pointer is off
+    // it, and a release away from it arms nothing.
+    select(peewee);
+    const auto attack = index_of("ATTACK");
+    send(SDL_EVENT_MOUSE_MOTION, away);
+    const auto idle_attack = hud_pixels(attack);
+    send(SDL_EVENT_MOUSE_MOTION, centre(attack));
+    require(hovered_ == attack, "the pointer is not over ATTACK");
+    snapshot("native-match-orders-attack-hover.ppm");
+    expect(hud_pixels(attack) == idle_attack, "ATTACK changes under the pointer");
+    send(SDL_EVENT_MOUSE_BUTTON_DOWN, centre(attack));
+    snapshot("native-match-orders-attack-held.ppm");
+    expect(hud_pixels(attack) != idle_attack, "ATTACK held under the pointer is not pressed");
+    send(SDL_EVENT_MOUSE_MOTION, away);
+    expect(hud_pixels(attack) == idle_attack, "ATTACK stays pressed with the pointer off it");
+    send(SDL_EVENT_MOUSE_MOTION, centre(attack));
+    expect(hud_pixels(attack) != idle_attack, "ATTACK is not pressed when the pointer is back");
+    send(SDL_EVENT_MOUSE_MOTION, away);
+    send(SDL_EVENT_MOUSE_BUTTON_UP, away);
+    expect(match_command_ == MatchCommand::none, "ATTACK released away from it armed an order");
+    expect(hud_pixels(attack) == idle_attack, "ATTACK stays pressed after the release");
+    // A press begun off ATTACK neither presses it nor, released over it,
+    // arms it; a click on it does.
+    send(SDL_EVENT_MOUSE_BUTTON_DOWN, away);
+    send(SDL_EVENT_MOUSE_MOTION, centre(attack));
+    expect(hud_pixels(attack) == idle_attack, "a press begun off ATTACK presses it");
+    send(SDL_EVENT_MOUSE_BUTTON_UP, centre(attack));
+    expect(
+        match_command_ == MatchCommand::none,
+        "a press begun off ATTACK and released over it armed an order"
+    );
+    send(SDL_EVENT_MOUSE_BUTTON_DOWN, centre(attack));
+    send(SDL_EVENT_MOUSE_BUTTON_UP, centre(attack));
+    expect(match_command_ == MatchCommand::attack, "a click on ATTACK did not arm it");
+    reset_match_command();
+    send(SDL_EVENT_MOUSE_MOTION, away);
+    if (!problems.empty())
+        throw std::runtime_error("hud pointer check: " + problems.front());
+    std::cout << "hud pointer check: " << build_name
+              << " and ATTACK are drawn as they are under the pointer; ATTACK is pressed while "
+                 "held over it and raised off it, and only a press begun on it arms it\n";
 }
 
 void Runtime::check_unit_damage_bar(uint16_t peewee) {

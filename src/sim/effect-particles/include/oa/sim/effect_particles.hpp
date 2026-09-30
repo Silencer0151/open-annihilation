@@ -595,10 +595,14 @@ int32_t step_wake_particle(WakeParticle& particle) noexcept;
 
 enum class DrawKind : uint8_t { sprite, pixel, flash, fragment };
 
+// A pixel item, a nano-lathe or wake particle, fills a square this many
+// battlefield pixels on a side, its top-left corner at the item's position.
+inline constexpr int32_t pixel_item_side = 2;
+
 // One item of a draw pass. Sprites blit `frame` of `sequence` at the 16.16
-// world `position`; pixels plot palette index `color`; flashes darken through
-// the shade table with the shade levels of `frame` of `sequence`;
-// fragments draw as 3DO objects turned by `spin`.
+// world `position`; pixels fill a pixel_item_side square with palette index
+// `color`; flashes darken through the shade table with the shade levels of
+// `frame` of `sequence`; fragments draw as 3DO objects turned by `spin`.
 // Layer items other than feature smoke are drawn only where the viewer's
 // sight grid shows the point.
 struct ParticleDraw {

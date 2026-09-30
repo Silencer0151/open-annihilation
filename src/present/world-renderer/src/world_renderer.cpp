@@ -299,6 +299,12 @@ screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noe
     return MapPixel{static_cast<uint32_t>(map_x), static_cast<uint32_t>(map_y)};
 }
 
+int32_t screen_span(const BattlefieldViewport& viewport, int32_t map_pixels) noexcept {
+    const auto scale = viewport.scale == 0.0F ? 1.0 : static_cast<double>(viewport.scale);
+    const auto span = static_cast<int64_t>(std::llround(static_cast<double>(map_pixels) * scale));
+    return static_cast<int32_t>(std::clamp<int64_t>(span, 1, std::numeric_limits<int32_t>::max()));
+}
+
 RenderResult render_battlefield_viewport(
     const formats::tnt::Map& map, const PaletteBytes& palette, const BattlefieldViewport& viewport
 ) {

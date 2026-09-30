@@ -21,7 +21,8 @@ namespace oa::ui::frontend_renderer {
 
 // Runtime button conditions used by the type-1 gadget drawing path.
 // `pressed` and `disabled` use the game's sunken bevel direction; the state
-// machine supplies any GAF frame change explicitly.
+// machine supplies any GAF frame change explicitly. `hovered` draws as
+// `normal`: a button under the pointer looks as it does without it.
 enum class ButtonCondition : uint8_t {
     normal,
     hovered,
@@ -43,7 +44,7 @@ struct ButtonPresentation {
     // Exact frame state (the button record's frame base, stage and status) is
     // maintained by the frontend state machine. The renderer accepts its
     // resolved index explicitly instead of guessing animation semantics from
-    // hover/press.
+    // the press.
     std::optional<std::size_t> gaf_frame;
     // Index into the authored pipe-delimited staged caption. The button
     // record's stage chooses this segment after the first panel draw replaces

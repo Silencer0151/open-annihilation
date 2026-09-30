@@ -11,8 +11,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 namespace oa::app {
@@ -39,8 +41,11 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         running = false;
         return;
     }
+    // Entering or leaving full screen lays the screen out again at the size
+    // the window ends at, which some window systems report only then.
     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-        event.type == SDL_EVENT_WINDOW_RESIZED) {
+        event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
+        event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
         apply_output_mode();
         if (screen_ == Screen::match && match_ && selected_tnt_)
             render_match_surface();
@@ -67,6 +72,13 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
          event.key.key == SDLK_ESCAPE) &&
         press_briefing_default(event.key.key == SDLK_ESCAPE))
         return;
+    // Up and Down move the selection of NEWGAME.GUI's focused list.
+    if (event.type == SDL_EVENT_KEY_DOWN &&
+        (screen_ == Screen::new_campaign || screen_ == Screen::any_mission) &&
+        (event.key.key == SDLK_UP || event.key.key == SDLK_DOWN)) {
+        step_campaign_list(event.key.key == SDLK_DOWN);
+        return;
+    }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         if (screen_ == Screen::main_menu) {
             // In state 7 escape belongs to the package that owns the frame.
@@ -140,6 +152,17 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
         const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
         update_pointer(x, y);
+        // A press on a HUD button holds it until either button comes up, on
+        // whatever screen; the release acts on a HUD button only when the
+        // press was on it.
+        std::optional<std::size_t> released_hud;
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP)
+            released_hud = std::exchange(match_hud_held_, std::nullopt);
+        else if (
+            screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT)
+        )
+            match_hud_held_ = hovered_;
         // A press on a scroll bar or its arrow, and the release of a held
         // one, belong to the bar alone.
         if (route_scroll_pointer(event, x, y))
@@ -204,7 +227,8 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             }
             match_drag_.reset();
             if (hovered_ && match_hud_) {
-                activate_match_hud(*hovered_);
+                if (released_hud == hovered_)
+                    activate_match_hud(*hovered_);
                 return;
             }
             if (match_paused_)
@@ -219,7 +243,8 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             // The right button on a unit or weapon build button is the same
             // click with the last message 2: it takes one off
             // the queue.
-            if (hovered_ && match_hud_ && *hovered_ < match_hud_->layout.gadgets.size()) {
+            if (hovered_ && released_hud == hovered_ && match_hud_ &&
+                *hovered_ < match_hud_->layout.gadgets.size()) {
                 constexpr auto build_buttons =
                     oa::ui::hud::kCommonUnitButton | oa::ui::hud::kCommonWeaponButton;
                 const auto attributes = static_cast<uint8_t>(
@@ -258,10 +283,20 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                         close_map_modal();
                     }
                 } else if (
-                    screen_ == Screen::any_mission &&
+                    (screen_ == Screen::new_campaign || screen_ == Screen::any_mission) &&
                     (released_name == "Campaign" || released_name == "Missions")
                 ) {
-                    select_campaign_list_row(released_name, y);
+                    // A press on a NEWGAME.GUI list selects the row under it
+                    // and gives the list the focus. A double-click on a row
+                    // of the list that stands for Start, Campaign for a new
+                    // campaign and Missions for any mission, starts it.
+                    campaign_setup_focus_ = released_name;
+                    const bool picked = select_campaign_list_row(released_name, y);
+                    const auto* start_list =
+                        screen_ == Screen::new_campaign ? "Campaign" : "Missions";
+                    if (picked && released_name == start_list &&
+                        event.button.button == SDL_BUTTON_LEFT && event.button.clicks >= 2)
+                        start_campaign_setup();
                 } else if (screen_ == Screen::campaign_end && released_name == "Missions") {
                     // ENDMSN starts the clicked mission, as Start does.
                     select_campaign_list_row(released_name, y);
@@ -375,6 +410,12 @@ void Runtime::play_movie_resource(std::string_view filename) {
         playback.play_audio = !options_.mute && !options_.headless_check;
         playback.window = sdl_.window;
         playback.renderer = sdl_.renderer;
+        // Alt+Enter switches full screen during the movie as it does in the
+        // game.
+        playback.hooks.context = this;
+        playback.hooks.window_event = [](void* context, const SDL_Event& event) {
+            (void)static_cast<Runtime*>(context)->take_full_screen_event(event);
+        };
         const auto result = opened.player->play(playback);
         if (!result.ok())
             status_ = "movie playback failed: " + result.error;

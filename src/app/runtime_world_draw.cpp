@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,10 @@
 #include <vector>
 
 namespace oa::app {
+
+namespace {
+constexpr int32_t kCellPixels = 16; // map pixels across a footprint cell
+} // namespace
 
 std::array<uint8_t, 3> Runtime::palette_rgb(uint8_t index) const {
     const auto pal = static_cast<std::size_t>(index) * 4U;
@@ -37,10 +42,12 @@ Runtime::pending_build_site(oa::sim::ground_orders::Point world) const {
     oa::sim::match_runtime::snap_build_position(world, fx, fz);
     const auto fx_u = static_cast<uint32_t>(fx);
     const auto fz_u = static_cast<uint32_t>(fz);
+    // The footprint's first cell, rounded toward negative infinity: a
+    // footprint over the left or top edge starts at a negative cell.
     const auto cell_x =
-        static_cast<int32_t>((static_cast<uint32_t>(world[0]) - fx_u * 0x80000u + 0x80000u) >> 20);
+        std::bit_cast<int32_t>(static_cast<uint32_t>(world[0]) - fx_u * 0x80000u + 0x80000u) >> 20;
     const auto cell_z =
-        static_cast<int32_t>((static_cast<uint32_t>(world[2]) - fz_u * 0x80000u + 0x80000u) >> 20);
+        std::bit_cast<int32_t>(static_cast<uint32_t>(world[2]) - fz_u * 0x80000u + 0x80000u) >> 20;
     const auto site =
         match_->building_site(pending_build_type_, cell_x, cell_z, 0, match_local_player_);
     const auto height =
@@ -82,25 +89,31 @@ void Runtime::draw_build_ghost(
     if (!site)
         return;
     const auto height = static_cast<uint32_t>(site->world[1]);
+    // Cells to 16.16 map positions; a negative cell stays left of or above the map.
+    const auto cell_position = [](int32_t cell) {
+        return static_cast<uint32_t>(cell * kCellPixels) << 16;
+    };
     const auto top_left = project_match_point(
-        viewport,
-        {static_cast<uint32_t>(site->cell_x * 16 << 16),
-         height,
-         static_cast<uint32_t>(site->cell_z * 16 << 16)}
+        viewport, {cell_position(site->cell_x), height, cell_position(site->cell_z)}
     );
     const auto bottom_right = project_match_point(
         viewport,
-        {static_cast<uint32_t>((site->cell_x + site->footprint_x) * 16 << 16),
+        {cell_position(site->cell_x + site->footprint_x),
          height,
-         static_cast<uint32_t>((site->cell_z + site->footprint_z) * 16 << 16)}
+         cell_position(site->cell_z + site->footprint_z)}
     );
     ensure_ui_colors();
     const auto color = ui_color_rgb(site->legal ? kBuildSiteClearColor : kBuildSiteRefusedColor);
-    for (int inset = 0; inset < 2; ++inset) {
+    // The outlines lie side by side, each inset one pixel inside the last, so
+    // together they are one band; the lines clip to the battlefield.
+    const auto band = kBuildSiteOutlineCount * build_site_outline_width(viewport.scale);
+    for (int inset = 0; inset < band; ++inset) {
         const auto left = top_left.x + inset;
         const auto top = top_left.y + inset;
         const auto right = bottom_right.x - inset;
         const auto bottom = bottom_right.y - inset;
+        if (left > right || top > bottom)
+            break;
         draw_match_line(destination, left, top, right, top, color);
         draw_match_line(destination, right, top, right, bottom, color);
         draw_match_line(destination, right, bottom, left, bottom, color);
@@ -108,14 +121,32 @@ void Runtime::draw_build_ghost(
     }
 }
 
+int Runtime::build_site_outline_width(float zoom) {
+    // Also one pixel for a zoom that is no number.
+    if (!(zoom >= 1.0F))
+        return 1;
+    const auto steps = static_cast<int>(std::lround(std::min(zoom, kMaxBattlefieldZoom)));
+    return std::max(1, steps * kBuildSiteOutlinePixelsPerZoomStep);
+}
+
 oa::present::world_renderer::ScreenPoint Runtime::project_match_point(
     const oa::present::world_renderer::BattlefieldViewport& viewport,
     const std::array<uint32_t, 3>& position
 ) const {
-    const auto map_x = static_cast<uint32_t>(std::bit_cast<int32_t>(position[0]) >> 16);
-    const auto map_z = static_cast<uint32_t>(std::bit_cast<int32_t>(position[2]) >> 16);
+    const auto map_x = std::bit_cast<int32_t>(position[0]) >> 16;
+    const auto map_z = std::bit_cast<int32_t>(position[2]) >> 16;
     const auto height = std::bit_cast<int32_t>(position[1]) >> 16;
-    auto screen = oa::present::world_renderer::map_pixel_to_screen(viewport, {map_x, map_z});
+    // A map pixel is unsigned, and a point's place on the frame hangs only on
+    // its offset from the camera, so a point left of or above the map is
+    // moved onto it together with the camera.
+    auto shifted = viewport;
+    const auto lift_x = static_cast<uint32_t>(std::max(0, -map_x));
+    const auto lift_z = static_cast<uint32_t>(std::max(0, -map_z));
+    shifted.source_x += lift_x;
+    shifted.source_y += lift_z;
+    auto screen = oa::present::world_renderer::map_pixel_to_screen(
+        shifted, {static_cast<uint32_t>(map_x) + lift_x, static_cast<uint32_t>(map_z) + lift_z}
+    );
     const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
     screen.y -= static_cast<int32_t>(
         std::lround(static_cast<double>(height) * 0.5 * static_cast<double>(scale))

@@ -146,6 +146,10 @@ bool TickHost::ConstructionAdapter::build_progress(
         nanoframe.flags
     };
     HealthHost health(host.match, source.unit_index);
+    // The step's own changes reach the frame before the cancel damage or the
+    // completion acts on it, and what those leave, such as a pending death,
+    // is what is stored.
+    health.bind(target_proj);
     const auto result =
         sim::unit_health::apply_build_progress(builder_proj, target_proj, rate, health);
     health.store();

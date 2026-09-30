@@ -938,8 +938,8 @@ ParticleDraw sprite_item(
 
 /// Builds the draw item of a nano or wake pixel.
 ///
-/// It is drawn where the viewer's sight grid shows its position; the host tests and
-/// plots it.
+/// It is drawn where the viewer's sight grid shows its position, as a square
+/// pixel_item_side battlefield pixels on a side; the host tests and fills it.
 ///
 /// @param color palette index
 /// @param position 16.16 world coordinates

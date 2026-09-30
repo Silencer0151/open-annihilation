@@ -540,6 +540,24 @@ void select_layout_list_row(
         store(*bar, layout);
 }
 
+bool step_layout_list_row(
+    LayoutScrolls& scrolls, gui::Layout& layout, std::size_t gadget, bool forward
+) {
+    auto* entry = find_layout_list(scrolls, gadget);
+    if (entry == nullptr)
+        return false;
+    auto* bar = group_bar(scrolls, entry->list.group);
+    if (input::scroll_list_step(
+            entry->list, bar != nullptr ? &bar->bar : nullptr, scrolls.line_height, forward
+        )) {
+        sync_layout_group(scrolls, layout, gadget);
+        return true;
+    }
+    if (bar != nullptr)
+        store(*bar, layout);
+    return false;
+}
+
 void sync_layout_group(LayoutScrolls& scrolls, gui::Layout& layout, std::size_t gadget) {
     if (auto* bar = find_layout_bar(scrolls, gadget)) {
         for (auto& entry : scrolls.lists)

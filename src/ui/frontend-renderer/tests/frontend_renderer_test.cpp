@@ -245,6 +245,16 @@ int main() {
     assert(red_at(sunken, 1, 1) == 0);
     assert(red_at(sunken, 5, 5) == 17);
 
+    // A button under the pointer draws exactly as it does without it.
+    const oa::ui::frontend_renderer::ButtonPresentation hovered{
+        "PLAIN",
+        oa::ui::frontend_renderer::ButtonCondition::hovered,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt
+    };
+    CHECK(oa::ui::frontend_renderer::render_main_menu(resources, {&hovered, 1}).rgb == raised.rgb);
+
     const oa::ui::frontend_renderer::ButtonPresentation disabled{
         "PLAIN",
         oa::ui::frontend_renderer::ButtonCondition::disabled,

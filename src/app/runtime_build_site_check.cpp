@@ -3,10 +3,12 @@
 
 // Headless check of the build ghost and the placing click over the sites the
 // game's building-site test refuses, and over bare ground and a metal deposit,
-// which it accepts alike.
+// which it accepts alike; and of the ghost's outline over the map's edges and
+// at several zooms.
 #include "oa/app/runtime.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace oa::app {
 
@@ -314,6 +317,288 @@ void Runtime::check_build_site_pointer(uint16_t builder, uint16_t type) {
               << ", on metal " << poorest << " at " << bare->first << ',' << bare->second
               << " and on metal " << richest << " at " << deposit->first << ',' << deposit->second
               << '\n';
+    // A solar collector's wide footprint hangs well over the edges.
+    const auto solar = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMSOLAR");
+    check_build_site_edges(solar != 0 && solar < spawn_types_.size() ? solar : type);
+}
+
+void Runtime::check_build_site_edges(uint16_t type) {
+    // Map pixels across a terrain tile and a footprint cell.
+    constexpr uint32_t tile_pixels = 32;
+    constexpr int32_t cell_pixels = 16;
+    // Map pixels the pointer stands inside an edge of the battlefield.
+    constexpr int pointer_inset = 2;
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * tile_pixels);
+    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * tile_pixels);
+    const auto saved_camera_x = match_camera_x_;
+    const auto saved_camera_z = match_camera_z_;
+    const auto saved_zoom = match_zoom_;
+    const auto saved_zoom_target = match_zoom_target_;
+    const auto saved_zoom_anchored = zoom_anchored_;
+    const fs::path report_directory = "local/reports";
+    fs::create_directories(report_directory);
+    std::vector<std::string> failures;
+    std::string report;
+    const auto set_zoom = [&](float zoom) {
+        match_zoom_ = zoom;
+        match_zoom_target_ = zoom;
+        zoom_anchored_ = false;
+    };
+    // Draws the frame with and without the ghost for the pointer at
+    // (`pointer_x`, `pointer_y`) on the battlefield, the camera at (`camera_x`,
+    // `camera_z`) and `zoom`, and compares them. The site must start left of
+    // the map when `over_left` is set and above it when `over_top` is.
+    const auto try_view = [&](const std::string& where,
+                              int32_t camera_x,
+                              int32_t camera_z,
+                              int pointer_x,
+                              int pointer_y,
+                              float zoom,
+                              bool over_left,
+                              bool over_top) {
+        // The zoom in tenths where it is not whole: 1, 1.5, 2.
+        const auto tenths = static_cast<int>(std::lround(zoom * 10.0F));
+        const auto zoom_name = std::to_string(tenths / 10) +
+                               (tenths % 10 != 0 ? '.' + std::to_string(tenths % 10) : "");
+        const auto name = where + " at zoom " + zoom_name;
+        set_zoom(zoom);
+        match_camera_x_ = camera_x;
+        match_camera_z_ = camera_z;
+        const auto canvas_x = static_cast<float>(match_layout_.left + pointer_x);
+        const auto canvas_y = static_cast<float>(match_layout_.top + pointer_y);
+        update_pointer(canvas_x, canvas_y);
+        match_command_ = MatchCommand::none;
+        render_match_surface();
+        const auto without = match_world_cpu_;
+        match_command_ = MatchCommand::build;
+        pending_build_type_ = type;
+        render_match_surface();
+        const auto with = match_world_cpu_;
+        const auto site = build_site_under(canvas_x, canvas_y);
+        if (!site) {
+            failures.push_back("no site under the pointer " + name);
+            return;
+        }
+        std::string snapshot = "native-build-ghost-" + where + "-zoom-" + zoom_name + ".ppm";
+        for (auto& letter : snapshot)
+            if (letter == ' ')
+                letter = '-';
+        renderer::Surface frame;
+        compose_match_frame(frame);
+        write_ppm(report_directory / snapshot, frame);
+        report += std::string(report.empty() ? "" : ", ") + name + " site " +
+                  std::to_string(site->cell_x) + ',' + std::to_string(site->cell_z);
+        if ((over_left && site->cell_x >= 0) || (over_top && site->cell_z >= 0))
+            failures.push_back(
+                "the site " + name + " starts at " + std::to_string(site->cell_x) + ',' +
+                std::to_string(site->cell_z) + ", not over the edge of the map"
+            );
+        // The footprint's rectangle on the battlefield frame, from the camera
+        // and the zoom alone.
+        const auto scale = static_cast<double>(zoom);
+        const auto raise = std::lround(static_cast<double>(site->world[1] >> 16) * 0.5 * scale);
+        const auto frame_x = [&](int32_t cell) {
+            return std::llround((cell * cell_pixels - match_camera_x_) * scale);
+        };
+        const auto frame_y = [&](int32_t cell) {
+            return std::llround((cell * cell_pixels - match_camera_z_) * scale) - raise;
+        };
+        const auto left = frame_x(site->cell_x);
+        const auto right = frame_x(site->cell_x + site->footprint_x);
+        const auto top = frame_y(site->cell_z);
+        const auto bottom = frame_y(site->cell_z + site->footprint_z);
+        const auto band = kBuildSiteOutlineCount * build_site_outline_width(zoom);
+        const auto colour =
+            ui_color_rgb(site->legal ? kBuildSiteClearColor : kBuildSiteRefusedColor);
+        const auto changed = [&](int64_t x, int64_t y) {
+            if (x < 0 || y < 0 || x >= static_cast<int64_t>(with.width) ||
+                y >= static_cast<int64_t>(with.height))
+                return false;
+            const auto at =
+                (static_cast<std::size_t>(y) * with.width + static_cast<std::size_t>(x)) * 3U;
+            return with.rgb[at] != without.rgb[at] || with.rgb[at + 1] != without.rgb[at + 1] ||
+                   with.rgb[at + 2] != without.rgb[at + 2];
+        };
+        std::size_t drawn = 0;
+        std::optional<std::pair<int64_t, int64_t>> stray;
+        for (int64_t y = 0; y < static_cast<int64_t>(with.height); ++y)
+            for (int64_t x = 0; x < static_cast<int64_t>(with.width); ++x) {
+                if (!changed(x, y))
+                    continue;
+                ++drawn;
+                const auto at =
+                    (static_cast<std::size_t>(y) * with.width + static_cast<std::size_t>(x)) * 3U;
+                const std::array<uint8_t, 3> pixel{
+                    with.rgb[at], with.rgb[at + 1], with.rgb[at + 2]
+                };
+                // How far inside the rectangle the pixel lies, with one pixel
+                // of slack for rounding at each side of the band.
+                const auto depth = std::min({x - left, right - x, y - top, bottom - y});
+                if (!stray && (pixel != colour || depth < -1 || depth > band))
+                    stray = std::pair{x, y};
+            }
+        // A refused site stands at height 0, so over the bottom edge of high
+        // ground its rectangle can fall wholly below the battlefield.
+        const bool on_battlefield = right >= 0 && left < static_cast<int64_t>(with.width) &&
+                                    bottom >= 0 && top < static_cast<int64_t>(with.height);
+        if (on_battlefield && drawn == 0)
+            failures.push_back("no outline drawn " + name);
+        if (stray)
+            failures.push_back(
+                "the ghost " + name + " changed " + std::to_string(stray->first) + ',' +
+                std::to_string(stray->second) + ", outside its outline " + std::to_string(left) +
+                ',' + std::to_string(top) + " to " + std::to_string(right) + ',' +
+                std::to_string(bottom)
+            );
+        if (left < 0 || top < 0 || right >= static_cast<int64_t>(with.width) ||
+            bottom >= static_cast<int64_t>(with.height))
+            return;
+        // A whole rectangle shows the whole band: count it from outside the
+        // top edge's middle down to the centre, and from outside the left
+        // edge's middle across to the centre.
+        const auto count_changed = [&](int64_t x, int64_t y, int64_t step_x, int64_t step_y) {
+            int count = 0;
+            for (; x <= (left + right) / 2 && y <= (top + bottom) / 2; x += step_x, y += step_y)
+                if (changed(x, y))
+                    ++count;
+            return count;
+        };
+        const auto top_depth = count_changed((left + right) / 2, top - 2, 0, 1);
+        const auto left_depth = count_changed(left - 2, (top + bottom) / 2, 1, 0);
+        if (top_depth != band || left_depth != band)
+            failures.push_back(
+                "the outline " + name + " is " + std::to_string(top_depth) +
+                " pixels deep at the top and " + std::to_string(left_depth) + " at the left, not " +
+                std::to_string(band)
+            );
+    };
+    // The view at `column` and `row` of the map (0 its left or top edge, 1 its
+    // middle, 2 its right or bottom edge), the pointer as far into the
+    // battlefield.
+    const auto try_grid = [&](const char* where, int column, int row, float zoom) {
+        set_zoom(zoom);
+        const auto inset = static_cast<int>(std::lround(pointer_inset * zoom));
+        const auto along = [&](int step, int extent) {
+            return step == 0 ? inset : step == 1 ? extent / 2 : extent - 1 - inset;
+        };
+        try_view(
+            where,
+            column * std::max(0, map_width - visible_map_width()) / 2,
+            row * std::max(0, map_height - visible_map_height()) / 2,
+            along(column, match_layout_.battlefield_width()),
+            along(row, match_layout_.battlefield_height()),
+            zoom,
+            column == 0,
+            false
+        );
+    };
+
+    // Over the top left corner the footprint starts left of and above the
+    // map whatever the ground there, and its rectangle is placed left of and
+    // above the battlefield.
+    set_zoom(1.0F);
+    match_command_ = MatchCommand::build;
+    pending_build_type_ = type;
+    const auto corner = pending_build_site({pointer_inset << 16, 0, pointer_inset << 16});
+    // The first cell of a footprint `size` cells wide centred on the pointer;
+    // a footprint of 0 counts as 2.
+    const auto corner_cell = [&](int16_t size) {
+        const auto cells = static_cast<double>(size > 0 ? size : 2);
+        return static_cast<int32_t>(
+            std::floor((pointer_inset - (cells - 1.0) * cell_pixels / 2.0) / cell_pixels)
+        );
+    };
+    const auto corner_x = corner_cell(spawn_types_[type].footprint_x);
+    const auto corner_z = corner_cell(spawn_types_[type].footprint_z);
+    if (!corner || corner->legal || corner->cell_x != corner_x || corner->cell_z != corner_z)
+        failures.push_back(
+            "the site at the top left corner is " +
+            (corner ? std::to_string(corner->cell_x) + ',' + std::to_string(corner->cell_z)
+                    : std::string("none")) +
+            ", not a refused " + std::to_string(corner_x) + ',' + std::to_string(corner_z)
+        );
+    const auto corner_view = live_viewport(0, 0);
+    const auto above_left = project_match_point(
+        corner_view,
+        {static_cast<uint32_t>(corner_x * cell_pixels) << 16,
+         0,
+         static_cast<uint32_t>(corner_z * cell_pixels) << 16}
+    );
+    if (above_left.x != corner_view.destination_x + corner_x * cell_pixels ||
+        above_left.y != corner_view.destination_y + corner_z * cell_pixels)
+        failures.push_back(
+            "the site at the top left corner is placed at " + std::to_string(above_left.x) + ',' +
+            std::to_string(above_left.y) + " on the frame"
+        );
+
+    try_grid("top left", 0, 0, 1.0F);
+    try_grid("top", 1, 0, 1.0F);
+    try_grid("top right", 2, 0, 1.0F);
+    try_grid("left", 0, 1, 1.0F);
+    try_grid("right", 2, 1, 1.0F);
+    try_grid("bottom left", 0, 2, 1.0F);
+    try_grid("bottom", 1, 2, 1.0F);
+    try_grid("bottom right", 2, 2, 1.0F);
+    for (const auto zoom : {1.0F, 1.5F, 2.0F, 3.0F})
+        try_grid("middle", 1, 1, zoom);
+    // Each outline is one pixel wide up to zoom 1 and as wide as the zoom,
+    // rounded to the nearest pixel, zoomed in.
+    for (const auto& [zoom, width] :
+         {std::pair{0.5F, 1},
+          std::pair{1.0F, 1},
+          std::pair{1.3F, 1},
+          std::pair{1.5F, 2},
+          std::pair{2.0F, 2},
+          std::pair{2.5F, 3},
+          std::pair{3.0F, 3}})
+        if (build_site_outline_width(zoom) != width)
+            failures.push_back(
+                "each outline is " + std::to_string(build_site_outline_width(zoom)) +
+                " pixels wide at zoom " + std::to_string(zoom) + ", not " + std::to_string(width)
+            );
+
+    // The pointer reaches a site over the top edge only where the ground
+    // along it is low enough; the first such place, a cell apart, is tried
+    // when the map has one.
+    set_zoom(1.0F);
+    const auto top_inset = pointer_inset;
+    std::optional<std::pair<int32_t, int>> low_top;
+    const auto camera_step = std::max(1, visible_map_width() / 2);
+    for (int32_t camera_x = 0; !low_top && camera_x + visible_map_width() <= map_width;
+         camera_x += camera_step)
+        for (int pointer_x = top_inset;
+             !low_top && pointer_x < match_layout_.battlefield_width() - top_inset;
+             pointer_x += cell_pixels) {
+            match_camera_x_ = camera_x;
+            match_camera_z_ = 0;
+            const auto site = build_site_under(
+                static_cast<float>(match_layout_.left + pointer_x),
+                static_cast<float>(match_layout_.top + top_inset)
+            );
+            if (site && site->cell_z < 0)
+                low_top = std::pair{camera_x, pointer_x};
+        }
+    if (low_top)
+        try_view(
+            "top low ground", low_top->first, 0, low_top->second, top_inset, 1.0F, false, true
+        );
+    else
+        report += ", no site over the top edge within the pointer's reach";
+
+    set_zoom(saved_zoom);
+    match_zoom_target_ = saved_zoom_target;
+    zoom_anchored_ = saved_zoom_anchored;
+    match_camera_x_ = saved_camera_x;
+    match_camera_z_ = saved_camera_z;
+    render_match_surface();
+    if (!failures.empty()) {
+        std::string message = "build ghost edge check:";
+        for (const auto& failure : failures)
+            message += "\n  " + failure;
+        throw std::runtime_error(message);
+    }
+    std::cout << "build ghost edge check: " << spawn_type_names_.at(type)
+              << " outline stays inside its footprint over " << report << '\n';
 }
 
 } // namespace oa::app

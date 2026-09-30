@@ -181,6 +181,16 @@ map_pixel_to_screen(const BattlefieldViewport& viewport, MapPixel map_pixel) noe
 [[nodiscard]] std::optional<MapPixel>
 screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noexcept;
 
+/// Returns how many screen pixels a run of map pixels spans at the viewport's scale.
+///
+/// Something drawn a fixed number of battlefield pixels wide, such as the
+/// square of a pixel particle, spans this many screen pixels in a zoomed view.
+///
+/// @param viewport battlefield viewport giving the scale; a zero scale is 1
+/// @param map_pixels run length in map pixels
+/// @return the run times the scale, rounded to the nearest pixel and at least 1
+[[nodiscard]] int32_t screen_span(const BattlefieldViewport& viewport, int32_t map_pixels) noexcept;
+
 // Radar sharing between the viewing player and a unit's owner (Unit.owner).
 // alliance_byte is the owner's Player.alliance entry for the viewer's
 // Player.index (written when an alliance changes). share_flags is the owner's

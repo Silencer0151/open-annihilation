@@ -717,8 +717,21 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
     sim::unit_health::EconomyDebit debit_;
     sim::unit_health::EconomyDebit metal_;
     oa::UnitEconomy& economy_;
+    sim::unit_health::Unit* stand_in_{}; // the projection bind() names; null for none
 
     sim::unit_spawn::Slot& slot(const sim::unit_health::Unit& u);
+
+    /// Copies the bound projection's health, flags, events and build fraction
+    /// into its unit's record; any other projection is left alone.
+    ///
+    /// @param u projection the host is about to act on
+    void write_stand_in(const sim::unit_health::Unit& u);
+
+    /// Reads the bound projection's health, flags, events and build fraction
+    /// back from its unit's record; any other projection is left alone.
+    ///
+    /// @param[in,out] u projection the host has just acted on
+    void read_stand_in(sim::unit_health::Unit& u);
 
   public:
 
@@ -729,6 +742,19 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
     }
 
     void store();
+
+    /// Lets a projection stand in for its unit's record while a build step
+    /// changes it.
+    ///
+    /// A health event or a completion the step raises acts on the record
+    /// itself, so the host first writes the projection's health, flags,
+    /// events and build fraction into the record, as the step has already
+    /// changed them, and afterwards reads them back; the caller then stores
+    /// what the event left, a death included.
+    ///
+    /// @param[in,out] projection projection of a unit record; it outlives the
+    ///        host's use of it
+    void bind(sim::unit_health::Unit& projection) noexcept { stand_in_ = &projection; }
 
     sim::unit_health::EconomyDebit& energy_debit(sim::unit_health::Unit&) override;
 

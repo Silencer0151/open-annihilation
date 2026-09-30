@@ -359,6 +359,29 @@ void test_layout_scrolls() {
         "a pick off the page scrolls the list and its knob"
     );
 
+    // Down and Up step the selection a row; past the page's last row the
+    // list scrolls a row and the knob follows it.
+    expect(
+        renderer::step_layout_list_row(scrolls, layout, 2, true) && rows->list.selection == 11 &&
+            rows->list.first == 10,
+        "Down selects the next row on the page"
+    );
+    renderer::select_layout_list_row(scrolls, layout, 2, 20);
+    expect(
+        renderer::step_layout_list_row(scrolls, layout, 2, true) && rows->list.selection == 21 &&
+            rows->list.first == 11 && slider->bar.knob == 149 * 11 / 89 &&
+            std::get<gui::ScrollBarFields>(layout.gadgets[3].fields).knob_position == 149 * 11 / 89,
+        "Down past the page's last row scrolls the list and its knob a row"
+    );
+    expect(
+        renderer::step_layout_list_row(scrolls, layout, 2, false) && rows->list.selection == 20 &&
+            rows->list.first == 11,
+        "Up selects the previous row on the page"
+    );
+    expect(
+        !renderer::step_layout_list_row(scrolls, layout, 1, true), "a bar steps no list selection"
+    );
+
     // A screen's own changes come back: a hidden list's bar takes no press.
     layout.gadgets[3].common.active = 0;
     std::get<gui::ScrollBarFields>(layout.gadgets[1].fields).knob_position = 44;

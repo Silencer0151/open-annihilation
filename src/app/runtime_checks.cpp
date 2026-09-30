@@ -72,6 +72,11 @@ constexpr int kDragEdgeInset = 48;
 // unit is selected; the unit, drawn after its box, hides the rest.
 constexpr std::size_t kSelectionBoxMinPercent = 25;
 
+// Map pixels below the local unit the pixel particle check starts a nano
+// stream at, and how far right of that the stream aims.
+constexpr int kParticleDrop = 48;
+constexpr int kParticleReach = 64;
+
 // Where the overlay check's probe draws, in 640x480 pixels: a line of text
 // 63 above the bottom bar and 1 right of the battlefield's edge, and under it
 // a 65 by 9 bar, where the game's traffic readout starts; and a line in the
@@ -713,8 +718,138 @@ void Runtime::check_match_layers() {
     };
     check_match_overlays(presented_frame, report_directory / "native-match-presented.ppm");
     check_selection_visuals(presented_frame);
+    check_pixel_particles(report_directory);
     std::cout << "match layer check: " << frames << " presented frames equal compose_match_frame\n";
     check_presented_match_end(report_directory);
+}
+
+void Runtime::check_pixel_particles(const fs::path& report_directory) {
+    namespace fx = oa::sim::effect_particles;
+    uint16_t anchor = 0;
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
+            oa::world_unit_at(&match_->state(), slot.unit_index)->owner_index ==
+                match_local_player_) {
+            anchor = slot.unit_index;
+            break;
+        }
+    if (anchor == 0)
+        throw std::runtime_error("pixel particle check found no local unit");
+    const auto* unit = match_->world().slots[anchor].unit;
+    const auto nozzle_x = static_cast<uint32_t>((unit->position[0] >> 16));
+    const auto nozzle_z = static_cast<uint32_t>((unit->position[2] >> 16) + kParticleDrop);
+    const FixedVec3 nozzle{
+        std::bit_cast<int32_t>(nozzle_x << 16),
+        std::bit_cast<int32_t>(
+            static_cast<uint32_t>(match_->map_height(nozzle_x << 16, nozzle_z << 16)) << 16
+        ),
+        std::bit_cast<int32_t>(nozzle_z << 16)
+    };
+    const FixedVec3 aim{
+        std::bit_cast<int32_t>((nozzle_x + kParticleReach) << 16), nozzle.y, nozzle.z
+    };
+    // A random stream of zeros puts the whole first spray at the nozzle,
+    // leaving the match's own streams alone.
+    const fx::EffectHost zeros{nullptr, [](void*) { return 0; }};
+    const auto saved_zoom = match_zoom_;
+    const auto saved_zoom_target = match_zoom_target_;
+    const auto saved_camera_x = match_camera_x_;
+    const auto saved_camera_z = match_camera_z_;
+    const auto saved_effects = std::make_unique<fx::EffectWorld>(match_->effects());
+    std::string report;
+    // Each zoom and the side of the square a particle fills there: two
+    // pixels at the game's own scale, twice that at zoom 2.
+    for (const auto& [zoom, side] : {std::pair{1.0F, 2}, std::pair{2.0F, 4}}) {
+        match_zoom_ = match_zoom_target_ = zoom;
+        center_camera_on_unit(anchor);
+        render_match_surface();
+        const auto without = match_world_cpu_;
+        fx::spawn_nano_outward(
+            match_->effects(), match_->state().game, zeros, nozzle, {aim, aim}, fx::layer_nano
+        );
+        // The layer draws its newest emitter last: the last pixel is the
+        // spray's top one.
+        std::optional<fx::ParticleDraw> drawn;
+        fx::draw_layer(
+            match_->effects(),
+            fx::layer_nano,
+            &drawn,
+            [](void* context, const fx::ParticleDraw& item) {
+                if (item.kind == fx::DrawKind::pixel)
+                    *static_cast<std::optional<fx::ParticleDraw>*>(context) = item;
+            }
+        );
+        render_match_surface();
+        const auto with = match_world_cpu_;
+        renderer::Surface frame;
+        compose_match_frame(frame);
+        write_ppm(
+            report_directory /
+                ("native-pixel-particle-zoom-" + std::to_string(static_cast<int>(zoom)) + ".ppm"),
+            frame
+        );
+        match_->effects() = *saved_effects;
+        const auto name = "at zoom " + std::to_string(static_cast<int>(zoom));
+        if (!drawn || drawn->position.x != nozzle.x || drawn->position.z != nozzle.z)
+            throw std::runtime_error("pixel particle check: no spray at the nozzle " + name);
+        auto view = live_viewport(
+            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
+        );
+        view.destination_x = 0;
+        view.destination_y = 0;
+        view.surface_width = with.width;
+        view.surface_height = with.height;
+        const auto corner = project_match_point(
+            view,
+            {std::bit_cast<uint32_t>(drawn->position.x),
+             std::bit_cast<uint32_t>(drawn->position.y),
+             std::bit_cast<uint32_t>(drawn->position.z)}
+        );
+        const auto colour = palette_rgb(drawn->color);
+        const auto inside = [&](int x, int y) {
+            return x >= corner.x && x < corner.x + side && y >= corner.y && y < corner.y + side;
+        };
+        if (corner.x < 0 || corner.y < 0 || corner.x + side > static_cast<int>(with.width) ||
+            corner.y + side > static_cast<int>(with.height))
+            throw std::runtime_error(
+                "pixel particle check: the nozzle is off the battlefield " + name
+            );
+        std::size_t filled = 0;
+        std::size_t strays = 0;
+        for (int y = 0; y < static_cast<int>(with.height); ++y)
+            for (int x = 0; x < static_cast<int>(with.width); ++x) {
+                const auto at =
+                    (static_cast<std::size_t>(y) * with.width + static_cast<std::size_t>(x)) * 3U;
+                const std::array<uint8_t, 3> pixel{
+                    with.rgb[at], with.rgb[at + 1], with.rgb[at + 2]
+                };
+                if (inside(x, y))
+                    filled += pixel == colour ? 1 : 0;
+                else
+                    strays += std::equal(
+                                  pixel.begin(),
+                                  pixel.end(),
+                                  without.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                              )
+                                  ? 0
+                                  : 1;
+            }
+        if (filled != static_cast<std::size_t>(side * side) || strays != 0)
+            throw std::runtime_error(
+                "pixel particle check: " + std::to_string(filled) + " of the " +
+                std::to_string(side) + 'x' + std::to_string(side) + " square at " +
+                std::to_string(corner.x) + ',' + std::to_string(corner.y) + " filled and " +
+                std::to_string(strays) + " pixels changed outside it " + name
+            );
+        report += std::string(report.empty() ? "" : ", ") + std::to_string(side) + 'x' +
+                  std::to_string(side) + ' ' + name;
+    }
+    match_zoom_ = saved_zoom;
+    match_zoom_target_ = saved_zoom_target;
+    match_camera_x_ = saved_camera_x;
+    match_camera_z_ = saved_camera_z;
+    render_match_surface();
+    std::cout << "pixel particle check: a nano particle fills " << report << '\n';
 }
 
 void Runtime::check_selection_visuals(const std::function<void(renderer::Surface&)>& frame_of) {

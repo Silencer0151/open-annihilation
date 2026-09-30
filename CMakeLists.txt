@@ -259,8 +259,15 @@ if(BUILD_TESTING)
   add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
   target_link_libraries(oa-app-match-clock-test PRIVATE oa-base-game-loop oa-ui-console oa-options)
   add_test(NAME app-match-clock COMMAND oa-app-match-clock-test)
+  # Alt+Enter: the key, the mode it asks for while the window is still
+  # switching, and a window of SDL's dummy video driver switched and back.
+  add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
+  target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
+  add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
+  set_tests_properties(app-full-screen PROPERTIES
+    ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
 endif()
-set(oa_game_sources src/app/main.cpp
+set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
   src/app/runtime_builtin_screens.cpp
   src/app/runtime_camera.cpp src/app/runtime_campaign.cpp src/app/runtime_checks.cpp
@@ -362,9 +369,10 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${CMAKE_CURRENT_BINARY_DIR}/native-checks/campaign-restart.conf")
       set_tests_properties(native-campaign-restart PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
       # The match frame presented through SDL on dummy devices must equal the
-      # CPU composition headless runs use, with the overlays visible. A won
-      # skirmish then leaves its VICTORY frame on its own for the end screen,
-      # which darkens that frame at the match's size.
+      # CPU composition headless runs use, with the overlays visible, and a
+      # nano particle fills a square two pixels on a side at zoom 1 and four
+      # at zoom 2. A won skirmish then leaves its VICTORY frame on its own for
+      # the end screen, which darkens that frame at the match's size.
       set(oa_layer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-layers")
       file(MAKE_DIRECTORY "${oa_layer_check_dir}")
       add_test(NAME native-match-layers COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -388,6 +396,9 @@ if(OA_BUILD_PLATFORM)
       # clicked through the SDL presenter shows the setting it changed (its
       # staged caption, frame or text) before Start; the clicked options tab
       # shows pressed and HELPTEXT shows the help under the pointer.
+      # NEWGAME.GUI's Campaign list selects the clicked campaign, steps with
+      # Up and Down until a button takes the focus, scrolls with its arrow and
+      # starts a double-clicked one.
       set(oa_frontend_controls_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/frontend-controls")
       file(MAKE_DIRECTORY "${oa_frontend_controls_dir}")
       add_test(NAME native-frontend-controls COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -403,7 +414,9 @@ if(OA_BUILD_PLATFORM)
       # its knob and arrows, a press beside the knob steps it one position, a
       # drag moves it pixel for pixel, an arrow steps and repeats, and the
       # preferences' sub-panel shows whole over the battlefield in a window
-      # taller than the chrome.
+      # taller than the chrome. The mission list also steps with Up and
+      # starts a double-clicked mission, and a click on Any Mission's Campaign
+      # list takes the focus, so Up and Down step it and refill the missions.
       set(oa_scroll_bars_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/scroll-bars")
       file(MAKE_DIRECTORY "${oa_scroll_bars_dir}")
       add_test(NAME native-scroll-bars COMMAND oa-game --game-dir "${OA_GAME_DIR}"

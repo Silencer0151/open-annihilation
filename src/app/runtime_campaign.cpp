@@ -425,6 +425,9 @@ void Runtime::enter_new_game_panel(bool any_mission) {
     host.select_group = [](void* context, const char* name) {
         static_cast<Runtime*>(context)->set_button_status(name, 1);
     };
+    host.focus_control = [](void* context, const char* name) {
+        static_cast<Runtime*>(context)->campaign_setup_focus_ = name != nullptr ? name : "";
+    };
     host.zero_sequence_origins = [](void* context, const char* name) {
         for (auto& sequence : static_cast<Runtime*>(context)->resources_.sprites.sequences)
             if (names_equal(sequence.name, name))
@@ -875,10 +878,10 @@ void Runtime::discover_campaigns() {
     load_campaign_missions(selected_campaign_index_);
 }
 
-void Runtime::select_campaign_list_row(std::string_view gadget_name, float canvas_y) {
+bool Runtime::select_campaign_list_row(std::string_view gadget_name, float canvas_y) {
     const auto* list = widget(std::string(gadget_name));
     if (list == nullptr)
-        return;
+        return false;
     auto item_height =
         static_cast<std::size_t>(oa::formats::fnt::line_height(resources_.font)) + 1U;
     if (const auto* fields = std::get_if<oa::ui::gui_layout::ListBoxFields>(&list->fields);
@@ -886,28 +889,53 @@ void Runtime::select_campaign_list_row(std::string_view gadget_name, float canva
         item_height = static_cast<std::size_t>(fields->item_height);
     const auto local_y = static_cast<int32_t>(canvas_y) - list->common.y - 2;
     if (local_y < 0 || item_height == 0)
-        return;
+        return false;
     // A list its scroll bar scrolls picks as 3.1c does, from the row it shows first.
     const auto bound = frontend_list_first(gadget_name).has_value();
     const auto picked = bound ? frontend_list_row_at(gadget_name, canvas_y) : std::nullopt;
     if (bound && !picked)
-        return;
+        return false;
     const auto row = static_cast<std::size_t>(local_y) / item_height;
     if (gadget_name == "Campaign") {
         const auto index = picked ? *picked : campaign_first_visible_ + row;
         if (index >= campaign_files_.size())
-            return;
+            return false;
+        // Only a press that changes the campaign refills the Missions list;
+        // one on the selected row keeps the chosen mission.
+        const bool changed = index != selected_campaign_index_;
         selected_campaign_index_ = index;
         select_frontend_list_row("Campaign", index);
-        load_campaign_missions(index);
+        if (changed)
+            load_campaign_missions(index);
         rebuild_surface();
-        return;
+        return true;
     }
     const auto index = picked ? *picked : campaign_mission_first_visible_ + row;
     if (index >= campaign_mission_files_.size())
-        return;
+        return false;
     selected_mission_index_ = index;
     select_frontend_list_row("Missions", index);
+    rebuild_surface();
+    return true;
+}
+
+void Runtime::step_campaign_list(bool forward) {
+    const auto campaigns = names_equal(campaign_setup_focus_, "Campaign");
+    if (!campaigns && !names_equal(campaign_setup_focus_, "Missions"))
+        return;
+    const auto row = step_frontend_list_row(campaign_setup_focus_, forward);
+    if (!row)
+        return;
+    if (campaigns && *row < campaign_files_.size()) {
+        // Any Mission refills its Missions list on every step, even one that
+        // stays at either end; a new campaign lists no missions.
+        const bool moved = *row != selected_campaign_index_;
+        selected_campaign_index_ = *row;
+        if (moved || screen_ == Screen::any_mission)
+            load_campaign_missions(*row);
+    } else if (!campaigns && *row < campaign_mission_files_.size()) {
+        selected_mission_index_ = *row;
+    }
     rebuild_surface();
 }
 

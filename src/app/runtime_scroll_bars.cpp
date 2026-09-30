@@ -240,6 +240,20 @@ void Runtime::select_frontend_list_row(std::string_view name, std::size_t row) {
         );
 }
 
+std::optional<std::size_t> Runtime::step_frontend_list_row(std::string_view name, bool forward) {
+    auto* scrolls = frontend_scrolls();
+    if (scrolls == nullptr)
+        return std::nullopt;
+    const auto index = gadget_index(resources_.layout, name);
+    if (!index)
+        return std::nullopt;
+    (void)renderer::step_layout_list_row(*scrolls, resources_.layout, *index, forward);
+    const auto* list = renderer::find_layout_list(*scrolls, *index);
+    if (list == nullptr || list->list.selection < 0)
+        return std::nullopt;
+    return static_cast<std::size_t>(list->list.selection);
+}
+
 std::optional<std::size_t> Runtime::frontend_list_first(std::string_view name) {
     auto* scrolls = frontend_scrolls();
     if (scrolls == nullptr)

@@ -2900,6 +2900,9 @@ void Runtime::activate_campaign_gadget() {
     if (!hovered_ || *hovered_ >= resources_.layout.gadgets.size())
         return;
     const auto name = resources_.layout.gadgets[*hovered_].common.name;
+    // The pressed control takes the keyboard focus, so Up and Down leave the
+    // lists alone after a button.
+    campaign_setup_focus_ = name;
     if (name == "PrevMenu" || name == "PREVMENU") {
         load(Screen::single_player);
         return;
@@ -2936,19 +2939,19 @@ void Runtime::activate_campaign_gadget() {
         rebuild_surface();
         return;
     }
-    if (name == "Start") {
-        play_ui_sound("BigButton", 0);
-        // Start marks every mission unplayed and loads the campaign on the
-        // list's selected row; New Campaign binds its first mission, Any
-        // Mission the selected one.
-        entry::reset_mission_results(state_);
-        if (screen_ == Screen::new_campaign)
-            load_campaign_missions(selected_campaign_index_);
-        show_mission_briefing();
-        return;
-    }
-    if (name == "Campaign" || name == "Missions")
-        return;
+    if (name == "Start")
+        start_campaign_setup();
+}
+
+void Runtime::start_campaign_setup() {
+    play_ui_sound("BigButton", 0);
+    // Start marks every mission unplayed and loads the campaign on the
+    // list's selected row; New Campaign binds its first mission, Any
+    // Mission the selected one.
+    entry::reset_mission_results(state_);
+    if (screen_ == Screen::new_campaign)
+        load_campaign_missions(selected_campaign_index_);
+    show_mission_briefing();
 }
 
 } // namespace oa::app

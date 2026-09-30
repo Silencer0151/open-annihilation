@@ -338,13 +338,11 @@ void Runtime::run_frame(bool& running) {
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     note_window_activation(event);
     // Alt+Enter switches between full screen and a window on every screen,
-    // before the screen or a screen package sees the key.
-    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) &&
-        (event.key.mod & SDL_KMOD_ALT) != 0) {
-        toggle_full_screen();
+    // before the screen or a screen package sees the key; its repeats reach
+    // no screen either, so a held Alt+Enter never opens the chat line or
+    // presses a dialog's default button.
+    if (take_full_screen_event(event))
         return;
-    }
     if (!dispatch_screen_input(event))
         handle_sdl_event(event, running);
     apply_screen_request();
@@ -611,17 +609,17 @@ void Runtime::rebuild_surface() {
     for (std::size_t index = 0; index < resources_.layout.gadgets.size(); ++index) {
         auto condition = renderer::ButtonCondition::normal;
         // A button whose status is set (the chosen member of its group) shows
-        // pressed like the one under a held pointer.
+        // pressed like one pressed and held with the pointer still over it.
+        // The pointer over a button without a press leaves it as it is.
         const auto* button =
             std::get_if<oa::ui::gui_layout::ButtonFields>(&resources_.layout.gadgets[index].fields);
         if (button != nullptr && button->grayed_out)
             condition = renderer::ButtonCondition::disabled;
         else if (
-            selected_ == static_cast<int32_t>(index) || (button != nullptr && button->status != 0)
+            (selected_ == static_cast<int32_t>(index) && hovered_ == index) ||
+            (button != nullptr && button->status != 0)
         )
             condition = renderer::ButtonCondition::pressed;
-        else if (hovered_ == index)
-            condition = renderer::ButtonCondition::hovered;
         const auto& name = resources_.layout.gadgets[index].common.name;
         const auto frame = widget_gaf_frames_.find(name);
         const auto text_stage = widget_text_stages_.find(name);

@@ -271,6 +271,21 @@ void select_layout_list_row(
     LayoutScrolls& scrolls, ui::gui_layout::Layout& layout, std::size_t gadget, int32_t row
 );
 
+/// Moves a list's selection one row, as the Up and Down keys do (scroll_list_step).
+///
+/// A selection that moved on the page brings the rest of the list's
+/// association in line (sync_layout_group); one off the page is brought into
+/// view with its bar's knob instead.
+///
+/// @param[in,out] scrolls The layout's bars and lists.
+/// @param[in,out] layout The layout; the bar's gadget takes its knob.
+/// @param gadget The list's index in the layout; one that is not a readied list is ignored.
+/// @param forward True to move toward the list's end.
+/// @return True when the selection moved on the page.
+bool step_layout_list_row(
+    LayoutScrolls& scrolls, ui::gui_layout::Layout& layout, std::size_t gadget, bool forward
+);
+
 /// Brings the rest of a bar's or list's association in line with it, as 3.1c does after one moves.
 ///
 /// A bar puts each list of its association that has a pitch where its knob

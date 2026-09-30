@@ -552,7 +552,12 @@ void Runtime::render_match_surface() {
                  !gadget_command_available(match_hud_->layout.gadgets[index]))
             )
                 condition = renderer::ButtonCondition::hidden;
-            else if (hovered_ == index || match_command_lit(index))
+            else if (
+                // The pointer over a button leaves it as it is: a button shows
+                // pressed while a press on it is held with the pointer still
+                // over it, or while its order is lit.
+                (match_hud_held_ == index && hovered_ == index) || match_command_lit(index)
+            )
                 condition = renderer::ButtonCondition::pressed;
             // A multi-stage button (RESTART.GUI's Difficulty) shows its stage.
             const auto& gadget = match_hud_->layout.gadgets[index];
@@ -1041,12 +1046,21 @@ void Runtime::render_match_surface() {
         const auto screen = project_match_point(viewport, at);
         const auto pal = static_cast<std::size_t>(item.color) * 4U;
         if (item.kind == oa::sim::effect_particles::DrawKind::pixel) {
-            put_match_pixel(
-                world_surface,
-                screen.x,
-                screen.y,
-                {match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]}
+            const std::array<uint8_t, 3> color{
+                match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]
+            };
+            const auto side = oa::present::world_renderer::screen_span(
+                viewport, oa::sim::effect_particles::pixel_item_side
             );
+            // The square, its top left corner at the point, clipped to the
+            // frame before it is filled.
+            const auto first_x = std::max<int64_t>(screen.x, 0);
+            const auto first_y = std::max<int64_t>(screen.y, 0);
+            const auto end_x = std::min<int64_t>(int64_t{screen.x} + side, world_surface.width);
+            const auto end_y = std::min<int64_t>(int64_t{screen.y} + side, world_surface.height);
+            for (auto y = first_y; y < end_y; ++y)
+                for (auto x = first_x; x < end_x; ++x)
+                    put_match_pixel(world_surface, static_cast<int>(x), static_cast<int>(y), color);
             return;
         }
         if (item.kind != oa::sim::effect_particles::DrawKind::sprite || item.sequence == nullptr ||

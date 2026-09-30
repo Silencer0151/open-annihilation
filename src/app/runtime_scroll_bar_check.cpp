@@ -50,6 +50,11 @@ constexpr int32_t kMinimumListKnob = 10;
 // once trimmed to 48, and MissionsKnob is 54 pixels long between its arrows.
 constexpr int32_t kMissionRows = 3;
 constexpr int32_t kMissionBarLength = 54;
+// NEWGAME.GUI's lists show rows of 15 pixels from 2 pixels below their top;
+// a press 7 pixels into a row lands in its middle.
+constexpr int32_t kListRowPitch = 15;
+constexpr int32_t kListRowsTop = 2;
+constexpr int32_t kListRowMiddle = 7;
 // Ticks a held arrow waits before it repeats.
 constexpr uint32_t kRepeatTicks = input::kScrollRepeatDelay;
 // Source rows of the preferences' sub-panel that lie in the bottom bar's
@@ -153,7 +158,7 @@ Point Runtime::scroll_canvas_point(int32_t x, int32_t y) const {
     return {x + modal_x + origin.x, y + modal_y + origin.y};
 }
 
-void Runtime::send_check_pointer(SDL_EventType type, Point canvas, uint8_t button) {
+void Runtime::send_check_pointer(SDL_EventType type, Point canvas, uint8_t button, uint8_t clicks) {
     float x = static_cast<float>(canvas.x);
     float y = static_cast<float>(canvas.y);
     if (sdl_.renderer != nullptr && !SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &x, &y))
@@ -168,7 +173,7 @@ void Runtime::send_check_pointer(SDL_EventType type, Point canvas, uint8_t butto
         event.button.windowID = sdl_.window != nullptr ? SDL_GetWindowID(sdl_.window) : 0;
         event.button.button = button;
         event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-        event.button.clicks = 1;
+        event.button.clicks = clicks;
         event.button.x = x;
         event.button.y = y;
     }
@@ -459,8 +464,98 @@ void Runtime::check_scroll_bars() {
         "a click on the list's last row did not pick the last mission"
     );
     write_ppm(report_directory / "native-scroll-bars-anymsn.ppm", frame_without_cursor());
+    // The clicked list has the focus: Up selects the mission above, and a
+    // double-click on the page's first row opens that mission's briefing, as
+    // Start does.
+    SDL_Event up{};
+    up.type = SDL_EVENT_KEY_DOWN;
+    up.key.key = SDLK_UP;
+    up.key.scancode = SDL_SCANCODE_UP;
+    up.key.down = true;
+    bool running = true;
+    dispatch_event(up, running);
+    require(
+        selected_mission_index_ == static_cast<std::size_t>(missions - 2) &&
+            frontend_list_first("Missions") == static_cast<std::size_t>(missions - kMissionRows),
+        "Up did not select the mission above the last one"
+    );
+    const auto first_row =
+        scroll_canvas_point(missions_list->common.x + 20, missions_list->common.y + 2 + 7);
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, first_row, 0);
+    for (uint8_t click = 1; click <= 2; ++click) {
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, first_row, SDL_BUTTON_LEFT, click);
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, first_row, SDL_BUTTON_LEFT, click);
+    }
+    require(
+        screen_ == Screen::briefing && bound_mission_index() == missions - kMissionRows,
+        "a double-click on a mission's row did not open its briefing"
+    );
     std::cout << "scroll bar check: NEWGAME.GUI's list of " << missions
-              << " missions scrolls with its knob\n";
+              << " missions scrolls with its knob, steps with Up and starts on a double-click\n";
+
+    // A press on Any Mission's Campaign list gives it the focus from the
+    // Missions list. A press on the selected campaign keeps the chosen
+    // mission; Up and Down step the campaign and refill the Missions list
+    // from its first row, even at the top of the list.
+    load(Screen::any_mission);
+    require(screen_ == Screen::any_mission, "Any Mission did not open NEWGAME.GUI again");
+    const auto* campaign_list = widget("Campaign");
+    const auto* shown_missions = widget("Missions");
+    require(
+        campaign_list != nullptr && shown_missions != nullptr,
+        "NEWGAME.GUI has no Campaign or Missions list"
+    );
+    const auto campaign_top = frontend_list_first("Campaign");
+    require(
+        campaign_top.has_value() && *campaign_top + 1 < campaign_labels_.size(),
+        "Any Mission's Campaign list is not bound over two campaigns or more"
+    );
+    const auto list_row = [](const oa::ui::gui_layout::Gadget& list, int32_t shown) {
+        return Point{
+            list.common.x + 20,
+            list.common.y + kListRowsTop + shown * kListRowPitch + kListRowMiddle
+        };
+    };
+    const auto click_row = [&](const oa::ui::gui_layout::Gadget& list, int32_t shown) {
+        press(list_row(list, shown));
+        release(list_row(list, shown));
+    };
+    const auto loaded_campaign = [&] {
+        const char* name = oa::data::campaign::campaign_name_if_loaded(&campaign_object());
+        return std::string(name != nullptr ? name : "");
+    };
+    click_row(*campaign_list, 0);
+    require(
+        selected_campaign_index_ == *campaign_top &&
+            tdf_names_equal(loaded_campaign(), campaign_labels_[*campaign_top]) &&
+            campaign_mission_labels_.size() > 1,
+        "a click on the Campaign list's first row did not list that campaign's missions"
+    );
+    click_row(*shown_missions, 1);
+    require(selected_mission_index_ == 1, "a click on the second mission did not pick it");
+    click_row(*campaign_list, 0);
+    require(
+        selected_campaign_index_ == *campaign_top && selected_mission_index_ == 1,
+        "a click on the selected campaign did not keep the chosen mission"
+    );
+    dispatch_event(up, running);
+    const auto above = *campaign_top == 0 ? std::size_t{0} : *campaign_top - 1;
+    require(
+        selected_campaign_index_ == above && selected_mission_index_ == 0 &&
+            frontend_list_first("Missions") == std::size_t{0},
+        "Up on the Campaign list did not refill the Missions list from its first row"
+    );
+    SDL_Event down = up;
+    down.key.key = SDLK_DOWN;
+    down.key.scancode = SDL_SCANCODE_DOWN;
+    dispatch_event(down, running);
+    require(
+        selected_campaign_index_ == above + 1 &&
+            tdf_names_equal(loaded_campaign(), campaign_labels_[above + 1]),
+        "Down on the Campaign list did not load the campaign below"
+    );
+    std::cout << "scroll bar check: Any Mission's Campaign list takes the focus and steps from '"
+              << campaign_labels_[above] << "' to '" << campaign_labels_[above + 1] << "'\n";
     load(Screen::single_player);
 
     // The match's preferences in a window taller than the chrome and in a

@@ -145,6 +145,8 @@ void Runtime::pump_loading_screen() {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             throw std::runtime_error("loading cancelled");
+        // Alt+Enter switches full screen while a match loads too.
+        (void)take_full_screen_event(event);
     }
 }
 

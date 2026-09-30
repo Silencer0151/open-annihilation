@@ -102,6 +102,16 @@ and `app-window-icon` that the embedded one decodes.
   flips (and another player's machine may set), holds any match inside the
   clock, whose time moves on so that nothing is caught up on resuming; a
   save stores the bit as the match holds it. `app-match-clock` tests both.
+- `full_screen.hpp`, `full_screen.cpp`: Alt+Enter (Return or keypad Enter,
+  either Alt key; Option on macOS), which switches the window between full
+  screen and a window on every screen, during the movies and while a match
+  loads; its Enter key's repeats and release reach no screen, even once Alt
+  is let go. While macOS, X11 or Wayland is
+  still switching the window, a second press switches from the mode last
+  asked for. The window opens with `game_window_flags`: full screen on
+  Windows unless `-d` is given. `app-full-screen` tests them, and
+  `--check-frontend-controls` presses Alt+Enter on a menu, over a message
+  box and in a match.
 - `runtime_hud.cpp`, `runtime_match_hud.cpp`: the HUD.
 - `runtime_messages.cpp`: the in-game message log (`Game.chat_lines`) drawn
   over the battlefield, and the speed and message part of `--check-navigation`.

@@ -454,6 +454,8 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
                 stop = true;
                 return false;
             }
+            if (options.hooks.window_event != nullptr)
+                options.hooks.window_event(options.hooks.context, event);
         }
         return true;
     };

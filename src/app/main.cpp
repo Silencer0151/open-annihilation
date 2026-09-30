@@ -4,6 +4,7 @@
 // oa-game entry point: display setup, intro playback and runtime launch.
 #include "oa/app/runtime.hpp"
 #include "oa/app/extension_list.hpp"
+#include "oa/app/full_screen.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
@@ -81,6 +82,8 @@ struct HostDisplay {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     bool active = false;
+    // The mode Alt+Enter last asked for while the intro movies play.
+    FullScreenSwitch full_screen{};
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, and its renderer.
@@ -106,7 +109,7 @@ struct HostDisplay {
             "Open Annihilation",
             options.window_resolution ? options.match_width : kDefaultWindowWidth,
             options.window_resolution ? options.match_height : kDefaultWindowHeight,
-            SDL_WINDOW_RESIZABLE
+            game_window_flags(options.start_full_screen)
         );
         if (window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
@@ -129,7 +132,7 @@ struct HostDisplay {
 };
 
 void play_intro_file(
-    const Options& options, const fs::path& path, bool snapshot, const HostDisplay* host
+    const Options& options, const fs::path& path, bool snapshot, HostDisplay* host
 ) {
     if (!fs::exists(path)) {
         std::cerr << "intro missing: " << path << '\n';
@@ -147,6 +150,13 @@ void play_intro_file(
     if (host != nullptr) {
         playback.window = host->window;
         playback.renderer = host->renderer;
+        // Alt+Enter switches full screen during the movies as it does in the
+        // game.
+        playback.hooks.context = host;
+        playback.hooks.window_event = [](void* context, const SDL_Event& event) {
+            auto& display = *static_cast<HostDisplay*>(context);
+            (void)take_full_screen_event(display.window, display.full_screen, event);
+        };
     }
     if (snapshot)
         playback.snapshot_path = options.snapshot;
@@ -159,7 +169,7 @@ void play_intro_file(
               << " frame(s)" << (result.skipped ? ", skipped\n" : "\n");
 }
 
-void play_intro(const Options& options, const HostDisplay* host) {
+void play_intro(const Options& options, HostDisplay* host) {
     // The game's -c, -n and -y switches skip the movies too. This startup
     // path runs before the preferences load, so the PlayMovie preference
     // does not bring them back; in 3.1c the movies still play under those
@@ -256,6 +266,7 @@ int main(int argc, char** argv) {
         }
         Runtime runtime(std::move(options), assets, extension, display.window, display.renderer);
         runtime.take_video_capture(std::move(capture));
+        runtime.take_full_screen_switch(display.full_screen);
         return runtime.run();
     } catch (const std::exception& error) {
         report_fatal(error.what());

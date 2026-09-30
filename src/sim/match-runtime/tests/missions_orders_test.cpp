@@ -1226,6 +1226,58 @@ void factory_death_kills_the_unit_on_its_pad() {
     }
 }
 
+// A frame nobody builds decays until nothing of it is left, and the step that
+// takes the last of it destroys it as a cancelled build: its metal comes back,
+// it leaves no wreck and counts as nobody's kill.
+void abandoned_frame_decays_away() {
+    Fixture f;
+    constexpr auto cancelled = static_cast<uint8_t>(sim::match_runtime::DeathKind::cancelled);
+    auto& frame = f.spawn(0, tank_type, 60, 60, false);
+    // One decay step takes 11 * build time / energy cost = 0.055 of the
+    // build, so two leave nothing of a frame 0.1 built.
+    frame.record.build_remaining = 0.9F;
+    frame.record.health = 10;
+    const auto metal = frame.record.economy.metal.produced;
+    auto& waiting = f.order(frame.unit_index, get_built_kind);
+    CHECK(step(*f.match, frame, waiting) == 1);
+    CHECK(step(*f.match, frame, waiting) == 1);
+    CHECK(step(*f.match, frame, waiting, 1) == 2);
+    CHECK(frame.record.build_remaining > 0.9F && frame.record.build_remaining < 1.0F);
+    CHECK(!(frame.record.flags & OA_UNIT_FLAG_DEATH_PENDING));
+    CHECK(step(*f.match, frame, waiting, 1) == 2);
+    CHECK(frame.record.build_remaining == 1.0F && frame.record.health < 1);
+    CHECK(frame.record.flags & OA_UNIT_FLAG_DEATH_PENDING);
+    CHECK(frame.record.damage_kind == cancelled);
+    // Each step gives back the metal of the share it takes: 0.1 of 50 in all.
+    const auto refunded = frame.record.economy.metal.produced - metal;
+    CHECK(refunded > 4.99F && refunded < 5.01F);
+
+    // The sweep then tears the frame down.
+    struct Deaths {
+        std::vector<sim::match_runtime::KillOutcome> outcomes;
+    } deaths;
+
+    sim::match_runtime::EventHooks hooks{};
+    hooks.context = &deaths;
+    hooks.unit_died = [](void* context,
+                         const oa::World&,
+                         uint16_t,
+                         const sim::match_runtime::KillOutcome& outcome,
+                         bool) { static_cast<Deaths*>(context)->outcomes.push_back(outcome); };
+    f.match->event_hooks = hooks;
+    std::array<uint8_t, 10> allies{};
+    allies[0] = 1;
+    f.match->configure_outcomes(0, allies, false);
+    const auto losses = f.match->state().game.players[0].losses;
+    ++f.match->state().game.tick;
+    f.match->tick();
+    CHECK(frame.record.type_index == 0 && !(frame.record.flags & OA_UNIT_FLAG_LIVE));
+    CHECK(deaths.outcomes.size() == 1);
+    CHECK(static_cast<uint8_t>(deaths.outcomes[0].kind) == cancelled);
+    CHECK(deaths.outcomes[0].killed_percent == 0 && deaths.outcomes[0].wreck_level == 0);
+    CHECK(f.match->state().game.players[0].losses == losses);
+}
+
 int main() {
     try {
         stop_and_state_orders();
@@ -1234,6 +1286,7 @@ int main() {
         guard_and_teleport();
         construction_orders();
         factory_orders();
+        abandoned_frame_decays_away();
         factory_queue_counts();
         queued_order_cancels_its_match();
         built_factory_produces();

@@ -15,6 +15,26 @@ sim::unit_spawn::Slot& TickHost::HealthHost::slot(const sim::unit_health::Unit& 
     return match_.world().slots[u.identity];
 }
 
+void TickHost::HealthHost::write_stand_in(const sim::unit_health::Unit& u) {
+    if (&u != stand_in_)
+        return;
+    auto& s = slot(u);
+    s.unit->health = u.health;
+    s.unit->flags = u.flags;
+    s.unit->events = u.events;
+    s.record.build_remaining = u.build_remaining;
+}
+
+void TickHost::HealthHost::read_stand_in(sim::unit_health::Unit& u) {
+    if (&u != stand_in_)
+        return;
+    const auto& s = slot(u);
+    u.health = s.unit->health;
+    u.flags = s.unit->flags;
+    u.events = s.unit->events;
+    u.build_remaining = s.record.build_remaining;
+}
+
 void TickHost::HealthHost::store() {
     economy_.energy.requested = debit_.requested;
     economy_.energy.accepted = debit_.accepted;
@@ -39,7 +59,9 @@ void TickHost::HealthHost::refund_metal(sim::unit_health::Unit& target, float am
 void TickHost::HealthHost::complete_construction(
     sim::unit_health::Unit& builder, sim::unit_health::Unit& target
 ) {
+    write_stand_in(target);
     match_.link_built_unit(slot(target), slot(builder));
+    read_stand_in(target);
 }
 
 void Match::link_built_unit(sim::unit_spawn::Slot& unit, sim::unit_spawn::Slot& builder) {
@@ -84,6 +106,7 @@ void TickHost::HealthHost::apply_health_event(
     const sim::unit_health::Unit* source,
     const sim::unit_health::HealthEvent& event
 ) {
+    write_stand_in(target);
     match_.apply_damage_event(
         this->slot(target),
         source ? &this->slot(*source) : nullptr,
@@ -91,6 +114,7 @@ void TickHost::HealthHost::apply_health_event(
         event.kind,
         event.direction
     );
+    read_stand_in(target);
 }
 
 bool TickHost::HealthHost::target_owner_present(const sim::unit_health::Unit& u) {

@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The setup screens' options clicked through the SDL presenter as a player
-// does: each click changes its setting and what the screen shows for it
-// before Start, the help line follows the pointer, and the chosen options tab
-// shows pressed.
+// MAINMENU.GUI's buttons under the pointer and held down, then the setup
+// screens' options clicked through the SDL presenter as a player does: each
+// click changes its setting and what the screen shows for it before Start,
+// the help line follows the pointer, and the chosen options tab shows pressed.
+// Alt+Enter switches the window to full screen and back on a menu and in a
+// match.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/frontend_dialogs.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -36,6 +39,10 @@ constexpr auto kRight = static_cast<uint8_t>(SDL_BUTTON_RIGHT);
 // A canvas point no gadget of the setup screens covers.
 constexpr int32_t kParkX = 0;
 constexpr int32_t kParkY = 0;
+// The width of the message box Alt+Enter is pressed over, in canvas pixels.
+constexpr int32_t kMessageBoxWidth = 300;
+// A text list's rows start this many pixels below its top.
+constexpr int32_t kListRowsTop = 2;
 
 [[noreturn]] void fail(std::string_view what) {
     throw std::runtime_error("frontend controls check: " + std::string(what));
@@ -96,6 +103,7 @@ std::string_view controller_caption(int32_t controller) {
 } // namespace
 
 void Runtime::check_frontend_controls() {
+    namespace dialogs = oa::ui::frontend_dialogs;
     if (sdl_.renderer == nullptr || sdl_.window == nullptr)
         fail("needs the SDL renderer");
     bool running = true;
@@ -110,7 +118,11 @@ void Runtime::check_frontend_controls() {
         if (!options_.snapshot.empty())
             write_ppm(step_snapshot(options_.snapshot, step), frame_without_cursor());
     };
-    const auto send = [&](SDL_EventType type, int32_t x, int32_t y, uint8_t button) {
+    const auto send = [&](SDL_EventType type,
+                          int32_t x,
+                          int32_t y,
+                          uint8_t button,
+                          uint8_t clicks = 1) {
         float window_x = 0.0F;
         float window_y = 0.0F;
         require(
@@ -129,7 +141,7 @@ void Runtime::check_frontend_controls() {
             event.button.windowID = SDL_GetWindowID(sdl_.window);
             event.button.button = button;
             event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-            event.button.clicks = 1;
+            event.button.clicks = clicks;
             event.button.x = window_x;
             event.button.y = window_y;
         }
@@ -262,6 +274,62 @@ void Runtime::check_frontend_controls() {
                 std::to_string(stages) + " clicks"
         );
     };
+
+    // MAINMENU.GUI's buttons under the pointer: each is drawn as it is without
+    // it. A press held over a button sinks it; it rises while the pointer is
+    // off it and sinks again when the pointer comes back, and a release away
+    // from it chooses nothing.
+    require(screen_ == Screen::main_menu, "did not start on MAINMENU.GUI");
+    // The frame as shown, the pointer drawn, for <stem>-<step>.ppm.
+    const auto shown_snapshot = [&](std::string_view step) {
+        if (options_.snapshot.empty())
+            return;
+        rebuild_surface();
+        write_ppm(step_snapshot(options_.snapshot, step), surface_);
+    };
+    const auto idle_menu = frame();
+    std::vector<std::string> menu_buttons;
+    for (const auto& gadget : resources_.layout.gadgets) {
+        const auto* fields = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+        if (gadget.common.type == oa::ui::gui_layout::GadgetType::button && fields != nullptr &&
+            !fields->grayed_out)
+            menu_buttons.push_back(gadget.common.name);
+    }
+    require(!menu_buttons.empty(), "MAINMENU.GUI has no buttons");
+    for (const auto& name : menu_buttons) {
+        hover(name);
+        const auto pixels = repainted(idle_menu, frame_without_cursor(), name);
+        std::cout << "frontend controls check: over " << name << ", " << pixels
+                  << " pixels of it redrawn\n";
+        expect(pixels == 0, name + " changes under the pointer");
+        if (name == menu_buttons.front())
+            shown_snapshot("menu-hover");
+    }
+    {
+        const auto& name = menu_buttons.front();
+        const auto box = box_of(name);
+        const auto x = box.x + box.width / 2;
+        const auto y = box.y + box.height / 2;
+        send(SDL_EVENT_MOUSE_MOTION, x, y, 0);
+        send(SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, kLeft);
+        const auto held = repainted(idle_menu, frame_without_cursor(), name);
+        shown_snapshot("menu-held");
+        send(SDL_EVENT_MOUSE_MOTION, kParkX, kParkY, 0);
+        const auto held_off = repainted(idle_menu, frame_without_cursor(), name);
+        shown_snapshot("menu-held-off");
+        send(SDL_EVENT_MOUSE_MOTION, x, y, 0);
+        const auto held_back = repainted(idle_menu, frame_without_cursor(), name);
+        send(SDL_EVENT_MOUSE_MOTION, kParkX, kParkY, 0);
+        send(SDL_EVENT_MOUSE_BUTTON_UP, kParkX, kParkY, kLeft);
+        idle_tick();
+        std::cout << "frontend controls check: " << name << " held " << held
+                  << " pixels redrawn, off it " << held_off << ", back on it " << held_back << '\n';
+        expect(held != 0, name + " held under the pointer is not drawn pressed");
+        expect(held_off == 0, name + " stays pressed with the pointer off it");
+        expect(held_back != 0, name + " is not drawn pressed when the pointer comes back");
+        require(screen_ == Screen::main_menu, name + " released away from it was chosen");
+        expect(repainted(idle_menu, frame(), name) == 0, name + " stays pressed after the release");
+    }
 
     // SKIRMISH.GUI.
     exercise_click(menu::resource_name(menu::Button::single_player));
@@ -577,6 +645,140 @@ void Runtime::check_frontend_controls() {
         snapshot(side == 1U ? "newgame-core" : "newgame-arm");
         before = std::move(after);
     }
+
+    // The Campaign list of the chosen side's campaigns: a click on another
+    // campaign's row selects it and shows it selected without leaving the
+    // screen, Down and Up move the selection a row, and a double-click on a
+    // row opens that campaign's first briefing, as Start does.
+    const auto campaign_rows = [&]() -> const oa::ui::gui_input::ScrollList& {
+        auto* scrolls = frontend_scrolls();
+        const auto index =
+            static_cast<std::size_t>(&gadget_named("Campaign") - resources_.layout.gadgets.data());
+        const auto* bound =
+            scrolls != nullptr ? renderer::find_layout_list(*scrolls, index) : nullptr;
+        if (bound == nullptr)
+            fail("NEWGAME.GUI's Campaign list is not bound");
+        return bound->list;
+    };
+    // The canvas point in the middle of a shown row of the Campaign list.
+    const auto campaign_row_point = [&](std::size_t row) {
+        const auto& rows = campaign_rows();
+        const auto pitch =
+            oa::ui::gui_input::scroll_list_pitch(rows, frontend_scrolls()->line_height);
+        const auto box = box_of("Campaign");
+        const auto shown = static_cast<int32_t>(row) - rows.first;
+        return std::pair{box.x + box.width / 2, box.y + kListRowsTop + shown * pitch + pitch / 2};
+    };
+    const auto click_campaign_row = [&](std::size_t row, uint8_t clicks) {
+        const auto [x, y] = campaign_row_point(row);
+        send(SDL_EVENT_MOUSE_MOTION, x, y, 0);
+        for (uint8_t click = 1; click <= clicks; ++click) {
+            send(SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, kLeft, click);
+            send(SDL_EVENT_MOUSE_BUTTON_UP, x, y, kLeft, click);
+        }
+        idle_tick();
+    };
+    const auto press_key = [&](SDL_Keycode code, SDL_Scancode scancode) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = code;
+        event.key.scancode = scancode;
+        event.key.down = true;
+        dispatch_event(event, running);
+        idle_tick();
+    };
+    const auto campaigns = campaign_labels_.size();
+    std::cout << "frontend controls check: NEWGAME.GUI lists " << campaigns << " campaigns:";
+    for (const auto& label : campaign_labels_)
+        std::cout << " '" << label << "'";
+    std::cout << '\n';
+    require(campaigns > 2, "NEWGAME.GUI does not list the installed campaigns");
+    // The first shown row that names another campaign than the selected row.
+    const auto page_rows = static_cast<std::size_t>(
+        oa::ui::gui_input::scroll_list_page_rows(campaign_rows(), frontend_scrolls()->line_height)
+    );
+    const auto first_shown = static_cast<std::size_t>(std::max<int16_t>(0, campaign_rows().first));
+    const auto shown_end = std::min(campaigns, first_shown + page_rows);
+    auto picked = first_shown;
+    while (picked < shown_end &&
+           tdf_names_equal(campaign_labels_[picked], campaign_labels_[selected_campaign_index_]))
+        ++picked;
+    require(
+        picked < shown_end && picked + 1 < campaigns,
+        "the Campaign list shows no other campaign with a row below it"
+    );
+    const auto shows_campaign = [&](std::size_t row) {
+        return selected_campaign_index_ == row &&
+               campaign_rows().selection == static_cast<int16_t>(row);
+    };
+    const auto& picked_label = campaign_labels_[picked];
+    before = frame();
+    click_campaign_row(picked, 1);
+    auto after = frame();
+    const auto list_pixels = repainted(before, after, "Campaign");
+    std::cout << "frontend controls check: a click on '" << picked_label << "' selects row "
+              << selected_campaign_index_ << ", " << list_pixels << " list pixels repainted\n";
+    expect(screen_ == Screen::new_campaign, "a click on '" + picked_label + "' left NEWGAME.GUI");
+    expect(shows_campaign(picked), "a click on '" + picked_label + "' did not select it");
+    expect(list_pixels != 0, "the Campaign list was not repainted after a click on another row");
+    snapshot("newgame-campaign-picked");
+    press_key(SDLK_DOWN, SDL_SCANCODE_DOWN);
+    expect(shows_campaign(picked + 1), "Down did not select the campaign below the selected one");
+    press_key(SDLK_UP, SDL_SCANCODE_UP);
+    expect(shows_campaign(picked), "Up did not select the campaign above the selected one");
+    // A pressed button takes the focus from the list: Down after Difficulty
+    // leaves the chosen campaign alone. Three presses bring the difficulty
+    // back round.
+    for (std::size_t step = 0; step < kDifficultyCaptions.size(); ++step) {
+        click("Difficulty");
+        press_key(SDLK_DOWN, SDL_SCANCODE_DOWN);
+        expect(shows_campaign(picked), "Down after Difficulty moved the Campaign list");
+    }
+    // CampaignKnob, shown when the campaigns overflow the list, scrolls it
+    // with its forward arrow, a knob position at a time, and a click on the
+    // row that brings into view selects that campaign.
+    if (const auto knob = check_scroll_bar("CampaignKnob").bar; knob.active) {
+        const auto first = campaign_rows().first;
+        for (int32_t step = 0; step < knob.range && campaign_rows().first == first; ++step)
+            click_check_arrow("CampaignKnob", true);
+        idle_tick();
+        const auto last_shown = std::min(
+            campaigns - 1, static_cast<std::size_t>(campaign_rows().first) + page_rows - 1
+        );
+        std::cout << "frontend controls check: CampaignKnob's forward arrow shows row "
+                  << campaign_rows().first << " first, '" << campaign_labels_[last_shown]
+                  << "' last\n";
+        expect(
+            campaign_rows().first == first + 1,
+            "CampaignKnob's forward arrow did not scroll the Campaign list"
+        );
+        click_campaign_row(last_shown, 1);
+        expect(
+            shows_campaign(last_shown),
+            "a click on '" + campaign_labels_[last_shown] + "' scrolled into view did not select it"
+        );
+        snapshot("newgame-campaign-scrolled");
+    }
+    const auto& started_label = campaign_labels_[picked + 1];
+    click_campaign_row(picked + 1, 2);
+    const char* loaded = oa::data::campaign::campaign_name_if_loaded(&campaign_object());
+    std::cout << "frontend controls check: a double-click on '" << started_label
+              << "' shows screen " << static_cast<int>(screen_) << " for '"
+              << (loaded != nullptr ? loaded : "") << "'\n";
+    require(
+        screen_ == Screen::briefing,
+        "a double-click on '" + started_label + "' did not open its briefing"
+    );
+    expect(
+        loaded != nullptr && tdf_names_equal(loaded, started_label),
+        "a double-click on '" + started_label + "' did not start that campaign"
+    );
+    snapshot("newgame-campaign-briefing");
+    click("PrevMenu");
+    require(
+        screen_ == Screen::new_campaign, "the briefing's PrevMenu did not go back to NEWGAME.GUI"
+    );
     click("PrevMenu");
     require(screen_ == Screen::single_player, "Previous Menu did not leave NEWGAME.GUI");
 
@@ -678,36 +880,166 @@ void Runtime::check_frontend_controls() {
     click("CANCEL");
     require(screen_ == Screen::single_player, "CANCEL did not leave the options");
 
-    // Alt+Enter switches the window to full screen and back again.
-    const auto alt_enter = [&] {
-        SDL_Event press{};
-        press.type = SDL_EVENT_KEY_DOWN;
-        press.key.windowID = SDL_GetWindowID(sdl_.window);
-        press.key.key = SDLK_RETURN;
-        press.key.scancode = SDL_SCANCODE_RETURN;
-        press.key.mod = SDL_KMOD_LALT;
-        press.key.down = true;
-        dispatch_event(press, running);
-        SDL_Event release = press;
-        release.type = SDL_EVENT_KEY_UP;
-        release.key.down = false;
-        dispatch_event(release, running);
+    // Alt+Enter switches the window to full screen and back, on a menu and
+    // in a match: Return and keypad Enter alike, a held key's repeats
+    // switching nothing and reaching no screen, and the screen following the
+    // window's new size.
+    const auto key = [&](SDL_EventType type, SDL_Keycode code, SDL_Keymod mod, bool repeat) {
+        SDL_Event event{};
+        event.type = type;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = code;
+        event.key.scancode =
+            code == SDLK_KP_ENTER ? SDL_SCANCODE_KP_ENTER : SDL_GetScancodeFromKey(code, nullptr);
+        event.key.mod = mod;
+        event.key.repeat = repeat;
+        event.key.down = type == SDL_EVENT_KEY_DOWN;
+        dispatch_event(event, running);
+    };
+    // The window's own events (its new size, full screen entered or left)
+    // reach the game as its loop pumps them.
+    const auto settle = [&] {
         (void)SDL_SyncWindow(sdl_.window);
+        SDL_Event event{};
+        while (SDL_PollEvent(&event))
+            dispatch_event(event, running);
+    };
+    // Alt+Enter pressed, held for some repeats and released.
+    const auto alt_enter = [&](SDL_Keycode code, int repeats) {
+        key(SDL_EVENT_KEY_DOWN, code, SDL_KMOD_LALT, false);
+        for (int repeat = 0; repeat < repeats; ++repeat)
+            key(SDL_EVENT_KEY_DOWN, code, SDL_KMOD_LALT, true);
+        key(SDL_EVENT_KEY_UP, code, SDL_KMOD_LALT, false);
+        settle();
     };
     const auto full_screen = [&] {
         return (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0;
     };
-    const bool started_full_screen = full_screen();
-    alt_enter();
-    const bool switched = full_screen() != started_full_screen;
-    alt_enter();
-    const bool switched_back = full_screen() == started_full_screen;
-    expect(switched, "Alt+Enter did not switch the window's mode");
-    expect(switched_back, "a second Alt+Enter did not switch it back");
-    expect(screen_ == Screen::single_player, "Alt+Enter left the screen it was pressed on");
-    if (switched && switched_back)
-        std::cout << "frontend controls check: Alt+Enter switched to "
-                  << (started_full_screen ? "a window" : "full screen") << " and back\n";
+    const auto window_size = [&] {
+        int width = 0;
+        int height = 0;
+        (void)SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+        return std::to_string(width) + 'x' + std::to_string(height);
+    };
+    // The screen is laid out at the window's size: a match's frame takes
+    // the window's pixels, and a menu is drawn to the whole window.
+    const auto follows_window = [&] {
+        int width = 0;
+        int height = 0;
+        int output_width = 0;
+        int output_height = 0;
+        (void)SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+        (void)SDL_GetRenderOutputSize(sdl_.renderer, &output_width, &output_height);
+        if (output_width != width || output_height != height)
+            return false;
+        return screen_ != Screen::match ||
+               (match_layout_.width == width && match_layout_.height == height &&
+                output_texture_w_ == width && output_texture_h_ == height);
+    };
+    // The window's picture as it is presented, at the window's size.
+    const auto snapshot_window = [&](std::string_view step) {
+        if (options_.snapshot.empty())
+            return;
+        renderer::Surface presented;
+        capture_frame_ = &presented;
+        render();
+        capture_frame_ = nullptr;
+        write_ppm(step_snapshot(options_.snapshot, step), presented);
+    };
+    const auto switches_twice = [&](std::string_view where, Screen screen) {
+        const bool started_full_screen = full_screen();
+        const auto started_size = window_size();
+        alt_enter(SDLK_RETURN, 3);
+        const auto switched_size = window_size();
+        expect(
+            full_screen() != started_full_screen,
+            "Alt+Enter did not switch the window's mode " + std::string(where)
+        );
+        expect(
+            follows_window(),
+            "the screen does not follow the window's size " + switched_size + ' ' +
+                std::string(where)
+        );
+        const std::string step = where == "on a menu" ? "alt-enter-menu" : "alt-enter-match";
+        snapshot_window(step + "-switched");
+        alt_enter(SDLK_KP_ENTER, 3);
+        expect(
+            full_screen() == started_full_screen,
+            "Alt+keypad Enter did not switch the window back " + std::string(where)
+        );
+        expect(
+            window_size() == started_size,
+            "the window came back at " + window_size() + ", not " + started_size + ' ' +
+                std::string(where)
+        );
+        expect(
+            follows_window(),
+            "the screen does not follow the window's size " + window_size() + " back " +
+                std::string(where)
+        );
+        expect(
+            screen_ == screen, "Alt+Enter left the screen it was pressed on " + std::string(where)
+        );
+        snapshot_window(step + "-back");
+        std::cout << "frontend controls check: Alt+Enter " << where << " switched to "
+                  << (started_full_screen ? "a window" : "full screen") << " (" << started_size
+                  << " to " << switched_size << ") and back\n";
+    };
+    switches_twice("on a menu", Screen::single_player);
+    // Over a message box, a held Alt+Enter switches the window and leaves the
+    // box open: its repeats never press OK, the box's Enter default.
+    show_frontend_message("Alt+Enter", kMessageBoxWidth, 1, 0);
+    require(dialogs::dialog_count() == 1, "the message box did not open");
+    const bool before_box_switch = full_screen();
+    alt_enter(SDLK_RETURN, 3);
+    expect(full_screen() != before_box_switch, "Alt+Enter did not switch over a message box");
+    expect(dialogs::dialog_count() == 1, "a held Alt+Enter pressed the message box's OK");
+    snapshot_window("alt-enter-box");
+    // Alt let go of before Enter: Enter's repeats and its release still
+    // belong to the switch, and press no OK either.
+    key(SDL_EVENT_KEY_DOWN, SDLK_RETURN, SDL_KMOD_LALT, false);
+    for (int repeat = 0; repeat < 3; ++repeat)
+        key(SDL_EVENT_KEY_DOWN, SDLK_RETURN, SDL_KMOD_NONE, true);
+    key(SDL_EVENT_KEY_UP, SDLK_RETURN, SDL_KMOD_NONE, false);
+    settle();
+    expect(
+        full_screen() == before_box_switch,
+        "a second Alt+Enter over a message box did not switch back"
+    );
+    expect(
+        dialogs::dialog_count() == 1,
+        "Enter held on after Alt was let go pressed the message box's OK"
+    );
+    key(SDL_EVENT_KEY_DOWN, SDLK_RETURN, SDL_KMOD_NONE, false);
+    key(SDL_EVENT_KEY_UP, SDLK_RETURN, SDL_KMOD_NONE, false);
+    expect(dialogs::dialog_count() == 0, "Enter did not close the message box");
+    require(screen_ == Screen::single_player, "the message box left SINGLE.GUI");
+
+    click(entry::resource_name(entry::Button::skirmish));
+    require(screen_ == Screen::skirmish, "Skirmish did not open SKIRMISH.GUI");
+    exercise_click(skirmish::resource_name(skirmish::Button::start));
+    require(screen_ == Screen::match && match_, "Start did not enter a match");
+    apply_output_mode();
+    switches_twice("in a match", Screen::match);
+    expect(!chat_composing_, "a held Alt+Enter opened the chat line in a match");
+    // With the chat line open, Alt+Enter switches the window and leaves the
+    // line as it was.
+    key(SDL_EVENT_KEY_DOWN, SDLK_RETURN, SDL_KMOD_NONE, false);
+    key(SDL_EVENT_KEY_UP, SDLK_RETURN, SDL_KMOD_NONE, false);
+    require(chat_composing_, "Enter did not open the chat line");
+    const bool before_chat_switch = full_screen();
+    alt_enter(SDLK_RETURN, 3);
+    expect(full_screen() != before_chat_switch, "Alt+Enter did not switch over the chat line");
+    expect(
+        chat_composing_ && chat_buffer_.empty(), "Alt+Enter submitted or changed the open chat line"
+    );
+    alt_enter(SDLK_RETURN, 0);
+    expect(
+        full_screen() == before_chat_switch,
+        "a second Alt+Enter over the chat line did not switch back"
+    );
+    key(SDL_EVENT_KEY_DOWN, SDLK_ESCAPE, SDL_KMOD_NONE, false);
+    expect(!chat_composing_, "Escape did not close the chat line");
 
     if (!problems.empty()) {
         std::string report;
