@@ -112,6 +112,46 @@ described in [tests/README.md](tests/README.md), and damaged files) and
 `audio-music-decoder-data`, which decodes every file of the installed
 game's music folder.
 
+## Sound output
+
+Every sound the game plays goes through `oa-audio-output`
+(`oa/audio/sound_output.hpp`): `sound_output()` is the process's
+`SoundOutput`, which opens `OutputStream`s, each with its own sample format
+(8-bit unsigned, 16- or 32-bit signed, 32-bit float), channel count and
+rate. A stream opens paused; it plays what is `put` to it, or asks its
+`StreamFeed` for more on the output's thread with the stream locked, and has
+its own gain, pause, `clear`, `flush` and the queued and converted byte
+counts. `SdlWavPlayer`, the sound-device sink (`sdl_audio_sink`) and the
+music device (`sdl_music`) play through it, and start and stop it where they
+used to start and stop SDL's audio.
+
+Two outputs exist (`oa/audio/sound_output_backends.hpp`):
+
+- SDL's (`sdl_sound_output.cpp`), in every build with SDL: each stream is an
+  SDL audio stream on a logical device of its own, as before, so SDL
+  converts and mixes them and the sound is unchanged. `start` and `stop`
+  are SDL's audio subsystem, counted as `SDL_InitSubSystem` counts.
+- The wave-out mixer (`wave_out_output.cpp`), on Windows: a
+  `BufferedOutput` that mixes the streams with `SoftwareMixer` into four
+  buffers of 1024 frames (16-bit stereo, 44100 Hz, about 93 ms) on the
+  Windows wave-out device of
+  [src/platform/sound-device](../platform/sound-device/README.md), refilled
+  in ring order by the device's thread as each one plays out. A build
+  without SDL uses it; a Windows build with SDL uses it when the
+  environment variable `OA_SOUND_OUTPUT` is `waveout`.
+
+`SoftwareMixer` scales each stream's samples to -1..1, plays one channel on
+both sides (more than two play their first two), converts the rate with
+`Resampler`, applies the gain, sums the streams, clamps the sum to -1..1 and
+rounds it to 16 bits by 32767. `BufferedOutput` takes the device through
+its hooks (`oa::platform::sound_device::Hooks`), so its ring is tested on a
+device the test plays by hand.
+
+Tests: `audio-output` (the formats, gains, pausing, clearing, feeds and rate
+conversion of the mixer; the buffered output's ring, its start count and a
+refused buffer) and on Windows `audio-output-wave-out`, which plays a tone
+on the system's device, or is skipped where there is none.
+
 ## Offline mix
 
 `oa-audio-offline-mix` (`oa/audio/offline_mix.hpp`, namespace

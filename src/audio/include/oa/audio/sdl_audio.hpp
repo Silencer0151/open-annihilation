@@ -31,7 +31,7 @@ class SdlWavPlayer {
     ///
     /// @param selection Result of select(); must have status selected.
     /// @param[out] error Reason for a missing or invalid WAV or an unavailable
-    ///             SDL device; cleared on success.
+    ///             sound device; cleared on success.
     /// @return True when the sound started.
     [[nodiscard]] bool play(const Selection& selection, std::string& error);
 
@@ -119,12 +119,13 @@ class SdlWavPlayer {
 
 namespace oa::audio {
 
-// SDL3 implementation of the mixer's sound-device boundary. Each buffer is
-// an SDL audio stream fed from its PCM image on the audio thread; the play
-// position is the next byte handed to SDL. 3D placement is not rendered.
+// The mixer's sound-device boundary over the sound output
+// (oa/audio/sound_output.hpp). Each buffer is a stream fed from its PCM
+// image on the output's thread; the play position is the next byte handed
+// to the stream. 3D placement is not rendered.
 struct SdlAudioDevice;
 
-/// Creates an SDL sound device; SDL audio opens only through the sink's open_device.
+/// Creates a sound device over the sound output, which starts only through the sink's open_device.
 ///
 /// @return The device.
 [[nodiscard]] SdlAudioDevice* sdl_audio_device_create();

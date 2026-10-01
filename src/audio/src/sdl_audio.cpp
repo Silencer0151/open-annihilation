@@ -3,6 +3,7 @@
 
 #include "oa/audio/sdl_audio.hpp"
 
+#include "oa/audio/sound_output.hpp"
 #include "oa/audio/spatial_gain.hpp"
 
 #include <SDL3/SDL.h>
@@ -27,7 +28,7 @@ struct LoopingTrack {
     std::size_t offset = 0;
 };
 
-void SDLCALL refill_loop(void* userdata, SDL_AudioStream* stream, int additional, int) {
+void refill_loop(void* userdata, OutputStream& stream, int32_t additional) {
     auto* loop = static_cast<LoopingTrack*>(userdata);
     if (loop == nullptr || loop->pcm.empty() || additional <= 0)
         return;
@@ -36,7 +37,7 @@ void SDLCALL refill_loop(void* userdata, SDL_AudioStream* stream, int additional
             loop->offset = 0;
         const auto remain = loop->pcm.size() - loop->offset;
         const auto put = std::min(remain, static_cast<std::size_t>(additional));
-        if (!SDL_PutAudioStreamData(stream, loop->pcm.data() + loop->offset, static_cast<int>(put)))
+        if (!stream.put(loop->pcm.data() + loop->offset, static_cast<int32_t>(put)))
             return;
         loop->offset += put;
         additional -= static_cast<int>(put);
@@ -44,34 +45,59 @@ void SDLCALL refill_loop(void* userdata, SDL_AudioStream* stream, int additional
 }
 
 struct PlayingSound {
-    SDL_AudioStream* stream{};
+    std::unique_ptr<OutputStream> stream;
     float level{1.0F}; // the voice volume relative to the near volume
 };
 
 struct SdlWavPlayer::Impl {
     const oa::AssetStore& assets;
     std::vector<PlayingSound> streams;
-    SDL_AudioStream* looping = nullptr;
+    std::unique_ptr<OutputStream> looping;
     LoopingTrack loop_track;
-    SDL_AudioStream* stream = nullptr; // the one streamed sound, played once
+    std::unique_ptr<OutputStream> stream; // the one streamed sound, played once
     uint32_t wave_out_volume{full_wave_out_volume};
     uint32_t fx_volume{default_fx_volume};
 
     explicit Impl(const oa::AssetStore& value) : assets(value) {}
 
     ~Impl() {
-        if (looping != nullptr)
-            SDL_DestroyAudioStream(looping);
-        if (stream != nullptr)
-            SDL_DestroyAudioStream(stream);
-        for (auto& sound : streams)
-            SDL_DestroyAudioStream(sound.stream);
+        looping.reset();
+        stream.reset();
+        streams.clear();
     }
 };
 
 namespace {
 
 constexpr uint64_t milliseconds_per_second = 1000;
+
+// The stream format of samples SDL decoded from a WAV.
+bool stream_format(const SDL_AudioSpec& spec, StreamFormat& format, std::string& error) {
+    switch (spec.format) {
+    case SDL_AUDIO_U8:
+        format.sample = SampleFormat::u8;
+        break;
+    case SDL_AUDIO_S16LE:
+        format.sample = SampleFormat::s16;
+        break;
+    case SDL_AUDIO_S32LE:
+        format.sample = SampleFormat::s32;
+        break;
+    case SDL_AUDIO_F32LE:
+        format.sample = SampleFormat::f32;
+        break;
+    default:
+        error = "unsupported WAV sample format";
+        return false;
+    }
+    if (spec.channels <= 0 || spec.channels > max_stream_channels || spec.freq <= 0) {
+        error = "unsupported WAV channels or rate";
+        return false;
+    }
+    format.channels = static_cast<uint8_t>(spec.channels);
+    format.rate = static_cast<uint32_t>(spec.freq);
+    return true;
+}
 
 // Decodes a WAV the asset store holds; the caller frees `wav` with SDL_free.
 bool load_wav(
@@ -167,29 +193,29 @@ bool SdlWavPlayer::play_placed(
     }
     const float level =
         std::pow(10.0F, static_cast<float>(volume - oa::audio::volume_near) / 2000.0F);
-    SDL_AudioStream* stream =
-        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    StreamFormat format{};
+    if (!stream_format(spec, format, error)) {
+        SDL_free(wav);
+        return false;
+    }
+    SoundOutput& output = sound_output();
+    auto stream = output.open_stream(format, nullptr, nullptr, error);
     if (!stream) {
-        error = SDL_GetError();
         SDL_free(wav);
         return false;
     }
-    if (!SDL_SetAudioStreamGain(
-            stream, output_gain(impl_->wave_out_volume, impl_->fx_volume) * level
-        )) {
-        error = SDL_GetError();
-        SDL_DestroyAudioStream(stream);
+    if (!stream->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume) * level)) {
+        error = output.last_error();
         SDL_free(wav);
         return false;
     }
-    const bool queued = SDL_PutAudioStreamData(stream, wav, static_cast<int>(length));
+    const bool queued = stream->put(wav, static_cast<int32_t>(length));
     SDL_free(wav);
-    if (!queued || !SDL_FlushAudioStream(stream) || !SDL_ResumeAudioStreamDevice(stream)) {
-        error = SDL_GetError();
-        SDL_DestroyAudioStream(stream);
+    if (!queued || !stream->flush() || !stream->resume()) {
+        error = output.last_error();
         return false;
     }
-    impl_->streams.push_back({stream, level});
+    impl_->streams.push_back({std::move(stream), level});
     error.clear();
     return true;
 }
@@ -204,19 +230,20 @@ bool SdlWavPlayer::start_loop_resource(std::string_view resource, std::string& e
     impl_->loop_track.pcm.assign(wav, wav + length);
     impl_->loop_track.offset = 0;
     SDL_free(wav);
-    impl_->looping = SDL_OpenAudioDeviceStream(
-        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, refill_loop, &impl_->loop_track
-    );
-    if (impl_->looping == nullptr) {
-        error = SDL_GetError();
+    StreamFormat format{};
+    if (!stream_format(spec, format, error)) {
         impl_->loop_track.pcm.clear();
         return false;
     }
-    if (!SDL_SetAudioStreamGain(
-            impl_->looping, output_gain(impl_->wave_out_volume, impl_->fx_volume)
-        ) ||
-        !SDL_ResumeAudioStreamDevice(impl_->looping)) {
-        error = SDL_GetError();
+    SoundOutput& output = sound_output();
+    impl_->looping = output.open_stream(format, refill_loop, &impl_->loop_track, error);
+    if (impl_->looping == nullptr) {
+        impl_->loop_track.pcm.clear();
+        return false;
+    }
+    if (!impl_->looping->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume)) ||
+        !impl_->looping->resume()) {
+        error = output.last_error();
         stop_loop();
         return false;
     }
@@ -225,10 +252,7 @@ bool SdlWavPlayer::start_loop_resource(std::string_view resource, std::string& e
 }
 
 void SdlWavPlayer::stop_loop() noexcept {
-    if (impl_->looping != nullptr) {
-        SDL_DestroyAudioStream(impl_->looping);
-        impl_->looping = nullptr;
-    }
+    impl_->looping.reset();
     impl_->loop_track = {};
 }
 
@@ -239,10 +263,14 @@ bool SdlWavPlayer::play_stream(std::string_view resource, uint32_t delay_ms, std
     Uint32 length = 0;
     if (!load_wav(impl_->assets, resource, spec, wav, length, error))
         return false;
-    SDL_AudioStream* stream =
-        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    StreamFormat format{};
+    if (!stream_format(spec, format, error)) {
+        SDL_free(wav);
+        return false;
+    }
+    SoundOutput& output = sound_output();
+    auto stream = output.open_stream(format, nullptr, nullptr, error);
     if (stream == nullptr) {
-        error = SDL_GetError();
         SDL_free(wav);
         return false;
     }
@@ -250,42 +278,33 @@ bool SdlWavPlayer::play_stream(std::string_view resource, uint32_t delay_ms, std
     const auto delay_frames = static_cast<std::size_t>(
         static_cast<uint64_t>(spec.freq) * delay_ms / milliseconds_per_second
     );
-    const std::vector<Uint8> silence(
-        delay_frames * static_cast<std::size_t>(SDL_AUDIO_FRAMESIZE(spec)),
-        static_cast<Uint8>(SDL_GetSilenceValueForFormat(spec.format))
+    const std::vector<uint8_t> silence(
+        delay_frames * frame_bytes(format), silence_byte(format.sample)
     );
     const bool queued =
-        SDL_SetAudioStreamGain(stream, output_gain(impl_->wave_out_volume, impl_->fx_volume)) &&
-        (silence.empty() ||
-         SDL_PutAudioStreamData(stream, silence.data(), static_cast<int>(silence.size()))) &&
-        SDL_PutAudioStreamData(stream, wav, static_cast<int>(length)) &&
-        SDL_FlushAudioStream(stream) && SDL_ResumeAudioStreamDevice(stream);
+        stream->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume)) &&
+        (silence.empty() || stream->put(silence.data(), static_cast<int32_t>(silence.size()))) &&
+        stream->put(wav, static_cast<int32_t>(length)) && stream->flush() && stream->resume();
     SDL_free(wav);
     if (!queued) {
-        error = SDL_GetError();
-        SDL_DestroyAudioStream(stream);
+        error = output.last_error();
         return false;
     }
-    impl_->stream = stream;
+    impl_->stream = std::move(stream);
     error.clear();
     return true;
 }
 
 void SdlWavPlayer::stop_stream() noexcept {
-    if (impl_->stream != nullptr) {
-        SDL_DestroyAudioStream(impl_->stream);
-        impl_->stream = nullptr;
-    }
+    impl_->stream.reset();
 }
 
 bool SdlWavPlayer::stream_busy() const noexcept {
-    return impl_->stream != nullptr && (SDL_GetAudioStreamQueued(impl_->stream) > 0 ||
-                                        SDL_GetAudioStreamAvailable(impl_->stream) > 0);
+    return impl_->stream != nullptr &&
+           (impl_->stream->queued_bytes() > 0 || impl_->stream->available_bytes() > 0);
 }
 
 void SdlWavPlayer::stop_all() noexcept {
-    for (auto& sound : impl_->streams)
-        SDL_DestroyAudioStream(sound.stream);
     impl_->streams.clear();
     stop_loop();
     stop_stream();
@@ -294,8 +313,7 @@ void SdlWavPlayer::stop_all() noexcept {
 bool SdlWavPlayer::playing() const noexcept {
     const bool effect =
         std::any_of(impl_->streams.begin(), impl_->streams.end(), [](const PlayingSound& sound) {
-            return SDL_GetAudioStreamQueued(sound.stream) > 0 ||
-                   SDL_GetAudioStreamAvailable(sound.stream) > 0;
+            return sound.stream->queued_bytes() > 0 || sound.stream->available_bytes() > 0;
         });
     return effect || impl_->looping != nullptr || stream_busy();
 }
@@ -305,20 +323,16 @@ void SdlWavPlayer::set_volume(uint32_t wave_out_volume, uint32_t fx_volume) noex
     impl_->fx_volume = fx_volume;
     const float gain = output_gain(wave_out_volume, fx_volume);
     for (auto& sound : impl_->streams)
-        SDL_SetAudioStreamGain(sound.stream, gain * sound.level);
+        sound.stream->set_gain(gain * sound.level);
     if (impl_->looping != nullptr)
-        SDL_SetAudioStreamGain(impl_->looping, gain);
+        impl_->looping->set_gain(gain);
     if (impl_->stream != nullptr)
-        SDL_SetAudioStreamGain(impl_->stream, gain);
+        impl_->stream->set_gain(gain);
 }
 
 void SdlWavPlayer::collect_finished() noexcept {
     std::erase_if(impl_->streams, [](const PlayingSound& sound) {
-        if (SDL_GetAudioStreamQueued(sound.stream) > 0 ||
-            SDL_GetAudioStreamAvailable(sound.stream) > 0)
-            return false;
-        SDL_DestroyAudioStream(sound.stream);
-        return true;
+        return sound.stream->queued_bytes() == 0 && sound.stream->available_bytes() == 0;
     });
     if (impl_->stream != nullptr && !stream_busy())
         stop_stream();
@@ -329,7 +343,7 @@ void SdlWavPlayer::collect_finished() noexcept {
 namespace oa::audio {
 
 struct SdlVoice {
-    SDL_AudioStream* stream{};
+    std::unique_ptr<OutputStream> stream;
     std::vector<uint8_t> pcm;
     PcmFormat format{};
     uint32_t read{};
@@ -357,13 +371,13 @@ struct SdlAudioDevice {
 
 namespace {
 
-// Runs on the SDL audio thread with the stream locked.
-void SDLCALL feed_voice(void* user, SDL_AudioStream* stream, int additional, int) {
+// Runs on the sound output's thread with the stream locked.
+void feed_voice(void* user, OutputStream& stream, int32_t additional) {
     auto* voice = static_cast<SdlVoice*>(user);
     while (voice->playing && additional > 0 && !voice->pcm.empty()) {
         if (voice->read >= voice->pcm.size()) {
             if (!voice->looping) {
-                voice->playing = SDL_GetAudioStreamQueued(stream) > 0;
+                voice->playing = stream.queued_bytes() > 0;
                 return;
             }
             voice->read = 0;
@@ -372,31 +386,27 @@ void SDLCALL feed_voice(void* user, SDL_AudioStream* stream, int additional, int
             voice->pcm.size() - voice->read, static_cast<std::size_t>(additional)
         );
         const auto* bytes = voice->pcm.data() + voice->read;
-        if (!SDL_PutAudioStreamData(stream, bytes, static_cast<int>(count)))
+        if (!stream.put(bytes, static_cast<int32_t>(count)))
             return;
         voice->read += static_cast<uint32_t>(count);
         additional -= static_cast<int>(count);
     }
 }
 
-SDL_AudioFormat sdl_format(uint16_t bits) {
-    return bits == 8 ? SDL_AUDIO_U8 : SDL_AUDIO_S16LE;
-}
-
 BufferHandle open_voice(SdlAudioDevice& device, std::unique_ptr<SdlVoice> voice) {
     if (!device.open || (voice->format.bits != 8 && voice->format.bits != 16) ||
-        voice->format.channels == 0 || voice->format.sample_rate == 0)
+        voice->format.channels == 0 || voice->format.channels > max_stream_channels ||
+        voice->format.sample_rate == 0)
         return no_buffer;
-    SDL_AudioSpec spec{};
-    spec.format = sdl_format(voice->format.bits);
-    spec.channels = voice->format.channels;
-    spec.freq = static_cast<int>(voice->format.sample_rate);
-    voice->stream = SDL_OpenAudioDeviceStream(
-        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, feed_voice, voice.get()
-    );
+    StreamFormat format{};
+    format.sample = voice->format.bits == 8 ? SampleFormat::u8 : SampleFormat::s16;
+    format.channels = static_cast<uint8_t>(voice->format.channels);
+    format.rate = voice->format.sample_rate;
+    std::string error;
+    voice->stream = sound_output().open_stream(format, feed_voice, voice.get(), error);
     if (voice->stream == nullptr)
         return no_buffer;
-    SDL_SetAudioStreamGain(voice->stream, device.master_gain());
+    voice->stream->set_gain(device.master_gain());
     const BufferHandle handle = device.next++;
     device.voices.emplace(handle, std::move(voice));
     return handle;
@@ -407,9 +417,9 @@ bool with_voice(void* context, BufferHandle handle, Function&& function) {
     auto* voice = static_cast<SdlAudioDevice*>(context)->find(handle);
     if (voice == nullptr)
         return false;
-    SDL_LockAudioStream(voice->stream);
+    voice->stream->lock();
     const bool result = function(*voice);
-    SDL_UnlockAudioStream(voice->stream);
+    voice->stream->unlock();
     return result;
 }
 
@@ -422,8 +432,7 @@ SdlAudioDevice* sdl_audio_device_create() {
 void sdl_audio_device_destroy(SdlAudioDevice* device) noexcept {
     if (device == nullptr)
         return;
-    for (auto& [handle, voice] : device->voices)
-        SDL_DestroyAudioStream(voice->stream);
+    device->voices.clear();
     delete device;
 }
 
@@ -432,7 +441,9 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
     sink.context = device;
     sink.open_device = [](void* context) {
         auto& self = *static_cast<SdlAudioDevice*>(context);
-        if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO))
+        SoundOutput& output = sound_output();
+        std::string error;
+        if (!output.started() && !output.start(error))
             return DeviceResult::no_driver;
         self.open = true;
         return DeviceResult::ok;
@@ -440,8 +451,6 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
     sink.set_primary_format = [](void*, PcmFormat) { return DeviceResult::ok; };
     sink.close_device = [](void* context) {
         auto& self = *static_cast<SdlAudioDevice*>(context);
-        for (auto& [handle, voice] : self.voices)
-            SDL_DestroyAudioStream(voice->stream);
         self.voices.clear();
         self.open = false;
     };
@@ -466,7 +475,6 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
         const auto found = self.voices.find(handle);
         if (found == self.voices.end())
             return;
-        SDL_DestroyAudioStream(found->second->stream);
         self.voices.erase(found);
     };
     sink.write_buffer = [](void* context,
@@ -483,7 +491,7 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
     };
     sink.query_playing = [](void* context, BufferHandle handle, bool* playing) {
         return with_voice(context, handle, [&](SdlVoice& voice) {
-            *playing = voice.playing || SDL_GetAudioStreamQueued(voice.stream) > 0;
+            *playing = voice.playing || voice.stream->queued_bytes() > 0;
             return true;
         });
     };
@@ -497,7 +505,7 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
         return with_voice(context, handle, [&](SdlVoice& voice) {
             const auto size = static_cast<uint32_t>(voice.pcm.size());
             voice.read = std::min(position, size);
-            SDL_ClearAudioStream(voice.stream);
+            voice.stream->clear();
             return true;
         });
     };
@@ -505,7 +513,7 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
         const float master = static_cast<SdlAudioDevice*>(context)->master_gain();
         return with_voice(context, handle, [&](SdlVoice& voice) {
             voice.gain = std::pow(10.0F, static_cast<float>(centibels) / 2000.0F);
-            return SDL_SetAudioStreamGain(voice.stream, voice.gain * master);
+            return voice.stream->set_gain(voice.gain * master);
         });
     };
     sink.set_spatial = [](void*, BufferHandle, const Spatial*) { return false; };
@@ -516,12 +524,12 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
             return true;
         });
         auto* voice = static_cast<SdlAudioDevice*>(context)->find(handle);
-        return started && SDL_ResumeAudioStreamDevice(voice->stream);
+        return started && voice->stream->resume();
     };
     sink.stop = [](void* context, BufferHandle handle) {
         with_voice(context, handle, [](SdlVoice& voice) {
             voice.playing = false;
-            SDL_ClearAudioStream(voice.stream);
+            voice.stream->clear();
             return true;
         });
     };
@@ -534,7 +542,7 @@ AudioSink sdl_audio_sink(SdlAudioDevice* device) noexcept {
         auto& self = *static_cast<SdlAudioDevice*>(context);
         self.wave_out_packed = packed;
         for (auto& [handle, voice] : self.voices)
-            SDL_SetAudioStreamGain(voice->stream, voice->gain * self.master_gain());
+            voice->stream->set_gain(voice->gain * self.master_gain());
         return true;
     };
     return sink;

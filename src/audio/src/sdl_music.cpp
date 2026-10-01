@@ -4,10 +4,10 @@
 #include "oa/audio/sdl_music.hpp"
 
 #include "oa/audio/music_decoder.hpp"
-
-#include <SDL3/SDL.h>
+#include "oa/audio/sound_output.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <string>
 #include <utility>
@@ -25,7 +25,7 @@ constexpr uint32_t full_aux_volume = 0xffffffffU;
 
 struct SdlMusicDevice {
     MusicDisc disc;
-    SDL_AudioStream* stream{};
+    std::unique_ptr<OutputStream> stream;
     MusicDecoder decoder;
     std::vector<float> scratch;
     std::string error;
@@ -44,14 +44,14 @@ namespace {
 class StreamLock {
   public:
 
-    explicit StreamLock(SdlMusicDevice& device) : stream_(device.stream) {
+    explicit StreamLock(SdlMusicDevice& device) : stream_(device.stream.get()) {
         if (stream_ != nullptr)
-            SDL_LockAudioStream(stream_);
+            stream_->lock();
     }
 
     ~StreamLock() {
         if (stream_ != nullptr)
-            SDL_UnlockAudioStream(stream_);
+            stream_->unlock();
     }
 
     StreamLock(const StreamLock&) = delete;
@@ -59,21 +59,21 @@ class StreamLock {
 
   private:
 
-    SDL_AudioStream* stream_;
+    OutputStream* stream_;
 };
 
 bool track_in_disc(const SdlMusicDevice& device, int32_t track) {
     return track >= music_disc_first_audio_track && track <= device.disc.track_count;
 }
 
-void SDLCALL feed_stream(void* user, SDL_AudioStream* stream, int additional, int) {
+void feed_stream(void* user, OutputStream& stream, int32_t additional) {
     auto& device = *static_cast<SdlMusicDevice*>(user);
     while (additional > 0 && device.active && !device.range_done) {
         device.scratch.clear();
         const bool more = device.decoder.decode(device.scratch);
         if (!device.scratch.empty()) {
             const auto bytes = static_cast<int>(device.scratch.size() * sizeof(float));
-            SDL_PutAudioStreamData(stream, device.scratch.data(), bytes);
+            (void)stream.put(device.scratch.data(), bytes);
             additional -= bytes;
             device.frames += device.scratch.size() / output_channels;
         }
@@ -95,10 +95,9 @@ void SDLCALL feed_stream(void* user, SDL_AudioStream* stream, int additional, in
 
 void apply_gain(SdlMusicDevice& device) {
     if (device.stream != nullptr)
-        SDL_SetAudioStreamGain(
-            device.stream,
+        device.stream->set_gain(
             static_cast<float>(device.aux_volume & max_device_volume) /
-                static_cast<float>(max_device_volume)
+            static_cast<float>(max_device_volume)
         );
 }
 
@@ -106,16 +105,15 @@ bool device_open(void* context) {
     auto& device = *static_cast<SdlMusicDevice*>(context);
     if (device.stream != nullptr)
         return true;
-    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        device.error = SDL_GetError();
+    SoundOutput& output = sound_output();
+    if (!output.start(device.error))
         return false;
-    }
-    const SDL_AudioSpec spec{SDL_AUDIO_F32, output_channels, output_rate};
-    device.stream =
-        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, feed_stream, &device);
+    const StreamFormat format{
+        SampleFormat::f32, static_cast<uint8_t>(output_channels), static_cast<uint32_t>(output_rate)
+    };
+    device.stream = output.open_stream(format, feed_stream, &device, device.error);
     if (device.stream == nullptr) {
-        device.error = SDL_GetError();
-        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        output.stop();
         return false;
     }
     apply_gain(device);
@@ -126,13 +124,13 @@ bool device_stop(void* context) {
     auto& device = *static_cast<SdlMusicDevice*>(context);
     if (device.stream == nullptr)
         return true;
-    SDL_PauseAudioStreamDevice(device.stream);
+    device.stream->pause();
     StreamLock lock(device);
     device.decoder.close();
     device.active = false;
     device.paused = false;
     device.range_done = false;
-    SDL_ClearAudioStream(device.stream);
+    device.stream->clear();
     return true;
 }
 
@@ -141,9 +139,8 @@ void device_close(void* context) {
     if (device.stream == nullptr)
         return;
     device_stop(context);
-    SDL_DestroyAudioStream(device.stream);
-    device.stream = nullptr;
-    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    device.stream.reset();
+    sound_output().stop();
 }
 
 bool device_track_count(void* context, int32_t* count) {
@@ -165,7 +162,7 @@ bool device_is_playing(void* context) {
         return false;
     StreamLock lock(device);
     return device.active && !device.paused &&
-           !(device.range_done && SDL_GetAudioStreamQueued(device.stream) == 0);
+           !(device.range_done && device.stream->queued_bytes() == 0);
 }
 
 bool device_current_track(void* context, int32_t* track) {
@@ -182,7 +179,7 @@ bool device_play(void* context, int32_t from, int32_t to) {
     {
         StreamLock lock(device);
         device.decoder.close();
-        SDL_ClearAudioStream(device.stream);
+        device.stream->clear();
         device.active =
             device.decoder.open(device.disc.tracks[static_cast<std::size_t>(from)], device.error);
         device.current = from;
@@ -193,7 +190,7 @@ bool device_play(void* context, int32_t from, int32_t to) {
         if (!device.active)
             return false;
     }
-    SDL_ResumeAudioStreamDevice(device.stream);
+    device.stream->resume();
     return true;
 }
 
@@ -208,7 +205,7 @@ bool device_resume(void* context, int32_t to) {
         device.to_track = to;
         device.paused = false;
     }
-    SDL_ResumeAudioStreamDevice(device.stream);
+    device.stream->resume();
     return true;
 }
 
@@ -216,7 +213,7 @@ bool device_pause(void* context) {
     auto& device = *static_cast<SdlMusicDevice*>(context);
     if (device.stream == nullptr)
         return false;
-    SDL_PauseAudioStreamDevice(device.stream);
+    device.stream->pause();
     StreamLock lock(device);
     device.paused = true;
     return true;
@@ -305,7 +302,7 @@ bool sdl_music_device_poll_complete(SdlMusicDevice* device) noexcept {
         return false;
     StreamLock lock(*device);
     if (!device->active || device->paused || !device->range_done ||
-        SDL_GetAudioStreamQueued(device->stream) != 0)
+        device->stream->queued_bytes() != 0)
         return false;
     device->active = false;
     return true;

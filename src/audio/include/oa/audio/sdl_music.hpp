@@ -8,10 +8,11 @@
 
 namespace oa::audio {
 
-// SDL3 music-file backend for the CD-audio boundary. Each disc track is a
-// file of the MusicDisc, decoded on SDL's audio thread and played through
-// its own logical playback device, so pausing it leaves effects alone. The
-// CD-audio mixer line maps to that stream's gain.
+// Music-file backend for the CD-audio boundary. Each disc track is a file
+// of the MusicDisc, decoded by MusicDecoder on the sound output's thread
+// and played through a stream of its own (oa/audio/sound_output.hpp), so
+// pausing it leaves effects alone. The CD-audio mixer line maps to that
+// stream's gain.
 struct SdlMusicDevice;
 
 /// Creates a music device over a scanned disc.
@@ -44,7 +45,9 @@ void sdl_music_device_destroy(SdlMusicDevice* device) noexcept;
 
 /// Reports whether this build has a compressed-audio decoder.
 ///
-/// @return False when only uncompressed files can be played.
+/// Every build has one: MP3, Ogg Vorbis and FLAC files play as WAVE files do.
+///
+/// @return True.
 [[nodiscard]] bool sdl_music_decoder_available() noexcept;
 
 /// Returns the last open or decode failure, for diagnostics.

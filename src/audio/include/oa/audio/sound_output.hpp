@@ -1,0 +1,184 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#pragma once
+
+// The sound output every sound of the game plays through: effects, speech,
+// music and the movies' sound. A stream takes samples in its own format and
+// rate; the output converts and mixes the streams and plays them on the
+// system's sound device. Two outputs exist: SDL's, wherever the game uses
+// SDL, and a mixer of the engine's own over the Windows wave-out device,
+// for systems SDL does not run on.
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace oa::audio {
+
+/// How the samples of a stream are stored; every format is little-endian.
+enum class SampleFormat : uint8_t {
+    u8,  ///< 8-bit unsigned, silence at 128
+    s16, ///< 16-bit signed
+    s32, ///< 32-bit signed
+    f32, ///< 32-bit float, -1..1
+};
+
+/// The samples a stream takes: their format, interleaved channels and rate.
+struct StreamFormat {
+    SampleFormat sample{SampleFormat::s16};
+    uint8_t channels{};
+    uint32_t rate{}; ///< frames per second
+};
+
+/// Most channels a stream may have.
+inline constexpr uint8_t max_stream_channels = 8;
+
+/// Returns the bytes of one sample of a format.
+///
+/// @param sample the sample format
+/// @return 1, 2 or 4
+[[nodiscard]] uint32_t sample_bytes(SampleFormat sample) noexcept;
+
+/// Returns the bytes of one frame of a stream format: one sample per channel.
+///
+/// @param format the stream format
+/// @return the frame size in bytes
+[[nodiscard]] uint32_t frame_bytes(const StreamFormat& format) noexcept;
+
+/// Returns the byte that fills a buffer of silence in a sample format.
+///
+/// @param sample the sample format
+/// @return 0x80 for 8-bit unsigned samples, 0 otherwise
+[[nodiscard]] uint8_t silence_byte(SampleFormat sample) noexcept;
+
+class OutputStream;
+
+/// Asks for more of a stream's samples. Runs on the output's own thread with
+/// the stream locked, when the samples queued run short.
+///
+/// @param context the context the stream was opened with
+/// @param stream the stream to put samples to
+/// @param wanted_bytes about how many bytes in the stream's format would fill it
+using StreamFeed = void (*)(void* context, OutputStream& stream, int32_t wanted_bytes);
+
+/// One stream of samples, mixed with the output's other streams.
+///
+/// A stream opens paused. Its samples play in the order they are put; a
+/// stream with a feed is asked for more as it plays. Destroying the stream
+/// stops it at once.
+class OutputStream {
+  public:
+
+    virtual ~OutputStream() = default;
+
+    /// Queues samples to play after those already queued.
+    ///
+    /// @param bytes the samples, in the stream's format
+    /// @param count bytes to queue; whole frames
+    /// @return false when the samples cannot be queued
+    [[nodiscard]] virtual bool put(const void* bytes, int32_t count) = 0;
+
+    /// Marks the queued samples as complete, so the last of them play out
+    /// without waiting for samples that follow.
+    ///
+    /// @return false when the stream cannot be flushed
+    virtual bool flush() = 0;
+
+    /// Returns the bytes put and not yet taken for playing.
+    ///
+    /// @return the byte count in the stream's format
+    [[nodiscard]] virtual int32_t queued_bytes() = 0;
+
+    /// Returns how much has been converted for playing and not yet played.
+    ///
+    /// @return a byte count, 0 when nothing waits to play
+    [[nodiscard]] virtual int32_t available_bytes() = 0;
+
+    /// Drops every sample queued or converted and not yet played.
+    virtual void clear() = 0;
+
+    /// Sets the factor every sample is multiplied by.
+    ///
+    /// @param gain the factor; 1 plays the samples as they are
+    /// @return false when the gain cannot be set
+    virtual bool set_gain(float gain) = 0;
+
+    /// Stops playing, keeping the samples queued.
+    ///
+    /// @return false when the stream cannot be paused
+    virtual bool pause() = 0;
+
+    /// Starts or continues playing.
+    ///
+    /// @return false when the stream cannot play
+    virtual bool resume() = 0;
+
+    /// Holds off the output's thread, and so the stream's feed, until unlock().
+    ///
+    /// A thread that holds the lock may take it again.
+    virtual void lock() = 0;
+
+    /// Releases one lock().
+    virtual void unlock() = 0;
+};
+
+/// The system's sound device, with the streams it mixes.
+class SoundOutput {
+  public:
+
+    virtual ~SoundOutput() = default;
+
+    /// Starts the sound device, or counts one more user when it has started.
+    ///
+    /// @param[out] error why the device cannot start; untouched on success
+    /// @return true when streams can be opened
+    [[nodiscard]] virtual bool start(std::string& error) = 0;
+
+    /// Counts one user less, stopping the device after the last.
+    virtual void stop() = 0;
+
+    /// Tells whether the device has started.
+    ///
+    /// @return true between the first start() and the last stop()
+    [[nodiscard]] virtual bool started() const = 0;
+
+    /// Opens a paused stream.
+    ///
+    /// @param format the samples the stream takes
+    /// @param feed asks for more samples as the stream plays; null for a
+    ///        stream that plays what is put to it
+    /// @param context passed back to the feed
+    /// @param[out] error why the stream cannot be opened; untouched on success
+    /// @return the stream, or null on failure
+    [[nodiscard]] virtual std::unique_ptr<OutputStream>
+    open_stream(const StreamFormat& format, StreamFeed feed, void* context, std::string& error) = 0;
+
+    /// Names the system interface the device plays through, for diagnostics.
+    ///
+    /// @return the name, or "" when the device has not started
+    [[nodiscard]] virtual std::string driver_name() const = 0;
+
+    /// Returns the reason for the last call that failed, for diagnostics.
+    ///
+    /// @return the reason, "" when none is known
+    [[nodiscard]] virtual std::string last_error() const = 0;
+};
+
+/// Returns the sound output of the process.
+///
+/// Unless set_sound_output() chose another, it is SDL's where the build has
+/// SDL, and the wave-out mixer otherwise. On Windows the environment
+/// variable OA_SOUND_OUTPUT set to "waveout" chooses the wave-out mixer in
+/// a build that has SDL too.
+///
+/// @return the output, which lives until the process ends
+[[nodiscard]] SoundOutput& sound_output();
+
+/// Makes every later sound_output() call return another output, as a test's.
+///
+/// @param output the output to use, which must outlive its use; null
+///        returns to the process's own
+void set_sound_output(SoundOutput* output) noexcept;
+
+} // namespace oa::audio

@@ -71,12 +71,43 @@ if(BUILD_TESTING)
   oa_add_game_data_test(audio-music-decoder-data oa-audio-music-decoder-test --data)
 endif()
 
+# The sound output every sound plays through (oa/audio/sound_output.hpp):
+# SDL's where the build has SDL, and the engine's own mixer over the
+# platform's sound device (src/platform/sound-device), which on Windows is
+# the wave-out device and needs nothing newer than Windows XP. A build
+# without SDL (OA_BUILD_PLATFORM off) gets the mixer alone.
+add_library(oa-audio-output src/sound_output.cpp src/sound_output_none.cpp
+  src/software_mixer.cpp src/buffered_output.cpp src/wave_out_output.cpp)
+add_library(oa::audio::output ALIAS oa-audio-output)
+target_include_directories(oa-audio-output PUBLIC include)
+target_link_libraries(oa-audio-output PUBLIC oa-audio-music-decoder oa-platform-sound-device
+  PRIVATE oa-options)
+target_compile_features(oa-audio-output PUBLIC cxx_std_20)
 if(OA_BUILD_PLATFORM)
   find_package(SDL3 3.2 CONFIG REQUIRED)
+  target_sources(oa-audio-output PRIVATE src/sdl_sound_output.cpp)
+  target_link_libraries(oa-audio-output PRIVATE SDL3::SDL3)
+  target_compile_definitions(oa-audio-output PRIVATE OA_AUDIO_HAVE_SDL_OUTPUT=1)
+endif()
+if(BUILD_TESTING)
+  # The mixer's conversion, gains, feeds and clamping, and the buffered
+  # output's ring of buffers on a device the test plays by hand.
+  add_executable(oa-audio-output-test tests/sound_output_test.cpp)
+  target_link_libraries(oa-audio-output-test PRIVATE oa-audio-output oa-options)
+  add_test(NAME audio-output COMMAND oa-audio-output-test)
+  if(WIN32)
+    # The wave-out mixer on the system's own device: started, fed and
+    # stopped. Where the system has no sound device it is skipped.
+    add_test(NAME audio-output-wave-out COMMAND oa-audio-output-test --wave-out)
+    set_tests_properties(audio-output-wave-out PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+  endif()
+endif()
+
+if(OA_BUILD_PLATFORM)
   add_library(oa-audio-sdl src/sdl_audio.cpp src/sdl_music.cpp)
   add_library(oa::audio::sdl ALIAS oa-audio-sdl)
   target_include_directories(oa-audio-sdl PUBLIC include)
-  target_link_libraries(oa-audio-sdl PUBLIC oa-audio SDL3::SDL3 oa-options
+  target_link_libraries(oa-audio-sdl PUBLIC oa-audio oa-audio-output SDL3::SDL3 oa-options
     PRIVATE oa-audio-music-decoder)
 endif()
 
