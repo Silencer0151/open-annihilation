@@ -248,6 +248,13 @@ struct Options {
     // without them, and that units move evenly from frame to frame. Implies
     // --headless-check and --skip-intro.
     bool check_interpolation = false;
+    // Draws the headless skirmish with the other player taken as another
+    // machine's, whose records arrive in bursts, and checks that its units
+    // move evenly on their playout, on whole ticks too, that the tracking
+    // camera and the pointer's pick follow where they are drawn, and that
+    // the local units, the world and, with no such player, every frame are
+    // as without the playout. Implies --headless-check and --skip-intro.
+    bool check_unit_playout = false;
     // --generate-script RECORDING: the recording a director script is
     // generated from; empty for none. Implies --headless-check and
     // --skip-intro.

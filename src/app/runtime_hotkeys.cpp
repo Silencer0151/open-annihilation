@@ -3,6 +3,7 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
@@ -438,7 +439,20 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
             continue;
         if (kind == "repair" && !local)
             continue;
-        const auto screen = project_match_point(viewport, slot.unit->position);
+        // A unit of another machine's player is tested where the frame last
+        // drawn showed it, on its playout, as the pointer picks it.
+        auto screen = project_match_point(viewport, slot.unit->position);
+        if (const MatchModels* models = drawn_match_models(); models != nullptr) {
+            if (const auto pose = mirrored_pose(
+                    *models, match_->state(), slot.unit_index, models->presentation.drawn_moment
+                ))
+                screen = project_match_point(
+                    viewport,
+                    {static_cast<uint32_t>(pose->position.x),
+                     static_cast<uint32_t>(pose->position.y),
+                     static_cast<uint32_t>(pose->position.z)}
+                );
+        }
         if (screen.x < x0 || screen.x > x1 || screen.y < y0 || screen.y > y1)
             continue;
         for_each_selected([&](uint16_t source) {

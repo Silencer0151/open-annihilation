@@ -3,6 +3,7 @@
 
 // Pointer tracking, menu activation and match unit picking.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
 #include "oa/sim/spatial_state/spatial.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
 #include <algorithm>
@@ -23,6 +24,30 @@ namespace {
 
 // Wraps kMultiplayerUnavailable to a single COMIX line; the box then fits it.
 constexpr int32_t kMultiplayerUnavailableWidth = 0x140;
+
+/// Moves a pick candidate of another machine's player to where the frame
+/// last drawn showed it, on its playout (mirrored_pose).
+///
+/// @param models the match's renderer state; null before the match is drawn
+/// @param world the match's World
+/// @param unit the unit
+/// @param[in,out] candidate the candidate, at the unit's simulated place
+void pick_where_drawn(
+    const MatchModels* models,
+    const World& world,
+    const Unit& unit,
+    oa::sim::gameplay_input::PickUnit& candidate
+) {
+    if (models == nullptr)
+        return;
+    const auto pose = mirrored_pose(
+        *models, world, static_cast<uint16_t>(unit.id), models->presentation.drawn_moment
+    );
+    if (!pose)
+        return;
+    candidate.position = {pose->position.x, pose->position.y, pose->position.z};
+    candidate.rotation = {pose->bank, static_cast<int16_t>(pose->heading), pose->pitch};
+}
 
 } // namespace
 
@@ -264,6 +289,7 @@ oa::sim::selection::Hooks Runtime::selection_hooks() {
             candidate.id = unit.id;
             candidate.position = {unit.position.x, unit.position.y, unit.position.z};
             candidate.rotation = {unit.bank, static_cast<int16_t>(unit.heading), unit.pitch};
+            pick_where_drawn(self.drawn_match_models(), world, unit, candidate);
             candidate.model = &instance->model().model();
             // A unit without a root object has no box to pick.
             if (candidate.model->objects.empty())
@@ -314,6 +340,10 @@ oa::sim::selection::Hooks Runtime::selection_hooks() {
         static_cast<Runtime*>(context)->stop_match_tracking();
     };
     return hooks;
+}
+
+const MatchModels* Runtime::drawn_match_models() const {
+    return match_models_ && match_models_->match == match_.get() ? match_models_.get() : nullptr;
 }
 
 void Runtime::rebuild_on_screen_units() {

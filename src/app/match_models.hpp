@@ -3,7 +3,8 @@
 
 // The match renderer's own state (Runtime::match_models): prepared models
 // and textures, every unit slot's draw state, the 8-bit bridge onto the RGB
-// frame, and what the presentation keeps to draw frames between ticks.
+// frame, and what the presentation keeps to draw frames between ticks and
+// the units of players this machine does not simulate on their playout.
 // runtime_match_render.cpp draws from it; the director's frame loop and the
 // debug grid reach it too.
 #pragma once
@@ -15,12 +16,14 @@
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
+#include "oa/present/unit_playout.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "presentation_interpolation.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -40,9 +43,16 @@ struct MatchPresentation {
     /// when a frame's clock step ran a batch of them; 1 when there is no tick
     /// before. Particles that step each tick show that many steps' way.
     uint32_t batch{1};
-    /// Counts the draws between ticks; a unit's copies note the draw they
-    /// were placed for.
+    /// Counts the draws; a unit's copies note the draw they were placed for.
     uint64_t draw{};
+    /// The playout of the units of players this machine does not simulate,
+    /// which the runtime feeds after each step: a unit of another machine's
+    /// player is drawn where its owner's playout clock has it (mirrored_pose).
+    /// Null draws every unit where its ticks place it.
+    const oa::present::unit_playout::Playout* playout{};
+    /// The moment of the playout the last frame drawn showed: the pointer
+    /// picks a mirrored unit where that frame drew it.
+    oa::present::unit_playout::FrameTime drawn_moment{};
     /// Set while a unit draws from its copies: a carried unit then draws from
     /// its own copies too (the renderer's model_of).
     bool blending{};
@@ -81,13 +91,49 @@ struct MatchModels {
     DebugGridRandom debug_random{};
 };
 
+/// Returns the moment of the unit playout a frame drawn part of the way
+/// through the current tick shows: that part of the way from the tick
+/// before the presentation's batch to the tick it saw last
+/// (oa::present::unit_playout::frame_time_between).
+///
+/// @param presentation the presentation, its tick noted
+/// @param fraction the part of the way, 0 to whole_tick
+/// @return the moment; at whole_tick, the tick the presentation saw last
+[[nodiscard]] oa::present::unit_playout::FrameTime
+playout_moment(const MatchPresentation& presentation, uint32_t fraction) noexcept;
+
+/// Returns where and how a frame draws a unit of another machine's player
+/// (in use with OA_PLAYER_STATUS_MIRRORED): where its owner's playout clock
+/// has it at the frame's moment, whole ticks included, rather than where its
+/// owner's newest record put it. A carried unit goes with its carrier: it is
+/// drawn on its own playout when its carrier has the same owner, else moved
+/// as its carrier is; a unit carried by one drawn where its ticks place it is
+/// drawn there too.
+///
+/// @param models the match's renderer state, its tick noted
+/// @param world the match's World
+/// @param slot unit slot
+/// @param moment the moment the frame shows (playout_moment)
+/// @return the pose; nothing for a unit drawn where its ticks place it: one
+///     this machine simulates, one of a player in use but free or closed, one
+///     carried by such a unit, an empty slot, or a presentation with no
+///     playout or no tick noted
+[[nodiscard]] std::optional<oa::present::unit_playout::UnitPose> mirrored_pose(
+    const MatchModels& models,
+    const oa::World& world,
+    uint16_t slot,
+    oa::present::unit_playout::FrameTime moment
+) noexcept;
+
 /// Returns where a unit shows in a frame drawn part of the way through the current tick.
 ///
 /// @param models the match's renderer state, its tick noted
 /// @param world the match's World
 /// @param slot unit slot
 /// @param fraction the part of the way, 0 to whole_tick
-/// @return its position that part of the way from the tick before when the
+/// @return for a unit of another machine's player, its place on the playout
+///     at that moment (mirrored_pose), at whole_tick too;
+///     else its position that part of the way from the tick before when the
 ///     fraction is below whole_tick and the unit moved, else Unit.position;
 ///     a slot outside the pool gives the origin
 [[nodiscard]] FixedVec3 shown_unit_position(

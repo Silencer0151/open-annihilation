@@ -182,6 +182,7 @@ void check_director_options(Options& options) {
         {options.check_director_view, "--check-director-view"},
         {options.check_director_render, "--check-director-render"},
         {options.check_interpolation, "--check-interpolation"},
+        {options.check_unit_playout, "--check-unit-playout"},
     };
     for (const auto& [given, name] : refused)
         if (given)
@@ -338,6 +339,8 @@ void check_director_options(Options& options) {
             result.check_director_render = true;
         else if (argument == "--check-interpolation")
             result.check_interpolation = true;
+        else if (argument == "--check-unit-playout")
+            result.check_unit_playout = true;
         else if (argument == "--generate-script")
             result.generate_script = path_from_utf8(value(argument));
         else if (argument == "--render-script")
@@ -378,6 +381,7 @@ void check_director_options(Options& options) {
                          "[--check-scroll-bars] "
                          "[--check-briefing-narration] [--check-director-view] "
                          "[--check-director-render] [--check-interpolation] "
+                         "[--check-unit-playout] "
                          "[--trace-input] "
                       << extension_text(extension, ExtensionText::usage_checks, "")
                       << "[--debug-order-lines] "
@@ -469,7 +473,8 @@ void check_director_options(Options& options) {
     if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
         result.debug_order_lines = true;
     // The director view check runs headless, where SDL is never started.
-    if (result.check_director_view || result.check_director_render || result.check_interpolation) {
+    if (result.check_director_view || result.check_director_render || result.check_interpolation ||
+        result.check_unit_playout) {
         result.headless_check = true;
         result.skip_intro = true;
     }
@@ -480,7 +485,7 @@ void check_director_options(Options& options) {
         result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
         result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
         result.check_pointer_interfaces || result.check_director_view ||
-        result.check_director_render || result.check_interpolation;
+        result.check_director_render || result.check_interpolation || result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

@@ -170,6 +170,11 @@ int Runtime::run() {
             flush_preferences();
             return 0;
         }
+        if (options_.check_unit_playout) {
+            check_unit_playout();
+            flush_preferences();
+            return 0;
+        }
         if (extension_run(RunPhase::headless_first))
             return exit_code;
         if (options_.check_navigation)
@@ -451,6 +456,27 @@ oa::base::game_loop::Timing Runtime::saved_match_timing() const {
     return timing;
 }
 
+namespace {
+
+/// Returns the instance generation of a unit slot of the match, which tells
+/// the unit playout a unit made in a slot freed within the same tick from
+/// the one before (oa::present::unit_playout::Hooks::slot_generation).
+///
+/// @param context the match (oa::sim::match_runtime::Match)
+/// @param slot the unit slot
+/// @return SlotRuntime::instance_generation; 0 for a slot outside the pool
+uint32_t unit_slot_generation(void* context, uint32_t slot) noexcept {
+    try {
+        return static_cast<oa::sim::match_runtime::Match*>(context)
+            ->runtime_state(static_cast<uint16_t>(slot))
+            .instance_generation;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+} // namespace
+
 void Runtime::advance_match_clock(uint32_t now_ms) {
     match_timing_.flags =
         clock_flags_with_pause(match_timing_.flags, match_->state().game.sim_run_flags);
@@ -478,12 +504,21 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
                     )
                                               .count())
                 );
+            // The step's records are applied: the playout of the units of
+            // players this machine does not simulate reads where they are.
+            // It throws nothing, so it costs the match no step.
+            observe_unit_playout();
         }
     } catch (const std::exception& error) {
         report_match_tick_error(error.what());
     }
     if (match_timing_.pending_steps != 0)
         oa::sim::messages::expire_oldest_message(match_->state().game);
+}
+
+void Runtime::observe_unit_playout() noexcept {
+    if (match_)
+        unit_playout_.observe(match_->state(), {match_.get(), unit_slot_generation});
 }
 
 void Runtime::report_match_tick_error(std::string_view message) {

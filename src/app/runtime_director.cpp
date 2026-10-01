@@ -513,6 +513,9 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
                 continue;
             }
             stalls = 0;
+            // The units of players this machine does not simulate are played
+            // out after every tick, as the main loop's clock does.
+            observe_unit_playout();
             start_director_debris_particles();
             // The presentation notes every tick, drawn or not, so that a
             // drawn frame always has the tick before at hand.
@@ -716,6 +719,9 @@ int Runtime::run_render_script() {
                     continue;
                 }
                 stalls = 0;
+                // The units of players this machine does not simulate are played
+                // out after every tick, as the main loop's clock does.
+                observe_unit_playout();
                 start_director_debris_particles();
             }
             recording_end = match_->state().game.tick + 1;
@@ -936,6 +942,9 @@ int Runtime::run_generate_script() {
                 continue;
             }
             stalls = 0;
+            // The units of players this machine does not simulate are played
+            // out after every tick, as the main loop's clock does.
+            observe_unit_playout();
             start_director_debris_particles();
             recorder.after_tick(match_->state(), visibility_hooks);
             status = replay_status(replay);

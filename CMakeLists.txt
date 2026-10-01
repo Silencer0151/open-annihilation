@@ -157,6 +157,7 @@ add_subdirectory(src/formats/sqsh)
 add_subdirectory(src/formats/hpi)
 add_subdirectory(src/data/defs)
 add_subdirectory(src/present/world-renderer)
+add_subdirectory(src/present/unit-playout)
 add_subdirectory(src/ui/frontend-renderer)
 add_subdirectory(src/audio)
 # The app's headers: its extension table, Runtime and the other headers an
@@ -328,7 +329,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
   src/app/runtime_director_view.cpp src/app/runtime_director.cpp
-  src/app/presentation_interpolation.cpp src/app/runtime_interpolation_check.cpp)
+  src/app/presentation_interpolation.cpp src/app/runtime_interpolation_check.cpp
+  src/app/runtime_unit_playout_check.cpp)
 # The run manifest of a director render names the engine's version.
 set_property(SOURCE src/app/runtime_director.cpp APPEND PROPERTY COMPILE_DEFINITIONS
   "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
@@ -336,7 +338,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-app-video-capture
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
   oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
-  oa-ui-hud oa-present-model oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
+  oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions)
 # The table that combines the extensions' tables of oa-game
@@ -541,6 +543,22 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
         PASS_REGULAR_EXPRESSION "interpolation: [0-9]+ frames between ticks drew"
         FAIL_REGULAR_EXPRESSION "interpolation check:")
+      # The other player taken as another machine's, whose records arrive in
+      # bursts: its runner is drawn on its playout, moving evenly at 120
+      # frames a second where its records alone hold it still and make it
+      # jump, on whole ticks too, with the tracking camera and the pointer's
+      # pick where it is drawn; the local runner and the world are as without
+      # the playout, and with no such player so is every frame.
+      set(oa_unit_playout_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-playout")
+      file(MAKE_DIRECTORY "${oa_unit_playout_dir}")
+      add_test(NAME native-unit-playout COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --check-unit-playout
+        --preferences-file "${oa_unit_playout_dir}/unit-playout.conf")
+      set_tests_properties(native-unit-playout PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_unit_playout_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        PASS_REGULAR_EXPRESSION "unit playout: [0-9]+ frames drew the other machine's runner evenly"
+        FAIL_REGULAR_EXPRESSION "unit playout check:")
       # native-intro-switch, which starts the game with -y, is registered
       # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order

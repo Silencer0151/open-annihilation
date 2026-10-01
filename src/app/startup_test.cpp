@@ -374,6 +374,13 @@ int main() {
             interpolation.skip_intro && interpolation.fixed_clock && interpolation.unattended,
         "--check-interpolation is a headless, fixed-clock and unattended run"
     );
+    // So does the check of the units of players this machine does not simulate.
+    const auto playout = parse({"--check-unit-playout"});
+    expect(
+        playout.check_unit_playout && playout.headless_check && playout.skip_intro &&
+            playout.fixed_clock && playout.unattended,
+        "--check-unit-playout is a headless, fixed-clock and unattended run"
+    );
 
     // --generate-script and --render-script run headless on the fixed clock
     // and seed, with nobody there.
@@ -455,6 +462,7 @@ int main() {
         {"--check-director-view"},
         {"--check-director-render"},
         {"--check-interpolation"},
+        {"--check-unit-playout"},
     };
     for (const auto* run : {"--generate-script", "--render-script"})
         for (const auto& other : refused_with_scripts) {

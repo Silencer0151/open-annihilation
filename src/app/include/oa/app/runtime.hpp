@@ -30,6 +30,7 @@
 #include "oa/present/display.hpp"
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/unit_playout.hpp"
 #include "oa/present/world_renderer/unit_renderer.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
@@ -481,11 +482,18 @@ class Runtime final : public menu::Host,
     /// The clock first takes the pause bit of the match's Game.sim_run_flags
     /// (clock_flags_with_pause): while it is set the clock's time moves on and
     /// no tick is owed. Each tick runs unless the extension's simulation step
-    /// takes it; a failing tick goes to report_match_tick_error(). After any
-    /// tick at most one expired line of the message log is retired.
+    /// takes it; a failing tick goes to report_match_tick_error(). The unit
+    /// playout reads the match after each step (observe_unit_playout). After
+    /// any tick at most one expired line of the message log is retired.
     ///
     /// @param now_ms clock_milliseconds() of this frame
     void advance_match_clock(uint32_t now_ms);
+
+    /// Has the unit playout (unit_playout_) read the match once its step's
+    /// records are applied: where the units of players this machine does not
+    /// simulate are, and how far their owners' records have come. Reads the
+    /// match only and throws nothing; does nothing without a match.
+    void observe_unit_playout() noexcept;
 
     /// Tells whether the running match's clock steps this frame.
     ///
@@ -2905,12 +2913,27 @@ class Runtime final : public menu::Host,
     /// @return the state; rebuilt when the match changed
     MatchModels& match_models();
 
+    /// Returns the 3DO renderer state of the current match when a frame of it
+    /// has built it, without building it.
+    ///
+    /// @return the state; null before the match is drawn or without a match
+    [[nodiscard]] const MatchModels* drawn_match_models() const;
+
     /// Runs --check-interpolation: frames drawn between ticks over the
     /// headless skirmish's fight show its units, pieces and projectiles part
     /// of the way from one tick to the next, leave every frame of a whole
     /// tick and the world as they are, and show its units moving evenly.
     /// Throws std::runtime_error when a check fails.
     void check_interpolation();
+
+    /// Runs --check-unit-playout over the headless skirmish with the other
+    /// player taken as another machine's, whose records arrive in bursts:
+    /// its units are drawn on their playout, moving evenly where whole
+    /// records alone hold them still and make them jump, on whole ticks too,
+    /// with the tracking camera and the pointer's pick where they are drawn;
+    /// the local units, the world and, with no such player, every frame are
+    /// as without the playout. Throws std::runtime_error when a check fails.
+    void check_unit_playout();
 
     /// Lists the loaded primitive table the match shatters a model object from: the prepared
     /// model's order and flag words, with each primitive's colour and vertex list.
@@ -3816,9 +3839,11 @@ class Runtime final : public menu::Host,
     /// Returns the selection module's services over the running match.
     ///
     /// Sight is Match::unit_visible; the pointer test is the unit type's root
-    /// box, turned by the unit's angles (gameplay_input::hits_root_bounds); the
-    /// armed command and the order panel are the runtime's; the camera centres
-    /// at once. A unit's select speech is not queued.
+    /// box, turned by the unit's angles (gameplay_input::hits_root_bounds),
+    /// where the frame last drawn showed it: a unit of another machine's
+    /// player on its playout (mirrored_pose). The armed command and the order
+    /// panel are the runtime's; the camera centres at once. A unit's select
+    /// speech is not queued.
     ///
     /// @return the hooks, bound to this runtime
     [[nodiscard]] oa::sim::selection::Hooks selection_hooks();
@@ -8033,6 +8058,12 @@ class Runtime final : public menu::Host,
     std::map<const oa::formats::gaf::Frame*, oa::formats::gaf::RenderedFrame>
         overlay_sprite_frames_{};
     oa::base::game_loop::Timing match_timing_{};
+    // The playout of the units of players this machine does not simulate
+    // (oa/present/unit_playout.hpp): advance_match_clock feeds it after each
+    // step, the match draws and picks those units where it has them
+    // (MatchPresentation::playout), and teardown_match empties it and frees
+    // its memory.
+    oa::present::unit_playout::Playout unit_playout_{};
     uintptr_t next_document_ = 0;
     std::string status_;
     // Opens web addresses: the browser in a watched run, else a record of the requests.

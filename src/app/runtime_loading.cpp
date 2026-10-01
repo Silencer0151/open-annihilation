@@ -235,6 +235,7 @@ void Runtime::teardown_match() {
     offline_services_.set_on_screen_test(nullptr, nullptr);
     effect_boundary_.clock = nullptr;
     match_.reset();
+    unit_playout_.reset();
     // Its models and radar are keyed by address; a later match can reuse the
     // addresses.
     match_models_.reset();

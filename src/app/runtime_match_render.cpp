@@ -40,6 +40,7 @@ namespace oa::app {
 namespace {
 
 namespace model_render = oa::present::model;
+namespace unit_playout = oa::present::unit_playout;
 
 /// Copies the pieces of every unit's model: their transforms, which a draw
 /// rebuilds and the match reads.
@@ -201,8 +202,10 @@ bool unit_or_cargo_moved(const MatchModels& models, const oa::World& world, uint
 
 /// Returns the copies a unit draws from part of the way through the current
 /// tick: its record and model instance, placed between its two poses when it
-/// moved, with a draw state of their own. The match's record, instance and
-/// draw state are only read.
+/// moved, with a draw state of their own. A unit of another machine's player
+/// is placed, turned and tilted on its playout (mirrored_pose), whole ticks
+/// included; its pieces stay those of its ticks. The match's record, instance
+/// and draw state are only read.
 ///
 /// The copies are placed once a draw; a later call of the same draw returns
 /// them as they are.
@@ -229,6 +232,14 @@ model_render::ModelRef presented_unit(MatchModels& models, uint16_t slot) {
                 motion.record,
                 motion.instance
             );
+        if (const auto pose = mirrored_pose(
+                models, world.record, slot, playout_moment(presentation, presentation.fraction)
+            )) {
+            motion.record.position = pose->position;
+            motion.record.heading = pose->heading;
+            motion.record.pitch = pose->pitch;
+            motion.record.bank = pose->bank;
+        }
         // The pieces were set without the setters, which would mark the
         // transforms for rebuilding.
         motion.state.transforms_dirty = true;
@@ -326,11 +337,77 @@ void bridge_line(
     oa::present::draw_clipped_line(&bridge.surface, x0, y0, x1, y1, color);
 }
 
+/// Tells whether a unit's owner is another machine's player: in use with
+/// OA_PLAYER_STATUS_MIRRORED. Only such a player's records move its units;
+/// the units of a player in use but free or closed stay where the
+/// simulation has them.
+///
+/// @param world the match's World
+/// @param unit the unit
+/// @return true for a unit of a mirrored player
+bool mirrored_owner(const oa::World& world, const oa::Unit& unit) noexcept {
+    if (unit.owner_index >= OA_PLAYER_COUNT)
+        return false;
+    const oa::Player& owner = world.game.players[unit.owner_index];
+    return owner.in_use != 0 && owner.status == OA_PLAYER_STATUS_MIRRORED;
+}
+
 } // namespace
+
+unit_playout::FrameTime
+playout_moment(const MatchPresentation& presentation, uint32_t fraction) noexcept {
+    return unit_playout::frame_time_between(
+        presentation.tick - presentation.batch, presentation.tick, fraction
+    );
+}
+
+std::optional<unit_playout::UnitPose> mirrored_pose(
+    const MatchModels& models, const oa::World& world, uint16_t slot, unit_playout::FrameTime moment
+) noexcept {
+    const auto* playout = models.presentation.playout;
+    if (playout == nullptr || !models.presentation.seen)
+        return std::nullopt;
+    const oa::Unit* unit = oa::world_unit_at(&world, slot);
+    if (unit == nullptr || unit->type_index == 0 || !mirrored_owner(world, *unit))
+        return std::nullopt;
+    const auto pose = playout->unit_pose(slot, moment);
+    const oa::Unit* carrier =
+        unit->attach_parent != 0 ? oa::world_unit(&world, unit->attach_parent) : nullptr;
+    if (carrier == nullptr)
+        return pose;
+    // A carried unit goes where its carrier is drawn.
+    const auto carrier_pose =
+        mirrored_owner(world, *carrier)
+            ? playout->unit_pose(
+                  static_cast<uint32_t>(oa::world_unit_slot(&world, carrier)), moment
+              )
+            : std::nullopt;
+    if (!carrier_pose)
+        return std::nullopt;
+    if (pose && carrier->owner_index == unit->owner_index)
+        return pose;
+    // Moved by as much as its carrier is drawn away from the carrier's place.
+    const auto moved_with = [](int32_t at, int32_t carrier_at, int32_t carrier_drawn) {
+        return wrapping_sub(at, wrapping_sub(carrier_at, carrier_drawn));
+    };
+    unit_playout::UnitPose moved{};
+    moved.position = {
+        moved_with(unit->position.x, carrier->position.x, carrier_pose->position.x),
+        moved_with(unit->position.y, carrier->position.y, carrier_pose->position.y),
+        moved_with(unit->position.z, carrier->position.z, carrier_pose->position.z)
+    };
+    moved.heading = unit->heading;
+    moved.pitch = unit->pitch;
+    moved.bank = unit->bank;
+    return moved;
+}
 
 FixedVec3 shown_unit_position(
     const MatchModels& models, const oa::World& world, uint16_t slot, uint32_t fraction
 ) {
+    if (const auto pose =
+            mirrored_pose(models, world, slot, playout_moment(models.presentation, fraction)))
+        return pose->position;
     if (fraction < whole_tick && unit_moved(models, slot)) {
         const auto& motion = models.presentation.units[slot];
         return blend_point(motion.previous.position, motion.current.position, fraction);
@@ -428,6 +505,8 @@ MatchModels& Runtime::match_models() {
     fresh.renderer.user = &fresh;
     fresh.renderer.ground_height = terrain_height;
     fresh.renderer.model_of = carried_model;
+    // The units of other machines' players are drawn on their playout.
+    fresh.presentation.playout = &unit_playout_;
     fresh.feature_unit.flags = OA_UNIT_FLAG_VIEWPOINT_OWNED | OA_UNIT_FLAG_BUILDING;
     fresh.feature_unit.flags2 = OA_UNIT_FLAG2_Z_BUFFER;
     // The first record of the type table Game.unit_defs refers to. The
@@ -629,8 +708,13 @@ void Runtime::render_match_surface() {
     observe_match_tick(models, *match_);
     auto& presentation = models.presentation;
     presentation.fraction = tick_fraction(presentation_alpha());
+    // The moment the units of other machines' players are drawn at on their
+    // playout, which the pointer then picks against.
+    presentation.drawn_moment = playout_moment(presentation, presentation.fraction);
+    const auto moment = presentation.drawn_moment;
 
-    // Outside a draw, every unit shows where its tick puts it.
+    // Outside a draw, every unit shows where its tick puts it, a mirrored
+    // unit where its playout has it at the tick.
     struct WholeTickAfter {
         MatchPresentation& presentation;
 
@@ -643,8 +727,9 @@ void Runtime::render_match_surface() {
     } whole_tick_after{presentation};
 
     const bool between_ticks = presentation.fraction < whole_tick;
-    if (between_ticks)
-        ++presentation.draw;
+    // Each draw places the copies it draws from afresh: a mirrored unit draws
+    // from them on whole ticks too.
+    ++presentation.draw;
     {
         const uint32_t tick = match_->simulation().tick;
         const auto shots = match_->projectiles();
@@ -1162,7 +1247,12 @@ void Runtime::render_match_surface() {
                 idle = movement->movement.speed == 0;
         } catch (const std::exception&) {
         }
-        if (between_ticks && unit_or_cargo_moved(models, world_record, unit_index)) {
+        // A unit of another machine's player draws from its copies on every
+        // frame, whole ticks included: they stand on its playout, a few of its
+        // owner's ticks behind its simulated place.
+        const bool on_playout = mirrored_pose(models, world_record, unit_index, moment).has_value();
+        if ((between_ticks && unit_or_cargo_moved(models, world_record, unit_index)) ||
+            on_playout) {
             // The match reads the piece transforms a draw rebuilds, so they
             // are rebuilt as a draw of the whole tick rebuilds them, and the
             // unit draws from its copies placed between the ticks. The image
@@ -1402,14 +1492,20 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
             continue;
         }
-        const auto unit_screen = project_match_point(viewport, slot.unit->position);
+        // A unit drawn on its playout is kept and ordered where it is drawn;
+        // whether it is seen stays with its simulated place.
+        const auto pose = mirrored_pose(models, world_record, slot.unit_index, moment);
+        const auto unit_screen = project_match_point(
+            viewport,
+            pose ? oa::sim::match_runtime::fixed_words(pose->position) : slot.unit->position
+        );
         if (!on_battlefield(unit_screen.x, unit_screen.y))
             continue;
         const auto model = unit_model(models, slot.unit_index);
         if (model.instance == nullptr)
             continue;
         units_to_draw.push_back(slot.unit_index);
-        unit_sites.push_back({model.unit->position.z, model.unit->flags});
+        unit_sites.push_back({pose ? pose->position.z : model.unit->position.z, model.unit->flags});
     }
     oa::present::world_renderer::BattlefieldDrawPlan draw_plan;
     oa::present::world_renderer::plan_battlefield_draws(
@@ -1606,7 +1702,10 @@ void Runtime::render_match_surface() {
             continue;
         }
         // The bars and digits stay with the unit where it shows.
-        const auto screen = between_ticks
+        const bool shown_elsewhere =
+            between_ticks ||
+            mirrored_pose(models, world_record, slot.unit_index, moment).has_value();
+        const auto screen = shown_elsewhere
                                 ? project_match_point(
                                       viewport,
                                       oa::sim::match_runtime::fixed_words(
