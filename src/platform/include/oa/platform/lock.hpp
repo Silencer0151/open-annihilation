@@ -61,9 +61,7 @@ void token_lock_leave(TokenLock* lock, const TokenLockHold* hold) noexcept;
 /// A signal given while no thread waits is kept until the next wait; signals
 /// given before that wait count as one.
 struct WakeEvent {
-    std::mutex mutex; // with condition and signalled, the event
-    std::condition_variable condition;
-    bool signalled{false};
+    base::threads::Event event{}; // an automatically resetting event
 };
 
 /// Signals the event: wakes one thread waiting on it, or else the next to wait.

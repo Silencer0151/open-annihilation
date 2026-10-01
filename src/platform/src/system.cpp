@@ -35,8 +35,7 @@ bool start_thread(ThreadEntry entry, std::size_t, void* argument) noexcept {
 }
 
 uint32_t processor_count() noexcept {
-    const unsigned processors = std::thread::hardware_concurrency();
-    return processors == 0 ? 1 : static_cast<uint32_t>(processors);
+    return base::threads::processor_count();
 }
 
 void set_error_sink(ErrorSink sink) noexcept {

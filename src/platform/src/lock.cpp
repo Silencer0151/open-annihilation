@@ -36,17 +36,11 @@ void token_lock_leave(TokenLock* lock, const TokenLockHold* hold) noexcept {
 }
 
 void wake_event_signal(WakeEvent* event) noexcept {
-    {
-        std::lock_guard guard(event->mutex);
-        event->signalled = true;
-    }
-    event->condition.notify_one();
+    event->event.signal();
 }
 
 void wake_event_wait(WakeEvent* event) noexcept {
-    std::unique_lock guard(event->mutex);
-    event->condition.wait(guard, [event] { return event->signalled; });
-    event->signalled = false;
+    event->event.wait();
 }
 
 } // namespace oa::platform
