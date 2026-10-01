@@ -541,7 +541,13 @@ void draw_explosions(
         const auto& record = world.explosions[i];
         if (!in_view(record.position))
             continue;
-        if (record.fragment != no_fragment) {
+        // A record moves only while its fragment flies (fly_fragment).
+        const bool flying = record.fragment != no_fragment;
+        const FixedVec3 motion = flying ? FixedVec3{wrap_add(record.velocity.x, record.carried.x),
+                                                    wrap_add(record.velocity.y, record.carried.y),
+                                                    wrap_add(record.velocity.z, record.carried.z)}
+                                        : FixedVec3{};
+        if (flying) {
             ParticleDraw item{};
             item.kind = DrawKind::fragment;
             item.sight_gated = false;
@@ -550,6 +556,9 @@ void draw_explosions(
             item.spin[0] = record.spin[0];
             item.spin[1] = record.spin[1];
             item.spin[2] = record.spin[2];
+            item.motion = motion;
+            for (int32_t axis = 0; axis < 3; ++axis)
+                item.spin_motion[axis] = static_cast<int16_t>(record.spin_rate[axis]);
             visit(context, item);
         }
         if (!record.sprite.active())
@@ -560,6 +569,7 @@ void draw_explosions(
         item.position = record.position;
         item.sequence = record.sprite.sequence;
         item.frame = record.sprite.frame_index;
+        item.motion = motion;
         visit(context, item);
     }
 }

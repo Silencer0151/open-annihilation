@@ -256,4 +256,32 @@ void reset_menu_sparks(MenuSparks& state, const Image& background);
 /// @param background FrontendX image whose pixels mark the traces.
 void step_menu_sparks(MenuSparks& state, Surface& surface, const Image& background);
 
+/// The opacity at which blend_rect paints its colour alone, in 256ths.
+inline constexpr uint32_t blend_opaque = 256;
+
+/// Blends a colour over a rectangle of an RGB image.
+///
+/// Each channel of each pixel becomes (pixel * (256 - opacity) + colour *
+/// opacity + 128) / 256, rounded down: an opacity of 0 leaves the pixels as
+/// they were, and blend_opaque or more paints the colour itself. The
+/// rectangle is clipped to the image; an image whose pixels do not fill its
+/// size is left as it is.
+///
+/// @param[in,out] surface the image
+/// @param x the rectangle's left column
+/// @param y the rectangle's top row
+/// @param width the rectangle's width; 0 or less blends nothing
+/// @param height the rectangle's height; 0 or less blends nothing
+/// @param color the colour, red, green and blue
+/// @param opacity the colour's share of each pixel, in 256ths
+void blend_rect(
+    Surface& surface,
+    int x,
+    int y,
+    int width,
+    int height,
+    std::array<uint8_t, 3> color,
+    uint32_t opacity
+) noexcept;
+
 } // namespace oa::ui::frontend_renderer

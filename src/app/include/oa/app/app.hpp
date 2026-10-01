@@ -58,6 +58,17 @@ constexpr int kDefaultWindowHeight = 1080;
 // initial seed, so two runs draw the same frames.
 constexpr uint32_t kFixedClockMsPerTick = 1000 / 30;
 constexpr uint32_t kFixedRandomSeed = 1;
+// The most frames a second the application loop draws unless --max-fps says
+// otherwise; the simulation keeps its 30 ticks a second whatever the rate.
+constexpr uint32_t kDefaultMaxFramesPerSecond = 120;
+// The lowest limit --max-fps takes. Frames on time at this rate or above are
+// at most 25 ms apart, so that no frame's clock step at normal speed runs two
+// ticks, even as the match clock rounds to whole milliseconds: each tick is
+// drawn before the next runs. At 30 a second some frames would run none and
+// the next two.
+constexpr uint32_t kLowestMaxFramesPerSecond = 40;
+// The highest --max-fps and --frame-rate take.
+constexpr uint32_t kHighestFrameRate = 1000;
 constexpr uintptr_t kFrontendMenuHandle = 1;
 constexpr uintptr_t kMessageTargetHandle = 1;
 
@@ -231,6 +242,12 @@ struct Options {
     // the render reaches the world the generator's undrawn replay of the
     // same ticks reaches. Implies --headless-check and --skip-intro.
     bool check_director_render = false;
+    // Draws frames between ticks over the headless skirmish's fight and checks
+    // that they show units, pieces and projectiles part of the way from one
+    // tick to the next, that frames of a whole tick and the world are as
+    // without them, and that units move evenly from frame to frame. Implies
+    // --headless-check and --skip-intro.
+    bool check_interpolation = false;
     // --generate-script RECORDING: the recording a director script is
     // generated from; empty for none. Implies --headless-check and
     // --skip-intro.
@@ -248,6 +265,27 @@ struct Options {
     std::optional<std::pair<uint32_t, uint32_t>> director_chunks;
     bool trace_input = false;
     bool debug_order_lines = false;
+    // The most frames a second the application loop draws (--max-fps); 0
+    // for no limit. While nothing moves on its own and no input comes, the
+    // loop draws fewer (frame_pacing.hpp).
+    uint32_t max_frames_per_second = kDefaultMaxFramesPerSecond;
+    // --frame-rate FPS: the headless match run (--match-ticks) draws every
+    // frame of a loop running at FPS frames a second on a clock that
+    // advances a frame at a time, each frame between two ticks as the
+    // application loop draws it; unset for a tick at a time.
+    std::optional<uint32_t> frame_rate;
+    // --frame-log FILE: that run writes one line a frame: the time, the
+    // tick, the fraction of a tick shown, the camera and a unit it follows.
+    fs::path frame_log;
+    // --scroll-camera: that run holds the camera's scroll, as the arrow keys
+    // would, sweeping it right and back over the army it starts on.
+    bool scroll_camera = false;
+    // --march: that run orders the local player's army (--combat) to march
+    // south at its start.
+    bool march = false;
+    // --follow: that run's camera tracks the unit its frame log follows, as
+    // the T key does.
+    bool follow = false;
     // Set by the checks above: no wall-clock input reaches the match or the frame.
     bool fixed_clock = false;
     // Scripted runs (fixed clock, navigation and menu checks, benchmarks,

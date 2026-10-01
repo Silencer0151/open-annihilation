@@ -477,6 +477,11 @@ void Runtime::present_match_layers() {
     if (!SDL_RenderPresent(sdl_.renderer))
         throw std::runtime_error(std::string("SDL_RenderPresent: ") + SDL_GetError());
     phase_times_.present += elapsed_since(present_start);
+    frame_pacing::note_frame_measure(
+        frame_stats_,
+        frame_pacing::FrameMeasure::present,
+        static_cast<uint64_t>(elapsed_since(upload_start))
+    );
 }
 
 void Runtime::capture_render_target() {
@@ -568,7 +573,11 @@ void Runtime::present_software_cursor() {
 void Runtime::render() {
     const auto compose_start = std::chrono::steady_clock::now();
     rebuild_surface();
-    phase_times_.compose += elapsed_since(compose_start);
+    const auto composed = elapsed_since(compose_start);
+    phase_times_.compose += composed;
+    frame_pacing::note_frame_measure(
+        frame_stats_, frame_pacing::FrameMeasure::draw, static_cast<uint64_t>(composed)
+    );
     // The loading screen went out through the display sink as it was drawn.
     if (screen_ == Screen::loading)
         return;
@@ -577,6 +586,7 @@ void Runtime::render() {
         return;
     }
     // A match's surface_ is composed at the display gamma already.
+    const auto present_start = std::chrono::steady_clock::now();
     const uint8_t* frame = surface_.rgb.data();
     std::vector<uint8_t> corrected;
     if (!gamma_identity_ && screen_ != Screen::match) {
@@ -591,6 +601,11 @@ void Runtime::render() {
     capture_render_target();
     if (!SDL_RenderPresent(sdl_.renderer))
         throw std::runtime_error(std::string("SDL render: ") + SDL_GetError());
+    frame_pacing::note_frame_measure(
+        frame_stats_,
+        frame_pacing::FrameMeasure::present,
+        static_cast<uint64_t>(elapsed_since(present_start))
+    );
 }
 
 [[nodiscard]] oa::ui::gui_input::MenuObject Runtime::input_menu() const {

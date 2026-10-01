@@ -500,6 +500,10 @@ void feature_smoke_never_finishes() {
     check(ungated, "feature smoke is drawn without the sight test");
 }
 
+bool same(const FixedVec3& a, const FixedVec3& b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
 void draw_visits_in_order() {
     Fixture f;
     spawn_nano_outward(
@@ -514,20 +518,28 @@ void draw_visits_in_order() {
     struct Seen {
         int32_t pixels{};
         uint8_t first_color{};
+        int32_t moving{}; ///< pixels whose motion is their particle's delta
+        const EffectWorld* world{};
     } seen{};
+
+    seen.world = f.world.get();
 
     draw_layer(*f.world, layer_nano, &seen, [](void* context, const ParticleDraw& item) {
         auto& s = *static_cast<Seen*>(context);
         if (s.pixels++ == 0)
             s.first_color = item.color;
+        // A nano particle steps by its delta each tick, which the item tells.
+        for (const auto& particle : s.world->nano.records)
+            if (same(particle.position, item.position) && same(particle.delta, item.motion) &&
+                (particle.delta.x != 0 || particle.delta.y != 0 || particle.delta.z != 0)) {
+                ++s.moving;
+                break;
+            }
     });
     check(
         seen.pixels == 5 && seen.first_color == 0xa1, "nano particles draw as pixels in spawn order"
     );
-}
-
-bool same(const FixedVec3& a, const FixedVec3& b) {
-    return a.x == b.x && a.y == b.y && a.z == b.z;
+    check(seen.moving == 5, "each nano pixel's motion is its particle's step");
 }
 
 TrailParticle trail(FixedVec3 position, FixedVec3 delta, int32_t period, int32_t frame) {

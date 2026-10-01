@@ -653,14 +653,26 @@ void draw_explosions_visits_flashes_first() {
     DrawLog log;
     f.world->explosions[1].fragment = claim_fragment(*f.world);
     f.world->explosions[1].spin[2] = 77;
+    f.world->explosions[1].spin_rate[2] = 300;
+    f.world->explosions[1].velocity = units(2, 3, 0);
+    f.world->explosions[1].carried = units(1, 0, -1);
     draw_explosions(*f.world, full_view, &log, [](void* context, const ParticleDraw& item) {
         auto& out = *static_cast<DrawLog*>(context);
         out.kinds[out.count] = item.kind;
         out.sequences[out.count] = item.sequence;
+        // A flying fragment's record moves by its velocity and what it
+        // carried each tick, and turns by its spin rates; a flash holds still.
         if (item.kind == DrawKind::fragment)
             check(
-                item.fragment != nullptr && item.spin[2] == 77,
-                "a fragment carries its slot and spin"
+                item.fragment != nullptr && item.spin[2] == 77 && item.spin_motion[2] == 300 &&
+                    item.motion.x == units(3, 0, 0).x && item.motion.y == units(0, 3, 0).y &&
+                    item.motion.z == units(0, 0, -1).z,
+                "a fragment carries its slot, spin and motion"
+            );
+        else if (item.kind == DrawKind::flash)
+            check(
+                item.motion.x == 0 && item.motion.y == 0 && item.motion.z == 0,
+                "a flash holds still"
             );
         ++out.count;
         check(!item.sight_gated, "explosion records ignore the sight grid");

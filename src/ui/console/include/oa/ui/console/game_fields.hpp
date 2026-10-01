@@ -79,7 +79,7 @@ inline constexpr uint8_t los_type = 0x04;
 // Bits of Game.outcome_flags the console writes.
 namespace outcome_flag {
 // Flipped by debug key 'i', and cleared when F11 turns debug_keys off and when
-// a session starts; the engine never reads it.
+// a session starts; the debug keys' line shows it as "INFO ON" or "INFO OFF".
 inline constexpr uint16_t debug_toggle_i = 0x0001;
 inline constexpr uint16_t debug_keys = 0x0002; // F11: debug hotkeys active
 inline constexpr uint16_t finished = 0x0004;

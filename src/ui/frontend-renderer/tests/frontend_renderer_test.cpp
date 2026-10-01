@@ -298,6 +298,51 @@ void test_grayed_art_cost() {
         );
 }
 
+// A colour blended over a rectangle: each channel mixed by the opacity in
+// 256ths and rounded to the nearest, clipped to the image; no opacity
+// leaves the pixels, a whole one paints the colour.
+void test_blend_rect() {
+    using oa::ui::frontend_renderer::blend_opaque;
+    using oa::ui::frontend_renderer::blend_rect;
+    oa::ui::frontend_renderer::Surface surface;
+    surface.width = 4;
+    surface.height = 3;
+    surface.rgb.assign(4U * 3U * 3U, 200);
+    const auto at = [&](int x, int y, int channel) {
+        return surface.rgb[(static_cast<std::size_t>(y) * surface.width + x) * 3 + channel];
+    };
+    // Three quarters black over 200: (200 * 64 + 128) / 256 = 50.
+    blend_rect(surface, 1, 1, 2, 1, {0, 0, 0}, 192);
+    CHECK(at(1, 1, 0) == 50 && at(2, 1, 1) == 50 && at(2, 1, 2) == 50);
+    CHECK(at(0, 1, 0) == 200 && at(3, 1, 0) == 200 && at(1, 0, 0) == 200 && at(1, 2, 0) == 200);
+    // Half of each channel's colour over 50: (50 * 128 + c * 128 + 128) / 256.
+    blend_rect(surface, 1, 1, 1, 1, {255, 100, 0}, 128);
+    CHECK(at(1, 1, 0) == 153 && at(1, 1, 1) == 75 && at(1, 1, 2) == 25);
+    // No opacity leaves the pixels; a whole one, or more, paints the colour.
+    const auto kept = surface.rgb;
+    blend_rect(surface, 0, 0, 4, 3, {9, 9, 9}, 0);
+    CHECK(surface.rgb == kept);
+    blend_rect(surface, 3, 2, 1, 1, {7, 8, 9}, blend_opaque);
+    CHECK(at(3, 2, 0) == 7 && at(3, 2, 1) == 8 && at(3, 2, 2) == 9);
+    blend_rect(surface, 0, 2, 1, 1, {1, 2, 3}, blend_opaque + 100);
+    CHECK(at(0, 2, 0) == 1 && at(0, 2, 1) == 2 && at(0, 2, 2) == 3);
+    // Clipped at every edge; nothing outside the image, an empty
+    // rectangle or an image whose pixels do not fill its size changes.
+    blend_rect(surface, -3, -3, 4, 4, {0, 0, 0}, blend_opaque);
+    CHECK(at(0, 0, 0) == 0 && at(1, 0, 0) == 200 && at(0, 1, 0) == 200);
+    blend_rect(surface, 3, 1, 10, 10, {0, 0, 0}, blend_opaque);
+    CHECK(at(3, 1, 0) == 0 && at(3, 2, 0) == 0 && at(2, 2, 0) == 200);
+    const auto clipped = surface.rgb;
+    blend_rect(surface, 4, 0, 2, 2, {0, 0, 0}, blend_opaque);
+    blend_rect(surface, 0, 3, 2, 2, {0, 0, 0}, blend_opaque);
+    blend_rect(surface, 1, 1, 0, 2, {0, 0, 0}, blend_opaque);
+    blend_rect(surface, 1, 1, 2, -1, {0, 0, 0}, blend_opaque);
+    CHECK(surface.rgb == clipped);
+    surface.rgb.assign(3, 200);
+    blend_rect(surface, 0, 0, 1, 1, {0, 0, 0}, blend_opaque);
+    CHECK(surface.rgb[0] == 200);
+}
+
 } // namespace
 
 int main() {
@@ -612,6 +657,7 @@ int main() {
     test_grayed_art_frame();
     test_grayed_art_cost();
     test_quick_key_and_focus();
+    test_blend_rect();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

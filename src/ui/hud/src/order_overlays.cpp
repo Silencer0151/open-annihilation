@@ -87,6 +87,16 @@ bool builds_units(const OverlayContext& context, const Unit* unit) noexcept {
     return def != nullptr && def->build_ids != 0;
 }
 
+/// Returns where a unit shows in the frame drawn.
+///
+/// @param context the overlay pass
+/// @param unit the unit
+/// @return the sink's place, or Unit.position without one
+FixedVec3 shown_place(const OverlayContext& context, const Unit& unit) {
+    return context.sink.place != nullptr ? context.sink.place(context.sink.user, unit)
+                                         : unit.position;
+}
+
 } // namespace
 
 ScreenPoint overlay_project(const OverlayView& view, const FixedVec3& point) noexcept {
@@ -212,7 +222,7 @@ void draw_unit_ranges(const OverlayContext& context, const OrderOverlay& order) 
     const auto* def = world_unit_def_of(context.world, unit);
     if (def == nullptr)
         return;
-    const auto& center = unit->position;
+    const FixedVec3 center = shown_place(context, *unit);
     const auto cloak = def->min_cloak_distance;
     const auto& game = context.world->game;
     if (!context.show_ranges) {
@@ -312,7 +322,7 @@ void draw_order_target(const OverlayContext& context, OrderOverlay& order, Fixed
                 static_cast<int32_t>(order.seen_z) << 16
             };
         } else {
-            target = victim.position;
+            target = shown_place(context, victim);
             order.flags |= kOrderTargetSeen;
             order.seen_x = high16(victim.position.x);
             order.seen_z = high16(victim.position.z);
@@ -426,7 +436,7 @@ void draw_target_ring(const OverlayContext& context, const OrderOverlay& order, 
     if (order.target != nullptr) {
         const auto* def = world_unit_def_of(context.world, order.target);
         radius = def != nullptr ? high16(def->size_x) : 0;
-        center = order.target->position;
+        center = shown_place(context, *order.target);
     }
     const auto squashed = static_cast<int32_t>(radius * kRingSquash);
     const auto origin = overlay_project(context.view, center);
@@ -450,8 +460,8 @@ void draw_unit_order_overlays(
     if (context.sink.orders == nullptr)
         return;
     bool ranges_drawn = false;
-    FixedVec3 previous = unit.position;
-    FixedVec3 point = unit.position;
+    FixedVec3 previous = shown_place(context, unit);
+    FixedVec3 point = previous;
     for (OrderOverlay* node = context.sink.orders(context.sink.user, unit, false); node != nullptr;
          node = node->next) {
         auto& order = *node;

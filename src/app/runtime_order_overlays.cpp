@@ -5,6 +5,7 @@
 // order-overlay module over the match's order queues, drawn into the
 // battlefield frame, and the ShowRanges check.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
 
 #include "oa/formats/gaf.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -151,6 +152,11 @@ Runtime::OrderOverlayPass Runtime::draw_order_overlays(
     context.sink.ground_height = [](void* user, const FixedVec3& point) {
         auto& match = *static_cast<Frame*>(user)->runtime->match_;
         return match.map_height(static_cast<uint32_t>(point.x), static_cast<uint32_t>(point.z));
+    };
+    // The paths start where the frame shows each unit (a frame between ticks).
+    context.sink.place = [](void* user, const oa::Unit& unit) -> FixedVec3 {
+        auto& runtime = *static_cast<Frame*>(user)->runtime;
+        return shown_unit_position(runtime.match_models(), runtime.match_->state(), unit.id);
     };
     context.sink.can_see = [](void* user, const oa::Player* viewer, const oa::Unit& unit) {
         auto& match = *static_cast<Frame*>(user)->runtime->match_;

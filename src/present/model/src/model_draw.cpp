@@ -235,8 +235,17 @@ bool compose_bounds(void* user, const Unit& unit, ui::hud::SpriteBounds& out) {
     }
     if (model.instance == nullptr)
         return false;
+    // The composer places a carried unit's extent by `unit`, the record it
+    // walked to; the unit draws where the record model_of handed back stands,
+    // which a draw between ticks places elsewhere.
     ModelBounds bounds{};
-    expand_model_bounds(bounds, *model.instance, 0, 0, 0);
+    expand_model_bounds(
+        bounds,
+        *model.instance,
+        wrap_sub(model.unit->position.x, unit.position.x),
+        wrap_sub(model.unit->position.y, unit.position.y),
+        wrap_sub(model.unit->position.z, unit.position.z)
+    );
     out = {bounds.left, bounds.right, bounds.top, bounds.bottom};
     return true;
 }
@@ -711,13 +720,13 @@ void draw_unit_model(
                     draw_piece_flat(
                         renderer,
                         target,
-                        *child,
+                        *carried.unit,
                         camera_x,
                         camera_z,
                         child_source.objects[piece.object_index],
                         carried.prepared->objects[piece.object_index],
                         piece,
-                        child->owner_index,
+                        carried.unit->owner_index,
                         first_frame
                     );
             }
@@ -771,9 +780,9 @@ void draw_unit_model(
         if (!has_image(*carried.state))
             continue;
         apply_build_effect(renderer, carried.state->image.sprite, carried);
-        const int32_t cx = wrap_sub(child->position.x, unit.position.x);
-        const int32_t cy = wrap_sub(child->position.y, unit.position.y);
-        const int32_t cz = wrap_sub(child->position.z, unit.position.z);
+        const int32_t cx = wrap_sub(carried.unit->position.x, unit.position.x);
+        const int32_t cy = wrap_sub(carried.unit->position.y, unit.position.y);
+        const int32_t cz = wrap_sub(carried.unit->position.z, unit.position.z);
         present::composite_depth_sprite(
             carried.state->image.sprite, composite, hi(cx), hi(cz) - (hi(cy) >> 1), hi(cy)
         );
@@ -1118,12 +1127,8 @@ void note_piece_changes(const ModelRef& model) {
     }
 }
 
-void draw_linked_model(
-    ModelRenderer& renderer, Surface* target, const ModelRef& model, bool movement_idle
-) {
+void update_linked_transforms(const ModelRenderer& renderer, const ModelRef& model) {
     const Unit& unit = *model.unit;
-    if (unit.attach_parent != 0)
-        return;
     update_model_transforms(model);
     for (const Unit* child = world_unit(renderer.world, unit.attach_first_child); child != nullptr;
          child = world_unit(renderer.world, child->attach_next)) {
@@ -1133,6 +1138,15 @@ void draw_linked_model(
         if (carried.instance != nullptr)
             update_model_transforms(carried);
     }
+}
+
+void draw_linked_model(
+    ModelRenderer& renderer, Surface* target, const ModelRef& model, bool movement_idle
+) {
+    const Unit& unit = *model.unit;
+    if (unit.attach_parent != 0)
+        return;
+    update_linked_transforms(renderer, model);
     ModelState& state = *model.state;
     // The build finished since the image was built: the image goes, as the
     // build's end drops it.

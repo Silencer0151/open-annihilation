@@ -7,7 +7,6 @@
 #include "oa/present/world_renderer/world_camera.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -16,6 +15,14 @@
 #include <string>
 
 namespace oa::app {
+
+namespace {
+
+// The longest step the zoom eases by, in seconds, however long since the
+// last frame.
+constexpr float kLongestZoomStep = 0.05F;
+
+} // namespace
 
 bool Runtime::radar_contains(float x, float y) const {
     return radar_picture_.width > 0 && radar_picture_.height > 0 &&
@@ -230,25 +237,32 @@ void Runtime::step_match_zoom() {
     // The director sets the zoom of every frame itself, off the wall clock.
     if (director_mode())
         return;
-    const auto now = std::chrono::steady_clock::now();
-    float dt = 1.0F / 120.0F;
-    if (zoom_clock_valid_) {
-        dt = std::chrono::duration<float>(now - zoom_clock_).count();
-        dt = std::clamp(dt, 0.0F, 0.05F);
+    // Seconds since the zoom last eased, from the frames' times; the first
+    // frame takes a frame at the full rate, and a long gap counts as
+    // kLongestZoomStep.
+    float dt = 1.0F / static_cast<float>(kDefaultMaxFramesPerSecond);
+    if (zoom_clock_valid_ && frame_time_ns_ >= zoom_clock_) {
+        dt = static_cast<float>(
+            static_cast<double>(frame_time_ns_ - zoom_clock_) /
+            static_cast<double>(frame_pacing::kNanosecondsPerSecond)
+        );
+        dt = std::clamp(dt, 0.0F, kLongestZoomStep);
     }
-    zoom_clock_ = now;
+    zoom_clock_ = frame_time_ns_;
     zoom_clock_valid_ = true;
     if (std::abs(match_zoom_ - match_zoom_target_) < 1.0e-4F) {
         match_zoom_ = match_zoom_target_;
         if (zoom_anchored_) {
             apply_zoom_anchor();
             zoom_anchored_ = false;
+            camera_moved_ = true;
         }
         return;
     }
     const auto t = 1.0F - std::exp(-kZoomLerpHz * dt);
     match_zoom_ += (match_zoom_target_ - match_zoom_) * t;
     apply_zoom_anchor();
+    camera_moved_ = true;
 }
 
 void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y) {
@@ -284,17 +298,22 @@ void Runtime::pan_match_camera() {
     // Neither keys nor the pointer move the director's camera.
     if (screen_ != Screen::match || !selected_tnt_ || director_mode())
         return;
-    // Paced as the game paces it: the map pixels moved in a frame are the
-    // scroll speed times the whole 30 Hz clock units since the previous frame,
-    // so a second of scrolling covers the same ground at any frame rate, at
-    // the match record's speed (the preference, or the console's ScrollSpeed).
-    const auto elapsed =
-        oa::ui::hud::scroll_clock_advance(scroll_clock_, static_cast<uint32_t>(SDL_GetTicks()));
+    // The map pixels moved in a frame are the scroll speed, pixels per 30 Hz
+    // clock unit, times the clock units the frame's real time is worth, so a
+    // second of scrolling covers the same ground at any frame rate, at the
+    // match record's speed (the preference, or the console's ScrollSpeed),
+    // and the camera moves a steady amount each frame.
+    const uint64_t elapsed_ns =
+        scroll_clock_ != 0 && frame_time_ns_ > scroll_clock_ ? frame_time_ns_ - scroll_clock_ : 0;
+    scroll_clock_ = frame_time_ns_;
     const auto speed =
         match_ != nullptr ? match_->state().game.scroll_speed : preferences_.scroll_speed;
-    const auto step = oa::ui::hud::scroll_step(speed, elapsed);
+    const double step = frame_pacing::scroll_distance(speed, elapsed_ns);
     const bool* keys = SDL_GetKeyboardState(nullptr);
     int dx = 0, dz = 0;
+    // A --frame-rate run's held scroll is an arrow key.
+    if (frame_run_clock_ns_)
+        dx += frame_run_scroll_;
     if (keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_A])
         --dx;
     if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D])
@@ -335,7 +354,7 @@ void Runtime::pan_match_camera() {
     // Zoom keeps the on-screen rate constant; the carried fraction keeps the
     // world rate exact rather than rounding it every frame.
     const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    scroll_zoom_carry_ += static_cast<double>(step) / zoom;
+    scroll_zoom_carry_ += step / zoom;
     const auto move = static_cast<int32_t>(std::floor(scroll_zoom_carry_));
     scroll_zoom_carry_ -= static_cast<double>(move);
     if (move == 0)
@@ -344,6 +363,7 @@ void Runtime::pan_match_camera() {
     zoom_anchored_ = false;
     match_camera_x_ += std::clamp(dx, -1, 1) * move;
     match_camera_z_ += std::clamp(dz, -1, 1) * move;
+    camera_moved_ = true;
 }
 
 void Runtime::issue_resume_or_repair(uint16_t id) {

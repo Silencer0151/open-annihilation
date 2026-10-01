@@ -213,11 +213,17 @@ height) is not limited to the player's range. `linear` moves `x`, `z` and
 
 A shot runs from the first frame that shows its tick to the first frame of
 the next shot; frame *f* shows the game after tick `first shot tick + floor(f
-* tickrate / framerate)`. With the defaults each tick is shown on two
-frames: units move 30 times a second and the camera 60. Game time is never
-skipped. A transition's frames draw the tick twice, from the shot's own
-camera and from the view the shot before ended on, held still, and blend
-them.
+* tickrate / framerate)`. A frame whose time, `first shot tick + f *
+tickrate / framerate`, lies between two ticks is drawn from the later tick,
+with units (their place, heading and the pieces their scripts move and
+turn), projectiles, debris, fragments and particles shown that part of the
+way from the earlier tick, as the game draws frames between ticks; a frame
+on a whole tick is the tick as it is. With the defaults every other frame
+lies half way between two ticks, so units move 60 times a second, as the
+camera does. The last frames, which would need the tick no frame shows,
+are drawn from the tick they show. Game time is never skipped. A
+transition's frames draw the tick twice, from the shot's own camera and
+from the view the shot before ended on, held still, and blend them.
 
 Scripts are read and written by `src/formats/oascript` (the grammar and
 every limit are in its headers), and compiled into cameras by
@@ -226,9 +232,10 @@ every limit are in its headers), and compiled into cameras by
 ## Sound
 
 The sound is the game's sound effects as heard from the director's camera:
-each tick is replayed with the camera of the first frame that shows it,
-which places the tick's sounds, and a sound starts on the first sample of
-that frame. Every sound the game plays at a point is placed in stereo from
+each tick is replayed with the camera of the first frame that shows it
+whole, which places the tick's sounds, and a sound starts on the first
+sample of that frame, though a frame before it is drawn part of the way to
+the tick. Every sound the game plays at a point is placed in stereo from
 the view's centre, as the game places sounds with 3D sound on, and every
 player's units speak (their acknowledgements, build and under-attack
 announcements), placed at the unit; the game itself speaks only for the
@@ -275,8 +282,10 @@ bundles.
   plays out alike, but their first frames may not match a whole render's
   pixel for pixel: models' texture animations and cached images start with
   the first frame drawn.
-- **Units move 30 times a second.** At 60 frames a second each tick is shown
-  twice, and a fast camera tracking a unit may judder.
+- **What changes at the tick rate alone.** Between ticks only places,
+  headings, piece poses and spins are shown part of the way: sprite and
+  texture animation frames, smoke puffs, the nanoframe's pulse and units
+  that appear, jump or are loaded and dropped change at the tick.
 - **A map smaller than the smallest view** (270 map pixels high, or 480
   wide at 16:9) is drawn from its top-left corner.
 - **Drawing is slow when many units show.** The renderer draws on the CPU,

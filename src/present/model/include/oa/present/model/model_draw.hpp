@@ -146,7 +146,9 @@ struct ModelRenderer {
     void* user{};
     // Terrain height (pixels) under a world point.
     int32_t (*ground_height)(void* user, const FixedVec3& position){};
-    // Model of a carried unit; a null instance when it has none.
+    // Model of a carried unit; a null instance when it has none. The carried
+    // unit draws where the returned ModelRef's record stands, which may be a
+    // copy of `unit` placed elsewhere (a draw between two ticks).
     ModelRef (*model_of)(void* user, const Unit& unit){};
 };
 
@@ -400,6 +402,15 @@ void set_model_shift(const ModelRef& model, sim::model_runtime::RotationWords ro
 /// @param model model to update
 void update_model_transforms(const ModelRef& model);
 
+/// Updates the transforms of a unit and its carried units, as draw_linked_model does first.
+///
+/// Only the transforms and the root shift change (update_model_transforms);
+/// the image cache is left for the next draw_linked_model.
+///
+/// @param renderer drawing context; its model_of finds the carried units
+/// @param model the carrying unit's model
+void update_linked_transforms(const ModelRenderer& renderer, const ModelRef& model);
+
 /// Replays the cache resets of the piece setters by comparing each piece with its state at the last draw.
 ///
 /// model_runtime does not report piece changes, so each piece is compared
@@ -412,9 +423,10 @@ void note_piece_changes(const ModelRef& model);
 
 /// Draws a unit and its carried units.
 ///
-/// Updates the transforms of the unit and its carried units, refreshes the
-/// image cache and draws the model at the renderer's camera. Carried units
-/// are drawn by their carrier, so a carried unit draws nothing here.
+/// Updates the transforms of the unit and its carried units
+/// (update_linked_transforms), refreshes the image cache and draws the model
+/// at the renderer's camera. Carried units are drawn by their carrier, so a
+/// carried unit draws nothing here.
 ///
 /// Finishing a build drops the unit's cached image: an image built while the
 /// unit was unfinished holds every piece, and once the unit is finished the

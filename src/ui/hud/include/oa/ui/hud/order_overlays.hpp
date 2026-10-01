@@ -166,6 +166,12 @@ struct OverlaySink {
     bool (*can_see)(void* user, const Player* viewer, const Unit& unit);
     /// First order of a unit's primary (or secondary) queue.
     OrderOverlay* (*orders)(void* user, const Unit& unit, bool secondary);
+    /// Where a unit shows in the frame drawn, which may lie part of the way
+    /// from its place at the tick before (a frame between two ticks); the
+    /// overlays start their paths, centre their ranges and find their target
+    /// units there. Null takes Unit.position. Whether a target is seen, and
+    /// where it was last seen, still follows Unit.position.
+    FixedVec3 (*place)(void* user, const Unit& unit){};
 };
 
 /// The battlefield view the overlays are projected into.

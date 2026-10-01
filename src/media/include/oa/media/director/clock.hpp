@@ -55,6 +55,32 @@ struct FrameClock {
 /// @return first_tick + floor(frame * tickrate / framerate)
 [[nodiscard]] uint32_t frame_tick(const FrameClock& clock, uint64_t frame) noexcept;
 
+/// The parts of a tick frame_place measures a frame's place in.
+inline constexpr uint32_t tick_parts = 0x10000;
+
+/// Where a frame lies between two ticks.
+struct FramePlace {
+    /// The tick the frame is drawn from: the first at or after the frame's
+    /// time, first_tick + frame * tickrate / framerate.
+    uint32_t tick{};
+    /// How far past the tick before `tick` the frame's time lies, in
+    /// tick_parts parts of a tick, rounded down; tick_parts when it lies on
+    /// `tick` itself.
+    uint32_t fraction{tick_parts};
+};
+
+/// Returns where a frame lies between two ticks, for a frame drawn part of
+/// the way from one tick to the next.
+///
+/// A frame whose time is a whole tick lies on frame_tick's tick; any other
+/// lies past it, part of the way to the next tick, and is drawn from that next tick.
+///
+/// @param clock the clock
+/// @param frame the frame, counted from 0
+/// @return the tick and the fraction; the tick is capped at the largest
+///         32-bit tick, where the fraction is tick_parts
+[[nodiscard]] FramePlace frame_place(const FrameClock& clock, uint64_t frame) noexcept;
+
 /// Returns the first frame that shows a tick or a later one.
 ///
 /// @param clock the clock

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The director's clock: frame ticks at common frame and tick rates, the
-// first frame of a tick, audio sample ranges without drift, durations in
-// frames, chunk boundaries in both modes, and exact results at the largest
-// values the script allows.
+// The director's clock: frame ticks at common frame and tick rates, each
+// frame's place between two ticks, the first frame of a tick, audio sample
+// ranges without drift, durations in frames, chunk boundaries in both modes,
+// and exact results at the largest values the script allows.
 
 #include "oa/media/director/clock.hpp"
 
@@ -133,6 +133,57 @@ void test_frame_ticks() {
     expect_first_frames(clock_of(3, {45, 0}, {60, 0}), 400);
     expect_first_frames(clock_of(0, {300, 0}, {60, 0}), 400);
     expect_first_frames(clock_of(0, {1, 3}, {239999, 3}), 5);
+}
+
+/// Checks a frame's place: its tick and its part of the way there.
+void expect_place(
+    const director::FrameClock& clock,
+    uint64_t frame,
+    uint32_t tick,
+    uint32_t fraction,
+    const std::source_location where = std::source_location::current()
+) {
+    const director::FramePlace place{director::frame_place(clock, frame)};
+    expect(place.tick == tick && place.fraction == fraction, "frame place", where);
+}
+
+void test_frame_places() {
+    constexpr uint32_t whole{director::tick_parts};
+    constexpr uint32_t half{director::tick_parts / 2};
+    // 60 frames a second at 30 ticks: every other frame lies half way to the next tick.
+    const director::FrameClock sixty{clock_of(100, {30, 0}, {60, 0})};
+    expect_place(sixty, 0, 100, whole);
+    expect_place(sixty, 1, 101, half);
+    expect_place(sixty, 2, 101, whole);
+    expect_place(sixty, 3, 102, half);
+    // 120 frames a second: quarters.
+    const director::FrameClock fast{clock_of(0, {30, 0}, {120, 0})};
+    expect_place(fast, 4, 1, whole);
+    expect_place(fast, 5, 2, director::tick_parts / 4);
+    expect_place(fast, 6, 2, half);
+    expect_place(fast, 7, 2, director::tick_parts * 3 / 4);
+    // At the tick rate every frame is a whole tick, as frame_tick says.
+    const director::FrameClock even{clock_of(5, {30, 0}, {30, 0})};
+    for (uint64_t frame{}; frame < 100; ++frame)
+        expect_place(even, frame, director::frame_tick(even, frame), whole);
+    // A frame on a whole tick lies on frame_tick's tick; any other on the next.
+    for (const auto& clock :
+         {sixty, fast, clock_of(7, {30, 0}, {24, 0}), clock_of(0, {30, 0}, {29970, 3})})
+        for (uint64_t frame{}; frame < 3000; ++frame) {
+            const director::FramePlace place{director::frame_place(clock, frame)};
+            const uint32_t shown{director::frame_tick(clock, frame)};
+            expect(
+                place.fraction == whole ? place.tick == shown
+                                        : place.tick == shown + 1 && place.fraction < whole,
+                "frame place against frame_tick"
+            );
+        }
+    // Thirds round down.
+    expect_place(clock_of(0, {30, 0}, {90, 0}), 1, 1, 21845);
+    expect_place(clock_of(0, {30, 0}, {90, 0}), 2, 1, 43690);
+    // The largest tick is a whole tick.
+    const director::FrameClock top{clock_of(0, {2999999, 3}, {239999, 3})};
+    expect_place(top, 343597383, std::numeric_limits<uint32_t>::max(), whole);
 }
 
 void test_frame_samples() {
@@ -267,6 +318,7 @@ void test_maxima() {
 int main() {
     test_rational_of();
     test_frame_ticks();
+    test_frame_places();
     test_frame_samples();
     test_frames_of_seconds();
     test_chunks();

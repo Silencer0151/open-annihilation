@@ -961,25 +961,30 @@ ParticleDraw pixel_item(int32_t color, const FixedVec3& position) {
 void draw_emitter(
     const EffectWorld& world, const Emitter& e, void* context, ParticleVisitor visit
 ) {
+    // Each particle that steps by its delta tells the step as its motion.
+    const auto moving = [](ParticleDraw item, const FixedVec3& delta) {
+        item.motion = delta;
+        return item;
+    };
     switch (e.kind) {
     case EmitterKind::teleport_trail:
         each_particle(world.trail, e.particles, [&](const TrailParticle& p) {
-            visit(context, sprite_item(p.sequence, p.frame, p.position, true));
+            visit(context, moving(sprite_item(p.sequence, p.frame, p.position, true), p.delta));
         });
         break;
     case EmitterKind::nano:
         each_particle(world.nano, e.particles, [&](const NanoParticle& p) {
-            visit(context, pixel_item(p.color, p.position));
+            visit(context, moving(pixel_item(p.color, p.position), p.delta));
         });
         break;
     case EmitterKind::flame:
         each_particle(world.flame, e.particles, [&](const FlameParticle& p) {
-            visit(context, sprite_item(p.sequence, p.frame, p.position, true));
+            visit(context, moving(sprite_item(p.sequence, p.frame, p.position, true), p.delta));
         });
         break;
     case EmitterKind::wake:
         each_particle(world.wake, e.particles, [&](const WakeParticle& p) {
-            visit(context, pixel_item(p.value, p.position));
+            visit(context, moving(pixel_item(p.value, p.position), p.delta));
         });
         break;
     case EmitterKind::smoke:

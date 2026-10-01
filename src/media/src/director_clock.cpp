@@ -191,6 +191,26 @@ uint32_t frame_tick(const FrameClock& clock, uint64_t frame) noexcept {
     );
 }
 
+FramePlace frame_place(const FrameClock& clock, uint64_t frame) noexcept {
+    const uint64_t ticks_numerator{
+        multiply_saturated(numerator_of(clock.tickrate), denominator_of(clock.framerate))
+    };
+    const uint64_t ticks_denominator{
+        multiply_saturated(denominator_of(clock.tickrate), numerator_of(clock.framerate))
+    };
+    const Quotient elapsed{divide(multiply(frame, ticks_numerator), ticks_denominator)};
+    const uint64_t whole{elapsed.saturated ? largest_tick : capped(elapsed.value, largest_tick)};
+    const uint64_t tick{capped(uint64_t{clock.first_tick} + whole, largest_tick)};
+    if (elapsed.saturated || elapsed.remainder == 0 || tick == largest_tick)
+        return FramePlace{static_cast<uint32_t>(tick), tick_parts};
+    return FramePlace{
+        static_cast<uint32_t>(tick + 1),
+        static_cast<uint32_t>(
+            multiply_divide_down(elapsed.remainder, tick_parts, ticks_denominator)
+        ),
+    };
+}
+
 uint64_t first_frame_of_tick(const FrameClock& clock, uint32_t tick) noexcept {
     if (tick <= clock.first_tick)
         return 0;

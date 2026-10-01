@@ -604,7 +604,9 @@ inline constexpr int32_t pixel_item_side = 2;
 // `color`; flashes darken through the shade table with the shade levels of
 // `frame` of `sequence`; fragments draw as 3DO objects turned by `spin`.
 // Layer items other than feature smoke are drawn only where the viewer's
-// sight grid shows the point.
+// sight grid shows the point. `motion` and `spin_motion` say how the item
+// moves and turns in a tick, so that a frame drawn between two ticks can show
+// it part of the way through its step; the simulation never reads them.
 struct ParticleDraw {
     DrawKind kind{};
     bool sight_gated{true};
@@ -614,6 +616,13 @@ struct ParticleDraw {
     uint8_t color{};
     const ShatterFragment* fragment{};
     int16_t spin[3]{};
+    /// The step each tick moves the item by, 16.16: a teleport-trail, nano,
+    /// flame or wake particle's delta, and a flying fragment's velocity and
+    /// the velocity it carried off its unit (a tick's fall left out); zero
+    /// for smoke, flashes and explosion sprites, which hold still.
+    FixedVec3 motion{};
+    /// The turn each tick adds to `spin`: a fragment's spin rates; zero otherwise.
+    int16_t spin_motion[3]{};
 };
 
 using ParticleVisitor = void (*)(void* context, const ParticleDraw&);

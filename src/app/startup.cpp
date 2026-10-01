@@ -53,6 +53,29 @@ const char* extension_text(const Extension& extension, ExtensionText which, cons
     return text != nullptr ? text : fallback;
 }
 
+/// Returns the frames a second a --max-fps or --frame-rate value names.
+///
+/// Throws std::runtime_error with `expected` unless the whole text is a
+/// decimal integer from `least` through kHighestFrameRate, or 0 when
+/// `zero_allowed`.
+///
+/// @param text the option's value
+/// @param least the lowest rate above 0 the option takes
+/// @param zero_allowed the option takes 0 as well
+/// @param expected the message that says what the option takes
+/// @return the rate
+[[nodiscard]] uint32_t
+parse_frame_rate(std::string_view text, uint32_t least, bool zero_allowed, const char* expected) {
+    uint32_t value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    const bool in_range =
+        (value >= least && value <= kHighestFrameRate) || (zero_allowed && value == 0);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+        !in_range)
+        throw std::runtime_error(expected);
+    return value;
+}
+
 /// Returns the showcase a --showcase value names.
 ///
 /// Throws std::runtime_error naming the showcases for any other value.
@@ -131,6 +154,7 @@ void check_director_options(Options& options) {
         {options.frame_limit.has_value(), "--frames"},
         {!options.snapshot.empty(), "--snapshot"},
         {options.match_ticks.has_value(), "--match-ticks"},
+        {options.frame_rate.has_value(), "--frame-rate"},
         {!options.campaign.empty() || options.campaign_mission.has_value(), "--campaign"},
         {!options.load_file.empty(), "--load"},
         {options.save_after.has_value(), "--save-after"},
@@ -157,6 +181,7 @@ void check_director_options(Options& options) {
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
         {options.check_director_view, "--check-director-view"},
         {options.check_director_render, "--check-director-render"},
+        {options.check_interpolation, "--check-interpolation"},
     };
     for (const auto& [given, name] : refused)
         if (given)
@@ -204,6 +229,28 @@ void check_director_options(Options& options) {
             result.benchmark_frames = parse_count(value(argument));
         else if (argument == "--match-ticks")
             result.match_ticks = parse_count(value(argument));
+        else if (argument == "--max-fps")
+            result.max_frames_per_second = parse_frame_rate(
+                value(argument),
+                kLowestMaxFramesPerSecond,
+                true,
+                "--max-fps expects 0 for no limit, or frames a second from 40 through 1000"
+            );
+        else if (argument == "--frame-rate")
+            result.frame_rate = parse_frame_rate(
+                value(argument),
+                1,
+                false,
+                "--frame-rate expects frames a second from 1 through 1000"
+            );
+        else if (argument == "--frame-log")
+            result.frame_log = path_from_utf8(value(argument));
+        else if (argument == "--scroll-camera")
+            result.scroll_camera = true;
+        else if (argument == "--march")
+            result.march = true;
+        else if (argument == "--follow")
+            result.follow = true;
         else if (argument == "--campaign")
             result.campaign = value(argument);
         else if (argument == "--mission")
@@ -289,6 +336,8 @@ void check_director_options(Options& options) {
             result.check_director_view = true;
         else if (argument == "--check-director-render")
             result.check_director_render = true;
+        else if (argument == "--check-interpolation")
+            result.check_interpolation = true;
         else if (argument == "--generate-script")
             result.generate_script = path_from_utf8(value(argument));
         else if (argument == "--render-script")
@@ -328,11 +377,14 @@ void check_director_options(Options& options) {
                          "[--check-load-save] [--check-frontend-controls] "
                          "[--check-scroll-bars] "
                          "[--check-briefing-narration] [--check-director-view] "
-                         "[--check-director-render] "
+                         "[--check-director-render] [--check-interpolation] "
                          "[--trace-input] "
                       << extension_text(extension, ExtensionText::usage_checks, "")
                       << "[--debug-order-lines] "
-                         "[--benchmark FRAMES] [--match-ticks N] "
+                         "[--max-fps N] "
+                         "[--benchmark FRAMES] [--match-ticks N "
+                         "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
+                         "[--follow]]] "
                          "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
                          "[--resolution WxH] "
                          "[--zoom FACTOR] [--combat UNITS] [--reclaim-check] [--camera X,Z] "
@@ -404,12 +456,20 @@ void check_director_options(Options& options) {
         throw std::runtime_error("--restart-at needs --campaign and --mission");
     if (!result.trace_units.empty() && result.trace_digest.empty())
         throw std::runtime_error("--trace-units needs --trace-digest");
+    if (result.frame_rate && (!result.match_ticks || result.campaign_mission || result.save_after ||
+                              !result.load_file.empty()))
+        throw std::runtime_error("--frame-rate draws a headless skirmish of --match-ticks ticks");
+    if (!result.frame_rate &&
+        (!result.frame_log.empty() || result.scroll_camera || result.march || result.follow))
+        throw std::runtime_error(
+            "--frame-log, --scroll-camera, --march and --follow need --frame-rate"
+        );
     if (extension.check_options != nullptr)
         extension.check_options(extension.context);
     if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
         result.debug_order_lines = true;
     // The director view check runs headless, where SDL is never started.
-    if (result.check_director_view || result.check_director_render) {
+    if (result.check_director_view || result.check_director_render || result.check_interpolation) {
         result.headless_check = true;
         result.skip_intro = true;
     }
@@ -420,7 +480,7 @@ void check_director_options(Options& options) {
         result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
         result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
         result.check_pointer_interfaces || result.check_director_view ||
-        result.check_director_render;
+        result.check_director_render || result.check_interpolation;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

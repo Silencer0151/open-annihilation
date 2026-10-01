@@ -328,6 +328,24 @@ console::Console* Runtime::match_console() {
         );
         console::console_init(&console_->state, world, &console_->host);
         std::copy(std::begin(contour), std::end(contour), console_->state.contour_values);
+        // "+stats" shows the frame statistics over the battlefield
+        // (draw_frame_stats); "+stats 1" and "+stats 0" show and hide them.
+        // 3.1c has no command that shows these times; its frame rate shows
+        // on the debug keys' line (draw_debug_status_line). It is an option:
+        // it needs no passphrase and echoes to this machine alone.
+        (void)oa::ui::services::command_table_set(
+            &console_->state.commands,
+            "Stats",
+            [](oa::ui::services::TokenLine* line) {
+                const console::Console* active = console::console_active();
+                if (active == nullptr || active->host == nullptr)
+                    return;
+                auto* runtime = runtime_of(active->host->context);
+                const int32_t asked = oa::ui::services::token_line_get_int(line, 1, -1);
+                runtime->show_frame_stats(asked < 0 ? !runtime->frame_stats_shown_ : asked != 0);
+            },
+            console::command_class::option | console::command_class::private_echo
+        );
         console_->bound_world = world;
         restore_console_carry();
     }
@@ -777,6 +795,7 @@ void Runtime::check_console_commands() {
         throw std::runtime_error(
             "console check: F11 after the passphrase did not enable debug keys"
         );
+    check_debug_status_line();
     key(SDLK_F11, SDL_SCANCODE_F11);
     // "+reload <unit>" kills that type with outcome 8 before reloading it:
     // a solar collector placed for the computer player must be gone after
@@ -816,6 +835,7 @@ void Runtime::check_console_commands() {
     check_console_debug_commands(enter_line);
     check_console_sound_commands(enter_line);
     check_console_display_commands(enter_line);
+    check_console_stats(enter_line);
     if (extension_.check_console != nullptr) {
         std::function<void(const char*)> line_entry = enter_line;
         extension_.check_console(
@@ -834,7 +854,8 @@ void Runtime::check_console_commands() {
     std::cout << "console check: +clock toggled the clock, +atm added 1000 metal, +give moved "
                  "metal, +reload removed a unit, a spawn by name and +kill (which turned victory "
                  "and defeat off), +feature and +burnone at the cursor, passphrase and F11 debug "
-                 "keys, +contour lines, +profile bars and DebugBreak's gate work\n";
+                 "keys with their FRATE line, +contour lines, +profile bars, +stats and "
+                 "DebugBreak's gate work\n";
 }
 
 void Runtime::enter_console_check_line(const char* text) {

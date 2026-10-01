@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // oa-game command-line parsing of the trace stream, seed, game directory,
-// data folder, window size, video capture and showcase options, and of the
-// options and switches an extension takes.
+// data folder, window size, frame rate, video capture and showcase options,
+// and of the options and switches an extension takes.
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
@@ -118,6 +118,70 @@ int main() {
     expect(traced.trace_digest == "run.trace", "--trace-digest takes its file");
     expect(traced.trace_units == "run.units", "--trace-units takes its file");
     expect(traced.seed && *traced.seed == 1234567u, "--seed takes its value");
+
+    // The frame rate the loop keeps, and the headless run drawn frame by frame.
+    expect(
+        plain.max_frames_per_second == oa::app::kDefaultMaxFramesPerSecond,
+        "120 frames a second unless --max-fps says otherwise"
+    );
+    expect(parse({"--max-fps", "60"}).max_frames_per_second == 60, "--max-fps takes its rate");
+    expect(parse({"--max-fps", "0"}).max_frames_per_second == 0, "--max-fps 0 is no limit");
+    expect(
+        rejection({"--max-fps", "1001"}) ==
+            "--max-fps expects 0 for no limit, or frames a second from 40 through 1000",
+        "--max-fps refuses a rate above 1000"
+    );
+    expect(
+        rejection({"--max-fps", "39"}) ==
+            "--max-fps expects 0 for no limit, or frames a second from 40 through 1000",
+        "--max-fps refuses a rate at which a frame may run two ticks"
+    );
+    expect(
+        parse({"--max-fps", "40"}).max_frames_per_second == oa::app::kLowestMaxFramesPerSecond,
+        "--max-fps takes its lowest rate"
+    );
+    const auto framed = parse(
+        {"--headless-check",
+         "--match-ticks",
+         "60",
+         "--frame-rate",
+         "120",
+         "--frame-log",
+         "run.frames",
+         "--scroll-camera",
+         "--march",
+         "--follow"}
+    );
+    expect(framed.frame_rate && *framed.frame_rate == 120, "--frame-rate takes its rate");
+    expect(
+        framed.frame_log == "run.frames" && framed.scroll_camera && framed.march && framed.follow,
+        "--frame-log, --scroll-camera, --march and --follow go with --frame-rate"
+    );
+    expect(
+        !plain.frame_rate && plain.frame_log.empty() && !plain.scroll_camera && !plain.march &&
+            !plain.follow,
+        "no frame-by-frame run without the flags"
+    );
+    expect(
+        rejection({"--headless-check", "--match-ticks", "60", "--frame-rate", "0"}) ==
+            "--frame-rate expects frames a second from 1 through 1000",
+        "--frame-rate refuses 0"
+    );
+    expect(
+        rejection({"--headless-check", "--frame-rate", "60"}) ==
+            "--frame-rate draws a headless skirmish of --match-ticks ticks",
+        "--frame-rate needs --match-ticks"
+    );
+    expect(
+        rejection({"--headless-check", "--match-ticks", "60", "--march"}) ==
+            "--frame-log, --scroll-camera, --march and --follow need --frame-rate",
+        "--march needs --frame-rate"
+    );
+    expect(
+        rejection({"--headless-check", "--match-ticks", "60", "--follow"}) ==
+            "--frame-log, --scroll-camera, --march and --follow need --frame-rate",
+        "--follow needs --frame-rate"
+    );
 
     // Without an extension the engine knows none of an extension's options.
     for (const char* flag : {"--extra", "--quiet-extra", "--not-an-option"})
@@ -303,6 +367,13 @@ int main() {
             director_render.skip_intro && director_render.fixed_clock && director_render.unattended,
         "--check-director-render is a headless, fixed-clock and unattended run"
     );
+    // So does the check of frames drawn between ticks.
+    const auto interpolation = parse({"--check-interpolation"});
+    expect(
+        interpolation.check_interpolation && interpolation.headless_check &&
+            interpolation.skip_intro && interpolation.fixed_clock && interpolation.unattended,
+        "--check-interpolation is a headless, fixed-clock and unattended run"
+    );
 
     // --generate-script and --render-script run headless on the fixed clock
     // and seed, with nobody there.
@@ -383,6 +454,7 @@ int main() {
         {"--check-match-layers"},
         {"--check-director-view"},
         {"--check-director-render"},
+        {"--check-interpolation"},
     };
     for (const auto* run : {"--generate-script", "--render-script"})
         for (const auto& other : refused_with_scripts) {

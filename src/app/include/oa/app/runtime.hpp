@@ -7,6 +7,7 @@
 #include "app.hpp"
 #include "director_presentation.hpp"
 #include "extension.hpp"
+#include "frame_pacing.hpp"
 #include "full_screen.hpp"
 #include "match_model_draws.hpp"
 #include "offline_services.hpp"
@@ -38,6 +39,7 @@
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/team_panels.hpp"
+#include "oa/ui/services/timers.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
@@ -363,12 +365,13 @@ class Runtime final : public menu::Host,
 
     /// Runs one pass of the idle loop.
     ///
-    /// The overlay and screen packages, music mood and timers, the speech queue, then, unless the
-    /// application is closing, the match camera and the active screen's frame: in
-    /// a match the extension's pump, the pointer's pick of the unit under it
-    /// (pick_cursor_unit), the ticks the clock is worth, the outcome, the
-    /// render (which rebuilds the on-screen list) and the film step, each
-    /// charged to the frame's profile window. When the extension's pump asks
+    /// The frame's time (take_frame_time), the overlay and screen packages, music mood and
+    /// timers, the speech queue, then, unless the application is closing, the match camera and
+    /// the active screen's frame: in a match the extension's pump, the pointer's pick of the
+    /// unit under it (pick_cursor_unit), the ticks the clock is worth at the frame's time and
+    /// the fraction of a tick the frame shows (step_match_frame), the outcome, the render
+    /// (which rebuilds the on-screen list) at that fraction, which goes back to 1 after it, and
+    /// the film step, each charged to the frame's profile window. When the extension's pump asks
     /// to end the run (ScreenServices::quit), the run ends after it and the
     /// frame stops there.
     /// The F2 and Ctrl+F9 screenshot keys reach the hotkey handlers as SDL key
@@ -2902,6 +2905,13 @@ class Runtime final : public menu::Host,
     /// @return the state; rebuilt when the match changed
     MatchModels& match_models();
 
+    /// Runs --check-interpolation: frames drawn between ticks over the
+    /// headless skirmish's fight show its units, pieces and projectiles part
+    /// of the way from one tick to the next, leave every frame of a whole
+    /// tick and the world as they are, and show its units moving evenly.
+    /// Throws std::runtime_error when a check fails.
+    void check_interpolation();
+
     /// Lists the loaded primitive table the match shatters a model object from: the prepared
     /// model's order and flag words, with each primitive's colour and vertex list.
     ///
@@ -3378,9 +3388,9 @@ class Runtime final : public menu::Host,
     /// does not come about in its time or the mission is lost.
     void run_showcase();
 
-    /// Runs one pass of the application loop: the pending SDL events, the
-    /// idle tick, the sweep of finished sound streams when one is due and the
-    /// log files' upkeep.
+    /// Runs one pass of the application loop: the frame's time from the
+    /// pacer, the pending SDL events, the idle tick, the sweep of finished
+    /// sound streams when one is due and the log files' upkeep.
     ///
     /// @param[in,out] running loop flag; cleared when an event ends the loop
     void run_frame(bool& running);
@@ -4824,7 +4834,8 @@ class Runtime final : public menu::Host,
     /// @return the gadget's name, or null when the pointer is over no gadget
     [[nodiscard]] const char* hovered_gadget_name() const;
 
-    /// Draws the game clock and the message log over the battlefield.
+    /// Draws the game clock, the message log, the debug keys' line
+    /// (draw_debug_status_line) and the "+stats" overlay over the battlefield.
     void draw_chat_overlay();
 
     /// Has the extension draw its readouts over the battlefield (Extension::draw_match_overlay).
@@ -5434,6 +5445,20 @@ class Runtime final : public menu::Host,
     /// label font and text colour the HUD last set.
     void draw_profile_bars();
 
+    /// Draws the debug keys' line while they are on (F11 after the developer
+    /// passphrase): "FRATE: n", the frames drawn over the last whole second,
+    /// counted on the frames that draw the line (frame_rate_sample), then
+    /// "[Release]" and "MODE DEBUG INFO ON" or "OFF" (debug key 'i'), in
+    /// COMIX in the message text colour, on the row three COMIX line heights
+    /// less ten pixels down the 640x480 screen at columns 131, 188 and 494.
+    void draw_debug_status_line();
+
+    /// Checks the debug keys' line in the console check, with the debug keys
+    /// on: drawn, it changes the frame on its row alone, from its first
+    /// column on, and debug key 'i' changes only its mode words.
+    /// Throws std::runtime_error when it does not.
+    void check_debug_status_line();
+
     /// Runs a DebugBreak crash test.
     ///
     /// 1 and 2 take 32 MB blocks until the heap gives out and the out-of-memory
@@ -6031,6 +6056,9 @@ class Runtime final : public menu::Host,
     void apply_zoom_anchor();
 
     /// Eases the battlefield zoom toward its target by frame time, keeping the anchor in place.
+    ///
+    /// The time is the frame's (frame_time_ns_), so a --frame-rate run eases
+    /// on its own clock as a player's frames do.
     void step_match_zoom();
 
     /// Zooms the battlefield with the mouse wheel about the pointer.
@@ -6042,12 +6070,15 @@ class Runtime final : public menu::Host,
 
     /// Scrolls the camera with the arrow and WASD keys and at the battlefield's edges.
     ///
-    /// Paced as the game paces it: the map pixels moved in a frame are the scroll
-    /// speed times the whole 30 Hz clock units since the previous frame, so a
-    /// second of scrolling covers the same ground at any frame rate, at the match
-    /// record's speed (the preference, or the console's ScrollSpeed). Zoom keeps
-    /// the on-screen rate constant; the carried fraction keeps the world rate
-    /// exact.
+    /// The map pixels moved in a frame are the scroll speed, pixels per 30 Hz
+    /// clock unit as in 3.1c, times the clock units the frame's real time is
+    /// worth (scroll_distance), so a second of scrolling covers the same
+    /// ground at any frame rate, at the match record's speed (the preference,
+    /// or the console's ScrollSpeed), and the camera moves by a steady amount
+    /// each frame instead of a whole step each clock unit. Zoom keeps the
+    /// on-screen rate constant; the carried fraction keeps the world rate
+    /// exact. A --frame-rate run's held scroll (frame_run_scroll_) counts as
+    /// an arrow key.
     void pan_match_camera();
 
     /// Sends the primary selected unit to resume building or repair a unit.
@@ -7603,9 +7634,9 @@ class Runtime final : public menu::Host,
     uint32_t zoom_anchor_map_y_{};
     int zoom_anchor_sx_{};
     int zoom_anchor_sy_{};
-    std::chrono::steady_clock::time_point zoom_clock_{};
+    uint64_t zoom_clock_{}; ///< the frame time (frame_time_ns_) the zoom last eased at
     bool zoom_clock_valid_ = false;
-    oa::ui::hud::ScrollClock scroll_clock_{};
+    uint64_t scroll_clock_{}; ///< the frame time the camera last scrolled at; 0 before
     double scroll_zoom_carry_ = 0.0;
 
     // The drag box kept while the left button is held on the
@@ -7709,6 +7740,227 @@ class Runtime final : public menu::Host,
     };
 
     PhaseTimes phase_times_{};
+
+    // Frame pacing, the fraction of a tick each frame shows, and the frame
+    // statistics of "+stats" (runtime_frame_stats.cpp, frame_pacing.hpp).
+    // Drawing between ticks reads presentation_alpha(); nothing here
+    // changes the match.
+
+    /// Returns how far between the previous tick's state and the current
+    /// tick's the frame being drawn shows the match.
+    ///
+    /// The previous state is the match's before the latest frame that ran
+    /// ticks, the current its state now: 0 shows the previous, 1 the current,
+    /// as every frame did before the loop drew between ticks. The loop sets it
+    /// for the frame it draws (next_presentation_alpha) and puts 1 back once
+    /// the frame is drawn, so checks, snapshots and every other drawing show
+    /// whole ticks; the director sets it for the frames it renders between
+    /// ticks.
+    ///
+    /// @return the fraction, 0 to 1
+    [[nodiscard]] float presentation_alpha() const noexcept;
+
+    /// Sets the fraction presentation_alpha() returns, for the frames drawn until it is set again.
+    ///
+    /// @param alpha the fraction, clamped to 0 to 1
+    void set_presentation_alpha(float alpha) noexcept;
+
+    /// Returns the time on the steady clock the loop's frames are paced on:
+    /// a --frame-rate run's own clock, else the steady clock's now.
+    ///
+    /// @return nanoseconds
+    [[nodiscard]] uint64_t frame_clock_ns() const;
+
+    /// Starts a frame of the application loop: takes its time from the pacer
+    /// (begin_paced_frame), rolls the frame statistics' second and times the
+    /// frame since the previous one.
+    void begin_loop_frame();
+
+    /// Takes the time the frame being run stands for into frame_time_ns_:
+    /// the loop's frame time when begin_loop_frame gave one, else the clock's
+    /// now, for an idle tick a check runs on its own.
+    void take_frame_time();
+
+    /// Counts the resource readout's eases the frame's time is worth:
+    /// kReadoutEasesPerSecond a second of frame time, carried from frame to
+    /// frame, at most kMostReadoutEases a frame, and one after a longer gap
+    /// or on a check's fixed clock, where the readout eases once a draw.
+    void count_readout_eases();
+
+    /// Returns the eases the resource readout takes in this draw and clears them.
+    ///
+    /// @return the eases count_readout_eases counted for the frame; 1 for a
+    ///     draw outside a counted frame (a check's, the director's, or a
+    ///     second draw of the frame)
+    uint32_t take_readout_eases();
+
+    /// Returns the milliseconds the match clock steps to this frame.
+    ///
+    /// @return a check's fixed clock (clock_milliseconds()) unless a
+    ///     --frame-rate run's clock runs; else the frame's time
+    [[nodiscard]] uint32_t frame_clock_milliseconds() const;
+
+    /// Steps the match clock for the frame when it steps, chooses the
+    /// fraction of a tick the frame shows (present_frame_between_ticks), and
+    /// centres a tracking camera where the frame shows its unit
+    /// (place_tracking_camera).
+    void step_match_frame();
+
+    /// Moves the battlefield camera for the frame, before its clock step: eases
+    /// the zoom, scrolls (pan_match_camera), and, unless a menu holds the match,
+    /// takes up the unit Game.follow_unit names and centres on the tracked
+    /// unit where its tick holds it (center_camera_on_unit). The application
+    /// loop and a --frame-rate run move it so.
+    void move_match_camera();
+
+    /// Centres the camera on the tracked unit where the frame about to be
+    /// drawn shows it, part of the way through the tick at
+    /// presentation_alpha(), after the frame's clock step (step_match_frame):
+    /// the unit holds still on the screen and the ground moves under it
+    /// evenly, and the pointer, clicks and the build box map through the
+    /// camera the frame is drawn from. Nothing while a menu holds the match,
+    /// when nothing is tracked or when the director draws. The camera is this
+    /// player's view, not the simulation's state.
+    void place_tracking_camera();
+
+    /// Chooses the fraction of a tick the frame about to be drawn shows.
+    ///
+    /// Whole ticks (1) when the clock did not step, the match is paused, a
+    /// check's fixed clock runs, or a film frame is due; else
+    /// next_presentation_alpha over the clock step, at the frame's time.
+    ///
+    /// @param stepped the match clock stepped this frame
+    /// @param ticks_before match_timing_.tick before the step
+    void present_frame_between_ticks(bool stepped, uint32_t ticks_before);
+
+    /// Ends a frame of the application loop: times its work, chooses the
+    /// rate (paced_frame_rate) and the wait (frame_wait_), and waits for the
+    /// next frame, ending an idle wait early when an event comes, which it
+    /// then dispatches.
+    ///
+    /// @param[in,out] running loop flag; cleared when the event ends the loop
+    void pace_next_frame(bool& running);
+
+    /// Notes an input event, which keeps the loop at its full rate for a while.
+    ///
+    /// @param event the event just received
+    void note_input_activity(const SDL_Event& event);
+
+    /// Shows or hides the "+stats" overlay.
+    ///
+    /// @param shown true shows it
+    void show_frame_stats(bool shown);
+
+    /// Where draw_frame_stats drew the "+stats" overlay, in canvas pixels.
+    struct FrameStatsPlace {
+        oa::ui::display_layout::Rect panel{}; ///< the panel, its edge included
+        oa::ui::display_layout::Rect graph{}; ///< the graph's bars' area
+        int scale{};                          ///< canvas pixels to a source pixel
+        /// Each value column's right edge, where its values end.
+        std::array<int, frame_pacing::kFrameStatsValueColumns> value_right{};
+        /// Each row's top: the tops of its glyphs.
+        std::array<int, frame_pacing::kFrameStatsRowsMost> row_top{};
+    };
+
+    /// Returns what the "+stats" overlay shows besides the measures: the
+    /// rates the loop keeps and the units the frame's drawing drew.
+    ///
+    /// @return the notes; before the loop has paced a frame, the full rate
+    ///     as the rate it keeps
+    [[nodiscard]] frame_pacing::FrameStatsNotes frame_stats_notes() const;
+
+    /// Draws the "+stats" overlay at the battlefield's bottom right, when
+    /// shown, in the match label font, and notes where it drew it
+    /// (frame_stats_place_). It reads the statistics and writes nothing of
+    /// the match.
+    ///
+    /// The panel is laid out for the widest texts its table shows
+    /// (frame_stats_panel::lay_out_panel), so nothing in it moves from frame
+    /// to frame, and is drawn at hud_text_scale(), or at the largest whole
+    /// scale below it at which it fits the battlefield's bottom right
+    /// quarter (frame_stats_panel::place_panel). It darkens the battlefield
+    /// under it and has a black outline and a raised edge in the GUI
+    /// palette's light and dark edge colours. On it, the table
+    /// frame_stats_table describes: the title in the text's white, the
+    /// column names in a mid gray over a rule, labels and the units count in
+    /// a light gray, and each time in a green, the health bar's yellow or
+    /// its red as it graded within the frame's allowance, within a tick or
+    /// over a tick when it was taken (time_severity), a time over a tick on
+    /// a red cell too. Under the table, a graph of the last two seconds of
+    /// frames (frame_pacing::FrameHistory), the newest at the right, each
+    /// column's bar as high as its longest frame and in that frame's
+    /// grade's colour, over a gray line at a tick and a fainter dotted one
+    /// at the frame's allowance.
+    void draw_frame_stats();
+
+    /// Checks "+stats" through the chat line: it needs no passphrase, echoes
+    /// to this machine alone, and draws its panel, with its outline, raised
+    /// edge, darkened fill and graph, at its inset from the battlefield's
+    /// bottom right corner and inside its bottom right quarter, changing
+    /// nothing outside the panel; at window sizes from 640x480 to 3840x2160
+    /// the panel fits that quarter, at scale 2 from 1280x960. Over two
+    /// seconds of frames on time, over the frame's allowance, over a tick
+    /// and past the graph's top, nothing in the panel moves; every column of
+    /// the graph has its longest frame's height and grade's colour, the
+    /// newest at the right, covering the lines at a tick and at the frame's
+    /// allowance where it reaches them; the table shows each grade's colour,
+    /// ends the frame row's times at their columns' right edges and puts a
+    /// red cell behind a time over a tick. Typed again, it takes the overlay
+    /// away, leaving the frame as it was.
+    ///
+    /// @param enter_line types a line into the chat line and submits it
+    void check_console_stats(const std::function<void(const char*)>& enter_line);
+
+    /// Prepares the headless skirmish of --match-ticks: the size, zoom,
+    /// armies, reclaim check and camera the options ask for.
+    void prepare_headless_match();
+
+    /// Runs --frame-rate: the headless skirmish played and drawn frame by
+    /// frame on a clock that advances 1 / frame_rate seconds a frame, each
+    /// frame taking the steps the match clock owes and drawn between two
+    /// ticks as the application loop draws it, until `ticks` ticks have run.
+    /// Prints the frames drawn, the ticks run and the world's digest (the
+    /// camera and the clock's frame-counting adaptation left out), which do
+    /// not depend on the frame rate; writes the frame log when asked.
+    ///
+    /// @param ticks ticks to run
+    /// @param frames_per_second the loop's rate
+    void run_headless_frames(std::size_t ticks, uint32_t frames_per_second);
+
+    /// Digests the running match as match_world_digest does, without the
+    /// camera and the clock's adaptation, which count frames.
+    ///
+    /// @return the 64-bit digest
+    [[nodiscard]] uint64_t frame_run_digest();
+
+    float presentation_alpha_ = 1.0F;                    ///< presentation_alpha()
+    frame_pacing::FramePacer frame_pacer_{};             ///< the application loop's schedule
+    frame_pacing::TickPresentation tick_presentation_{}; ///< the fraction from frame to frame
+    frame_pacing::FrameStatsWindow frame_stats_{};       ///< the "+stats" figures
+    frame_pacing::FrameDrawCounts frame_draws_{}; ///< what the frame's drawing showed of the units
+    /// The debug keys' frame counter (draw_debug_status_line).
+    oa::ui::services::FrameRate debug_line_rate_{};
+    /// The frame time the resource readout has eased up to; empty before the first.
+    std::optional<uint64_t> readout_clock_ns_{};
+    /// The eases the frame's resource readout takes; empty for one a draw.
+    std::optional<uint32_t> readout_eases_{};
+    bool frame_stats_shown_ = false; ///< "+stats" shows the overlay
+    /// Where the last frame drew the "+stats" overlay; empty when it drew none.
+    std::optional<FrameStatsPlace> frame_stats_place_{};
+    uint64_t frame_time_ns_{};       ///< the time the frame being run stands for
+    bool loop_frame_time_ = false;   ///< begin_loop_frame gave frame_time_ns_ for this frame
+    uint64_t loop_frame_start_ns_{}; ///< when the loop's frame started, on the steady clock
+    uint64_t previous_loop_frame_start_ns_{}; ///< when the frame before it started; 0 for none
+    uint64_t last_input_ns_{};           ///< when the last input event came, on the steady clock
+    bool camera_moved_ = false;          ///< the camera scrolled or the zoom eased this frame
+    uint32_t paced_frames_per_second_{}; ///< the rate the loop keeps now; 0 for no limit
+    /// How the loop waits for the next frame to be due (pace_next_frame).
+    frame_pacing::FrameWait frame_wait_{};
+    /// A --frame-rate run's clock, nanoseconds; empty for the steady clock.
+    std::optional<uint64_t> frame_run_clock_ns_{};
+    /// The scroll a --frame-rate run holds (Options::scroll_camera): 1 to the
+    /// right, -1 to the left, as the arrow keys; 0 for none.
+    int32_t frame_run_scroll_{};
 
     struct {
         int x = 0;

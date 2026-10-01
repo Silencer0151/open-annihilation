@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The in-game console's developer displays and crash tests: the debug grid
-// and "Contour" lines over the terrain, the "Profile" frame-time bars and
-// "DebugBreak", with their headless check.
+// and "Contour" lines over the terrain, the "Profile" frame-time bars, the
+// debug keys' frame-rate line and "DebugBreak", with their headless check.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
 #include "oa/app/match_console.hpp"
 
 #include "oa/present/model/model_library.hpp"
@@ -18,6 +19,7 @@
 #include "oa/sim/selection.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/services/timers.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
 
@@ -25,8 +27,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -41,6 +45,20 @@ namespace {
 // The crash tests wait this long after taking a fullscreen display back to a
 // window, before it breaks.
 constexpr uint32_t kDebugBreakSettleMs = 500;
+// The debug keys' line on the 640x480 screen (draw_debug_status_line): its
+// row lies three COMIX line heights less ten pixels down, and its three
+// parts start at these columns.
+constexpr int32_t kDebugLineRows = 3;
+constexpr int32_t kDebugLineRaise = 10;
+constexpr int32_t kDebugLineRateX = 131;
+constexpr int32_t kDebugLineBuildX = 188;
+constexpr int32_t kDebugLineModeX = 494;
+// The build the line names, and the mode words: the debug keys are on
+// whenever the line is drawn, and debug key 'i' turns the information on.
+constexpr const char* kDebugLineBuild = "[Release]";
+constexpr const char* kDebugLineMode = "DEBUG";
+constexpr const char* kDebugLineInfoOn = "ON";
+constexpr const char* kDebugLineInfoOff = "OFF";
 // The debug grid's font, smlfont, which the grid reads on its first draw
 // (start-up keeps its own smlfont, with COMIX, in place of Game.common_fonts).
 constexpr const char* kSmallFontPath = "fonts\\smlfont.FNT";
@@ -160,9 +178,22 @@ void Runtime::draw_match_debug_grid(
         const auto cell = search.cell(static_cast<uint32_t>(x), static_cast<uint32_t>(z));
         return wr::DebugSearchCell{cell.flags, cell.predecessor};
     };
-    sources.random.user = match_.get();
+    // However often a tick is drawn, the grid takes from the match's random
+    // stream what one draw takes (DebugGridRandom).
+    auto& kept = match_models().debug_random;
+    start_debug_grid_draw(kept, match_->simulation().tick);
+
+    struct GridNumbers {
+        DebugGridRandom* kept{};
+        oa::sim::match_runtime::Match* match{};
+    } numbers{&kept, match_.get()};
+
+    sources.random.user = &numbers;
     sources.random.next = [](void* user) {
-        return static_cast<int32_t>(static_cast<oa::sim::match_runtime::Match*>(user)->lcg_rand());
+        auto& grid = *static_cast<GridNumbers*>(user);
+        return next_debug_grid_number(*grid.kept, [&] {
+            return static_cast<int32_t>(grid.match->lcg_rand());
+        });
     };
     oa::present::model::bridge_begin(bridge, frame, area, scale, display.palette);
     oa::present::model::bridge_open(
@@ -206,6 +237,126 @@ void Runtime::draw_profile_bars() {
             font_height,
             profile::category_labels[category],
             category
+        );
+}
+
+void Runtime::draw_debug_status_line() {
+    if (!match_)
+        return;
+    const oa::Game& game = match_->state().game;
+    if ((game.outcome_flags & console::outcome_flag::debug_keys) == 0)
+        return;
+    const oa::formats::fnt::Font& font = message_font();
+    ensure_ui_colors();
+    // The counter counts the frames that draw the line, on the clock the
+    // frame's match clock step read.
+    const oa::ui::services::Clock clock{
+        this,
+        [](void* context) {
+            return static_cast<const Runtime*>(context)->frame_clock_milliseconds();
+        },
+        nullptr
+    };
+    const int32_t rate = oa::ui::services::frame_rate_sample(&debug_line_rate_, &clock);
+    const auto height = static_cast<int32_t>(static_cast<uint8_t>(font.nominal_height));
+    const int32_t row = kDebugLineRows * height - kDebugLineRaise;
+    const int scale = hud_text_scale();
+    const uint8_t color = ui_colors_[kUiColorText];
+    const auto part = [&](int32_t x, const char* text) {
+        const auto at = hud_canvas(x, row);
+        draw_match_text(&font, at.x, at.y, text, color, scale);
+    };
+    char text[48];
+    std::snprintf(text, sizeof text, "FRATE: %d", static_cast<int>(rate));
+    part(kDebugLineRateX, text);
+    part(kDebugLineBuildX, kDebugLineBuild);
+    const bool info = (game.outcome_flags & console::outcome_flag::debug_toggle_i) != 0;
+    std::snprintf(
+        text,
+        sizeof text,
+        "MODE %s INFO %s",
+        kDebugLineMode,
+        info ? kDebugLineInfoOn : kDebugLineInfoOff
+    );
+    part(kDebugLineModeX, text);
+}
+
+void Runtime::check_debug_status_line() {
+    oa::Game& game = match_->state().game;
+    const uint16_t kept = game.outcome_flags;
+    // The echoed lines stay out of the compared frames.
+    const auto capture = [&](uint16_t flags) {
+        game.outcome_flags = flags;
+        oa::sim::messages::clear_messages(game);
+        render_match_surface();
+        return surface_;
+    };
+    const auto keys = console::outcome_flag::debug_keys;
+    const auto info = console::outcome_flag::debug_toggle_i;
+    const auto without = capture(static_cast<uint16_t>(kept & ~keys));
+    const auto info_off = capture(static_cast<uint16_t>((kept | keys) & ~info));
+    const auto info_on = capture(static_cast<uint16_t>(kept | keys | info));
+    game.outcome_flags = kept;
+    // The line's row and its first and mode columns on the canvas.
+    const auto& font = message_font();
+    const auto height = static_cast<int32_t>(static_cast<uint8_t>(font.nominal_height));
+    const int32_t row = kDebugLineRows * height - kDebugLineRaise;
+    const auto start =
+        oa::ui::display_layout::source_to_canvas(match_layout_, kDebugLineRateX, row);
+    const auto mode = oa::ui::display_layout::source_to_canvas(match_layout_, kDebugLineModeX, row);
+    const int line_bottom =
+        start.y + static_cast<int>(oa::formats::fnt::line_height(font)) * hud_text_scale();
+
+    // The box about the pixels two frames differ in within a region, and how
+    // many they are.
+    struct Changed {
+        std::size_t pixels{};
+        int left{std::numeric_limits<int>::max()};
+        int top{std::numeric_limits<int>::max()};
+        int right{std::numeric_limits<int>::min()};
+        int bottom{std::numeric_limits<int>::min()};
+    };
+
+    const auto changed =
+        [](const renderer::Surface& a, const renderer::Surface& b, int top, int bottom) {
+            Changed box{};
+            for (std::size_t at = 0; at + 2 < a.rgb.size() && at + 2 < b.rgb.size(); at += 3) {
+                const auto x = static_cast<int>((at / 3) % a.width);
+                const auto y = static_cast<int>((at / 3) / a.width);
+                if (y < top || y > bottom ||
+                    (a.rgb[at] == b.rgb[at] && a.rgb[at + 1] == b.rgb[at + 1] &&
+                     a.rgb[at + 2] == b.rgb[at + 2]))
+                    continue;
+                ++box.pixels;
+                box.left = std::min(box.left, x);
+                box.right = std::max(box.right, x);
+                box.top = std::min(box.top, y);
+                box.bottom = std::max(box.bottom, y);
+            }
+            return box;
+        };
+    const auto text = [](const Changed& box) {
+        return std::to_string(box.pixels) + " pixels in (" + std::to_string(box.left) + ", " +
+               std::to_string(box.top) + ")-(" + std::to_string(box.right) + ", " +
+               std::to_string(box.bottom) + ")";
+    };
+    const int any_row = std::numeric_limits<int>::max();
+    // The line: text on its row, from its first column on. The debug keys
+    // change other readouts too, elsewhere on the screen.
+    const Changed line = changed(without, info_off, start.y - 1, line_bottom + 1);
+    if (line.pixels < kTextMinPixels || line.left < start.x - 1)
+        throw std::runtime_error(
+            "console check: the debug keys' line changed " + text(line) + " on its row from (" +
+            std::to_string(start.x) + ", " + std::to_string(start.y) + ") to y " +
+            std::to_string(line_bottom)
+        );
+    // Debug key 'i': the line's mode words alone.
+    const Changed words = changed(info_off, info_on, 0, any_row);
+    if (words.pixels == 0 || words.left < mode.x - 1 || words.top < start.y - 1 ||
+        words.bottom > line_bottom + 1)
+        throw std::runtime_error(
+            "console check: debug key 'i' changed " + text(words) +
+            ", not the debug keys' line's mode words from x " + std::to_string(mode.x)
         );
 }
 

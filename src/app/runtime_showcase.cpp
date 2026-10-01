@@ -39,8 +39,6 @@ constexpr double kPressSeconds = 0.15;       // a button held down, drawn presse
 constexpr double kScreenTimeoutSeconds = 60.0;
 constexpr double kMarchTimeoutSeconds = 900.0;
 constexpr double kNanosecondsPerSecond = 1e9;
-// The application loop's rest between frames, in milliseconds.
-constexpr uint32_t kFrameDelayMs = 8;
 // The camera changes to a unit nearer the goal only when it is this many map
 // pixels nearer, so that it does not jump between neighbours, and looks for
 // the nearest this often, in seconds.
@@ -78,12 +76,12 @@ void Runtime::run_showcase() {
         fail("needs the game's window");
     bool running = true;
     const auto now = [] { return static_cast<double>(SDL_GetTicksNS()) / kNanosecondsPerSecond; };
-    // One pass of the application loop, as run() makes it.
+    // One pass of the application loop, paced as run() paces it.
     const auto frame = [&] {
         run_frame(running);
         if (!running || exit_requested_)
             fail("the game was closed");
-        SDL_Delay(kFrameDelayMs);
+        pace_next_frame(running);
     };
     const auto hold = [&](double seconds) {
         const auto end = now() + seconds;

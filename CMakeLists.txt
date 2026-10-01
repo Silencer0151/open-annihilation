@@ -255,10 +255,35 @@ if(BUILD_TESTING)
   target_link_libraries(oa-match-model-draws-test PRIVATE oa-app-headers oa-present-model oa-sim-feature-runtime
     oa-options)
   add_test(NAME match-model-draws COMMAND oa-match-model-draws-test)
+  # What frames between two ticks show: the blends of places, angles and
+  # piece poses, the poses each tick leaves, and projectiles and debris
+  # followed from one tick to the next.
+  add_executable(oa-app-presentation-interpolation-test src/app/presentation_interpolation_test.cpp
+    src/app/presentation_interpolation.cpp)
+  target_link_libraries(oa-app-presentation-interpolation-test PRIVATE oa-app-headers
+    oa-present-model oa-sim-effect-particles oa-options)
+  add_test(NAME app-presentation-interpolation COMMAND oa-app-presentation-interpolation-test)
   # When the match clock steps: menus, the outcome and the pause bit.
   add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
   target_link_libraries(oa-app-match-clock-test PRIVATE oa-base-game-loop oa-ui-console oa-options)
   add_test(NAME app-match-clock COMMAND oa-app-match-clock-test)
+  # The application loop's pacing over a fake clock: frames evenly spaced
+  # at the rate asked for, 30 ticks a second at any frame rate, the fraction
+  # of a tick each frame shows, the camera's scroll for a frame's real time,
+  # and the +stats overlay's figures, frame history, grades and table.
+  add_executable(oa-app-frame-pacing-test src/app/frame_pacing_test.cpp src/app/frame_pacing.cpp)
+  target_link_libraries(oa-app-frame-pacing-test PRIVATE oa-app-headers oa-base-game-loop oa-ui-hud
+    oa-options)
+  add_test(NAME app-frame-pacing COMMAND oa-app-frame-pacing-test)
+  # The +stats overlay's panel: its rows, columns, notes and graph laid out
+  # over texts of known widths and kept in place whatever the figures, its
+  # place and scale on windows of every size, the height of each frame's
+  # bar and the colour of each grade.
+  add_executable(oa-app-frame-stats-panel-test src/app/frame_stats_panel_test.cpp
+    src/app/frame_stats_panel.cpp src/app/frame_pacing.cpp)
+  target_link_libraries(oa-app-frame-stats-panel-test PRIVATE oa-app-headers oa-base-game-loop
+    oa-ui-hud oa-ui-display-layout oa-options)
+  add_test(NAME app-frame-stats-panel COMMAND oa-app-frame-stats-panel-test)
   # Alt+Enter: the key, the mode it asks for while the window is still
   # switching, and a window of SDL's dummy video driver switched and back.
   add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
@@ -299,9 +324,11 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_check_host.cpp src/app/check_host_input.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
+  src/app/frame_pacing.cpp src/app/frame_stats_panel.cpp src/app/runtime_frame_stats.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
-  src/app/runtime_director_view.cpp src/app/runtime_director.cpp)
+  src/app/runtime_director_view.cpp src/app/runtime_director.cpp
+  src/app/presentation_interpolation.cpp src/app/runtime_interpolation_check.cpp)
 # The run manifest of a director render names the engine's version.
 set_property(SOURCE src/app/runtime_director.cpp APPEND PROPERTY COMPILE_DEFINITIONS
   "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
@@ -353,7 +380,7 @@ if(OA_BUILD_PLATFORM)
     configure_file(src/app/open-annihilation.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc" @ONLY)
     target_sources(oa-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc")
   endif()
-  target_link_libraries(oa-game PRIVATE oa-ui-display-layout)
+  target_link_libraries(oa-game PRIVATE oa-ui-display-layout oa-ui-gadget-render)
   target_link_libraries(oa-game PRIVATE oa-media-director oa-media-director-planner oa-audio-offline-mix
     oa-formats-oascript oa-formats-zip oa-app-director-output)
   target_link_libraries(oa-game PRIVATE ${oa_game_intro_player} SDL3::SDL3 ${oa_game_libraries}
@@ -471,10 +498,11 @@ if(OA_BUILD_PLATFORM)
       # sound and manifests are written, neither a chunk's sound nor the
       # world depends on the chunks drawn before it, and the render reaches
       # the world the generator's undrawn replay reaches. The frames and the
-      # sound are pinned.
+      # sound are pinned; at 60 frames a second every other frame lies half
+      # way between two ticks, and is drawn so.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
       set(oa_director_render_hashes
-        "director render: frames c70634a9984e59d0d954978f235d634f1b6b75d6e74b04cee25c7a543079f001 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d")
+        "director render: frames 120ddb6c955601391f182b27d0796b3d4e252463f4a22f35c0a3897156ba2094 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render
@@ -498,6 +526,21 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
         PASS_REGULAR_EXPRESSION "${oa_director_render_hashes}"
         FAIL_REGULAR_EXPRESSION "director render check:|filesystem error")
+      # Frames drawn between ticks over the headless skirmish's fight leave the
+      # world and every whole tick's frame as they are, show units, turrets
+      # and projectiles part of the way from one tick to the next, and move
+      # a unit, and the ground under a camera tracking it, along the even
+      # path frame by frame at 120 frames a second.
+      set(oa_interpolation_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/interpolation")
+      file(MAKE_DIRECTORY "${oa_interpolation_dir}")
+      add_test(NAME native-interpolation COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --check-interpolation
+        --preferences-file "${oa_interpolation_dir}/interpolation.conf")
+      set_tests_properties(native-interpolation PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_interpolation_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        PASS_REGULAR_EXPRESSION "interpolation: [0-9]+ frames between ticks drew"
+        FAIL_REGULAR_EXPRESSION "interpolation check:")
       # native-intro-switch, which starts the game with -y, is registered
       # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order
@@ -603,6 +646,19 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-trace PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The seeded headless skirmish, its army marching, played through
+        # the match clock and drawn every frame at 30, 60, 120 and 144
+        # frames a second writes one trace stream and reaches one world
+        # digest; at 120 the scrolled camera moves the same distance every
+        # frame, each frame shows a quarter of a tick more, and a marching
+        # unit drawn between ticks moves on nearly every frame, none carrying
+        # more than half the most it moves in a tick; and a camera tracking
+        # the unit keeps it at one place of the screen on every frame.
+        add_test(NAME native-frame-rate COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_frame_rate.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-frame-rate PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # Arm mission 9 (AC09) at medium, its commander left idle, is lost to
         # the two Pyros its script sends: defeat follows the commander's death
         # after the outcome countdown, with no failed tick.

@@ -111,6 +111,87 @@ and `app-window-icon` that the embedded one decodes.
   flips (and another player's machine may set), holds any match inside the
   clock, whose time moves on so that nothing is caught up on resuming; a
   save stores the bit as the match holds it. `app-match-clock` tests both.
+- `frame_pacing.hpp`, `frame_pacing.cpp`, `frame_stats_panel.hpp`,
+  `frame_stats_panel.cpp`, `runtime_frame_stats.cpp`: the
+  application loop's frames, apart from the simulation's 30 ticks a second.
+  The loop draws up to `--max-fps` frames a second (120 unless it says
+  otherwise; 0 for no limit, and never fewer than 40, so that a frame on
+  time never runs two ticks at normal speed), each frame standing for its
+  time on an evenly spaced run of frames (`FramePacer`), with a precise wait
+  between them; a frame that ends late starts the next at once and the run
+  goes on from it, never with frames bunched to catch up. While nothing
+  moves on its own (no stepping match, no camera motion, no input for half
+  a second), a paused multiplayer match among them, it draws 30 a second,
+  and an event ends the wait at once. The match clock steps to each
+  frame's time, and the frame is drawn the fraction of the way between the
+  state before the last batch of ticks and the state after it that its time
+  stands for (`presentation_alpha()`, `next_presentation_alpha`): never
+  past the current tick, whole ticks while the match is paused, waits on
+  another machine or catches up, on a check's fixed clock and for a film
+  frame, and 1 again once the frame is drawn, so that every other drawing
+  shows whole ticks. The unit drawing adds what it drew to `frame_draws_`
+  (`FrameDrawCounts`). The camera scrolls and the zoom eases for each
+  frame's real time (`scroll_distance`), so they move a steady amount every
+  frame, and a camera tracking a unit is centred, after the clock step,
+  where the frame shows the unit (`place_tracking_camera`), so that the
+  unit holds still on the screen, and the pointer, clicks and the build box
+  map through the camera the frame is drawn from. The resource readout
+  eases toward the stores 120 times a second of frame time, as often as it
+  eased at the default rate. Drawing a unit refreshes the piece positions
+  some of its script's queries read, so a tick with no frame drawn after it
+  (a frame slower than a tick, or a batch of ticks above normal speed) can
+  still change the match, as it could before frames were drawn between
+  ticks. "+stats", an option command the runtime adds to the console,
+  shows a panel at the battlefield's bottom right: the battlefield
+  darkened under it, a black outline and a raised edge in the GUI
+  palette's light and dark edge colours, and on it a table
+  (`frame_stats_table`) titled "Frame stats (ms)" of the frames a second
+  of the last second, with the rate the loop keeps, the frame, work, tick,
+  draw and present times' least, mean and most in columns, and the units
+  the last frame drew. Each time is graded as it is taken, against the
+  allowance of the frame it belongs to (`frame_allowance_ns`: 1 / the rate
+  kept, and half a millisecond after a precise wait or two after an idle
+  one, whose wait is rounded up to whole milliseconds), and shows in a
+  green within it, the health bar's yellow over it but within a tick, or
+  its red, on a red cell, over a tick (`time_severity`), so that times
+  keep their colours when the rate changes. Under the table, a graph of
+  the last two seconds of frames laid end to end (`FrameHistory`, a
+  column for each 1/120 s holding the longest frame that covers it): a
+  frame a column at 120 frames a second, a 33 ms idle frame four columns
+  wide, and a hitch as wide as it lasted, each bar in its frame's grade's
+  colour, capped in white past the graph's 40 ms, over a gray line at a
+  tick and a fainter dotted one at the frame's allowance.
+  `frame_stats_panel` lays the panel out in the match label font for the
+  widest texts the table shows (`frame_stats_widest_table`), so nothing in
+  it moves from frame to frame, and places it at the HUD's text scale, or
+  at the largest whole scale below it at which it fits the battlefield's
+  bottom right quarter; it reads the statistics and writes nothing of the
+  match. The console check types "+stats" and checks the panel's outline,
+  edge, fill and graph, that it fits the quarter at window sizes from
+  640x480 to 3840x2160, that every column of the graph has its frame's
+  height and colour over two seconds of late and slow frames, the lines,
+  the colours, alignment and red cells of the table, that nothing moves,
+  and that nothing outside the battlefield's bottom right quarter changes. 3.1c
+  has no command that shows these times; its frame rate shows as "FRATE:"
+  on the debug keys' line (F11 after the developer passphrase), with
+  "[Release]" and "MODE DEBUG INFO ON" or "OFF", which
+  `draw_debug_status_line` draws as 3.1c does and the console check
+  checks. `app-frame-pacing` tests the pacing, the fraction, the figures,
+  the history and the grades over a fake clock, and
+  `app-frame-stats-panel` the panel's rows, columns, notes and graph, its
+  place and scale, the bars and lines and each grade's colour. `--frame-rate FPS` with `--match-ticks` plays
+  the headless skirmish frame by frame on a clock of its own, moving the
+  camera and stepping the clock as the loop does and drawing each frame as
+  the loop does; `--frame-log FILE` writes each frame's time, tick,
+  fraction, camera and a unit it follows, where the simulation holds it and
+  where the frame drew it, `--scroll-camera` sweeps the camera's scroll
+  right and back over the army, `--march` sends the local army south and
+  `--follow` tracks the unit the log follows. `native-frame-rate` checks
+  that 30, 60, 120 and 144 frames a second write one trace stream and reach
+  one world digest; that at 120 the camera moves evenly, each frame shows a
+  quarter of a tick more, and the unit drawn moves on nearly every frame,
+  none carrying more than half the most it moves in a tick; and that a
+  tracked unit is drawn at one place of the screen on every frame.
 - `full_screen.hpp`, `full_screen.cpp`: Alt+Enter (Return or keypad Enter,
   either Alt key; Option on macOS), which switches the window between full
   screen and a window on every screen, during the movies and while a match
@@ -165,6 +246,27 @@ and `app-window-icon` that the embedded one decodes.
   (each chunk's frame manifest and sound, the run manifest), run `ffmpeg` on
   the chunks and join them, and read and write the `.oamovie` bundle;
   `app-director-output` tests them without an encoder.
+- Frames between ticks: `presentation_interpolation.hpp` and `.cpp` keep
+  each unit's pose (place, heading and the pieces its script moved and
+  turned), the projectile pool and the debris table at the last two ticks
+  the presentation saw, and blend them; a batch of ticks one frame ran
+  (above normal speed) blends from the tick before the batch.
+  `match_models.hpp` holds the match renderer's state with them
+  (`MatchModels`). `render_match_surface` draws at `presentation_alpha()`,
+  which the application loop's pacing chooses for each frame: at 1 the
+  tick as it is, below 1 each moved unit from copies of its record and
+  model instance placed part of the way from the tick before, with a draw
+  state of their own, while the match's own pieces are rebuilt as a whole
+  tick's draw rebuilds them; projectiles, debris, fragments, particles,
+  health bars, order lines and a tracking camera follow. The director
+  draws its frames between ticks so. The debug grid takes the match's
+  random numbers on a tick's first draw alone and draws the same numbers
+  again on the tick's later draws (`DebugGridRandom`), so that, shown, it
+  takes from the match's random stream what one draw a tick takes at any
+  frame rate; before, each draw took more, and a match with the grid shown
+  ended otherwise at another frame rate. `app-presentation-interpolation`
+  tests the blends and the grid's numbers, and `--check-interpolation`
+  (`runtime_interpolation_check.cpp`) the frames.
 
 ## Game folder
 

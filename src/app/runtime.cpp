@@ -29,9 +29,6 @@ namespace oa::app {
 
 namespace {
 
-// Milliseconds the application loop rests between frames.
-constexpr uint32_t kFrameDelayMs = 8;
-
 // Names a built-in screen in the headless check's output.
 [[nodiscard]] std::string_view screen_label(Screen screen) {
     switch (screen) {
@@ -168,6 +165,11 @@ int Runtime::run() {
             flush_preferences();
             return 0;
         }
+        if (options_.check_interpolation) {
+            check_interpolation();
+            flush_preferences();
+            return 0;
+        }
         if (extension_run(RunPhase::headless_first))
             return exit_code;
         if (options_.check_navigation)
@@ -186,7 +188,10 @@ int Runtime::run() {
             return result;
         }
         if (options_.match_ticks) {
-            run_headless_match(*options_.match_ticks);
+            if (options_.frame_rate)
+                run_headless_frames(*options_.match_ticks, *options_.frame_rate);
+            else
+                run_headless_match(*options_.match_ticks);
             flush_preferences();
             return 0;
         }
@@ -306,7 +311,7 @@ int Runtime::run() {
         }
         run_frame(running);
         ++frames;
-        SDL_Delay(kFrameDelayMs);
+        pace_next_frame(running);
     }
     if (video_capture_) {
         video_capture_->finish();
@@ -323,6 +328,7 @@ void Runtime::take_video_capture(std::unique_ptr<VideoCapture> capture) {
 }
 
 void Runtime::run_frame(bool& running) {
+    begin_loop_frame();
     SDL_Event event{};
     while (SDL_PollEvent(&event))
         dispatch_event(event, running);
@@ -337,6 +343,7 @@ void Runtime::run_frame(bool& running) {
 
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     note_window_activation(event);
+    note_input_activity(event);
     // Alt+Enter switches between full screen and a window on every screen,
     // before the screen or a screen package sees the key; its repeats reach
     // no screen either, so a held Alt+Enter never opens the chat line or
@@ -349,6 +356,8 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
 }
 
 void Runtime::idle_tick() {
+    take_frame_time();
+    camera_moved_ = false;
     tick_screen_packages();
     step_music();
     present_unit_announcements();
@@ -356,19 +365,7 @@ void Runtime::idle_tick() {
         return;
     if (screen_ == Screen::briefing && !briefing_from_pause_)
         tick_mission_briefing();
-    if (screen_ == Screen::match && selected_tnt_)
-        step_match_zoom();
-    if (screen_ == Screen::match && !match_paused_) {
-        pan_match_camera();
-        if (match_)
-            follow_match_camera_unit();
-        if (match_tracking_) {
-            if (!match_unit_present(tracked_match_unit_))
-                stop_match_tracking();
-            else
-                center_camera_on_unit(tracked_match_unit_);
-        }
-    }
+    move_match_camera();
     // Each game frame opens a profile window, and the pump, the
     // ticks and the drawing are charged as they end.
     const bool profiled = screen_ == Screen::match && match_;
@@ -392,11 +389,16 @@ void Runtime::idle_tick() {
         pick_cursor_unit(false);
     // A held scroll bar or arrow moves its knob in the frame's update.
     tick_scroll_bars();
-    if (match_clock_steps())
-        advance_match_clock(clock_milliseconds());
+    step_match_frame();
     if (screen_ == Screen::match && match_)
         present_match_outcome();
+    // The frame is drawn between the ticks at the fraction the clock step
+    // chose; whatever draws after it shows whole ticks.
+    frame_draws_.units_drawn = 0;
+    frame_draws_.units_between_ticks = 0;
+    frame_draws_.probe_drawn = false;
     render();
+    presentation_alpha_ = 1.0F;
     capture_film_frame();
     if (profiled && match_)
         mark_profile(OA_PROFILE_RENDER_STATIC);
@@ -404,6 +406,22 @@ void Runtime::idle_tick() {
     // on its own.
     if (screen_ == Screen::match && match_finished_)
         finish_match_outcome();
+}
+
+void Runtime::move_match_camera() {
+    if (screen_ == Screen::match && selected_tnt_)
+        step_match_zoom();
+    if (screen_ != Screen::match || match_paused_)
+        return;
+    pan_match_camera();
+    if (match_)
+        follow_match_camera_unit();
+    if (match_tracking_) {
+        if (!match_unit_present(tracked_match_unit_))
+            stop_match_tracking();
+        else
+            center_camera_on_unit(tracked_match_unit_);
+    }
 }
 
 uint32_t Runtime::clock_milliseconds() const {
@@ -441,12 +459,25 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
     );
     try {
         for (int32_t step = 0; step < match_timing_.pending_steps; ++step) {
-            if (extension_.simulation_step != nullptr &&
-                extension_.simulation_step(extension_.context, *this))
-                continue;
-            ++match_timing_.tick;
-            match_->simulation().tick = match_timing_.tick;
-            match_->tick();
+            // Each step that runs a tick is timed for the frame statistics,
+            // on the real clock; a step the extension holds runs none.
+            const auto step_start = std::chrono::steady_clock::now();
+            const uint32_t tick_before = match_timing_.tick;
+            if (extension_.simulation_step == nullptr ||
+                !extension_.simulation_step(extension_.context, *this)) {
+                ++match_timing_.tick;
+                match_->simulation().tick = match_timing_.tick;
+                match_->tick();
+            }
+            if (match_timing_.tick != tick_before)
+                frame_pacing::note_frame_measure(
+                    frame_stats_,
+                    frame_pacing::FrameMeasure::tick,
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - step_start
+                    )
+                                              .count())
+                );
         }
     } catch (const std::exception& error) {
         report_match_tick_error(error.what());

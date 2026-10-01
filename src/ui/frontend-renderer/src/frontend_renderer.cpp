@@ -1344,4 +1344,36 @@ void step_menu_sparks(MenuSparks& state, Surface& surface, const Image& backgrou
     }
 }
 
+void blend_rect(
+    Surface& surface,
+    int x,
+    int y,
+    int width,
+    int height,
+    std::array<uint8_t, 3> color,
+    uint32_t opacity
+) noexcept {
+    const auto columns = static_cast<int64_t>(surface.width);
+    const auto rows = static_cast<int64_t>(surface.height);
+    if (surface.rgb.size() < static_cast<std::size_t>(columns * rows * 3))
+        return;
+    const int64_t left = std::max<int64_t>(x, 0);
+    const int64_t top = std::max<int64_t>(y, 0);
+    const int64_t right = std::min<int64_t>(int64_t{x} + std::max(width, 0), columns);
+    const int64_t bottom = std::min<int64_t>(int64_t{y} + std::max(height, 0), rows);
+    const uint32_t share = std::min(opacity, blend_opaque);
+    const uint32_t keep = blend_opaque - share;
+    constexpr uint32_t half = blend_opaque / 2;
+    std::array<uint32_t, 3> painted{};
+    for (std::size_t channel = 0; channel < painted.size(); ++channel)
+        painted[channel] = uint32_t{color[channel]} * share + half;
+    for (int64_t row = top; row < bottom; ++row) {
+        auto* pixel = surface.rgb.data() + static_cast<std::size_t>((row * columns + left) * 3);
+        for (int64_t column = left; column < right; ++column, pixel += 3)
+            for (std::size_t channel = 0; channel < painted.size(); ++channel)
+                pixel[channel] =
+                    static_cast<uint8_t>((pixel[channel] * keep + painted[channel]) / blend_opaque);
+    }
+}
+
 } // namespace oa::ui::frontend_renderer

@@ -4,7 +4,9 @@
 // Composition of the match battlefield frame.
 #include "oa/app/runtime.hpp"
 #include "director_state.hpp"
+#include "match_models.hpp"
 #include "oa/app/match_model_draws.hpp"
+#include "presentation_interpolation.hpp"
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/present/blit.hpp"
@@ -34,32 +36,6 @@
 #include <vector>
 
 namespace oa::app {
-
-// 3DO renderer state of one match: prepared models and textures, the draw
-// state of every unit slot, and the 8-bit bridge onto the RGB frame. Each 3D
-// feature keeps its own draw state in its MatchFeatureDraw.
-struct MatchModels {
-    const void* match{};
-    oa::sim::match_runtime::Match* offline{};
-    oa::present::model::ModelLibrary library;
-    oa::present::model::ModelDisplay display;
-    oa::present::model::ModelRenderer renderer;
-    oa::present::model::RgbBridge bridge;
-    std::vector<UnitDrawState> units; // by unit slot
-    // 3D features draw through one zeroed unit record marked as a z-buffered
-    // building owned by the viewpoint player, kept here in place of its part
-    // of Game.search_context_block.
-    oa::Unit feature_unit{};
-    uint32_t animation_tick{};
-    bool animation_started{};
-    uint32_t debris_tick{}; // the tick whose first draw started the debris particles
-    bool debris_drawn{};
-    bool weapon_names_loaded{};
-    std::unordered_map<uint8_t, std::string> weapon_model_names; // by registry index
-    std::unordered_map<uint8_t, std::shared_ptr<const oa::formats::objects3d::Model>> weapon_models;
-    std::vector<uint8_t> shadow_pixels;
-    oa::Sprite projectile_shadow{}; // FX.GAF "shadow" frame 0
-};
 
 namespace {
 
@@ -193,10 +169,88 @@ const model_render::PreparedModel* prepared_type_model(
     return nullptr;
 }
 
+/// Tells whether a draw between ticks shows a unit slot otherwise than its
+/// tick does: the unit moved, turned or moved a piece since the tick before.
+///
+/// @param models the match's renderer state, its tick noted
+/// @param slot unit slot
+/// @return true when the slot's unit moved
+bool unit_moved(const MatchModels& models, uint32_t slot) {
+    const auto& units = models.presentation.units;
+    return slot < units.size() && units[slot].seen && units[slot].moved;
+}
+
+/// Tells whether a unit or a unit it carries moved since the tick before.
+///
+/// @param models the match's renderer state, its tick noted
+/// @param world the match's World
+/// @param slot the unit's slot
+/// @return true when the unit or one it carries moved
+bool unit_or_cargo_moved(const MatchModels& models, const oa::World& world, uint16_t slot) {
+    if (unit_moved(models, slot))
+        return true;
+    const oa::Unit* unit = oa::world_unit_at(&world, slot);
+    if (unit == nullptr)
+        return false;
+    for (const oa::Unit* child = oa::world_unit(&world, unit->attach_first_child); child != nullptr;
+         child = oa::world_unit(&world, child->attach_next))
+        if (unit_moved(models, oa::world_unit_slot(&world, child)))
+            return true;
+    return false;
+}
+
+/// Returns the copies a unit draws from part of the way through the current
+/// tick: its record and model instance, placed between its two poses when it
+/// moved, with a draw state of their own. The match's record, instance and
+/// draw state are only read.
+///
+/// The copies are placed once a draw; a later call of the same draw returns
+/// them as they are.
+///
+/// @param[in,out] models the match's renderer state, its tick noted
+/// @param slot unit slot of a live unit with a model instance
+/// @return the copies' model
+model_render::ModelRef presented_unit(MatchModels& models, uint16_t slot) {
+    auto& world = models.offline->world();
+    auto& presentation = models.presentation;
+    auto& runtime = models.offline->runtime_state(slot);
+    if (presentation.units.size() <= slot || !runtime.instance)
+        return unit_model(models, slot);
+    auto& motion = presentation.units[slot];
+    const oa::Unit& record = world.record.units[slot];
+    if (motion.blended_draw != presentation.draw) {
+        motion.record = record;
+        motion.instance = runtime.instance->model();
+        if (motion.moved)
+            blend_unit_pose(
+                motion.previous,
+                motion.current,
+                presentation.fraction,
+                motion.record,
+                motion.instance
+            );
+        // The pieces were set without the setters, which would mark the
+        // transforms for rebuilding.
+        motion.state.transforms_dirty = true;
+        motion.blended_draw = presentation.draw;
+    }
+    return {
+        &motion.instance,
+        &model_render::prepare_model(models.library, motion.instance.model_handle()),
+        &motion.state,
+        &motion.record,
+        oa::world_unit_def_of(&world.record, &record)
+    };
+}
+
 model_render::ModelRef carried_model(void* user, const oa::Unit& unit) {
     auto* models = static_cast<MatchModels*>(user);
     const auto& world = models->offline->world().record;
-    return unit_model(*models, static_cast<uint16_t>(oa::world_unit_slot(&world, &unit)));
+    const auto slot = static_cast<uint16_t>(oa::world_unit_slot(&world, &unit));
+    // A carrier drawn from its copies carries its units' copies.
+    if (models->presentation.blending)
+        return presented_unit(*models, slot);
+    return unit_model(*models, slot);
 }
 
 void include(oa::Rect32& region, int32_t x, int32_t y, int32_t width, int32_t height) {
@@ -273,6 +327,71 @@ void bridge_line(
 }
 
 } // namespace
+
+FixedVec3 shown_unit_position(
+    const MatchModels& models, const oa::World& world, uint16_t slot, uint32_t fraction
+) {
+    if (fraction < whole_tick && unit_moved(models, slot)) {
+        const auto& motion = models.presentation.units[slot];
+        return blend_point(motion.previous.position, motion.current.position, fraction);
+    }
+    const oa::Unit* unit = oa::world_unit_at(&world, slot);
+    return unit != nullptr ? unit->position : FixedVec3{};
+}
+
+FixedVec3 shown_unit_position(const MatchModels& models, const oa::World& world, uint16_t slot) {
+    return shown_unit_position(models, world, slot, models.presentation.fraction);
+}
+
+void observe_match_tick(MatchModels& models, oa::sim::match_runtime::Match& match) {
+    const uint32_t tick = match.simulation().tick;
+    auto& presentation = models.presentation;
+    if (!presentation.seen || presentation.tick != tick) {
+        const uint32_t ticks = presentation.seen ? batch_ticks(presentation.tick, tick) : 0;
+        presentation.batch = std::max<uint32_t>(ticks, 1);
+        presentation.tick = tick;
+        presentation.seen = true;
+    }
+    auto& world = match.world();
+    const uint32_t slots = world.record.unit_slot_count;
+    if (presentation.units.size() < slots)
+        presentation.units.resize(slots);
+    for (uint32_t slot = 1; slot < slots; ++slot) {
+        auto& motion = presentation.units[slot];
+        const oa::Unit& record = world.record.units[slot];
+        auto* runtime =
+            record.type_index != 0 ? &match.runtime_state(static_cast<uint16_t>(slot)) : nullptr;
+        if (runtime == nullptr || !runtime->instance) {
+            if (motion.seen)
+                forget_unit(motion);
+            continue;
+        }
+        observe_unit(
+            motion, tick, runtime->instance_generation, record, runtime->instance->model()
+        );
+    }
+    observe_shots(presentation.shots, tick, match.projectiles());
+    const auto& effects = match.effects();
+    observe_debris(presentation.debris, tick, effects.debris);
+}
+
+void Runtime::place_tracking_camera() {
+    if (screen_ != Screen::match || match_paused_ || !match_ || !match_tracking_ || director_mode())
+        return;
+    const auto& world = match_->world().record;
+    if (oa::world_unit_at(&world, tracked_match_unit_) == nullptr)
+        return;
+    auto& models = match_models();
+    observe_match_tick(models, *match_);
+    const FixedVec3 shown = shown_unit_position(
+        models, world, tracked_match_unit_, tick_fraction(presentation_alpha())
+    );
+    set_camera_position(
+        high_word(shown.x) - visible_map_width() / 2,
+        high_word(shown.z) - visible_map_height() / 2,
+        0
+    );
+}
 
 const oa::formats::gaf::RenderedFrame*
 Runtime::feature_sequence_image(oa_ref32 sequence, uint16_t frame) {
@@ -397,6 +516,10 @@ void Runtime::release_model_images() {
         tracked.state.image = {};
         tracked.state.shadow = {};
     }
+    for (auto& motion : match_models_->presentation.units) {
+        motion.state.image = {};
+        motion.state.shadow = {};
+    }
     for (auto& feature : match_features_) {
         feature.state.image = {};
         feature.state.shadow = {};
@@ -409,6 +532,8 @@ std::size_t Runtime::cached_model_images() const {
     std::size_t count = 0;
     for (const auto& tracked : match_models_->units)
         count += tracked.state.image.sprite.data != nullptr ? 1 : 0;
+    for (const auto& motion : match_models_->presentation.units)
+        count += motion.state.image.sprite.data != nullptr ? 1 : 0;
     for (const auto& feature : match_features_)
         count += feature.state.image.sprite.data != nullptr ? 1 : 0;
     return count;
@@ -498,6 +623,37 @@ void Runtime::render_match_surface() {
     );
     match_camera_x_ = static_cast<int32_t>(camera_x);
     match_camera_z_ = static_cast<int32_t>(camera_y);
+    // The frame's place between the ticks. Each draw notes the tick the
+    // match is on first, so that the poses of the tick before are at hand.
+    auto& models = match_models();
+    observe_match_tick(models, *match_);
+    auto& presentation = models.presentation;
+    presentation.fraction = tick_fraction(presentation_alpha());
+
+    // Outside a draw, every unit shows where its tick puts it.
+    struct WholeTickAfter {
+        MatchPresentation& presentation;
+
+        explicit WholeTickAfter(MatchPresentation& shown) : presentation(shown) {}
+
+        WholeTickAfter(const WholeTickAfter&) = delete;
+        WholeTickAfter& operator=(const WholeTickAfter&) = delete;
+
+        ~WholeTickAfter() { presentation.fraction = whole_tick; }
+    } whole_tick_after{presentation};
+
+    const bool between_ticks = presentation.fraction < whole_tick;
+    if (between_ticks)
+        ++presentation.draw;
+    {
+        const uint32_t tick = match_->simulation().tick;
+        const auto shots = match_->projectiles();
+        presentation.presented_shots.resize(shots.size());
+        for (std::size_t index = 0; index < shots.size(); ++index)
+            presentation.presented_shots[index] = presented_shot(
+                presentation.shots, tick, index, shots[index], presentation.fraction
+            );
+    }
     ensure_radar_surfaces();
     if (directed)
         bind_director_view();
@@ -722,7 +878,10 @@ void Runtime::render_match_surface() {
     // (the flame or propeller) while it still has flight time.
     const auto draw_projectile_models = [&](MatchModels& models) {
         auto& renderer = models.renderer;
-        for (const auto& shot : match_->projectiles()) {
+        const auto shots = match_->projectiles();
+        const auto& shown_shots = models.presentation.presented_shots;
+        for (std::size_t index = 0; index < shots.size(); ++index) {
+            const auto& shot = shots[index];
             const auto* weapon = match_->projectile_weapon(shot);
             if (weapon == nullptr || shot.burst_remaining != 0)
                 continue;
@@ -742,17 +901,21 @@ void Runtime::render_match_surface() {
             if (model == nullptr || model->objects.empty())
                 continue;
             const auto& prepared = model_render::prepare_model(models.library, model);
+            // Where the shot shows in this frame (presented_shot).
+            const ShotPose shown =
+                shown_shots.size() == shots.size() ? shown_shots[index] : shot_pose(shot);
+            const auto shown_position = oa::sim::match_runtime::fixed_words(shown.position);
             const oa::formats::objects3d::FixedVector3 position{
-                wrapping_sub(shot.position.x, camera_fixed(renderer.camera_x)),
-                shot.position.y,
-                wrapping_sub(shot.position.z, camera_fixed(renderer.camera_y))
+                wrapping_sub(shown.position.x, camera_fixed(renderer.camera_x)),
+                shown.position.y,
+                wrapping_sub(shown.position.z, camera_fixed(renderer.camera_y))
             };
             const int32_t x = high_word(position.x) + renderer.origin_x;
             const int32_t z = high_word(position.z) + renderer.origin_y;
             const int32_t y = z - (high_word(position.y) >> 1);
             // As Projectile.plot_height: the terrain height under the shot.
             const int32_t shadow_y =
-                z - (match_->map_height(shot_position[0], shot_position[2]) >> 1);
+                z - (match_->map_height(shown_position[0], shown_position[2]) >> 1);
             oa::Rect32 region{
                 x - kProjectileReach,
                 y - kProjectileReach,
@@ -776,12 +939,12 @@ void Runtime::render_match_surface() {
             if (type == kRenderMissile)
                 rotation = {
                     0,
-                    static_cast<int16_t>(shot.heading + kHalfTurn),
-                    static_cast<int16_t>(shot.pitch + kHalfTurn)
+                    static_cast<int16_t>(shown.heading + kHalfTurn),
+                    static_cast<int16_t>(shown.pitch + kHalfTurn)
                 };
             else if (type == kRenderModel)
                 rotation = {
-                    0, static_cast<int16_t>(shot.heading), static_cast<int16_t>(shot.pitch)
+                    0, static_cast<int16_t>(shown.heading), static_cast<int16_t>(shown.pitch)
                 };
             model_render::draw_projectile_model(
                 renderer,
@@ -809,7 +972,6 @@ void Runtime::render_match_surface() {
             );
         }
     };
-    auto& models = match_models();
 
     // The match reads its units' piece transforms, which drawing a unit
     // rebuilds from the draw's own root rotation. A director's draw puts them
@@ -960,6 +1122,34 @@ void Runtime::render_match_surface() {
     oa::present::world_renderer::OverlayRaster selection_raster{};
     selection_raster.user = &models.bridge;
     selection_raster.line = bridge_line;
+
+    // While a unit draws from its copies, the units it carries draw from
+    // theirs (carried_model).
+    struct Blending {
+        MatchPresentation& presentation;
+
+        explicit Blending(MatchPresentation& shown) : presentation(shown) {
+            presentation.blending = true;
+        }
+
+        Blending(const Blending&) = delete;
+        Blending& operator=(const Blending&) = delete;
+
+        ~Blending() { presentation.blending = false; }
+    };
+
+    // What the frame drew of the units, for "+stats" and a --frame-rate
+    // run's frame log: each unit drawn, those drawn from copies placed
+    // between two ticks, and where the unit the log follows was drawn.
+    const auto note_unit_drawn = [&](uint16_t unit_index, const oa::Unit& drawn, bool blended) {
+        ++frame_draws_.units_drawn;
+        frame_draws_.units_between_ticks += blended ? 1 : 0;
+        if (unit_index == frame_draws_.probe_unit) {
+            frame_draws_.probe_drawn = true;
+            frame_draws_.probe_x = drawn.position.x;
+            frame_draws_.probe_z = drawn.position.z;
+        }
+    };
     const auto draw_unit = [&](uint16_t unit_index) {
         const auto model = unit_model(models, unit_index);
         if (model.instance == nullptr)
@@ -972,6 +1162,43 @@ void Runtime::render_match_surface() {
                 idle = movement->movement.speed == 0;
         } catch (const std::exception&) {
         }
+        if (between_ticks && unit_or_cargo_moved(models, world_record, unit_index)) {
+            // The match reads the piece transforms a draw rebuilds, so they
+            // are rebuilt as a draw of the whole tick rebuilds them, and the
+            // unit draws from its copies placed between the ticks. The image
+            // cache of the unit's own draw state waits for a draw of a whole
+            // tick, which leaves it as it would have been.
+            // A carried unit is drawn, and its transforms rebuilt, by its
+            // carrier (draw_linked_model).
+            const bool carried = model.unit->attach_parent != 0;
+            model_render::note_piece_changes(model);
+            if (!carried)
+                model_render::update_linked_transforms(renderer, model);
+            const Blending blending{presentation};
+            const auto shown = presented_unit(models, unit_index);
+            note_unit_drawn(unit_index, *shown.unit, true);
+            if (!bare && (shown.unit->flags & OA_UNIT_FLAG_SELECTED) != 0 &&
+                !shown.instance->model().objects.empty())
+                oa::present::world_renderer::overlay_selection_box(
+                    world_record.game,
+                    selection_raster,
+                    &models.bridge.surface,
+                    *shown.unit,
+                    shown.instance->model().objects.front()
+                );
+            model_render::note_piece_changes(shown);
+            if (carried)
+                return;
+            model_render::update_linked_transforms(renderer, shown);
+            model_render::bridge_open(
+                models.bridge,
+                unit_region(renderer, shown, terrain_height(&models, shown.unit->position))
+            );
+            model_render::draw_linked_model(renderer, &models.bridge.surface, shown, idle);
+            bridge_holds_draws = true;
+            return;
+        }
+        note_unit_drawn(unit_index, *model.unit, false);
         // A selected unit's box is outlined before the unit draws, unless the
         // interface is not drawn.
         if (!bare && (model.unit->flags & OA_UNIT_FLAG_SELECTED) != 0 &&
@@ -1003,10 +1230,26 @@ void Runtime::render_match_surface() {
         if (prepared == nullptr || look.object >= prepared->objects.size() ||
             look.primitive >= prepared->objects[look.object].primitives.size())
             return;
+        // Part of the way through the ticks' flight and spin.
+        const FixedVec3 at =
+            point_along_step(item.position, item.motion, presentation.batch, presentation.fraction);
+        oa::sim::model_runtime::RotationWords spin{item.spin[0], item.spin[1], item.spin[2]};
+        if (between_ticks)
+            spin = {
+                angle_along_step(
+                    item.spin[0], item.spin_motion[0], presentation.batch, presentation.fraction
+                ),
+                angle_along_step(
+                    item.spin[1], item.spin_motion[1], presentation.batch, presentation.fraction
+                ),
+                angle_along_step(
+                    item.spin[2], item.spin_motion[2], presentation.batch, presentation.fraction
+                )
+            };
         const oa::formats::objects3d::FixedVector3 position{
-            wrapping_sub(item.position.x, camera_fixed(renderer.camera_x)),
-            item.position.y,
-            wrapping_sub(item.position.z, camera_fixed(renderer.camera_y))
+            wrapping_sub(at.x, camera_fixed(renderer.camera_x)),
+            at.y,
+            wrapping_sub(at.z, camera_fixed(renderer.camera_y))
         };
         const int32_t x = high_word(position.x) + renderer.origin_x;
         const int32_t y = high_word(position.z) - (high_word(position.y) >> 1) + renderer.origin_y;
@@ -1028,7 +1271,7 @@ void Runtime::render_match_surface() {
             position,
             fragment,
             prepared->objects[look.object].primitives[look.primitive],
-            {item.spin[0], item.spin[1], item.spin[2]}
+            spin
         );
         model_render::bridge_end(models.bridge);
         oa::present::bind_display(outer_display);
@@ -1051,7 +1294,13 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
             return;
         }
-        const auto screen = project_match_point(viewport, at);
+        // Part of the way through the ticks' steps.
+        const auto screen = project_match_point(
+            viewport,
+            oa::sim::match_runtime::fixed_words(point_along_step(
+                item.position, item.motion, presentation.batch, presentation.fraction
+            ))
+        );
         const auto pal = static_cast<std::size_t>(item.color) * 4U;
         if (item.kind == oa::sim::effect_particles::DrawKind::pixel) {
             const std::array<uint8_t, 3> color{
@@ -1229,7 +1478,12 @@ void Runtime::render_match_surface() {
     // that origin, in its unit's team colour.
     std::vector<oa::formats::objects3d::FixedVector3> debris_points;
     const oa::Rect32 debris_view{0, 0, vis_w - 1, vis_h - 1};
-    auto draw_debris_piece = [&](const oa::sim::effect_particles::DebrisPiece& piece) {
+    const auto& debris_table = match_->effects().debris;
+    auto draw_debris_piece = [&](const oa::sim::effect_particles::DebrisPiece& live) {
+        // Part of the way through the tick's fall and spin, by the piece's slot.
+        const auto slot = static_cast<std::size_t>(&live - std::begin(debris_table));
+        const auto piece =
+            presented_debris(presentation.debris, renderer.tick, slot, live, presentation.fraction);
         if (piece.model == nullptr || piece.object >= piece.model->objects.size())
             return;
         const auto& object = piece.model->objects[piece.object];
@@ -1351,7 +1605,15 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
             continue;
         }
-        const auto screen = project_match_point(viewport, slot.unit->position);
+        // The bars and digits stay with the unit where it shows.
+        const auto screen = between_ticks
+                                ? project_match_point(
+                                      viewport,
+                                      oa::sim::match_runtime::fixed_words(
+                                          shown_unit_position(models, world_record, slot.unit_index)
+                                      )
+                                  )
+                                : project_match_point(viewport, slot.unit->position);
         const int bar_x = screen.x;
         const int bar_y = screen.y + 10;
         if (const auto& world = match_->state();

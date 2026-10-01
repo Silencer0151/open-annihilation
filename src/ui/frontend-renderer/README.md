@@ -78,3 +78,12 @@ step with its bar, and draws them over the screen (`draw_layout_scrolls`).
 `bind_screen_buttons` binds a panel's buttons as the first draw does, for a
 panel merged into a loaded one. `scroll_bars_test.cpp` (`frontend-scroll-bars`)
 pins the art, the drawing and a layout's bars and lists.
+
+## Blending
+
+`blend_rect` blends a colour over a rectangle of an RGB surface: each
+channel of each pixel becomes the opacity's share of the colour, in 256ths,
+and the rest of the pixel, rounded to the nearest; the rectangle is clipped
+to the surface. An opacity of 0 leaves the pixels and `blend_opaque` paints
+the colour, so it fills as well as tints. The match's "+stats" panel darkens
+the battlefield under it this way. `frontend-renderer` tests it.

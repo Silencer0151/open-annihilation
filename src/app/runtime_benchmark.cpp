@@ -30,6 +30,18 @@ using BenchClock = std::chrono::steady_clock;
 }
 
 constexpr int32_t kScrollStep = 6;
+// 16.16 world units: the shift to whole map pixels and one map pixel.
+constexpr uint32_t kFixedShift = 16;
+constexpr double kFixedOne = 65536.0;
+// Map pixels of a map tile.
+constexpr uint32_t kTilePixels = 32;
+// --march: map pixels each unit is sent south, kept this far inside the
+// map's bottom edge.
+constexpr int32_t kMarchDistance = 400;
+constexpr int32_t kMarchEdge = 64;
+// --scroll-camera: map pixels the camera sweeps from where it starts before
+// the held scroll turns back, so that the army it starts over stays in view.
+constexpr int32_t kScrollSweep = 192;
 // Ticks of a mission between the orders --give-orders gives a headless
 // campaign run.
 constexpr std::size_t kMissionOrderPeriod = 300;
@@ -163,7 +175,7 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
     match_camera_z_ = centre_z - visible_map_height() / 2;
 }
 
-void Runtime::run_headless_match(std::size_t ticks) {
+void Runtime::prepare_headless_match() {
     start_benchmark_skirmish();
     match_layout_ =
         oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
@@ -177,6 +189,181 @@ void Runtime::run_headless_match(std::size_t ticks) {
         match_camera_x_ = options_.camera->first;
         match_camera_z_ = options_.camera->second;
     }
+}
+
+uint64_t Runtime::frame_run_digest() {
+    const auto kept_x = match_camera_x_;
+    const auto kept_z = match_camera_z_;
+    const auto kept_adaptation = match_timing_.adaptation;
+    match_camera_x_ = 0;
+    match_camera_z_ = 0;
+    match_timing_.adaptation = 0;
+    const auto digest = match_world_digest();
+    match_camera_x_ = kept_x;
+    match_camera_z_ = kept_z;
+    match_timing_.adaptation = kept_adaptation;
+    return digest;
+}
+
+void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second) {
+    prepare_headless_match();
+    // --march sends the local player's units south; the frame log follows
+    // the first of them, or the first local unit without --march.
+    uint16_t probe = 0;
+    for (const auto& slot : match_->world().slots) {
+        if (slot.unit == nullptr || slot.record.type_index == 0 ||
+            slot.record.owner_index != match_local_player_ ||
+            !match_->takes_move_order(slot.unit_index))
+            continue;
+        if (probe == 0)
+            probe = slot.unit_index;
+        if (!options_.march)
+            break;
+        const auto x = static_cast<int32_t>(slot.unit->position[0] >> kFixedShift);
+        const auto map_h = static_cast<int32_t>(selected_tnt_->tile_height * kTilePixels);
+        const auto z = std::min(
+            static_cast<int32_t>(slot.unit->position[2] >> kFixedShift) + kMarchDistance,
+            map_h - kMarchEdge
+        );
+        const oa::sim::ground_orders::Point point{
+            static_cast<int32_t>(static_cast<uint32_t>(x) << kFixedShift),
+            static_cast<int32_t>(
+                static_cast<uint32_t>(match_->map_height(
+                    static_cast<uint32_t>(x) << kFixedShift, static_cast<uint32_t>(z) << kFixedShift
+                ))
+                << kFixedShift
+            ),
+            static_cast<int32_t>(static_cast<uint32_t>(z) << kFixedShift)
+        };
+        match_->issue_ground_move(slot.unit_index, point, false);
+    }
+
+    // The run's clock, its held scroll and its log end with it, however it ends.
+    struct RunEnd {
+        Runtime& runtime;
+        std::FILE* log{};
+
+        /// Ends the run's clock, its held scroll and its log.
+        ~RunEnd() {
+            runtime.frame_run_clock_ns_.reset();
+            runtime.frame_run_scroll_ = 0;
+            if (runtime.match_tracking_)
+                runtime.stop_match_tracking();
+            if (log != nullptr)
+                std::fclose(log);
+        }
+    } run_end{*this};
+
+    std::FILE* log = nullptr;
+    if (!options_.frame_log.empty()) {
+        log = run_end.log = std::fopen(options_.frame_log.string().c_str(), "w");
+        if (log == nullptr)
+            throw std::runtime_error("cannot create the frame log " + options_.frame_log.string());
+        std::fprintf(
+            log, "frame,time_ms,tick,alpha,camera_x,camera_z,zoom,unit_x,unit_z,drawn_x,drawn_z\n"
+        );
+    }
+    // The run's clock starts at 0, where the match clock last stepped; its
+    // frames stand for the middle of each 1 / frames_per_second.
+    frame_run_clock_ns_ = 0;
+    match_timing_.previous_clock = oa::base::game_loop::scaled_clock(0, match_clock_scale());
+    tick_presentation_ = {};
+    scroll_clock_ = 0;
+    zoom_clock_valid_ = false;
+    frame_draws_ = {};
+    frame_draws_.probe_unit = probe;
+    // --follow tracks the unit the log follows, as the T key does.
+    if (options_.follow && probe != 0)
+        begin_match_tracking(probe);
+    int32_t scroll = options_.scroll_camera ? 1 : 0;
+    // The sweep runs from where the camera starts, or as near it as the
+    // map's right edge leaves room for.
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * kTilePixels);
+    const int32_t scroll_limit = std::max(0, map_width - visible_map_width());
+    const int32_t sweep_left = std::max(0, std::min(match_camera_x_, scroll_limit - kScrollSweep));
+    const int32_t sweep_right = std::min(scroll_limit, sweep_left + kScrollSweep);
+    // A match whose clock never steps would never end the run.
+    const uint64_t frame_limit =
+        static_cast<uint64_t>(ticks + 1) * frames_per_second / frame_pacing::kTicksPerSecond * 2 +
+        2;
+    std::size_t between_ticks = 0;
+    uint64_t frame = 0;
+    while (match_timing_.tick < ticks) {
+        if (frame >= frame_limit)
+            throw std::runtime_error("the frame run's match clock stopped stepping");
+        // Each frame stands for the middle of its period, so frames at
+        // the tick rate do not fall on the clock's whole milliseconds
+        // where its units turn over.
+        frame_run_clock_ns_ =
+            (2 * frame + 1) * frame_pacing::kNanosecondsPerSecond / (2 * frames_per_second);
+        // The frame's camera and clock step, in the application loop's order.
+        take_frame_time();
+        camera_moved_ = false;
+        frame_run_scroll_ = scroll;
+        move_match_camera();
+        step_match_frame();
+        frame_draws_.units_drawn = 0;
+        frame_draws_.units_between_ticks = 0;
+        frame_draws_.probe_drawn = false;
+        rebuild_surface();
+        between_ticks += presentation_alpha_ < 1.0F ? 1 : 0;
+        if (log != nullptr) {
+            const auto* unit = probe != 0 ? match_->world().slots[probe].unit : nullptr;
+            std::fprintf(
+                log,
+                "%llu,%.3f,%u,%.4f,%d,%d,%.4f,",
+                static_cast<unsigned long long>(frame),
+                static_cast<double>(*frame_run_clock_ns_) / 1.0e6,
+                match_timing_.tick,
+                static_cast<double>(presentation_alpha_),
+                match_camera_x_,
+                match_camera_z_,
+                static_cast<double>(match_zoom_)
+            );
+            if (unit != nullptr)
+                std::fprintf(
+                    log,
+                    "%.4f,%.4f,",
+                    static_cast<double>(static_cast<int32_t>(uint32_t{unit->position[0]})) /
+                        kFixedOne,
+                    static_cast<double>(static_cast<int32_t>(uint32_t{unit->position[2]})) /
+                        kFixedOne
+                );
+            else
+                std::fprintf(log, ",,");
+            if (frame_draws_.probe_drawn)
+                std::fprintf(
+                    log,
+                    "%.4f,%.4f\n",
+                    static_cast<double>(frame_draws_.probe_x) / kFixedOne,
+                    static_cast<double>(frame_draws_.probe_z) / kFixedOne
+                );
+            else
+                std::fprintf(log, ",\n");
+        }
+        presentation_alpha_ = 1.0F;
+        // The held scroll turns back at either end of its sweep.
+        if ((scroll > 0 && match_camera_x_ >= sweep_right) ||
+            (scroll < 0 && match_camera_x_ <= sweep_left))
+            scroll = -scroll;
+        ++frame;
+    }
+    std::printf(
+        "frame run: %u frames a second, %llu frames, %u ticks, %zu frames between ticks, "
+        "world digest %016llx\n",
+        frames_per_second,
+        static_cast<unsigned long long>(frame),
+        match_timing_.tick,
+        between_ticks,
+        static_cast<unsigned long long>(frame_run_digest())
+    );
+    std::fflush(stdout);
+    if (!options_.snapshot.empty())
+        write_ppm(options_.snapshot, surface_);
+}
+
+void Runtime::run_headless_match(std::size_t ticks) {
+    prepare_headless_match();
     int64_t window_ns = 0;
     int64_t worst_ns = 0;
     for (std::size_t tick = 1; tick <= ticks; ++tick) {

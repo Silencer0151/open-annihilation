@@ -533,7 +533,9 @@ void Runtime::draw_resource_readout() {
     auto& game = match_->state().game;
     auto& player = game.players[viewer];
     auto& readout = game.resource_readout;
-    oa::ui::hud::update_resource_readout(readout, player, game.tick);
+    // The readout eases as often a second at any frame rate (take_readout_eases).
+    for (uint32_t ease = take_readout_eases(); ease != 0; --ease)
+        oa::ui::hud::update_resource_readout(readout, player, game.tick);
     // PANELTOP already contains the METAL/ENERGY chrome; SIDEDATA.TDF names the
     // fill troughs, stored/capacity numbers, and produced/consumed readouts.
     const auto text_color = oa::ui::hud::readout_color(game, oa::ui::hud::kReadoutTextColor);

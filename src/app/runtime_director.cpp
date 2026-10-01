@@ -12,6 +12,7 @@
 // headless skirmish instead of a recording.
 #include "oa/app/runtime.hpp"
 #include "director_state.hpp"
+#include "match_models.hpp"
 
 #include "oa/app/director_output.hpp"
 #include "oa/app/game_directory.hpp"
@@ -457,18 +458,43 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
     bool chunk_open = false;
     auto chunk_start = std::chrono::steady_clock::now();
     director::FrameCameras cameras{};
+    // Every draw leaves the frames after it to be drawn at a whole tick.
+    ScopeExit whole_ticks{[this]() noexcept { set_presentation_alpha(1.0F); }};
     while (rig.position() < end_frame && rig.next(cameras)) {
         const uint64_t frame = cameras.frame;
         const auto view = placed_view(director::engine_view(cameras.camera, output_size));
-        // Every tick this frame shows first runs with the frame's camera
-        // bound, which places its sounds, and its sounds start with the
-        // frame.
+        // A frame whose time lies between two ticks is drawn from the later
+        // one, part of the way from the earlier (frame_place), so that the
+        // video moves at its own frame rate rather than the tick rate. A frame
+        // that would need the tick no frame shows is drawn from the tick it
+        // shows.
+        const auto place = director::frame_place(clock, frame);
+        const bool between = place.fraction < director::tick_parts && place.tick < shots.end_tick;
+        const uint32_t drawn_tick = between ? place.tick : cameras.tick;
+        // Every tick runs with the camera of the first frame that shows it
+        // whole bound, which places its sounds, and its sounds start with
+        // that frame, whether or not an earlier frame shows part of the way
+        // to it.
+        const auto view_of_tick = [&](uint32_t tick) {
+            const uint64_t first = director::first_frame_of_tick(clock, tick);
+            if (first <= frame)
+                return view;
+            auto ahead = rig;
+            director::FrameCameras later{};
+            while (later.frame < first && ahead.next(later)) {
+            }
+            return later.frame == first
+                       ? placed_view(director::engine_view(later.camera, output_size))
+                       : view;
+        };
         uint32_t stalls = 0;
-        while (match_ && match_->state().game.tick < cameras.tick) {
+        while (match_ && match_->state().game.tick < drawn_tick) {
             const uint32_t before = match_->state().game.tick;
-            set_director_view(view);
+            set_director_view(view_of_tick(before + 1));
             bind_director_view();
-            glue.start_sample = director::frame_samples(clock, frame).first;
+            glue.start_sample =
+                director::frame_samples(clock, director::first_frame_of_tick(clock, before + 1))
+                    .first;
             glue.audible = before + 1 >= clock.first_tick;
             if (!replay.step(replay.context))
                 throw std::runtime_error(
@@ -488,6 +514,9 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
             }
             stalls = 0;
             start_director_debris_particles();
+            // The presentation notes every tick, drawn or not, so that a
+            // drawn frame always has the tick before at hand.
+            observe_match_tick(match_models(), *match_);
             present_director_announcements();
             const auto status = replay_status(replay);
             if (status.errors > errors_seen) {
@@ -507,6 +536,9 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
                 chunk_start = std::chrono::steady_clock::now();
             }
             set_director_view(view);
+            set_presentation_alpha(
+                between ? static_cast<float>(place.fraction) / director::tick_parts : 1.0F
+            );
             draw_director_frame(incoming);
             std::span<const uint8_t> picture = incoming;
             if (cameras.transition) {
@@ -516,6 +548,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
                     placed_view(director::engine_view(cameras.outgoing, output_size))
                 );
                 draw_director_frame(outgoing);
+                set_presentation_alpha(1.0F);
                 if (!director::blend_transition(
                         cameras.transition_kind,
                         cameras.transition_step,
@@ -529,6 +562,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
                     throw std::logic_error("a transition's frames are the output's size");
                 picture = blended;
             }
+            set_presentation_alpha(1.0F);
             output.add_frame(frame, cameras.tick, picture);
             ++render.frames_drawn;
         }

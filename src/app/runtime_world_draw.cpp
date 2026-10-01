@@ -3,6 +3,8 @@
 
 // World-space drawing: build ghosts, lines and GAF blits.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
+#include "presentation_interpolation.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -354,18 +356,28 @@ void Runtime::draw_match_projectiles(
         const auto sample = static_cast<int32_t>((jitter_seed >> 16) & 0x7fffU);
         return sample * (2 * kLightningJitter + 1) / 0x8000 - kLightningJitter;
     };
-    for (const auto& shot : match_->projectiles()) {
+    // Each shot draws where the frame shows it (presented_shot), which the
+    // frame's draw worked out for the pool as it is.
+    const auto shots = match_->projectiles();
+    const auto& shown_shots = match_models().presentation.presented_shots;
+    for (std::size_t index = 0; index < shots.size(); ++index) {
+        const auto& shot = shots[index];
         const auto* weapon = match_->projectile_weapon(shot);
         if (weapon == nullptr || shot.burst_remaining != 0)
             continue;
-        const auto shot_position = oa::sim::match_runtime::fixed_words(shot.position);
-        const auto shot_origin = oa::sim::match_runtime::fixed_words(shot.origin);
         try {
-            if (!match_->point_visible(static_cast<uint8_t>(match_view_player()), shot_position))
+            if (!match_->point_visible(
+                    static_cast<uint8_t>(match_view_player()),
+                    oa::sim::match_runtime::fixed_words(shot.position)
+                ))
                 continue;
         } catch (const std::exception&) {
             continue;
         }
+        const ShotPose shown =
+            shown_shots.size() == shots.size() ? shown_shots[index] : shot_pose(shot);
+        const auto shot_position = oa::sim::match_runtime::fixed_words(shown.position);
+        const auto shot_origin = oa::sim::match_runtime::fixed_words(shown.origin);
         switch (static_cast<ProjectileRender>(weapon->rendertype)) {
         case ProjectileRender::laser: {
             auto head = project_match_point(viewport, shot_position);
