@@ -51,10 +51,10 @@ Step-by-step guides to downloading Open Annihilation, getting the game data
 from your copy of Total Annihilation and starting the game:
 
 | | Platform | Guide |
-|---|---|---|
-| <img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white"> | macOS 11 or later, Intel and Apple silicon | [Installing on macOS](docs/installation/macos.md) |
-| <img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge"> | Windows XP SP3 to Windows 11: 64-bit, 32-bit and ARM | [Installing on Windows](docs/installation/windows.md) |
-| <img alt="Linux" src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black"> <img alt="Raspberry Pi" src="https://img.shields.io/badge/Raspberry%20Pi-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white"> | Linux and Raspberry Pi: 64-bit PC, 64-bit ARM and 32-bit ARM | [Installing on Linux](docs/installation/linux.md) |
+|:---:|---|---|
+| <img alt="macOS" src="docs/images/platforms/macos.svg"> | macOS 11 or later, Intel and Apple silicon | [Installing on macOS](docs/installation/macos.md) |
+| <img alt="Windows" src="docs/images/platforms/windows.svg"> | Windows XP SP3 to Windows 11: 64-bit, 32-bit and ARM | [Installing on Windows](docs/installation/windows.md) |
+| <img alt="Linux" src="docs/images/platforms/linux.svg"><br><img alt="Raspberry Pi" src="docs/images/platforms/raspberry-pi.svg"> | Linux and Raspberry Pi: 64-bit PC, 64-bit ARM and 32-bit ARM | [Installing on Linux](docs/installation/linux.md) |
 
 ## How the project works
 
