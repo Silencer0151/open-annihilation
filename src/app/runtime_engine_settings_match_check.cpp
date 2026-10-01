@@ -87,7 +87,7 @@ fs::path step_snapshot(const fs::path& snapshot, std::string_view step) {
 } // namespace
 
 void Runtime::check_engine_settings_in_match() {
-    using Host = EngineSettingsMatchHost;
+    using MatchHost = EngineSettingsMatchHost;
     const auto require = [](bool ok, const std::string& what) {
         if (!ok)
             throw std::runtime_error("engine settings check: " + what);
@@ -180,7 +180,7 @@ void Runtime::check_engine_settings_in_match() {
 
     // Clicks the middle of a part of the dialog that shows beside the column.
     const auto click_dialog = [&](const artless::SourceRect& part) {
-        const auto at = Host::dialog_rect(match_layout_);
+        const auto at = MatchHost::dialog_rect(match_layout_);
         const layout::Point point{
             at.x + (part.x + part.width / 2) * at.width / settings::dialog_width,
             at.y + (part.y + part.height / 2) * at.height / settings::dialog_height
@@ -267,8 +267,8 @@ void Runtime::check_engine_settings_in_match() {
             "the match canvas is not the window's size" + on
         );
         const auto& fonts = *engine_settings_fonts();
-        const auto button = Host::button_rect(match_layout_);
-        const auto dialog_at = Host::dialog_rect(match_layout_);
+        const auto button = MatchHost::button_rect(match_layout_);
+        const auto dialog_at = MatchHost::dialog_rect(match_layout_);
         require(
             button.y + button.height <= match_layout_.hud_height && button.x >= 0 &&
                 button.x + button.width <= match_layout_.left,
@@ -283,7 +283,7 @@ void Runtime::check_engine_settings_in_match() {
         // In play the column and the button are hidden, and a press on the
         // button's place opens nothing.
         render();
-        require(!Host::button_shown(*this), "the OA button shows in play" + on);
+        require(!MatchHost::button_shown(*this), "the OA button shows in play" + on);
         send_check_pointer(SDL_EVENT_MOUSE_MOTION, centre(button), 0);
         send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, centre(button), SDL_BUTTON_LEFT);
         send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, centre(button), SDL_BUTTON_LEFT);
