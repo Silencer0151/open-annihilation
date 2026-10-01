@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Telling a Raspberry Pi from its board's model, given as text and as the
-// model file Linux keeps it in.
+// model file Linux keeps it in; telling a light machine from its processors,
+// SSE2 and memory, and reading this machine's.
 
 #include "oa/platform/machine.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -101,10 +103,54 @@ void only_linux_reads_the_device_tree() {
 
 } // namespace
 
+void light_machines_are_told_apart() {
+    constexpr uint64_t mebibyte = uint64_t{1024} * 1024;
+    const auto machine = [](uint32_t processors, uint64_t memory, bool sse2) {
+        platform::MachineTraits traits;
+        traits.processors = processors;
+        traits.memory = memory;
+        traits.sse2 = sse2;
+        return traits;
+    };
+    // A Pentium III with 256 MiB: one processor, no SSE2, little memory.
+    CHECK(platform::light_machine(machine(1, 256 * mebibyte, false)));
+    // Each trait alone makes a machine light.
+    CHECK(platform::light_machine(machine(1, 4096 * mebibyte, true)));
+    CHECK(platform::light_machine(machine(2, 4096 * mebibyte, false)));
+    CHECK(platform::light_machine(machine(4, 511 * mebibyte, true)));
+    CHECK(platform::light_machine(machine(4, platform::light_machine_memory - 1, true)));
+    // A machine with none of them is not.
+    CHECK(!platform::light_machine(machine(2, platform::light_machine_memory, true)));
+    CHECK(!platform::light_machine(machine(2, 1024 * mebibyte, true)));
+    CHECK(!platform::light_machine(machine(24, 192 * 1024 * mebibyte, true)));
+    // Unknown memory leaves the processor to decide.
+    CHECK(!platform::light_machine(machine(2, 0, true)));
+    CHECK(platform::light_machine(machine(1, 0, true)));
+    // The defaults are a machine of one processor, so light.
+    CHECK(platform::light_machine(platform::MachineTraits{}));
+}
+
+void this_machine_is_read() {
+    const auto traits = platform::read_machine_traits();
+    CHECK(traits.processors >= 1);
+#if !defined(__i386__) && !defined(_M_IX86)
+    CHECK(traits.sse2);
+#endif
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
+    CHECK(traits.memory != 0);
+#endif
+    std::cout << "this machine: " << traits.processors << " processor(s), "
+              << traits.memory / (uint64_t{1024} * 1024) << " MiB, SSE2 "
+              << (traits.sse2 ? "yes" : "no") << ", "
+              << (platform::light_machine(traits) ? "light" : "not light") << '\n';
+}
+
 int main() {
     every_raspberry_pi_model_is_one();
     other_boards_are_not();
     model_files_are_read_up_to_their_limit();
     only_linux_reads_the_device_tree();
+    light_machines_are_told_apart();
+    this_machine_is_read();
     return failures == 0 ? 0 : 1;
 }

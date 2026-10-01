@@ -17,6 +17,9 @@ static_assert(oa::sim::session::kMaxUnitLimit <= highest_unit_limit);
 static_assert(raspberry_pi_frame_rate >= lowest_frame_rate);
 static_assert(raspberry_pi_frame_rate <= highest_frame_rate);
 static_assert((raspberry_pi_frame_rate - lowest_frame_rate) % frame_rate_step == 0);
+static_assert(light_machine_frame_rate >= lowest_frame_rate);
+static_assert(light_machine_frame_rate <= highest_frame_rate);
+static_assert((light_machine_frame_rate - lowest_frame_rate) % frame_rate_step == 0);
 
 namespace {
 
@@ -148,6 +151,9 @@ void store(
         values[std::string{key}] = text;
 }
 
+/// The stored text of the desktop's screen size.
+constexpr std::string_view desktop_text = "desktop";
+
 /// Returns a switch's stored text.
 ///
 /// @param on the switch's state
@@ -168,7 +174,29 @@ EngineSettings default_settings(const Inputs& inputs) {
         settings.max_frame_rate = raspberry_pi_frame_rate;
         settings.anti_aliasing = AntiAliasing::off;
     }
+    if (inputs.players_own_profile && inputs.light_machine) {
+        settings.max_frame_rate = light_machine_frame_rate;
+        settings.anti_aliasing = AntiAliasing::off;
+        const bool small_desktop = inputs.desktop != desktop_screen_size &&
+                                   (inputs.desktop.width < light_machine_screen_size.width ||
+                                    inputs.desktop.height < light_machine_screen_size.height);
+        settings.screen_size =
+            small_desktop ? small_desktop_screen_size : light_machine_screen_size;
+    }
     return settings;
+}
+
+std::string screen_size_text(ScreenSize size) {
+    if (size == desktop_screen_size)
+        return std::string{desktop_text};
+    return std::to_string(size.width) + "x" + std::to_string(size.height);
+}
+
+std::optional<ScreenSize> screen_size_from_text(std::string_view text) {
+    for (const ScreenSize size : screen_sizes)
+        if (text == screen_size_text(size))
+            return size;
+    return std::nullopt;
 }
 
 EngineSettings read_settings(
@@ -191,6 +219,8 @@ EngineSettings read_settings(
         settings.anti_aliasing = anti_aliasing_from_number(*number);
     if (const auto number = stored_number(values, key::frame_stats))
         settings.frame_stats = *number > 0;
+    if (const auto found = values.find(std::string{key::screen_size}); found != values.end())
+        settings.screen_size = screen_size_from_text(found->second).value_or(settings.screen_size);
     return settings;
 }
 
@@ -255,6 +285,14 @@ void write_settings(
         switch_text(chosen.frame_stats),
         chosen.frame_stats != opened.frame_stats,
         chosen.frame_stats == defaults.frame_stats,
+        restored
+    );
+    store(
+        values,
+        key::screen_size,
+        screen_size_text(chosen.screen_size),
+        chosen.screen_size != opened.screen_size,
+        chosen.screen_size == defaults.screen_size,
         restored
     );
 }

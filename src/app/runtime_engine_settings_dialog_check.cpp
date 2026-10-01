@@ -138,6 +138,8 @@ std::string_view label_of(settings::Setting setting) {
         return "Maximum frame rate";
     case settings::Setting::anti_aliasing:
         return "Enhanced anti-aliasing";
+    case settings::Setting::screen_size:
+        return "Screen size";
     case settings::Setting::frame_stats:
         return "Show performance statistics";
     }

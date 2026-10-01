@@ -3,6 +3,7 @@
 
 // oa-game entry point: display setup, intro playback and runtime launch.
 #include "oa/app/runtime.hpp"
+#include "screen_size.hpp"
 #include "oa/app/extension_list.hpp"
 #include "oa/app/full_screen.hpp"
 #include "oa/app/game_directory.hpp"
@@ -86,7 +87,9 @@ struct HostDisplay {
     FullScreenSwitch full_screen{};
 
     /// Starts SDL's video and sound and opens the window, at the size
-    /// --resolution gives when it is given, and its renderer.
+    /// --resolution gives when it is given, else at the Screen size setting's
+    /// (starting_screen_size), and its renderer. A window of a set screen
+    /// size takes the display mode nearest it in full screen.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
     ///
@@ -105,14 +108,22 @@ struct HostDisplay {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         active = true;
+        const auto screen = starting_screen_size(options, desktop_size());
+        const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
         window = SDL_CreateWindow(
             "Open Annihilation",
-            options.window_resolution ? options.match_width : kDefaultWindowWidth,
-            options.window_resolution ? options.match_height : kDefaultWindowHeight,
-            game_window_flags(options.start_full_screen)
+            options.window_resolution ? options.match_width
+            : sized                   ? screen.width
+                                      : kDefaultWindowWidth,
+            options.window_resolution ? options.match_height
+            : sized                   ? screen.height
+                                      : kDefaultWindowHeight,
+            game_window_flags(options.start_full_screen && !sized)
         );
         if (window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
+        if (sized)
+            take_screen_size(window, screen, options.start_full_screen);
         set_window_icon(window);
         renderer = SDL_CreateRenderer(window, nullptr);
         if (renderer == nullptr)

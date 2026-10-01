@@ -333,6 +333,10 @@ and `app-window-icon` that the embedded one decodes.
   describes both. Benchmarks, `--frame-rate` runs, headless saved-game runs
   and the battle end with the memory report, its peaks the largest the
   system saw (`oa/platform/memory_status.hpp`).
+- `screen_size.hpp`, `screen_size.cpp`: the Screen size setting read before
+  the window opens, with the defaults of a light machine
+  (`oa/platform/machine.hpp`), the window opened at that size and full
+  screen given the display mode nearest it.
 - Director scripts ([docs/director.md](../../docs/director.md)):
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and

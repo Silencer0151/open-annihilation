@@ -57,6 +57,7 @@ enum class Setting : uint8_t {
     unit_limit,        ///< Unit limit: a slider
     max_frame_rate,    ///< Maximum frame rate: a slider
     anti_aliasing,     ///< Enhanced anti-aliasing: a strip of levels
+    screen_size,       ///< Screen size: a slider
     frame_stats,       ///< Show performance statistics: a switch
 };
 

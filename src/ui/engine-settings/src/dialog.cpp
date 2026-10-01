@@ -30,12 +30,25 @@ constexpr std::array<Setting, 3> kControlsRows{
 /// Gameplay's rows.
 constexpr std::array<Setting, 1> kGameplayRows{Setting::unit_limit};
 /// Graphics' rows.
-constexpr std::array<Setting, 2> kGraphicsRows{Setting::max_frame_rate, Setting::anti_aliasing};
+constexpr std::array<Setting, 3> kGraphicsRows{
+    Setting::max_frame_rate,
+    Setting::anti_aliasing,
+    Setting::screen_size,
+};
 /// Developer's rows.
 constexpr std::array<Setting, 1> kDeveloperRows{Setting::frame_stats};
 
 /// The lowest level that draws units finer and needs the warning hint.
 constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
+
+/// Returns a screen size's place among screen_sizes.
+///
+/// @param size the screen size
+/// @return its index; 0, the desktop's, for a size not offered
+int32_t screen_size_index(ScreenSize size) noexcept {
+    const auto found = std::find(screen_sizes.begin(), screen_sizes.end(), size);
+    return found == screen_sizes.end() ? 0 : static_cast<int32_t>(found - screen_sizes.begin());
+}
 
 /// Returns a whole number of a range's steps, rounded to the nearest.
 ///
@@ -51,7 +64,7 @@ int32_t steps_from(int64_t value, int64_t lowest, int64_t step) noexcept {
 
 bool is_slider(Setting setting) noexcept {
     return setting == Setting::path_search || setting == Setting::unit_limit ||
-           setting == Setting::max_frame_rate;
+           setting == Setting::max_frame_rate || setting == Setting::screen_size;
 }
 
 Slider slider_of(Setting setting) noexcept {
@@ -64,6 +77,8 @@ Slider slider_of(Setting setting) noexcept {
         return Slider{
             static_cast<int32_t>((highest_frame_rate - lowest_frame_rate) / frame_rate_step + 1)
         };
+    case Setting::screen_size:
+        return Slider{static_cast<int32_t>(screen_sizes.size())};
     default:
         return Slider{2};
     }
@@ -81,6 +96,9 @@ int32_t stop_of(const EngineSettings& settings, Setting setting) noexcept {
         break;
     case Setting::max_frame_rate:
         stop = steps_from(settings.max_frame_rate, lowest_frame_rate, frame_rate_step);
+        break;
+    case Setting::screen_size:
+        stop = screen_size_index(settings.screen_size);
         break;
     default:
         break;
@@ -100,6 +118,9 @@ void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept 
     case Setting::max_frame_rate:
         settings.max_frame_rate =
             lowest_frame_rate + static_cast<uint32_t>(clamped) * frame_rate_step;
+        break;
+    case Setting::screen_size:
+        settings.screen_size = screen_sizes[static_cast<std::size_t>(clamped)];
         break;
     default:
         break;
@@ -282,6 +303,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "Maximum frame rate";
     case Setting::anti_aliasing:
         return "Enhanced anti-aliasing";
+    case Setting::screen_size:
+        return "Screen size";
     case Setting::frame_stats:
         return "Show performance statistics";
     }
@@ -323,6 +346,9 @@ hint_line(Setting setting, const EngineSettings& settings, std::size_t line) noe
         else
             lines = {"Units drawn at higher resolution and scaled down", "for smoother edges."};
         break;
+    case Setting::screen_size:
+        lines = {"Full screen at this size, or a window of it.", "Applies from the next start."};
+        break;
     case Setting::frame_stats:
         lines = {"Frame and tick times over the battlefield.", {}};
         break;
@@ -335,6 +361,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::escape_opens_menu:
     case Setting::unit_limit:
     case Setting::anti_aliasing:
+    case Setting::screen_size:
         return 2;
     default:
         return 1;
@@ -349,6 +376,11 @@ std::string value_text(Setting setting, const EngineSettings& settings) {
         return std::to_string(settings.unit_limit) + " per player";
     case Setting::max_frame_rate:
         return std::to_string(settings.max_frame_rate) + " fps";
+    case Setting::screen_size:
+        return settings.screen_size == desktop_screen_size
+                   ? std::string{"Desktop"}
+                   : std::to_string(settings.screen_size.width) + " x " +
+                         std::to_string(settings.screen_size.height);
     default:
         return {};
     }

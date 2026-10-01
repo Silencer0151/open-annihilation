@@ -3,9 +3,28 @@
 
 #include "oa/platform/machine.hpp"
 
+#include "oa/platform/system.hpp"
+
 #include <fstream>
 #include <ios>
 #include <string>
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
+
+#if defined(__i386__) || defined(_M_IX86)
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+#endif
 
 namespace oa::platform {
 
@@ -33,6 +52,65 @@ bool running_on_raspberry_pi() {
 #else
     return false;
 #endif
+}
+
+bool light_machine(const MachineTraits& machine) noexcept {
+    return machine.processors <= 1 || !machine.sse2 ||
+           (machine.memory != 0 && machine.memory < light_machine_memory);
+}
+
+namespace {
+
+/// Returns the machine's physical memory as the system reports it.
+///
+/// @return bytes, or 0 when the system does not say
+uint64_t physical_memory() noexcept {
+#if defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof status;
+    return GlobalMemoryStatusEx(&status) ? static_cast<uint64_t>(status.ullTotalPhys) : 0;
+#elif defined(__APPLE__)
+    uint64_t bytes = 0;
+    std::size_t size = sizeof bytes;
+    return sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0 ? bytes : 0;
+#elif defined(__linux__)
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long page = sysconf(_SC_PAGESIZE);
+    return pages > 0 && page > 0 ? static_cast<uint64_t>(pages) * static_cast<uint64_t>(page) : 0;
+#else
+    return 0;
+#endif
+}
+
+/// Tells whether the processor runs SSE2 instructions.
+///
+/// @return the SSE2 bit of the processor's feature word on 32-bit x86; true elsewhere
+bool runs_sse2() noexcept {
+#if defined(__i386__) || defined(_M_IX86)
+    // CPUID leaf 1 reports SSE2 in bit 26 of its EDX word.
+    constexpr unsigned feature_leaf = 1;
+    constexpr unsigned sse2_bit = 1U << 26;
+#if defined(_MSC_VER)
+    int words[4] = {};
+    __cpuid(words, static_cast<int>(feature_leaf));
+    return (static_cast<unsigned>(words[3]) & sse2_bit) != 0;
+#else
+    unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
+    return __get_cpuid(feature_leaf, &eax, &ebx, &ecx, &edx) != 0 && (edx & sse2_bit) != 0;
+#endif
+#else
+    return true;
+#endif
+}
+
+} // namespace
+
+MachineTraits read_machine_traits() noexcept {
+    MachineTraits machine;
+    machine.processors = processor_count();
+    machine.memory = physical_memory();
+    machine.sse2 = runs_sse2();
+    return machine;
 }
 
 } // namespace oa::platform

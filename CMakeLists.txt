@@ -308,7 +308,7 @@ if(BUILD_TESTING)
   set_tests_properties(app-full-screen PROPERTIES
     ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
 endif()
-set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
+set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
   src/app/runtime_builtin_screens.cpp
   src/app/runtime_camera.cpp src/app/runtime_campaign.cpp src/app/runtime_checks.cpp

@@ -209,7 +209,13 @@ void each_section_shows_its_rows() {
     CHECK(settings::page_settings(Page::gameplay)[0] == settings::Setting::unit_limit);
     CHECK(settings::page_settings(Page::graphics)[0] == settings::Setting::max_frame_rate);
     CHECK(settings::page_settings(Page::graphics)[1] == settings::Setting::anti_aliasing);
+    CHECK(settings::page_settings(Page::graphics).size() == 3);
+    CHECK(settings::page_settings(Page::graphics)[2] == settings::Setting::screen_size);
     CHECK(settings::page_settings(Page::developer)[0] == settings::Setting::frame_stats);
+    // Graphics' three rows lie above the footer.
+    const auto graphics = geometry::place_rows(Page::graphics, {});
+    CHECK(graphics.count == 3);
+    CHECK(graphics.bottom <= geometry::footer_rule_row);
 
     const auto parts = settings::dialog_layout(opened(Page::controls));
     for (const std::string_view text :
@@ -315,7 +321,8 @@ void every_stop_maps_to_its_value_and_back() {
     for (const Expected expected :
          {Expected{settings::Setting::path_search, 8},
           Expected{settings::Setting::unit_limit, 30},
-          Expected{settings::Setting::max_frame_rate, 17}}) {
+          Expected{settings::Setting::max_frame_rate, 17},
+          Expected{settings::Setting::screen_size, 5}}) {
         CHECK(geometry::slider_of(expected.setting).stops == expected.stops);
         const renderer::SourceRect track{100, 50, 189, geometry::slider_line_height};
         for (int32_t stop = 0; stop < expected.stops; ++stop) {
@@ -350,6 +357,16 @@ void every_stop_maps_to_its_value_and_back() {
     CHECK(geometry::value_text(settings::Setting::unit_limit, state) == "21 per player");
     state.unit_limit = 275;
     CHECK(geometry::stop_of(state, settings::Setting::unit_limit) == 5);
+    // The screen sizes from the desktop's up, each shown as it is.
+    geometry::set_stop(state, settings::Setting::screen_size, 0);
+    CHECK(state.screen_size == settings::desktop_screen_size);
+    CHECK(geometry::value_text(settings::Setting::screen_size, state) == "Desktop");
+    geometry::set_stop(state, settings::Setting::screen_size, 2);
+    CHECK((state.screen_size == settings::ScreenSize{800, 600}));
+    CHECK(geometry::value_text(settings::Setting::screen_size, state) == "800 x 600");
+    geometry::set_stop(state, settings::Setting::screen_size, 99);
+    CHECK((state.screen_size == settings::ScreenSize{1280, 1024}));
+    CHECK(geometry::value_text(settings::Setting::screen_size, state) == "1280 x 1024");
 }
 
 void sliders_follow_the_pointer_and_the_arrows() {

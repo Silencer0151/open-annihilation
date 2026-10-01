@@ -159,13 +159,23 @@ they are open; a multiplayer game keeps running.
   250. A saved game keeps the limit it was saved with.
 - **Graphics:** Maximum frame rate, 40 to 120 frames a second. Enhanced
   anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
-  and scaled down for smoother edges; 8× and 16× need a fast CPU.
+  and scaled down for smoother edges; 8× and 16× need a fast CPU. Screen
+  size, from the next start: Desktop, the default, leaves the screen at the
+  desktop's size; 640×480, 800×600, 1024×768 or 1280×1024 switches the
+  screen to that size in full screen, and opens the window at that size.
 - **Developer:** Show performance statistics: frame and tick times over the
   battlefield, as the `+stats` console command shows them.
 
 Pathfinding cycles and Unit limit cannot change during a game; in a
 multiplayer game the host's settings apply. `--max-fps N` on the command
 line sets the frame rate for that run without changing the setting.
+
+On a light computer, one with a single processor, a processor without SSE2
+(a Pentium III or an Athlon XP) or less than 512 MB of memory, the game
+starts at a screen size of 800×600 (640×480 when the desktop is smaller),
+with the maximum frame rate at 60 frames a second and Enhanced
+anti-aliasing off. Each can be changed in the settings, and **Restore
+defaults** puts these back.
 
 ### Raspberry Pi
 

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace oa::ui::engine_settings {
@@ -34,6 +35,9 @@ inline constexpr std::string_view max_frame_rate = "open-annihilation.max-fps";
 inline constexpr std::string_view anti_aliasing = "open-annihilation.anti-aliasing";
 /// 1 or 0 (EngineSettings::frame_stats).
 inline constexpr std::string_view frame_stats = "open-annihilation.frame-stats";
+/// "desktop", or the width and height in decimal joined by an "x", as
+/// "800x600" (EngineSettings::screen_size).
+inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
 } // namespace key
 
 /// Path nodes the path search may visit in a game tick, all players
@@ -66,6 +70,35 @@ inline constexpr uint32_t frame_rate_step = 5;
 /// The maximum frame rate a Raspberry Pi starts with, in frames a second:
 /// what its graphics keep up with at the game's resolutions.
 inline constexpr uint32_t raspberry_pi_frame_rate = 60;
+/// The maximum frame rate a light machine starts with, in frames a second.
+inline constexpr uint32_t light_machine_frame_rate = 60;
+
+/// The size the game's window, or the screen in full screen, is set to, in
+/// pixels; zero by zero is the desktop's own size, the game's default.
+struct ScreenSize {
+    uint16_t width{};  ///< pixels across; 0 with height 0 for the desktop's size
+    uint16_t height{}; ///< pixels down
+
+    friend bool operator==(const ScreenSize&, const ScreenSize&) = default;
+};
+
+/// The desktop's size, as ScreenSize keeps it.
+inline constexpr ScreenSize desktop_screen_size{};
+
+/// The screen sizes the setting offers, in the order the dialog offers them.
+inline constexpr std::array<ScreenSize, 5> screen_sizes{{
+    desktop_screen_size,
+    {640, 480},
+    {800, 600},
+    {1024, 768},
+    {1280, 1024},
+}};
+
+/// The screen size a light machine starts with.
+inline constexpr ScreenSize light_machine_screen_size{800, 600};
+/// The screen size a light machine starts with when its desktop is smaller
+/// than light_machine_screen_size.
+inline constexpr ScreenSize small_desktop_screen_size{640, 480};
 
 /// The most bytes of an installation's totala.ini the defaults read.
 inline constexpr std::size_t installation_ini_limit = std::size_t{64} * 1024;
@@ -104,6 +137,8 @@ struct EngineSettings {
     uint32_t max_frame_rate{highest_frame_rate};   ///< frames a second
     AntiAliasing anti_aliasing{AntiAliasing::off}; ///< enhanced anti-aliasing of units
     bool frame_stats{}; ///< the frame and tick times over the battlefield (+stats)
+    /// The window's size, and the screen's in full screen, from the next start.
+    ScreenSize screen_size{desktop_screen_size};
 
     friend bool operator==(const EngineSettings&, const EngineSettings&) = default;
 };
@@ -119,6 +154,11 @@ struct Inputs {
     /// of it; empty when it has none.
     std::string_view installation_ini{};
     bool raspberry_pi{}; ///< the game runs on a Raspberry Pi
+    /// The game runs on a light machine (oa::platform::light_machine): one
+    /// processor, no SSE2 or under 512 MiB of memory.
+    bool light_machine{};
+    /// The desktop's size; zero by zero when it is not known.
+    ScreenSize desktop{};
 };
 
 /// Returns the settings a player has before changing any.
@@ -128,7 +168,10 @@ struct Inputs {
 /// (installation_unit_limit) with the player's own file, else
 /// default_unit_limit. On a Raspberry Pi with the player's own file the
 /// maximum frame rate is raspberry_pi_frame_rate and enhanced
-/// anti-aliasing is off.
+/// anti-aliasing is off. On a light machine with the player's own file the
+/// maximum frame rate is light_machine_frame_rate, enhanced anti-aliasing is
+/// off and the screen size is light_machine_screen_size, or
+/// small_desktop_screen_size on a known desktop narrower or shorter than it.
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults
@@ -143,7 +186,8 @@ struct Inputs {
 /// highest_unit_limit; frame rate lowest_frame_rate to highest_frame_rate;
 /// anti-aliasing the highest level not above the stored number, off below
 /// 2; a switch is on for a number above 0. A value between a setting's
-/// stops is kept as stored.
+/// stops is kept as stored. The screen size is "desktop" or one of
+/// screen_sizes as "WIDTHxHEIGHT"; any other value gives the default.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -158,7 +202,8 @@ struct Inputs {
 /// For each setting but switch_alt: after Restore defaults (`restored`), a
 /// setting at its default has its key erased; otherwise a setting that
 /// differs from `opened` has its key written, in decimal, a switch as 1 or
-/// 0. Every other key is left as it is. switch_alt is never written here:
+/// 0, the screen size as "desktop" or "WIDTHxHEIGHT". Every other key is
+/// left as it is. switch_alt is never written here:
 /// 3.1c's SwitchAlt key goes with the frontend's own preferences.
 ///
 /// @param[in,out] values the preferences
@@ -173,6 +218,19 @@ void write_settings(
     const EngineSettings& defaults,
     bool restored
 );
+
+/// Returns the text the preferences keep a screen size as.
+///
+/// @param size the screen size
+/// @return "desktop" for desktop_screen_size, else "WIDTHxHEIGHT" in decimal
+[[nodiscard]] std::string screen_size_text(ScreenSize size);
+
+/// Returns the screen size a preferences text names.
+///
+/// @param text the stored text
+/// @return the size, when the text is "desktop" or names one of screen_sizes
+///     as "WIDTHxHEIGHT"; nothing otherwise
+[[nodiscard]] std::optional<ScreenSize> screen_size_from_text(std::string_view text);
 
 /// Returns the unit limit an installation's totala.ini sets.
 ///

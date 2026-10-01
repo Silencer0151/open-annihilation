@@ -7,7 +7,7 @@
 #include "engine_settings_state.hpp"
 
 #include "oa/app/runtime.hpp"
-#include "oa/platform/machine.hpp"
+#include "screen_size.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
 
 #include <SDL3/SDL.h>
@@ -76,6 +76,8 @@ settings::Inputs Runtime::EngineSettingsState::inputs(const Runtime& runtime) {
     if (runtime.engine_settings_) {
         inputs.installation_ini = runtime.engine_settings_->installation_ini;
         inputs.raspberry_pi = runtime.engine_settings_->raspberry_pi;
+        inputs.light_machine = runtime.engine_settings_->light_machine;
+        inputs.desktop = runtime.engine_settings_->desktop;
     }
     return inputs;
 }
@@ -199,7 +201,11 @@ void Runtime::load_engine_settings() {
     state.installation_ini = options_.preferences_file
                                  ? std::string{}
                                  : EngineSettingsState::read_installation_ini(options_.game_dir);
-    state.raspberry_pi = oa::platform::running_on_raspberry_pi();
+    // The machine as the window was opened for it (starting_screen_size).
+    const auto start = start_inputs(options_, desktop_size());
+    state.raspberry_pi = start.raspberry_pi;
+    state.light_machine = start.light_machine;
+    state.desktop = start.desktop;
     const bool switch_alt = (preferences_.graphics_flags & init::preference_flags::switch_alt) != 0;
     const auto read =
         settings::read_settings(preference_values_, EngineSettingsState::inputs(*this), switch_alt);
