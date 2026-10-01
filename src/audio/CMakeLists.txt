@@ -48,7 +48,10 @@ target_include_directories(oa-audio-music-decoder SYSTEM PRIVATE ${oa_music_code
 target_link_libraries(oa-audio-music-decoder PRIVATE oa-options)
 target_compile_features(oa-audio-music-decoder PUBLIC cxx_std_20)
 if(MSVC)
-  set_source_files_properties(src/music_codecs.c PROPERTIES COMPILE_OPTIONS /w)
+  # The decoders build their tables from constant floating-point expressions,
+  # which /fp:strict does not take as static initializers. Decoded music
+  # takes no part in a match.
+  set_source_files_properties(src/music_codecs.c PROPERTIES COMPILE_OPTIONS "/w;/fp:precise")
 else()
   set_source_files_properties(src/music_codecs.c PROPERTIES COMPILE_OPTIONS -w)
 endif()
