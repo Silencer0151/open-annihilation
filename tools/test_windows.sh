@@ -25,7 +25,7 @@ Usage: tools/test_windows.sh [--rebuild-image] [build_windows.sh options]
 
 Builds the Windows test image when it is missing, then runs
 tools/build_windows.sh --run-tests inside it. Remaining options go to
-build_windows.sh (--build-type, --jobs, --ffmpeg, --source).
+build_windows.sh (--build-type, --jobs, --source).
 
   --rebuild-image   Build the image again before running
   -h, --help        Show this help

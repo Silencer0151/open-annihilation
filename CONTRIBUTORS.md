@@ -28,7 +28,7 @@ only, the project's licence, and their authors keep the copyright in them.
 - [Shields.io](https://shields.io/) and [Simple Icons](https://simpleicons.org/):
   README badges
 
-The libraries included in the releases, such as SDL and FFmpeg, and their
+The libraries included in the releases, such as SDL and zlib, and their
 licences are listed in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
 
 ## Thanks

@@ -2,16 +2,15 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Build the pinned zlib, SDL3 and FFmpeg as universal static libraries for macOS.
+"""Build the pinned zlib and SDL3 as universal static libraries for macOS.
 
 The macOS release (tools/release_macos.sh) links them into the application,
 which then needs no library beyond the system's. Each library runs on arm64
 and x86_64 Macs from the oldest macOS release --deployment-target names, and
-gets its own install prefix (zlib/, sdl/, ffmpeg/) under the prefix root,
-<deps>/macos-<deployment target> unless --prefix-root names another. zlib
-and SDL3 are built for both architectures at once; FFmpeg is built once for
-each, with the options tools/bootstrap_windows_deps.py shares, and lipo
-combines the two. Build trees live beside the root (<root>-build). Each
+gets its own install prefix (zlib/, sdl/) under the prefix root,
+<deps>/macos-<deployment target> unless --prefix-root names another. Each
+library is built for both architectures at once. Build trees live beside
+the root (<root>-build). Each
 prefix records in build-settings.json what its library was built from and
 how: the version, the archive's SHA-256, the deployment target, the
 architectures and the options. A library whose prefix is complete and
@@ -22,7 +21,6 @@ Nothing outside the cache, the root and its build trees is modified.
 import argparse
 import json
 import pathlib
-import platform
 import shutil
 import subprocess
 import sys
@@ -33,7 +31,6 @@ import bootstrap_windows_deps as pins  # noqa: E402
 
 ARCHITECTURES = ("arm64", "x86_64")
 DEFAULT_DEPLOYMENT_TARGET = "11.0"
-FFMPEG_LIBRARIES = ("libavformat.a", "libavcodec.a", "libavutil.a", "libswscale.a", "libswresample.a")
 SETTINGS_FILE = "build-settings.json"
 ZLIB_OPTIONS = ["-DZLIB_BUILD_EXAMPLES=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"]
 SDL_OPTIONS = ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF", "-DSDL_TESTS=OFF",
@@ -77,40 +74,6 @@ def build_universal(source, build, install, deployment_target, jobs, options):
     subprocess.run(["cmake", "--install", str(build)], check=True)
 
 
-def ffmpeg_configure_options(architecture, deployment_target):
-    """Returns FFmpeg's configure options for one architecture, but its prefix."""
-    target_options = []
-    if architecture != platform.machine():
-        target_options = ["--enable-cross-compile", f"--arch={architecture}", "--target-os=darwin"]
-    minimum = f"-mmacosx-version-min={deployment_target}"
-    return [*target_options, f"--cc=clang -arch {architecture}", f"--extra-cflags={minimum}",
-            f"--extra-ldflags={minimum}",
-            *pins.ffmpeg_options(["--enable-static", "--disable-shared"], "--enable-pthreads")]
-
-
-def build_ffmpeg(source, build, install, architecture, deployment_target, jobs):
-    """Builds and installs FFmpeg's static libraries for one architecture."""
-    shutil.rmtree(build, ignore_errors=True)
-    shutil.rmtree(install, ignore_errors=True)
-    build.mkdir(parents=True)
-    subprocess.run([str(source / "configure"), f"--prefix={install}",
-                    *ffmpeg_configure_options(architecture, deployment_target)],
-                   cwd=build, check=True)
-    subprocess.run(["make", f"-j{jobs}"], cwd=build, check=True)
-    subprocess.run(["make", "install"], cwd=build, check=True)
-
-
-def combine_ffmpeg(installs, universal):
-    """Combines the per-architecture FFmpeg installs into one universal prefix."""
-    shutil.rmtree(universal, ignore_errors=True)
-    (universal / "lib").mkdir(parents=True)
-    # The installed headers are the same for both architectures.
-    shutil.copytree(installs[0] / "include", universal / "include")
-    for library in FFMPEG_LIBRARIES:
-        subprocess.run(["lipo", "-create", *[str(install / "lib" / library) for install in installs],
-                        "-output", str(universal / "lib" / library)], check=True)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--deps", type=pathlib.Path, default=bootstrap_sdl.ROOT / "local" / "deps",
@@ -141,20 +104,7 @@ def main():
         build_universal(bootstrap_sdl.sdl_source(deps), builds / "sdl", sdl_install, args.deployment_target,
                         args.jobs, SDL_OPTIONS)
         record(sdl_install, sdl_settings)
-    ffmpeg_install = prefixes / "ffmpeg"
-    ffmpeg_settings = settings(pins.FFMPEG_VERSION, pins.FFMPEG_SHA256, args.deployment_target,
-                               {architecture: ffmpeg_configure_options(architecture, args.deployment_target)
-                                for architecture in ARCHITECTURES})
-    if not is_current(ffmpeg_install, [f"lib/{library}" for library in FFMPEG_LIBRARIES], ffmpeg_settings):
-        source = pins.ffmpeg_source(deps)
-        installs = [builds / f"ffmpeg-{architecture}-install" for architecture in ARCHITECTURES]
-        for architecture, install in zip(ARCHITECTURES, installs):
-            build_ffmpeg(source, builds / f"ffmpeg-{architecture}", install, architecture,
-                         args.deployment_target, args.jobs)
-        combine_ffmpeg(installs, ffmpeg_install)
-        record(ffmpeg_install, ffmpeg_settings)
-    for install, wanted in ((zlib_install, zlib_settings), (sdl_install, sdl_settings),
-                            (ffmpeg_install, ffmpeg_settings)):
+    for install, wanted in ((zlib_install, zlib_settings), (sdl_install, sdl_settings)):
         print(f"{install.name} {wanted['version']} for macOS {args.deployment_target}, {' '.join(ARCHITECTURES)}")
     print(f"macOS dependencies ready under {prefixes}")
 

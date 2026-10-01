@@ -43,7 +43,7 @@ Builds the macOS release of Open Annihilation and writes, in DIR:
       puts Open Annihilation.app in /Applications
 
 The game is a Release build for arm64 and x86_64 and macOS 11.0 or later,
-without tests, with zlib, SDL3 and FFmpeg linked in from
+without tests, with zlib and SDL3 linked in from
 tools/bootstrap_macos_deps.py. The application is signed inside-out with the
 hardened runtime, notarized and stapled, and so is the installer package;
 then both are checked. Nothing is installed.
@@ -230,7 +230,6 @@ if [[ -z "$app" ]]; then
     python3 "$repo_dir/tools/bootstrap_macos_deps.py" --deps "$deps_dir" \
         --deployment-target "$macos_minimum" --jobs "$jobs"
     prefix="$deps_dir/macos-$macos_minimum"
-    ffmpeg="$prefix/ffmpeg"
 
     # A Release build without tests, for both architectures and the oldest
     # macOS release, with the static libraries of the prefix only: never
@@ -260,11 +259,7 @@ if [[ -z "$app" ]]; then
         -DOA_BUILD_PLATFORM=ON -DOA_BUILD_INTRO_PLAYER=ON -DOA_REQUIRE_GAME=ON \
         -DOA_GAME_DIR= -DOA_DEMO_INSTALLER= \
         "-DSDL3_DIR=$prefix/sdl/lib/cmake/SDL3" \
-        "-DZLIB_INCLUDE_DIR=$prefix/zlib/include" "-DZLIB_LIBRARY=$prefix/zlib/lib/libz.a" \
-        "-DOA_FFMPEG_INCLUDE_DIR=$ffmpeg/include" \
-        "-DOA_AVFORMAT_LIBRARY=$ffmpeg/lib/libavformat.a" "-DOA_AVCODEC_LIBRARY=$ffmpeg/lib/libavcodec.a" \
-        "-DOA_AVUTIL_LIBRARY=$ffmpeg/lib/libavutil.a" "-DOA_SWSCALE_LIBRARY=$ffmpeg/lib/libswscale.a" \
-        "-DOA_SWRESAMPLE_LIBRARY=$ffmpeg/lib/libswresample.a"
+        "-DZLIB_INCLUDE_DIR=$prefix/zlib/include" "-DZLIB_LIBRARY=$prefix/zlib/lib/libz.a"
 
     step "build"
     cmake --build "$build_dir" --parallel "$jobs" --target oa-game
@@ -330,7 +325,7 @@ echo "$staged_app"
 
 # Code inside the bundle besides its executable is signed before what holds
 # it: every Mach-O file, then every nested bundle, each deepest first, then
-# the application. The game has none today, since SDL3, FFmpeg and zlib are
+# the application. The game has none today, since SDL3 and zlib are
 # linked into its executable, but a library or helper added later is signed
 # where it lies. A Developer ID signature carries the hardened runtime and a
 # secure timestamp, and no entitlements (docs/releasing.md).

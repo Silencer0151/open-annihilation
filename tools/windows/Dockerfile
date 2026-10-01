@@ -3,7 +3,6 @@
 
 # An x86-64 Linux image that cross-builds the tree for Windows with the
 # mingw-w64 GCC toolchain and runs the Windows test executables under Wine.
-# The native gcc builds FFmpeg's configure-time host tools.
 # tools/test_windows.sh builds it and runs tools/build_windows.sh --run-tests
 # inside it, with the checkout and the game install mounted at their host paths.
 FROM --platform=linux/amd64 debian:trixie-slim

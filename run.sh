@@ -65,7 +65,7 @@ scripted runs print to the terminal.
 
 Environment: OA_GAME_DIR, OA_BUILD_DIR, OA_BUILD_JOBS (default: 6),
 OA_BUILD_TYPE (default: Debug; e.g. RelWithDebInfo builds in build-relwithdebinfo).
-SDL is bootstrapped locally if missing; FFmpeg development libraries are required.
+SDL is bootstrapped locally if missing.
 USAGE
 }
 
@@ -164,7 +164,7 @@ for candidate in "$build_dir/$app_file.app/Contents/MacOS/$app_file" \
     if [[ -f "$candidate" && -x "$candidate" ]]; then executable="$candidate"; break; fi
 done
 if [[ -z "$executable" ]]; then
-    printf 'run.sh: native player was not built; check SDL3 and FFmpeg development dependencies.\n' >&2
+    printf 'run.sh: native player was not built; check the SDL3 development dependency.\n' >&2
     exit 1
 fi
 printf 'Launching %s from current source...\n' "$app_file"

@@ -18,12 +18,11 @@ in this repository or in the release packages.
 | Component | Version | Licence | macOS | Windows | Linux |
 |---|---|---|---|---|---|
 | [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
-| [FFmpeg](#ffmpeg) (libavcodec, libavformat, libavutil, libswresample, libswscale) | 9.0.2 | LGPL 2.1 or later | static, inside the app | DLLs beside `open-annihilation.exe` | shared libraries in `lib/` |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
 | [stb_vorbis](#stb_vorbis) | 1.22, changed | public domain or MIT | static | static | static |
 | [dr_mp3 and dr_flac](#dr_mp3-and-dr_flac) | 0.7.3 and 0.13.3, with later fixes | public domain or MIT No Attribution | static | static | static |
-| [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 12.0.0 (x64), 15.0.0 (ARM64) | ZPL 2.1, MIT, BSD | | static | |
-| [GCC runtime](#gcc-runtime) | 14.2.0 | GPL 3 with the GCC Runtime Library Exception | | static | |
+| [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 15.0.0 | ZPL 2.1, MIT, BSD | | static | |
+| [LLVM runtime libraries](#llvm-runtime-libraries) (libc++, libc++abi, libunwind, compiler-rt) | 23.1.2 | Apache 2.0 with LLVM Exceptions | | static | |
 
 The operating system's own libraries, such as the C and C++ runtimes and
 the graphics, audio and windowing libraries, are not included.
@@ -34,34 +33,27 @@ The table above describes the release packages. A build made from this
 repository with CMake links these components as follows:
 
 - stb_vorbis, dr_mp3 and dr_flac, which decode the music, are kept in
-  [`third_party/`](third_party/) and compiled into every build.
+  [`third_party/`](third_party/) and compiled into every build. The movies
+  and the rest of the sound are decoded by the engine's own code.
 - When CMake is pointed at the SDL that `tools/bootstrap_sdl.py` installs,
   as `run.sh` and the README do, SDL 3.4.16 is linked statically. Otherwise
   the build takes whichever SDL 3.2 or later CMake finds, which may be a
   shared library.
-- On macOS and Linux, zlib and FFmpeg are the system's, except in the macOS
-  release build below: the executables link the libraries CMake finds
-  (Homebrew's FFmpeg on macOS when it is installed), and the build copies
-  none of them beside the executables. The [FFmpeg](#ffmpeg) section below
-  does not describe such a build: the licence and configuration of the
-  FFmpeg it found apply to it. Homebrew's FFmpeg, for example, is built
-  under the GPL version 3 with x264 and x265.
+- On macOS and Linux, zlib is the system's, except in the macOS release
+  build below: the executables link the zlib CMake finds, and the build
+  copies none beside the executables.
 - The native Windows build that the README describes, with vcpkg's
   `zlib:x64-windows`, links that zlib as a DLL and copies it beside
-  `oa-tool.exe`. It uses FFmpeg only when CMake finds one; without it, as in
-  continuous integration, `open-annihilation` and `oa-intro` are not built.
+  `oa-tool.exe`.
 - The Windows cross-build, `tools/build_windows.sh`, builds zlib 1.3.1 and
-  SDL for the target and links them statically. It builds FFmpeg 9.0.2 as
-  separate DLLs with `tools/bootstrap_windows_deps.py`, or takes the FFmpeg
-  that `--ffmpeg PREFIX` names, and copies the DLLs and that FFmpeg's
-  `COPYING.LGPLv2.1` beside `open-annihilation.exe` and `oa-intro.exe`. The
-  [FFmpeg](#ffmpeg) section describes an FFmpeg given with `--ffmpeg` only
-  when it is itself an LGPL build, configured without `--enable-gpl` and
-  `--enable-nonfree`.
-- The macOS release build, `tools/release_macos.sh`, builds zlib 1.3.1,
-  SDL 3.4.16 and FFmpeg 9.0.2 for arm64 and x86_64 as static libraries with
+  SDL for the target and links them statically.
+- The macOS release build, `tools/release_macos.sh`, builds zlib 1.3.1 and
+  SDL 3.4.16 for arm64 and x86_64 as static libraries with
   `tools/bootstrap_macos_deps.py` and links them into the application, as
   the macOS package in the table above has them.
+- The movies and music need no other library; the `ffmpeg` program that
+  video capture and the director's renders start (docs/capture.md) is a
+  separate program that no package contains.
 
 ## SDL
 
@@ -108,51 +100,6 @@ SDL contains code from other projects:
   MIT-style licences (keysym conversion, EDID parsing, XSETTINGS and the
   Wayland protocol files). Their notices are in
   [`licenses/SDL-linux.txt`](licenses/SDL-linux.txt).
-
-## FFmpeg
-
-This software uses libraries from the FFmpeg project under the LGPL v2.1.
-FFmpeg is Copyright (c) 2000-2026 the FFmpeg developers. The licence text is
-in [`licenses/FFmpeg-COPYING.LGPLv2.1`](licenses/FFmpeg-COPYING.LGPLv2.1), and the
-source and build details are in [`licenses/FFmpeg-SOURCE.txt`](licenses/FFmpeg-SOURCE.txt).
-
-The FFmpeg libraries decode the game's movies. They are built from
-the unmodified release archive
-<https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.gz>
-(SHA-256 `84960df915059e8754fef2cd7c9afeb614062b1b5458ec471eecee619ee04e98`),
-which is their complete corresponding source. They include only the
-components below, and no GPL or non-free component:
-
-```
---disable-programs --disable-doc --disable-debug --disable-autodetect
---disable-network --disable-avdevice --disable-avfilter --disable-x86asm
---disable-everything --enable-protocol=file
---enable-demuxer=smacker,mp3,ogg,wav,flac
---enable-decoder=smacker,smackaud,mp3float,vorbis,flac,pcm_s16le,pcm_s24le,pcm_u8
---enable-parser=mpegaudio,vorbis,flac
-```
-
-The Windows and Linux packages build them as shared libraries
-(`--enable-shared --disable-static`), and the macOS package as static
-libraries (`--enable-static --disable-shared`). Windows adds the
-cross-compilation, `--enable-w32threads` and static runtime options for
-mingw-w64, and macOS and Linux add `--enable-pthreads`. The Windows
-cross-build in this repository takes its options from
-`tools/bootstrap_windows_deps.py`, and the macOS release build from
-`tools/bootstrap_macos_deps.py`. The exact options of each package are in
-[`licenses/FFmpeg-SOURCE.txt`](licenses/FFmpeg-SOURCE.txt).
-
-On Windows and Linux the libraries are separate files, so you can replace
-them with another compatible build of FFmpeg 9.0. On macOS they are linked
-into the application; you can rebuild it against a different FFmpeg from
-the Open Annihilation source code. Open Annihilation's GNU GPL v3 terms give
-you the rights that section 6 of the LGPL v2.1 requires for this.
-
-To build against a modified FFmpeg, set the CMake cache variables
-`OA_FFMPEG_INCLUDE_DIR`, `OA_AVFORMAT_LIBRARY`, `OA_AVCODEC_LIBRARY`,
-`OA_AVUTIL_LIBRARY`, `OA_SWSCALE_LIBRARY` and `OA_SWRESAMPLE_LIBRARY` to its
-headers and libraries when you configure the source. The Windows
-cross-build takes it with `tools/build_windows.sh --ffmpeg PREFIX`.
 
 ## stb_vorbis
 
@@ -213,26 +160,18 @@ All packages link zlib 1.3.1 statically, from
 
 ## mingw-w64 runtime and winpthreads
 
-The Windows package is linked statically against the mingw-w64 12.0.0
+The Windows packages are linked statically against the mingw-w64 15.0.0
 runtime (Zope Public License 2.1, with parts in the public domain or under
 BSD licences; Copyright (c) 2009-2013 by the mingw-w64 project) and its
 winpthreads library (MIT; Copyright (c) 2011-2016 mingw-w64 project; parts
 (C) 2010 Lockless Inc., BSD 3-Clause). Their full notices and disclaimers
 are in [`licenses/mingw-w64.txt`](licenses/mingw-w64.txt).
 
-## Windows on ARM (experimental)
+## LLVM runtime libraries
 
-The experimental Windows ARM64 package contains the same components as the
-Windows package (SDL, zlib and the mingw-w64 runtime linked statically, and
-the FFmpeg DLLs), built with the LLVM toolchain instead of GCC: llvm-mingw
-20260922, with LLVM 23.1.2 and the mingw-w64 15.0.0 runtime. It also links
-LLVM's C++ standard library and its support libraries (libc++, libc++abi,
-libunwind and compiler-rt) statically. These are licensed under the Apache
-License 2.0 with LLVM Exceptions, which place no requirements on programs that
-embed them in compiled form.
-
-## GCC runtime
-
-The Windows package links libgcc and libstdc++ from GCC 14.2.0 statically.
-They are covered by the GCC Runtime Library Exception, which places no
-requirements on programs compiled with an unmodified GCC.
+The Windows packages (x64, x86 and the experimental ARM64 package) are
+built with the LLVM toolchain llvm-mingw 20260922, with LLVM 23.1.2, and
+link LLVM's C++ standard library and its support libraries (libc++,
+libc++abi, libunwind and compiler-rt) statically. These are licensed under
+the Apache License 2.0 with LLVM Exceptions, which place no requirements on
+programs that embed them in compiled form.

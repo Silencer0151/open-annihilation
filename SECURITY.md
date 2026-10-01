@@ -32,7 +32,8 @@ that makes it:
 - read or write files outside the folders it is meant to use;
 - run code of the file's choosing.
 
-Problems in the libraries it uses (SDL, FFmpeg, zlib) belong to those
+Problems in the libraries it uses (SDL, zlib, and the music decoders in
+`third_party/`) belong to those
 projects; if you find one through Open Annihilation, report it to that
 project and tell us too, so that the release can pick up the fix.
 

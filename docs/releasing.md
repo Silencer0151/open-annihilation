@@ -28,7 +28,7 @@ expanded and checked, and the notary service's logs.
 1. **Builds the game.** The tree must have no uncommitted changes;
    `--allow-local-changes` builds one anyway, for a test and never for a
    release. The script says whether `HEAD` carries the version's tag.
-   `tools/bootstrap_macos_deps.py` builds the pinned zlib, SDL3 and FFmpeg
+   `tools/bootstrap_macos_deps.py` builds the pinned zlib and SDL3
    as static libraries for both architectures and macOS 11.0 under
    `local/deps/macos-11.0` (the first run downloads their archives and
    checks each against its SHA-256). Each library's folder records in
@@ -202,7 +202,7 @@ without any key or Apple's services.
 
 The application is signed with the hardened runtime and no entitlements,
 since it needs none: it loads no code but its own executable and the
-system's libraries (SDL3, FFmpeg and zlib are linked into the executable),
+system's libraries (SDL3 and zlib are linked into the executable),
 makes no executable memory, reads no `DYLD_` variables, and uses neither
 camera nor microphone. The x86_64 code runs under Rosetta with the same
 signature. Add an entitlement only when a checked run shows the hardened
@@ -249,6 +249,5 @@ The packages run on macOS 11.0 or later: `macos_minimum` in
 `tools/release_macos.sh` names it, the dependencies and the game are built
 for it, and the checks hold the build to it. Supporting an older release
 on Intel Macs is a change of its own: the dependencies rebuilt for it, that
-value, the macOS options in `licenses/FFmpeg-SOURCE.txt` and the release
-notes changed, and a run on that release of macOS. Apple silicon needs
+value and the release notes changed, and a run on that release of macOS. Apple silicon needs
 macOS 11.0 in any case.

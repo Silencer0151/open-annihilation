@@ -75,8 +75,7 @@ status instead of failing silently.
 ## Requirements
 
 CMake 3.24 or newer, a C++20 compiler, zlib and Python 3.12 or newer. The
-FFmpeg development libraries are optional: without them the game still
-builds and runs, but plays no intro movies and no music. SDL3 is built
+engine decodes the movies and the music itself. SDL3 is built
 locally by `tools/bootstrap_sdl.py` into the ignored `local/deps` directory;
 nothing is installed globally. On macOS the Xcode Command Line Tools provide
 the compiler and zlib.
@@ -106,12 +105,9 @@ enough. Without one, each of those tests prints what it skipped and exits with
 code 77, which ctest reports as skipped, not passed; say in the pull request
 if they did not run. Configure with `-DOA_REQUIRE_GAME_DATA=ON` to make a
 missing installation fail instead: a test that skips because the installation
-lacks optional content, such as a music folder, or the build lacks the FFmpeg
-music decoder still reports skipped. The native checks, which run the game
-headless over the installation, are added only when `OA_GAME_DIR` names one.
-Only the intro movies and the music need the FFmpeg development libraries;
-when CMake does not find them it says so, and the game still builds but
-plays neither.
+lacks optional content, such as a music folder, still reports skipped. The
+native checks, which run the game headless over the installation, are added
+only when `OA_GAME_DIR` names one.
 
 Two more options serve checking builds: `-DOA_REQUIRE_GAME=ON` stops the
 configure when the `oa-game` target cannot be built (it needs the SDL3 shell,
@@ -142,8 +138,8 @@ ctest --test-dir build -C Debug --output-on-failure
 ```
 
 From macOS or Linux, `tools/build_windows.sh` cross-compiles the tree for
-x86-64 Windows with mingw-w64, including static zlib and SDL3 and a minimal
-FFmpeg, and `tools/test_windows.sh` builds it in a container and runs its
+x86-64 Windows with mingw-w64, including static zlib and SDL3, and
+`tools/test_windows.sh` builds it in a container and runs its
 tests under Wine. [docs/testing.md](docs/testing.md) covers the other
 builds, what CI runs, and writing a new test.
 
@@ -292,8 +288,8 @@ your GitHub account, so that your commits are credited to you.
    you tested it, including whether the tests that read game data ran.
 5. Run every check (see [Checks](#checks)) before asking for review.
    Continuous integration builds the tree on macOS, Windows and Linux,
-   starts `open-annihilation` on each, builds the FFmpeg intro player on
-   macOS and Linux, and runs the tests that need no game data. The tests
+   starts `open-annihilation` on each, and runs the tests that need no game
+   data. The tests
    that read game data and the native checks, which run the game headless
    over an installation, run only on your machine.
 6. A maintainer reviews the change. Answer comments by pushing further

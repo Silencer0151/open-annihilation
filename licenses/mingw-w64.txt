@@ -1,5 +1,5 @@
-Windows executables and DLLs are linked statically against the mingw-w64
-14.0.0 runtime and its winpthreads library.
+Windows executables are linked statically against the mingw-w64
+15.0.0 runtime and its winpthreads library.
 
 mingw-w64 runtime:
 

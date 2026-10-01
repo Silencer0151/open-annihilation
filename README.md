@@ -25,7 +25,6 @@
 <p align="center">
   <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B20-00599C?style=for-the-badge&logo=cplusplus&logoColor=white">
   <img alt="SDL3" src="https://img.shields.io/badge/SDL3-1B3C73?style=for-the-badge">
-  <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-007808?style=for-the-badge&logo=ffmpeg&logoColor=white">
   <img alt="CMake" src="https://img.shields.io/badge/CMake-064F8C?style=for-the-badge&logo=cmake&logoColor=white">
   <img alt="Claude" src="https://img.shields.io/badge/Claude-D97757?style=for-the-badge&logo=claude&logoColor=white">
 </p>
@@ -87,9 +86,18 @@ Total Annihilation: Kingdoms:
 
 Download the package for your platform from the
 [Releases](https://github.com/open-annihilation/open-annihilation/releases)
-page. Releases are built for macOS 11 or later (Intel and Apple silicon),
-Windows and Linux. On macOS, the `.pkg` installer puts **Open
-Annihilation.app** in Applications; the zip holds the same app.
+page. On macOS, the `.pkg` installer puts **Open Annihilation.app** in
+Applications; the zip holds the same app.
+
+| Package | Runs on |
+|---|---|
+| `macos-universal` | macOS 11 or later, Intel and Apple silicon |
+| `windows-x64` | 64-bit Windows 7 and later (built to run on XP x64 and Vista too, untested there) |
+| `windows-x86` | 32-bit Windows: XP SP3 and later, on a Pentium III, Athlon XP or later processor |
+| `windows-arm64-experimental` | Windows 11 on ARM |
+| `linux-x86_64` | 64-bit PC Linux with glibc 2.28 or later: Debian 10, Ubuntu 20.04 and later |
+| `linux-arm64` | 64-bit ARM Linux with glibc 2.28 or later, such as 64-bit Raspberry Pi OS |
+| `linux-armhf` | 32-bit ARMv7 Linux with glibc 2.36 or later: Debian 12, 32-bit Raspberry Pi OS Bookworm |
 
 ## Running
 
@@ -116,7 +124,9 @@ folder, not to the terminal:
 - **macOS:** `~/Library/Application Support/net.coreprime.open-annihilation/logs`
 - **Linux:** `~/.local/share/open-annihilation/logs`, or
   `$XDG_DATA_HOME/open-annihilation/logs`
-- **Windows:** `%LOCALAPPDATA%\CorePrime\Open Annihilation\logs`
+- **Windows:** `%LOCALAPPDATA%\CorePrime\Open Annihilation\logs`; on
+  Windows XP, `Local Settings\Application Data\CorePrime\Open Annihilation\logs`
+  in your user folder
 
 A new file begins every UTC day, or when the current one reaches 10 MB. The
 folder keeps at most 25 files, none older than seven days, so the logs never
@@ -162,8 +172,8 @@ line sets the frame rate for that run without changing the setting.
 Open Annihilation runs on a Raspberry Pi 4, Pi 400 or Pi 5 with the 64-bit
 Raspberry Pi OS (Bookworm or later): download the Linux ARM64 package,
 `open-annihilation-<version>-linux-arm64.zip`. A Pi 2, Pi 3 or Pi 4 with the
-32-bit Raspberry Pi OS needs the Linux 32-bit ARM package, which is not
-released yet. To see which system your Pi runs, type
+32-bit Raspberry Pi OS (Bookworm or later) needs the Linux 32-bit ARM package,
+`open-annihilation-<version>-linux-armhf.zip`. To see which system your Pi runs, type
 `dpkg --print-architecture` in a terminal: `arm64` is 64-bit, `armhf` is
 32-bit.
 
@@ -176,7 +186,8 @@ released yet. To see which system your Pi runs, type
    ```
 
    The 1997 demo works too: see [Playing the demo](#playing-the-demo).
-2. Unzip the package, for example into your home folder:
+2. Unzip the package, for example into your home folder (with the 32-bit
+   package, `linux-armhf` in place of `linux-arm64`):
 
    ```sh
    unzip open-annihilation-<version>-linux-arm64.zip
@@ -252,7 +263,8 @@ game data, about 20 MB, into a `demo-1997` folder in its per-user data folder:
 - **Linux:** `~/.local/share/open-annihilation`, or
   `$XDG_DATA_HOME/open-annihilation` when `XDG_DATA_HOME` is set
 - **Windows:** `%LOCALAPPDATA%\CorePrime\Open Annihilation`, beside its
-  preferences
+  preferences (on Windows XP, `Local Settings\Application Data\CorePrime\Open Annihilation`
+  in your user folder)
 
 Later starts check the unpacked data and use it directly, and unpack it again
 only if it is missing or damaged. The folder you chose is left as it is, and it
