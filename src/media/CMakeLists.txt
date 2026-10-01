@@ -14,7 +14,7 @@ if(OA_BUILD_INTRO_PLAYER)
     add_library(oa::media::intro_player ALIAS oa-media-intro-player)
     target_include_directories(oa-media-intro-player PUBLIC include)
     target_link_libraries(oa-media-intro-player PUBLIC oa-formats-smacker SDL3::SDL3
-                          PRIVATE oa-options)
+                          PRIVATE oa-audio-output oa-options)
     target_compile_features(oa-media-intro-player PUBLIC cxx_std_20)
     if(BUILD_TESTING)
       add_executable(oa-intro-player-test tests/intro_player_test.cpp)

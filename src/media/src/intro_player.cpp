@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/media/intro_player.hpp"
+#include "oa/audio/sound_output.hpp"
 #include "oa/formats/smacker.hpp"
 #include "oa/formats/smacker/decoder.hpp"
 
@@ -224,7 +225,7 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     SDL_Renderer* renderer = options.renderer;
     const bool host_display = window != nullptr && renderer != nullptr;
     SDL_Texture* texture = nullptr;
-    SDL_AudioStream* audio_stream = nullptr;
+    std::unique_ptr<oa::audio::OutputStream> audio_stream;
     bool sdl_initialized = false;
     const auto canvas_width = std::max(kGamePresentationWidth, impl.width);
     const auto canvas_height = std::max(kGamePresentationHeight, impl.presentation_height);
@@ -235,8 +236,7 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
         static_cast<float>(impl.presentation_height)
     };
     auto cleanup = [&] {
-        if (audio_stream != nullptr)
-            SDL_DestroyAudioStream(audio_stream);
+        audio_stream.reset();
         if (texture != nullptr)
             SDL_DestroyTexture(texture);
         if (!host_display) {
@@ -248,7 +248,6 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
                 SDL_Quit();
         }
         texture = nullptr;
-        audio_stream = nullptr;
         if (!host_display) {
             renderer = nullptr;
             window = nullptr;
@@ -269,8 +268,9 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
             );
             renderer = window == nullptr ? nullptr : SDL_CreateRenderer(window, nullptr);
         } else if (options.play_audio && impl.has_audio()) {
-            if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-                playback.error = std::string("SDL_InitSubSystem audio: ") + SDL_GetError();
+            std::string error;
+            if (!oa::audio::sound_output().start(error)) {
+                playback.error = "sound output: " + error;
                 return playback;
             }
         }
@@ -294,25 +294,25 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
             return playback;
         }
         if (options.play_audio && impl.has_audio()) {
-            // SDL3's order is format, channels, frequency. Use named writes
-            // here because the old SDL2 order was format, frequency, channels.
-            SDL_AudioSpec spec{};
-            spec.format = SDL_AUDIO_S16;
-            spec.channels = impl.audio_format.channels;
-            spec.freq = static_cast<int>(impl.audio_format.sample_rate);
-            audio_stream = SDL_OpenAudioDeviceStream(
-                SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr
-            );
-            if (audio_stream == nullptr || !SDL_ResumeAudioStreamDevice(audio_stream)) {
-                playback.error = std::string("SDL audio setup: ") + SDL_GetError();
+            oa::audio::StreamFormat format{};
+            format.sample = oa::audio::SampleFormat::s16;
+            format.channels = static_cast<uint8_t>(impl.audio_format.channels);
+            format.rate = impl.audio_format.sample_rate;
+            std::string error;
+            audio_stream = oa::audio::sound_output().open_stream(format, nullptr, nullptr, error);
+            if (audio_stream == nullptr || !audio_stream->resume()) {
+                playback.error = "sound output setup: " +
+                                 (error.empty() ? oa::audio::sound_output().last_error() : error);
                 cleanup();
                 return playback;
             }
         }
         const auto* video_backend = SDL_GetCurrentVideoDriver();
         const auto* renderer_backend = SDL_GetRendererName(renderer);
-        const auto* audio_backend =
-            options.play_audio && impl.has_audio() ? SDL_GetCurrentAudioDriver() : nullptr;
+        const std::string audio_driver = options.play_audio && impl.has_audio()
+                                             ? oa::audio::sound_output().driver_name()
+                                             : std::string();
+        const char* audio_backend = audio_driver.empty() ? nullptr : audio_driver.c_str();
         std::fprintf(
             stderr,
             "intro backends video=%s renderer=%s audio=%s\n",
@@ -369,8 +369,8 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
         }
         playback.decoded_audio_bytes += bytes;
         if (audio_stream != nullptr && bytes > 0 && bytes <= INT_MAX &&
-            !SDL_PutAudioStreamData(audio_stream, audio_samples.data(), static_cast<int>(bytes))) {
-            playback.error = std::string("SDL_PutAudioStreamData: ") + SDL_GetError();
+            !audio_stream->put(audio_samples.data(), static_cast<int32_t>(bytes))) {
+            playback.error = "sound output put: " + oa::audio::sound_output().last_error();
             return false;
         }
         return true;
@@ -538,20 +538,21 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     if (playback.error.empty() && chunks > impl.limits.max_chunks && !stop)
         playback.error = "intro chunk limit exceeded";
     if (audio_stream != nullptr && playback.error.empty()) {
-        if (!SDL_FlushAudioStream(audio_stream)) {
-            playback.error = std::string("SDL_FlushAudioStream: ") + SDL_GetError();
+        if (!audio_stream->flush()) {
+            playback.error = "sound output flush: " + oa::audio::sound_output().last_error();
         } else if (!playback.skipped && options.frame_limit == 0) {
             // Full playback should not discard the final queued samples. A
             // finite smoke run intentionally returns after its requested
             // frames so validation remains bounded.
             const auto drain_start_ns = SDL_GetTicksNS();
             for (;;) {
-                const auto queued = SDL_GetAudioStreamQueued(audio_stream);
-                const auto available = SDL_GetAudioStreamAvailable(audio_stream);
+                const auto queued = audio_stream->queued_bytes();
+                const auto available = audio_stream->available_bytes();
                 if (queued == 0 && available == 0)
                     break;
                 if (queued < 0 || available < 0) {
-                    playback.error = std::string("SDL audio stream drain query: ") + SDL_GetError();
+                    playback.error =
+                        "sound output drain query: " + oa::audio::sound_output().last_error();
                     break;
                 }
                 if (SDL_GetTicksNS() - drain_start_ns >= kAudioDrainTimeoutNs) {
