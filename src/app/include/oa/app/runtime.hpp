@@ -121,6 +121,7 @@ PaletteBytes load_active_palette(const AssetStore& assets);
 
 struct MatchConsole;
 struct MatchModels;
+struct WorldDrawList;
 
 // The named-background cache and the bitmaps its handles name (index + 1).
 struct NamedBackgrounds {
@@ -744,6 +745,18 @@ class Runtime final : public menu::Host,
     ///
     /// @param per_side units in each line
     void spawn_combat_armies(std::size_t per_side);
+
+    /// Adds --busy-combat's units to the combat armies around their centre.
+    ///
+    /// Four missile trucks stand behind each army; the local player gets a
+    /// kbot lab told to build four peewees and an air transport told to load
+    /// the peewee beside it; the local army is selected and selection boxes
+    /// are shown. Throws std::runtime_error when the installation lacks a
+    /// type or a unit cannot be placed.
+    ///
+    /// @param centre_x map pixel column between the armies
+    /// @param centre_z map pixel row between the armies
+    void spawn_busy_combat(int32_t centre_x, int32_t centre_z);
 
     /// Runs a headless match and logs its timings and list sizes.
     ///
@@ -3055,18 +3068,18 @@ class Runtime final : public menu::Host,
         const oa::present::world_renderer::BattlefieldViewport& viewport
     );
 
-    /// Draws projectiles by their weapon render type.
+    /// Adds the frame's projectiles drawn by their weapon render type to its draws.
     ///
     /// Lasers are a line from the head to the tail in UI colour `color`, with a
-    /// second line one pixel off the major axis in `color2`. Model projectiles
-    /// (render types 1, 3 and 6) are not drawn by this pass; a projectile out of
-    /// the viewer's sight is skipped.
+    /// second line one pixel off the major axis in `color2`; plasma and flames
+    /// are FX.GAF sprites, decoded once for the frame; lightning is jittered
+    /// lines. Model projectiles (render types 1, 3 and 6) are not drawn by
+    /// this pass; a projectile out of the viewer's sight is skipped.
     ///
-    /// @param[in,out] destination battlefield frame
+    /// @param[in,out] draws the frame's draws, in order
     /// @param viewport battlefield viewport
-    void draw_match_projectiles(
-        oa::present::world_renderer::Surface& destination,
-        const oa::present::world_renderer::BattlefieldViewport& viewport
+    void plan_match_projectiles(
+        WorldDrawList& draws, const oa::present::world_renderer::BattlefieldViewport& viewport
     );
 
     /// Returns the RGB of a Game UI colour slot.
@@ -3161,12 +3174,15 @@ class Runtime final : public menu::Host,
     /// The camera is clamped to the map, the radar surfaces and view bound, and
     /// the drag box followed. The terrain, features, units, projectiles, nano
     /// streams, shatter fragments, effects, debris, explosions and smoke draw
-    /// on the world layer, then the fog, the order overlays while Shift is
-    /// held (over the smoke and the fog, which cover them in 3.1c), the build
-    /// ghost and the selection band; the HUD layer takes the radar, the
-    /// status strip, unit labels and readouts, the resource readout, the build
-    /// captions and the extension's HUD. Each part is charged to its profile
-    /// category. Throws std::logic_error without a match.
+    /// on the world layer: their draws are worked out in order first, with
+    /// everything the drawing builds on the way, and then drawn in one band
+    /// of rows for each drawing thread (world_draws.hpp). Then the fog, the
+    /// order overlays while Shift is held (over the smoke and the fog, which
+    /// cover them in 3.1c), the build ghost and the selection band; the HUD
+    /// layer takes the radar, the status strip, unit labels and readouts, the
+    /// resource readout, the build captions and the extension's HUD. Each
+    /// part is charged to its profile category. Throws std::logic_error
+    /// without a match, and std::runtime_error when a band cannot be drawn.
     void render_match_surface();
 
     /// Returns the 3DO renderer state of the current match, built on first use.
@@ -4576,25 +4592,6 @@ class Runtime final : public menu::Host,
     /// @return the animation's index, or SIZE_MAX without a shadow sequence
     std::size_t
     intern_feature_shadow_anim(uint16_t feature_index, const std::string& filename, bool animating);
-
-    /// Blits a GAF frame through the alpha table onto the battlefield frame at a hotspot.
-    ///
-    /// Each covered pixel takes table[source * 256 + destination], the
-    /// destination's palette index read back from the RGB world through the model
-    /// bridge. Nothing is drawn without an alpha table.
-    ///
-    /// @param[in,out] destination battlefield frame
-    /// @param frame rendered frame
-    /// @param screen frame point the GAF origin lands on
-    /// @param scale size factor; 0 or less draws at 1
-    /// @param models renderer state holding the display, palette and bridge
-    void blit_gaf_blended_hotspot(
-        oa::present::world_renderer::Surface& destination,
-        const oa::formats::gaf::RenderedFrame& frame,
-        const oa::present::world_renderer::ScreenPoint& screen,
-        float scale,
-        MatchModels& models
-    );
 
     /// Steps the animating GAF feature animations once per tick up to a tick.
     ///

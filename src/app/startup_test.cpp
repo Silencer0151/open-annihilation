@@ -178,6 +178,17 @@ int main() {
         "--frame-rate needs --match-ticks"
     );
     expect(
+        parse({"--headless-check", "--match-ticks", "60", "--combat", "4", "--busy-combat"})
+                .busy_combat &&
+            !plain.busy_combat,
+        "--busy-combat goes with --combat"
+    );
+    expect(
+        rejection({"--headless-check", "--match-ticks", "60", "--busy-combat"}) ==
+            "--busy-combat needs --combat",
+        "--busy-combat needs --combat"
+    );
+    expect(
         rejection({"--headless-check", "--match-ticks", "60", "--march"}) ==
             "--frame-log, --scroll-camera, --march and --follow need --frame-rate",
         "--march needs --frame-rate"
@@ -477,6 +488,7 @@ int main() {
         {"--camera", "10,20"},
         {"--zoom", "2"},
         {"--combat", "4"},
+        {"--busy-combat"},
         {"--check-navigation"},
         {"--check-match-layers"},
         {"--check-director-view"},

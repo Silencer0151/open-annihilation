@@ -76,6 +76,31 @@ and `app-window-icon` that the embedded one decodes.
   ever added to `screens.inc`.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
   camera.
+- `world_draws.hpp`, `world_draws.cpp`, `runtime_match_render.cpp`: the
+  battlefield drawn in horizontal bands. `render_match_surface` first works
+  out the frame's draws in their order (`WorldDrawList` in `MatchModels`):
+  the effect layers' particles, the features and units far to near, the
+  projectiles, debris, explosions and smoke. Everything drawing builds or
+  changes on the way is done then, once, on the drawing thread: the piece
+  transforms and the presented copies, the units' and features' cached
+  images and silhouettes and those of the units they carry
+  (`plan_unit_supersampled`), the texture animations, the projectiles'
+  models, the GAF frames decoded for the particles (each once a frame), the
+  selection boxes' lines and the frame's statistics. The model bridge is
+  then split into one band of whole tile rows for each drawing thread
+  (`bridge_split`), and each band draws the whole list with its own rows
+  alone (`draw_world_band`): its own tiles of the bridge are captured, drawn
+  and written back, and sprites, squares and lines change only its rows,
+  each line and polygon working out its pixels as over the whole frame. A
+  band reads the list and the models and writes only its rows of the frame
+  and of the bridge, so the bands draw on the job pool at once and give the
+  frame drawn whole byte for byte. The first band draws with the models'
+  renderer and buffers; each other band keeps a renderer of its own (its
+  composite buffer), its supersampling buffers and its own memory of
+  colours outside the palette, about 1 MB a band; with one drawing thread
+  there is one band and no more. The debug grid before the list, and the
+  fog, the order overlays, the build ghost, the selection band, the health
+  bars and the HUD after it, are drawn on the drawing thread as before.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
   match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
   Game Settings sheet, the removal question) is placed as 3.1c's panel
@@ -193,23 +218,34 @@ and `app-window-icon` that the embedded one decodes.
   none carrying more than half the most it moves in a tick; and that a
   tracked unit is drawn at one place of the screen on every frame. The run
   ends with a line giving the world digest, a frames digest of every
-  frame's drawn battlefield and the drawing threads it drew on.
+  frame's drawn battlefield, the drawing threads it drew on and the most
+  bands a frame's battlefield was drawn in. `--busy-combat` adds missile
+  trucks to both armies, and for the local player a kbot lab building
+  peewees and an air transport loading one, and selects the local army
+  with selection boxes shown, so that the frames reach every kind of
+  battlefield draw.
 - `xrgb_conversion.hpp`, `xrgb_conversion.cpp`: each frame's RGB layers
   converted into the window's 32-bit pixels (0xffRRGGBB) as they are
   uploaded, through the display gamma's table when the gamma is not 1, in
   bands of 32 rows. The Runtime keeps a [job pool](../platform/job-pool/README.md)
-  (`draw_pool_`) that this conversion, the terrain fill and the fog run
-  their bands on: `--draw-threads N` (1 to 32), else the `OA_DRAW_THREADS`
+  (`draw_pool_`) that this conversion, the terrain fill, the fog and the
+  battlefield's draws (`world_draws.hpp`) run their bands on:
+  `--draw-threads N` (1 to 32), else the `OA_DRAW_THREADS`
   environment variable, else the pool's default, one thread on a machine of
   one or two logical processors and otherwise one fewer than the
   processors, at most four. With one thread there is no pool and every
-  band runs on the drawing thread. The bands are fixed by the rows, never
-  by the threads, so every count draws the same frames.
+  band runs on the drawing thread. The conversion's, the terrain's and the
+  fog's bands are fixed by the rows; the battlefield's are one a thread, and
+  any number of them draws the same frames, so every count draws the same
+  frames.
   `app-xrgb-conversion` checks each pixel's packing and gamma for rows of
   any width and that pools of 2, 3, 4 and 8 threads convert the same bytes;
   `native-draw-threads` draws the seeded skirmish's fight frame by frame at
-  zoom 1, 1.37 and 0.6 on 1, 3 and 4 drawing threads and checks that every
-  count gives the same frames digest and world digest.
+  zoom 1, 1.37 and 0.6, and a longer `--busy-combat` fight into its
+  explosions and debris with enhanced anti-aliasing off and at 4x, on 1, 2,
+  3, 4 and 7 drawing threads and checks that every count gives the same
+  frames digest and world digest, and draws in one band a thread at zoom 1
+  and in more than one elsewhere.
 - `full_screen.hpp`, `full_screen.cpp`: Alt+Enter (Return or keypad Enter,
   either Alt key; Option on macOS), which switches the window between full
   screen and a window on every screen, during the movies and while a match

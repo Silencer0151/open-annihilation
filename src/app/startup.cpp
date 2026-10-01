@@ -183,6 +183,7 @@ void check_director_options(Options& options) {
         {options.camera.has_value(), "--camera"},
         {options.match_zoom != kDefaultBattlefieldZoom, "--zoom"},
         {options.combat_units != 0, "--combat"},
+        {options.busy_combat, "--busy-combat"},
         {options.reclaim_check, "--reclaim-check"},
         {options.give_orders, "--give-orders"},
         {options.check_navigation, "--check-navigation"},
@@ -285,6 +286,8 @@ void check_director_options(Options& options) {
             result.campaign_restart_tick = parse_count(value(argument));
         else if (argument == "--combat")
             result.combat_units = parse_count(value(argument));
+        else if (argument == "--busy-combat")
+            result.busy_combat = true;
         else if (argument == "--save-after")
             result.save_after = parse_count(value(argument));
         else if (argument == "--save-file")
@@ -418,7 +421,8 @@ void check_director_options(Options& options) {
                          "[--follow]]] "
                          "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
                          "[--resolution WxH] "
-                         "[--zoom FACTOR] [--combat UNITS] [--reclaim-check] [--camera X,Z] "
+                         "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--reclaim-check] "
+                         "[--camera X,Z] "
                       << extension_text(extension, ExtensionText::usage_runs, "")
                       << "[--save-after TICK] "
                          "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
@@ -509,6 +513,8 @@ void check_director_options(Options& options) {
         result.skip_intro = true;
     }
     check_director_options(result);
+    if (result.busy_combat && result.combat_units == 0)
+        throw std::runtime_error("--busy-combat needs --combat");
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_match_dialogs ||
         result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||

@@ -4,6 +4,8 @@
 // Bounded frame-time benchmark and headless runs over live skirmish and
 // campaign matches.
 #include "oa/app/runtime.hpp"
+#include "match_models.hpp"
+#include "oa/sim/selection.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -49,6 +51,22 @@ constexpr int32_t kScrollSweep = 192;
 constexpr std::size_t kMissionOrderPeriod = 300;
 // Ticks of a mission between the unit counts a headless campaign run prints.
 constexpr std::size_t kCampaignCensusPeriod = 300;
+// --busy-combat: the missile trucks each side, the first one's place south
+// of the armies' centre (map pixels, negative is north), the space between
+// them and how far east or west of the centre they stand.
+constexpr int32_t kBusyCombatTrucks = 4;
+constexpr int32_t kBusyCombatTruckTop = -72;
+constexpr int32_t kBusyCombatTruckSpacing = 40;
+constexpr int32_t kBusyCombatTruckReach = 170;
+// The kbot lab's place from the centre, and the peewees it is told to build.
+constexpr int32_t kBusyCombatLabX = -120;
+constexpr int32_t kBusyCombatLabZ = 140;
+constexpr int32_t kBusyCombatLabBuilds = 4;
+// The air transport's place from the centre, and how far east of it the
+// peewee it loads stands.
+constexpr int32_t kBusyCombatTransportX = -40;
+constexpr int32_t kBusyCombatTransportZ = 120;
+constexpr int32_t kBusyCombatCargoOffset = 24;
 // The frames digest of a frame run: its start, and the odd multiplier each
 // word of a frame is folded in with.
 constexpr uint64_t kFramesDigestBasis = 0xcbf29ce484222325ULL;
@@ -207,8 +225,66 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
             (void)match_->create(request);
         }
     }
+    if (options_.busy_combat)
+        spawn_busy_combat(centre_x, centre_z);
     match_camera_x_ = centre_x - visible_map_width() / 2;
     match_camera_z_ = centre_z - visible_map_height() / 2;
+}
+
+void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
+    const uint8_t local = match_local_player_;
+    const auto enemy = static_cast<uint8_t>(local == 0 ? 1 : 0);
+    const auto type_of = [this](std::string_view name) {
+        const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, name);
+        if (type == 0)
+            throw std::runtime_error("busy combat lacks " + std::string(name));
+        return type;
+    };
+    // A finished unit on the ground at a map pixel.
+    const auto place = [&](std::string_view name, uint8_t player, int32_t x, int32_t z) {
+        oa::sim::unit_spawn::Request request;
+        request.player = player;
+        request.type = type_of(name);
+        request.finished = true;
+        request.state = kGroundOccupancyState;
+        request.position = {
+            static_cast<uint32_t>(x) << 16,
+            static_cast<uint32_t>(
+                match_->map_height(static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16)
+            ) << 16,
+            static_cast<uint32_t>(z) << 16
+        };
+        const auto* placed = match_->create(request);
+        if (placed == nullptr || placed->unit == nullptr)
+            throw std::runtime_error("busy combat could not place " + std::string(name));
+        return placed->unit_index;
+    };
+    // Missile trucks behind each army: their missiles are drawn as 3DO models.
+    for (int32_t truck = 0; truck < kBusyCombatTrucks; ++truck) {
+        const int32_t z = centre_z + kBusyCombatTruckTop + truck * kBusyCombatTruckSpacing;
+        (void)place("ARMSAM", local, centre_x - kBusyCombatTruckReach, z);
+        (void)place("CORMIST", enemy, centre_x + kBusyCombatTruckReach, z);
+    }
+    // A kbot lab building peewees: its nano particles, and each peewee
+    // carried on the lab's pad while it is built.
+    const auto lab = place("ARMLAB", local, centre_x + kBusyCombatLabX, centre_z + kBusyCombatLabZ);
+    match_->queue_factory_build(lab, type_of("ARMPW"), kBusyCombatLabBuilds);
+    // An air transport loading the peewee beside it, then carrying it.
+    const auto transport = place(
+        "ARMATLAS", local, centre_x + kBusyCombatTransportX, centre_z + kBusyCombatTransportZ
+    );
+    const auto cargo = place(
+        "ARMPW",
+        local,
+        centre_x + kBusyCombatTransportX + kBusyCombatCargoOffset,
+        centre_z + kBusyCombatTransportZ
+    );
+    (void)match_->issue_load(transport, cargo, false);
+    // The local army selected, its selection boxes shown.
+    auto& world = match_->state();
+    world.game.console_flags =
+        static_cast<uint16_t>(world.game.console_flags | OA_CONSOLE_FLAG_SELECTION_BOXES);
+    oa::sim::selection::select_all(world, selection_hooks());
 }
 
 void Runtime::prepare_headless_match() {
@@ -392,14 +468,15 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
     }
     std::printf(
         "frame run: %u frames a second, %llu frames, %u ticks, %zu frames between ticks, "
-        "world digest %016llx, frames digest %016llx, drawing threads %u\n",
+        "world digest %016llx, frames digest %016llx, drawing threads %u, drawing bands %d\n",
         frames_per_second,
         static_cast<unsigned long long>(frame),
         match_timing_.tick,
         between_ticks,
         static_cast<unsigned long long>(frame_run_digest()),
         static_cast<unsigned long long>(frames_digest),
-        draw_pool_ ? draw_pool_->threads() : 1U
+        draw_pool_ ? draw_pool_->threads() : 1U,
+        match_models_ ? match_models_->most_bands : 0
     );
     std::fflush(stdout);
     if (!options_.snapshot.empty())

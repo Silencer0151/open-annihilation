@@ -7,6 +7,7 @@
 #include "match_models.hpp"
 #include "oa/app/match_model_draws.hpp"
 #include "presentation_interpolation.hpp"
+#include "world_draws.hpp"
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/present/blit.hpp"
@@ -101,6 +102,20 @@ model_render::ModelRef unit_model(MatchModels& models, uint16_t slot) {
         &record,
         oa::world_unit_def_of(&world.record, &record)
     };
+}
+
+/// Grows the unit slots' draw states (MatchModels::units) to hold every slot
+/// with a model instance, as unit_model would grow them slot by slot.
+///
+/// @param[in,out] models the match's renderer state
+void hold_unit_draw_states(MatchModels& models) {
+    const uint32_t slots = models.offline->world().record.unit_slot_count;
+    uint32_t highest = 0;
+    for (uint32_t slot = 1; slot < slots; ++slot)
+        if (models.offline->runtime_state(static_cast<uint16_t>(slot)).instance)
+            highest = slot;
+    if (models.units.size() <= highest)
+        models.units.resize(static_cast<std::size_t>(highest) + 1);
 }
 
 /// Returns the prepared model of a unit type's model known only by address.
@@ -285,23 +300,6 @@ oa::Rect32 unit_region(
     };
 }
 
-// Selection boxes go to the bridge: the overlay projects about the
-// game's battlefield corner, the bridge's 8-bit view starts at it, and
-// each line captures the tiles it crosses before drawing.
-void bridge_line(
-    void* user, oa::Surface*, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color
-) {
-    auto& bridge = *static_cast<model_render::RgbBridge*>(user);
-    x0 -= oa::present::world_renderer::battlefield_origin_x;
-    x1 -= oa::present::world_renderer::battlefield_origin_x;
-    y0 -= oa::present::world_renderer::battlefield_origin_y;
-    y1 -= oa::present::world_renderer::battlefield_origin_y;
-    model_render::bridge_open(
-        bridge, {std::min(x0, x1), std::min(y0, y1), std::max(x0, x1), std::max(y0, y1)}
-    );
-    oa::present::draw_clipped_line(&bridge.surface, x0, y0, x1, y1, color);
-}
-
 /// Tells whether a unit's owner is another machine's player: in use with
 /// OA_PLAYER_STATUS_MIRRORED. Only such a player's records move its units;
 /// the units of a player in use but free or closed stay where the
@@ -315,6 +313,81 @@ bool mirrored_owner(const oa::World& world, const oa::Unit& unit) noexcept {
         return false;
     const oa::Player& owner = world.game.players[unit.owner_index];
     return owner.in_use != 0 && owner.status == OA_PLAYER_STATUS_MIRRORED;
+}
+
+/// Draws the frame's battlefield draws (MatchModels::draws) band by band.
+///
+/// The bridge is split into one band for each thread the pool runs a job
+/// on (bridge_split), and the bands draw at once on the pool, or the one
+/// band covering the frame draws on the calling thread alone. The first band
+/// draws with the models' renderer and buffers; each other band with its
+/// own (MatchModels::band_scratch), the frame's renderer settings copied in,
+/// and its own memory of colours outside the palette. A band that fails
+/// lets the others finish; the failure of the first band in band order that
+/// failed is then thrown on the calling thread.
+///
+/// @param[in,out] models the match's renderer state, its draws worked out
+/// @param frame what every band draws with
+/// @param pool the drawing threads; null draws on the calling thread alone
+void draw_world_bands(
+    MatchModels& models, const WorldFrameDraw& frame, oa::platform::job_pool::Pool* pool
+) {
+    const auto threads =
+        pool != nullptr
+            ? static_cast<int32_t>(std::min(pool->threads(), oa::platform::job_pool::max_threads))
+            : 1;
+    const int32_t made = model_render::bridge_split(models.bridge, threads, models.bands);
+    models.most_bands = std::max(models.most_bands, made);
+    if (models.band_scratch.size() + 1 < static_cast<std::size_t>(made))
+        models.band_scratch.resize(static_cast<std::size_t>(made) - 1);
+    for (int32_t band = 1; band < made; ++band) {
+        auto& scratch = models.band_scratch[static_cast<std::size_t>(band) - 1];
+        model_render::copy_renderer_settings(models.renderer, scratch.renderer);
+        model_render::bridge_band_colours(
+            models.bridge, models.bands[static_cast<std::size_t>(band)]
+        );
+    }
+    // Each band notes its own failure; the first band's that failed is
+    // thrown, whichever thread failed first.
+    std::array<std::string, oa::platform::job_pool::max_threads> failures{};
+    oa::platform::job_pool::run_bands(
+        made > 1 ? pool : nullptr, static_cast<uint32_t>(made), [&](uint32_t band) noexcept {
+            std::string& failure = failures[band];
+            try {
+                if (band == 0) {
+                    draw_world_band(
+                        models.draws,
+                        frame,
+                        models.bands.front(),
+                        models.renderer,
+                        models.supersample,
+                        models.debris_points
+                    );
+                    return;
+                }
+                auto& scratch = models.band_scratch[band - 1];
+                draw_world_band(
+                    models.draws,
+                    frame,
+                    models.bands[band],
+                    scratch.renderer,
+                    scratch.supersample,
+                    scratch.debris_points
+                );
+            } catch (const std::exception& error) {
+                failure = error.what()[0] != '\0' ? error.what() : "a band failed";
+            } catch (...) {
+                failure = "a band failed";
+            }
+        }
+    );
+    for (auto& band : models.bands)
+        model_render::bridge_join_band(models.bridge, band);
+    for (int32_t band = 0; band < made; ++band)
+        if (!failures[static_cast<std::size_t>(band)].empty())
+            throw std::runtime_error(
+                "cannot draw the battlefield: " + failures[static_cast<std::size_t>(band)]
+            );
 }
 
 } // namespace
@@ -493,61 +566,6 @@ MatchModels& Runtime::match_models() {
         fresh.projectile_shadow.data = fresh.shadow_pixels.data();
     }
     return fresh;
-}
-
-void Runtime::blit_gaf_blended_hotspot(
-    oa::present::world_renderer::Surface& destination,
-    const oa::formats::gaf::RenderedFrame& frame,
-    const oa::present::world_renderer::ScreenPoint& screen,
-    float scale,
-    MatchModels& models
-) {
-    const auto& display = models.display.context;
-    if ((display.flags & oa::present::display_flag_alpha_table) == 0)
-        return;
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    const auto left =
-        screen.x - static_cast<int>(std::lround(static_cast<double>(frame.origin_x) * scale));
-    const auto top =
-        screen.y - static_cast<int>(std::lround(static_cast<double>(frame.origin_y) * scale));
-    const auto dest_w =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.width) * scale)));
-    const auto dest_h =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
-    const auto& palette = models.display.palette;
-    for (int row = 0; row < dest_h; ++row) {
-        const int y = top + row;
-        if (y < world_pixel_clip_.y || y >= world_pixel_clip_.y + world_pixel_clip_.h || y < 0 ||
-            y >= static_cast<int>(destination.height))
-            continue;
-        const auto source_row =
-            static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        for (int column = 0; column < dest_w; ++column) {
-            const int x = left + column;
-            if (x < world_pixel_clip_.x || x >= world_pixel_clip_.x + world_pixel_clip_.w ||
-                x < 0 || x >= static_cast<int>(destination.width))
-                continue;
-            const auto source_column =
-                static_cast<std::size_t>(column) * frame.width / static_cast<std::size_t>(dest_w);
-            const auto offset = source_row * frame.width + source_column;
-            if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
-                continue;
-            auto* pixel =
-                destination.rgb.data() +
-                (static_cast<std::size_t>(y) * destination.width + static_cast<std::size_t>(x)) *
-                    3U;
-            const uint8_t under =
-                model_render::bridge_index(models.bridge, pixel[0], pixel[1], pixel[2]);
-            const auto& blended =
-                palette
-                    .entries[display.alpha_table
-                                 [static_cast<std::size_t>(frame.pixels[offset]) * 0x100 + under]];
-            pixel[0] = blended.r;
-            pixel[1] = blended.g;
-            pixel[2] = blended.b;
-        }
-    }
 }
 
 void Runtime::release_model_images() {
@@ -927,10 +945,20 @@ void Runtime::render_match_surface() {
         }
         return models.weapon_models.emplace(index, std::move(model)).first->second;
     };
+    // The frame's battlefield draws, worked out in order before any is drawn
+    // (world_draws.hpp): everything drawing builds or changes on the way,
+    // the piece transforms, the units' cached images, the texture
+    // animations, the decoded particle frames, is done here, once, and every
+    // band then draws the list.
+    auto& draw_list = models.draws;
+    clear_world_draws(draw_list);
+    const auto add_draw = [&draw_list](WorldDrawKind kind, std::size_t index) {
+        add_world_draw(draw_list, kind, index);
+    };
     // Projectile render types 1, 3 and 6: the projectile's ground shadow,
     // then its model; a missile also draws its first child
     // (the flame or propeller) while it still has flight time.
-    const auto draw_projectile_models = [&](MatchModels& models) {
+    const auto plan_projectile_models = [&](MatchModels& models) {
         auto& renderer = models.renderer;
         const auto shots = match_->projectiles();
         const auto& shown_shots = models.presentation.presented_shots;
@@ -959,71 +987,61 @@ void Runtime::render_match_surface() {
             const ShotPose shown =
                 shown_shots.size() == shots.size() ? shown_shots[index] : shot_pose(shot);
             const auto shown_position = oa::sim::match_runtime::fixed_words(shown.position);
-            const oa::formats::objects3d::FixedVector3 position{
+            ProjectileDraw drawn{};
+            drawn.position = {
                 wrapping_sub(shown.position.x, camera_fixed(renderer.camera_x)),
                 shown.position.y,
                 wrapping_sub(shown.position.z, camera_fixed(renderer.camera_y))
             };
-            const int32_t x = high_word(position.x) + renderer.origin_x;
-            const int32_t z = high_word(position.z) + renderer.origin_y;
-            const int32_t y = z - (high_word(position.y) >> 1);
+            const int32_t x = high_word(drawn.position.x) + renderer.origin_x;
+            const int32_t z = high_word(drawn.position.z) + renderer.origin_y;
+            const int32_t y = z - (high_word(drawn.position.y) >> 1);
             // As Projectile.plot_height: the terrain height under the shot.
             const int32_t shadow_y =
                 z - (match_->map_height(shown_position[0], shown_position[2]) >> 1);
-            oa::Rect32 region{
+            drawn.region = {
                 x - kProjectileReach,
                 y - kProjectileReach,
                 x + kProjectileReach,
                 y + kProjectileReach
             };
             include(
-                region,
+                drawn.region,
                 x - kProjectileReach,
                 shadow_y - kProjectileReach,
                 2 * kProjectileReach,
                 2 * kProjectileReach
             );
-            model_render::bridge_open(models.bridge, region);
-            if (models.projectile_shadow.data != nullptr)
-                oa::present::draw_sprite_blended(
-                    &models.bridge.surface, &models.projectile_shadow, x, shadow_y
-                );
+            drawn.shadow = models.projectile_shadow.data != nullptr;
+            drawn.x = x;
+            drawn.shadow_y = shadow_y;
             // Type 3 draws unrotated.
-            oa::sim::model_runtime::RotationWords rotation{};
             if (type == kRenderMissile)
-                rotation = {
+                drawn.rotation = {
                     0,
                     static_cast<int16_t>(shown.heading + kHalfTurn),
                     static_cast<int16_t>(shown.pitch + kHalfTurn)
                 };
             else if (type == kRenderModel)
-                rotation = {
+                drawn.rotation = {
                     0, static_cast<int16_t>(shown.heading), static_cast<int16_t>(shown.pitch)
                 };
-            model_render::draw_projectile_model(
-                renderer,
-                &models.bridge.surface,
-                position,
-                model->objects[0],
-                prepared.objects[0],
-                rotation
-            );
+            drawn.object = &model->objects[0];
+            drawn.prepared = &prepared.objects[0];
             const auto child = model->objects[0].first_child;
-            if (type != kRenderMissile || child == oa::formats::objects3d::kNoObject ||
-                child >= model->objects.size() ||
-                static_cast<int32_t>(shot.lifetime_tick) <= static_cast<int32_t>(renderer.tick))
-                continue;
-            // This match keeps no spin angle for a propeller: it draws with no roll.
-            if ((weapon->flags & OA_WEAPON_FLAG_PROPELLER) != 0)
-                rotation.xy = 0;
-            model_render::draw_projectile_model(
-                renderer,
-                &models.bridge.surface,
-                position,
-                model->objects[child],
-                prepared.objects[child],
-                rotation
-            );
+            if (type == kRenderMissile && child != oa::formats::objects3d::kNoObject &&
+                child < model->objects.size() &&
+                static_cast<int32_t>(shot.lifetime_tick) > static_cast<int32_t>(renderer.tick)) {
+                drawn.child = &model->objects[child];
+                drawn.child_prepared = &prepared.objects[child];
+                drawn.child_rotation = drawn.rotation;
+                // This match keeps no spin angle for a propeller: it draws
+                // with no roll.
+                if ((weapon->flags & OA_WEAPON_FLAG_PROPELLER) != 0)
+                    drawn.child_rotation.xy = 0;
+            }
+            draw_list.projectiles.push_back(drawn);
+            add_draw(WorldDrawKind::projectile, draw_list.projectiles.size() - 1);
         }
     };
 
@@ -1052,6 +1070,11 @@ void Runtime::render_match_surface() {
     for (uint32_t step = 0; models.animation_tick < renderer.tick; ++models.animation_tick)
         if (step++ < kMaxAnimationSteps)
             model_render::step_texture_animations(models.library);
+    // A unit slot's draw state is found by its place in the slot list,
+    // which must not move while the frame's draws point into it: it grows
+    // now to hold every slot with a model instance, which is every slot
+    // the draws can reach (unit_model).
+    hold_unit_draw_states(models);
     const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
     const model_render::RgbFrame rgb_frame{
         world_surface.rgb.data(),
@@ -1074,16 +1097,29 @@ void Runtime::render_match_surface() {
     );
     // Models draw into the bridge and sprites straight into the RGB frame,
     // so the bridge's pixels go back to the frame before a sprite draws over
-    // them, and the next model captures the frame again.
-    bool bridge_holds_draws = false;
-    const auto commit_models = [&] {
-        if (bridge_holds_draws)
-            model_render::bridge_end(models.bridge);
-        bridge_holds_draws = false;
+    // them (a commit), and the next model captures the frame again.
+    const auto plan_commit = [&] { add_draw(WorldDrawKind::commit, 0); };
+    // A model readied and planned for the frame's draws.
+    const auto add_model = [&](const model_render::ModelRef& model,
+                               const oa::Rect32& region,
+                               bool idle,
+                               model_render::UnitSupersampling level,
+                               int32_t stand_in) {
+        draw_list.models.emplace_back();
+        ModelDraw& drawn = draw_list.models.back();
+        drawn.model = model;
+        drawn.stand_in = stand_in;
+        model_render::plan_unit_supersampled(
+            renderer, models.bridge, model, region, idle, level, drawn.plan
+        );
+        if (stand_in >= 0)
+            drawn.model.unit = nullptr;
+        add_draw(WorldDrawKind::model, draw_list.models.size() - 1);
     };
-    const auto draw_object_feature = [&](MatchFeatureDraw& feature) {
+    const auto plan_object_feature = [&](MatchFeatureDraw& feature) {
         // The placed record's object, rotation words and position
-        // go to the stand-in unit, which then draws like any unit.
+        // go to the stand-in unit, which then draws like any unit; the
+        // frame's draws keep a copy of it as it draws this feature.
         models.feature_unit.bank = feature.rotation.xy;
         models.feature_unit.heading = static_cast<uint16_t>(feature.rotation.xz);
         models.feature_unit.pitch = feature.rotation.yz;
@@ -1096,12 +1132,14 @@ void Runtime::render_match_surface() {
             oa::world_unit_def(&world_record, models.feature_unit.def)
         };
         model_render::note_piece_changes(model);
-        model_render::bridge_open(
-            models.bridge,
-            unit_region(renderer, model, terrain_height(&models, models.feature_unit.position))
+        draw_list.stand_ins.push_back(models.feature_unit);
+        add_model(
+            model,
+            unit_region(renderer, model, terrain_height(&models, models.feature_unit.position)),
+            false,
+            model_render::UnitSupersampling::off,
+            static_cast<int32_t>(draw_list.stand_ins.size() - 1)
         );
-        model_render::draw_linked_model(renderer, &models.bridge.surface, model, false);
-        bridge_holds_draws = true;
     };
     advance_gaf_feature_anims(match_->simulation().tick);
     // plan_feature_draw picks each sprite feature's frames, its
@@ -1118,10 +1156,10 @@ void Runtime::render_match_surface() {
                            static_cast<std::size_t>(anim.frame), anim.frames.size() - 1
                        )];
     };
-    const auto draw_sprite_feature = [&](const MatchGafFeatureDraw& feature,
+    const auto plan_sprite_feature = [&](const MatchGafFeatureDraw& feature,
                                          const oa::ui::hud::FeatureDraw& plan,
                                          const oa::present::world_renderer::ScreenPoint& screen) {
-        commit_models();
+        plan_commit();
         const auto* plot = oa::world_plot(&world_record, feature.cell_x, feature.cell_z);
         const auto* record =
             plot != nullptr && (plot->flags & OA_PLOT_FLAG_ANIMATING_FEATURE) != 0
@@ -1147,15 +1185,28 @@ void Runtime::render_match_surface() {
             }
             if (image == nullptr)
                 continue;
-            if (sprite.translucent)
-                blit_gaf_blended_hotspot(world_surface, *image, screen, viewport.scale, models);
-            else
-                blit_gaf_hotspot(world_surface, *image, screen, match_palette_, viewport.scale);
+            draw_list.sprites.push_back({image, screen});
+            add_draw(
+                sprite.translucent ? WorldDrawKind::blended_sprite : WorldDrawKind::sprite,
+                draw_list.sprites.size() - 1
+            );
         }
     };
+    // Selection boxes go to the bridge: the overlay projects about the
+    // game's battlefield corner, the bridge's 8-bit view starts at it, and
+    // each line captures the tiles it crosses before drawing.
     oa::present::world_renderer::OverlayRaster selection_raster{};
-    selection_raster.user = &models.bridge;
-    selection_raster.line = bridge_line;
+    selection_raster.user = &draw_list;
+    selection_raster.line =
+        [](
+            void* user, oa::Surface*, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color
+        ) {
+            auto& list = *static_cast<WorldDrawList*>(user);
+            constexpr int32_t left = oa::present::world_renderer::battlefield_origin_x;
+            constexpr int32_t top = oa::present::world_renderer::battlefield_origin_y;
+            list.lines.push_back({x0 - left, y0 - top, x1 - left, y1 - top, {}, color});
+            add_world_draw(list, WorldDrawKind::selection_line, list.lines.size() - 1);
+        };
 
     // While a unit draws from its copies, the units it carries draw from
     // theirs (carried_model).
@@ -1187,7 +1238,7 @@ void Runtime::render_match_surface() {
     // How finely units are drawn (enhanced anti-aliasing); director frames
     // draw them as without it.
     const auto unit_level = directed ? model_render::UnitSupersampling::off : unit_supersampling_;
-    const auto draw_unit = [&](uint16_t unit_index) {
+    const auto plan_unit = [&](uint16_t unit_index) {
         const auto model = unit_model(models, unit_index);
         if (model.instance == nullptr)
             return;
@@ -1232,15 +1283,12 @@ void Runtime::render_match_surface() {
             if (carried)
                 return;
             model_render::update_linked_transforms(renderer, shown);
-            model_render::draw_unit_supersampled(
-                renderer,
-                models.bridge,
-                models.supersample,
+            add_model(
                 shown,
                 unit_region(renderer, shown, terrain_height(&models, shown.unit->position)),
                 idle,
                 unit_level,
-                bridge_holds_draws
+                -1
             );
             return;
         }
@@ -1257,20 +1305,17 @@ void Runtime::render_match_surface() {
                 model.instance->model().objects.front()
             );
         model_render::note_piece_changes(model);
-        model_render::draw_unit_supersampled(
-            renderer,
-            models.bridge,
-            models.supersample,
+        add_model(
             model,
             unit_region(renderer, model, terrain_height(&models, model.unit->position)),
             idle,
             unit_level,
-            bridge_holds_draws
+            -1
         );
     };
     // A record's shatter fragment, drawn into
     // the model bridge and written back before the record's sprite.
-    const auto draw_fragment = [&](const oa::sim::effect_particles::ParticleDraw& item) {
+    const auto plan_fragment = [&](const oa::sim::effect_particles::ParticleDraw& item) {
         const auto& fragment = *item.fragment;
         const auto& look = fragment.look;
         if (look.model == nullptr)
@@ -1283,9 +1328,10 @@ void Runtime::render_match_surface() {
         // Part of the way through the ticks' flight and spin.
         const FixedVec3 at =
             point_along_step(item.position, item.motion, presentation.batch, presentation.fraction);
-        oa::sim::model_runtime::RotationWords spin{item.spin[0], item.spin[1], item.spin[2]};
+        FragmentDraw drawn{};
+        drawn.spin = {item.spin[0], item.spin[1], item.spin[2]};
         if (between_ticks)
-            spin = {
+            drawn.spin = {
                 angle_along_step(
                     item.spin[0], item.spin_motion[0], presentation.batch, presentation.fraction
                 ),
@@ -1296,13 +1342,14 @@ void Runtime::render_match_surface() {
                     item.spin[2], item.spin_motion[2], presentation.batch, presentation.fraction
                 )
             };
-        const oa::formats::objects3d::FixedVector3 position{
+        drawn.position = {
             wrapping_sub(at.x, camera_fixed(renderer.camera_x)),
             at.y,
             wrapping_sub(at.z, camera_fixed(renderer.camera_y))
         };
-        const int32_t x = high_word(position.x) + renderer.origin_x;
-        const int32_t y = high_word(position.z) - (high_word(position.y) >> 1) + renderer.origin_y;
+        const int32_t x = high_word(drawn.position.x) + renderer.origin_x;
+        const int32_t y =
+            high_word(drawn.position.z) - (high_word(drawn.position.y) >> 1) + renderer.origin_y;
         // A turned point stays within the sum of its magnitudes.
         int32_t reach = 0;
         for (const auto& point : fragment.points)
@@ -1312,25 +1359,17 @@ void Runtime::render_match_surface() {
                     std::abs(high_word(point.z))
             );
         reach += kModelRegionMargin;
-        oa::present::DisplayContext* outer_display = oa::present::display_context();
-        oa::present::bind_display(&models.display.context);
-        model_render::bridge_open(models.bridge, {x - reach, y - reach, x + reach, y + reach});
-        model_render::draw_shatter_fragment(
-            renderer,
-            &models.bridge.surface,
-            position,
-            fragment,
-            prepared->objects[look.object].primitives[look.primitive],
-            spin
-        );
-        model_render::bridge_end(models.bridge);
-        oa::present::bind_display(outer_display);
+        drawn.region = {x - reach, y - reach, x + reach, y + reach};
+        drawn.fragment = &fragment;
+        drawn.primitive = &prepared->objects[look.object].primitives[look.primitive];
+        draw_list.fragments.push_back(drawn);
+        add_draw(WorldDrawKind::fragment, draw_list.fragments.size() - 1);
     };
     // Explosion records and the effect layers. Flashes need
     // the shade table and are skipped.
-    auto draw_effect = [&](const oa::sim::effect_particles::ParticleDraw& item) {
+    auto plan_effect = [&](const oa::sim::effect_particles::ParticleDraw& item) {
         if (item.kind == oa::sim::effect_particles::DrawKind::fragment) {
-            draw_fragment(item);
+            plan_fragment(item);
             return;
         }
         const std::array<uint32_t, 3> at{
@@ -1361,32 +1400,37 @@ void Runtime::render_match_surface() {
             );
             // The square, its top left corner at the point, clipped to the
             // frame before it is filled.
-            const auto first_x = std::max<int64_t>(screen.x, 0);
-            const auto first_y = std::max<int64_t>(screen.y, 0);
-            const auto end_x = std::min<int64_t>(int64_t{screen.x} + side, world_surface.width);
-            const auto end_y = std::min<int64_t>(int64_t{screen.y} + side, world_surface.height);
-            for (auto y = first_y; y < end_y; ++y)
-                for (auto x = first_x; x < end_x; ++x)
-                    put_match_pixel(world_surface, static_cast<int>(x), static_cast<int>(y), color);
+            draw_list.squares.push_back(
+                {static_cast<int32_t>(std::max<int64_t>(screen.x, 0)),
+                 static_cast<int32_t>(std::max<int64_t>(screen.y, 0)),
+                 static_cast<int32_t>(
+                     std::min<int64_t>(int64_t{screen.x} + side, world_surface.width)
+                 ),
+                 static_cast<int32_t>(
+                     std::min<int64_t>(int64_t{screen.y} + side, world_surface.height)
+                 ),
+                 color}
+            );
+            add_draw(WorldDrawKind::pixel_square, draw_list.squares.size() - 1);
             return;
         }
         if (item.kind != oa::sim::effect_particles::DrawKind::sprite || item.sequence == nullptr ||
             item.frame < 0 || static_cast<std::size_t>(item.frame) >= item.sequence->frames.size())
             return;
-        const auto& frame = item.sequence->frames[static_cast<std::size_t>(item.frame)];
-        const auto rendered = oa::formats::gaf::render_normal(frame);
-        if (rendered.ok())
-            blit_gaf_hotspot(
-                world_surface, *rendered.frame, screen, match_palette_, viewport.scale
-            );
+        const auto* decoded =
+            decoded_frame(draw_list, item.sequence->frames[static_cast<std::size_t>(item.frame)]);
+        if (decoded == nullptr)
+            return;
+        draw_list.sprites.push_back({decoded, screen});
+        add_draw(WorldDrawKind::sprite, draw_list.sprites.size() - 1);
     };
     const auto visit = [](void* context, const oa::sim::effect_particles::ParticleDraw& item) {
-        (*static_cast<decltype(draw_effect)*>(context))(item);
+        (*static_cast<decltype(plan_effect)*>(context))(item);
     };
-    const auto draw_effect_layers = [&](uint16_t first, uint16_t last) {
-        commit_models();
+    const auto plan_effect_layers = [&](uint16_t first, uint16_t last) {
+        plan_commit();
         for (uint16_t layer = first; layer <= last; ++layer)
-            oa::sim::effect_particles::draw_layer(match_->effects(), layer, &draw_effect, visit);
+            oa::sim::effect_particles::draw_layer(match_->effects(), layer, &plan_effect, visit);
     };
 
     // The features and units this frame draws, placed in the draw order: a
@@ -1471,12 +1515,12 @@ void Runtime::render_match_surface() {
     oa::present::world_renderer::plan_battlefield_draws(
         feature_sites, unit_sites, renderer.camera_y, draw_plan
     );
-    const auto draw_feature = [&](uint32_t index) {
+    const auto plan_feature = [&](uint32_t index) {
         auto& feature = features_to_draw[index];
         if (feature.object != nullptr)
-            draw_object_feature(*feature.object);
+            plan_object_feature(*feature.object);
         else
-            draw_sprite_feature(*feature.sprite, feature.plan, feature.screen);
+            plan_sprite_feature(*feature.sprite, feature.plan, feature.screen);
     };
     // The battlefield draws far to near: effect layers 0 to 2 (wakes among
     // them), the lying features, layers 3 and 4, then row by row the ground
@@ -1484,21 +1528,21 @@ void Runtime::render_match_surface() {
     // debris and explosions, layer 7, the units off the ground, then layers 8
     // and 9 (smoke); the fog goes over them all, and the order overlays over
     // the fog.
-    draw_effect_layers(0, 2);
+    plan_effect_layers(0, 2);
     for (const auto index : draw_plan.lying_features)
-        draw_feature(index);
-    draw_effect_layers(3, 4);
+        plan_feature(index);
+    plan_effect_layers(3, 4);
     for (const auto& draw : draw_plan.ground) {
         if (draw.kind == oa::present::world_renderer::DrawnThing::unit)
-            draw_unit(units_to_draw[draw.index]);
+            plan_unit(units_to_draw[draw.index]);
         else
-            draw_feature(draw.index);
+            plan_feature(draw.index);
     }
-    draw_effect_layers(5, 6);
-    draw_projectile_models(models);
-    bridge_holds_draws = true;
-    commit_models();
-    draw_match_projectiles(world_surface, viewport);
+    plan_effect_layers(5, 6);
+    plan_projectile_models(models);
+    // Every captured tile goes back to the frame after the projectiles.
+    add_draw(WorldDrawKind::commit_always, 0);
+    plan_match_projectiles(draw_list, viewport);
     // Nano streams are the type-6 particles; the beam line is a debug aid.
     const auto debug_beams = options_.debug_order_lines
                                  ? match_->nano_lasers()
@@ -1518,7 +1562,8 @@ void Runtime::render_match_surface() {
                       uint8_t,
                       3>{match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]}
                 : std::array<uint8_t, 3>{80, 255, 80};
-        draw_match_line(world_surface, from.x, from.y, to.x, to.y, color);
+        draw_list.lines.push_back({from.x, from.y, to.x, to.y, color, 0});
+        add_draw(WorldDrawKind::line, draw_list.lines.size() - 1);
     }
     // The battlefield rectangle the load screen sets, over the visible map area.
     const oa::sim::effect_particles::ExplosionView explosion_view{
@@ -1532,10 +1577,8 @@ void Runtime::render_match_surface() {
     // The in-bounds pass starts with the debris pieces: each piece's object is turned
     // by its spin and drawn at its origin, culled on
     // that origin, in its unit's team colour.
-    std::vector<oa::formats::objects3d::FixedVector3> debris_points;
-    const oa::Rect32 debris_view{0, 0, vis_w - 1, vis_h - 1};
     const auto& debris_table = match_->effects().debris;
-    auto draw_debris_piece = [&](const oa::sim::effect_particles::DebrisPiece& live) {
+    auto plan_debris_piece = [&](const oa::sim::effect_particles::DebrisPiece& live) {
         // Part of the way through the tick's fall and spin, by the piece's slot.
         const auto slot = static_cast<std::size_t>(&live - std::begin(debris_table));
         const auto piece =
@@ -1548,7 +1591,8 @@ void Runtime::render_match_surface() {
         if (prepared == nullptr)
             return;
         const auto* owner = oa::world_unit_at(&world_record, piece.unit);
-        const uint8_t team = renderer.team_colors[(owner != nullptr ? owner->owner_index : 0) % 10];
+        DebrisDraw drawn{};
+        drawn.team = renderer.team_colors[(owner != nullptr ? owner->owner_index : 0) % 10];
         const int32_t x =
             high_word(wrapping_sub(piece.position.x, camera_fixed(renderer.camera_x))) +
             renderer.origin_x;
@@ -1564,39 +1608,51 @@ void Runtime::render_match_surface() {
                     std::abs(high_word(vertex.z))
             );
         reach += kModelRegionMargin;
-        oa::present::DisplayContext* outer_display = oa::present::display_context();
-        oa::present::bind_display(&models.display.context);
-        model_render::bridge_open(models.bridge, {x - reach, y - reach, x + reach, y + reach});
-        model_render::draw_rotated_debris(
-            renderer,
-            &models.bridge.surface,
-            debris_view,
-            object,
-            prepared->objects[piece.object],
-            {piece.spin[2], piece.spin[1], piece.spin[0]},
-            {piece.position.x, piece.position.y, piece.position.z},
-            team,
-            debris_points
-        );
-        model_render::bridge_end(models.bridge);
-        oa::present::bind_display(outer_display);
+        drawn.region = {x - reach, y - reach, x + reach, y + reach};
+        drawn.object = &object;
+        drawn.prepared = &prepared->objects[piece.object];
+        drawn.spin = {piece.spin[2], piece.spin[1], piece.spin[0]};
+        drawn.origin = {piece.position.x, piece.position.y, piece.position.z};
+        draw_list.debris.push_back(drawn);
+        add_draw(WorldDrawKind::debris, draw_list.debris.size() - 1);
     };
     // The pieces' particles start in the match's tick, never here.
     oa::sim::effect_particles::draw_debris(
         match_->effects(),
-        &draw_debris_piece,
+        &plan_debris_piece,
         [](void* context, const oa::sim::effect_particles::DebrisPiece& piece) {
-            (*static_cast<decltype(draw_debris_piece)*>(context))(piece);
+            (*static_cast<decltype(plan_debris_piece)*>(context))(piece);
         }
     );
     oa::sim::effect_particles::draw_explosions(
-        match_->effects(), explosion_view, &draw_effect, visit
+        match_->effects(), explosion_view, &plan_effect, visit
     );
-    draw_effect_layers(7, 7);
+    plan_effect_layers(7, 7);
     for (const auto index : draw_plan.raised_units)
-        draw_unit(units_to_draw[index]);
-    draw_effect_layers(8, 8);
-    draw_effect_layers(9, 9);
+        plan_unit(units_to_draw[index]);
+    plan_effect_layers(8, 8);
+    plan_effect_layers(9, 9);
+    // Every band of the frame draws the list: on the drawing threads at
+    // once, or in order on this one.
+    WorldFrameDraw frame_draw{};
+    frame_draw.target = {
+        world_surface.rgb.data(),
+        static_cast<int32_t>(world_surface.width),
+        static_cast<int32_t>(world_surface.height),
+        world_pixel_clip_.x,
+        world_pixel_clip_.y,
+        world_pixel_clip_.w,
+        world_pixel_clip_.h,
+        0,
+        static_cast<int32_t>(world_surface.height)
+    };
+    frame_draw.palette = &match_palette_;
+    frame_draw.scale = viewport.scale;
+    frame_draw.bridge = &models.bridge;
+    frame_draw.display = &models.display;
+    frame_draw.projectile_shadow = &models.projectile_shadow;
+    frame_draw.debris_view = {0, 0, vis_w - 1, vis_h - 1};
+    draw_world_bands(models, frame_draw, draw_pool_.get());
     oa::present::bind_display(bound_display);
     mark_profile(OA_PROFILE_RENDER_STUFF);
     apply_match_fog(

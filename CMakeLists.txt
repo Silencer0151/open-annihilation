@@ -325,7 +325,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_match_panel_keys_check.cpp
   src/app/runtime_turret_draw_check.cpp
   src/app/runtime_selection.cpp src/app/runtime_skirmish_host.cpp
-  src/app/runtime_skirmish_start.cpp src/app/runtime_world_draw.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
+  src/app/runtime_skirmish_start.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
   src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
   src/app/runtime_factory_check.cpp src/app/runtime_build_page_check.cpp
@@ -732,8 +732,13 @@ if(OA_BUILD_PLATFORM)
         set_tests_properties(native-sim-independent-of-drawing PROPERTIES
           TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The seeded headless skirmish's fight drawn frame by frame with the
-        # camera's scroll held, at zoom 1, 1.37 and 0.6, on 1, 3 and 4 drawing
-        # threads: every count draws the same frames and reaches the same world.
+        # camera's scroll held, at zoom 1, 1.37 and 0.6, and a longer busy
+        # fight (--busy-combat: missiles, nano particles, a loaded transport,
+        # selection boxes), into its explosions, debris and fragments, with
+        # enhanced anti-aliasing off and at 4x, on 1, 2, 3, 4 and 7 drawing
+        # threads, which draw the battlefield's units and effects in as many
+        # bands of rows: every count draws the same frames and reaches the
+        # same world.
         add_test(NAME native-draw-threads COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_draw_threads.py"
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"

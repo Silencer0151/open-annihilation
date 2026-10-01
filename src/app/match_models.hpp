@@ -20,6 +20,7 @@
 #include "oa/present/unit_playout.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "presentation_interpolation.hpp"
+#include "world_draws.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +77,20 @@ struct MatchModels {
     oa::present::model::RgbBridge bridge;
     // The buffers of units drawn finer than the frame (enhanced anti-aliasing).
     oa::present::model::SupersampleScratch supersample;
+    // The frame's battlefield draws in order, worked out before any band
+    // draws them (world_draws.hpp).
+    WorldDrawList draws;
+    // The bands the frame's bridge is split into, one for each drawing
+    // thread; one band covers the whole frame on one thread.
+    std::vector<oa::present::model::BridgeBand> bands;
+    // The buffers of the bands after the first, which draws with the
+    // renderer and supersampling buffers above; none on one thread.
+    std::vector<WorldBandScratch> band_scratch;
+    // The first band's buffer of turned debris points.
+    std::vector<oa::formats::objects3d::FixedVector3> debris_points;
+    // The most bands a frame of the match was drawn in, which a frame run
+    // reports.
+    int32_t most_bands{};
     std::vector<UnitDrawState> units; // by unit slot
     // 3D features draw through one zeroed unit record marked as a z-buffered
     // building owned by the viewpoint player, kept here in place of its part

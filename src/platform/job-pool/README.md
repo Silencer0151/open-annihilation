@@ -6,17 +6,28 @@ namespace `oa::platform::job_pool`.
 
 The drawing passes that work row by row hand their rows to it in bands: the
 terrain fill (`fill_scaled_viewport`) and the fog (`draw_fog_grid`) in
-[the world renderer](../../present/world-renderer/README.md), and the
+[the world renderer](../../present/world-renderer/README.md), the
+battlefield's units, features and effects (`draw_world_band`), and the
 conversion of each frame to the window's pixel format before it is shown
 ([src/app](../../app/README.md)).
 
 ## Results do not depend on the threads
 
-A job is split into bands by its data, never by the number of threads: the
-terrain fill and the conversion by 32 rows, the fog by one row of its grid.
 Each band writes only its own rows and reads nothing another band writes,
 so the order bands run in, and the threads they run on, never change a byte
 of the result. A pool of any size gives the frame one thread gives.
+
+The terrain fill, the fog and the conversion split their work into bands
+by its data, never by the number of threads: the terrain fill and the
+conversion by 32 rows, the fog by one row of its grid. The battlefield's
+draws take one band for each thread instead: the model bridge splits into
+that many bands of whole tile rows, only where its rows and the frame's
+split alike (`bridge_split` in
+[the model module](../../present/model/README.md)), and each band draws
+every draw of the frame with its own rows alone, each draw over a band's
+edge worked out as over the whole frame. Any number of those bands gives
+the frame one band gives, so these results do not depend on the threads
+either.
 
 ## Entry points
 

@@ -157,6 +157,11 @@ struct Options {
     bool window_resolution = false;
     float match_zoom = kDefaultBattlefieldZoom;
     std::size_t combat_units = 0;
+    // --busy-combat: the --combat armies also bring missile trucks, the
+    // local player a kbot lab building peewees, an air transport loading a
+    // peewee, and its army starts selected with selection boxes shown, so
+    // that the run's frames draw every kind of battlefield draw.
+    bool busy_combat = false;
     bool reclaim_check = false;
     // Headless camera placement: map pixel at the view's top-left.
     std::optional<std::pair<int, int>> camera;

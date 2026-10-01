@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "match_models.hpp"
 #include "presentation_interpolation.hpp"
+#include "world_draws.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -156,24 +157,53 @@ oa::present::world_renderer::ScreenPoint Runtime::project_match_point(
     return screen;
 }
 
+namespace {
+
+/// Returns the whole battlefield frame as a draw's target: every row may
+/// change, within the visible world rectangle.
+///
+/// @param destination the battlefield frame
+/// @param x the visible world rectangle's left column
+/// @param y its top row
+/// @param width its columns
+/// @param height its rows
+/// @return the target
+WorldTarget whole_frame(
+    oa::present::world_renderer::Surface& destination, int x, int y, int width, int height
+) {
+    return {
+        destination.rgb.data(),
+        static_cast<int32_t>(destination.width),
+        static_cast<int32_t>(destination.height),
+        x,
+        y,
+        width,
+        height,
+        0,
+        static_cast<int32_t>(destination.height)
+    };
+}
+
+} // namespace
+
 void Runtime::put_match_pixel(
     oa::present::world_renderer::Surface& destination,
     int x,
     int y,
     const std::array<uint8_t, 3>& color
 ) {
-    if (x < world_pixel_clip_.x || y < world_pixel_clip_.y ||
-        x >= world_pixel_clip_.x + world_pixel_clip_.w ||
-        y >= world_pixel_clip_.y + world_pixel_clip_.h)
-        return;
-    if (x < 0 || y < 0 || x >= static_cast<int>(destination.width) ||
-        y >= static_cast<int>(destination.height))
-        return;
-    const auto di =
-        (static_cast<std::size_t>(y) * destination.width + static_cast<std::size_t>(x)) * 3U;
-    destination.rgb[di] = color[0];
-    destination.rgb[di + 1] = color[1];
-    destination.rgb[di + 2] = color[2];
+    put_world_pixel(
+        whole_frame(
+            destination,
+            world_pixel_clip_.x,
+            world_pixel_clip_.y,
+            world_pixel_clip_.w,
+            world_pixel_clip_.h
+        ),
+        x,
+        y,
+        color
+    );
 }
 
 void Runtime::draw_match_line(
@@ -184,78 +214,20 @@ void Runtime::draw_match_line(
     int y1,
     const std::array<uint8_t, 3>& color
 ) {
-    // Clip the segment to the visible world rectangle before stepping it, so
-    // off-map endpoints (e.g. a build ghost under an off-map cursor) cannot
-    // produce billion-step walks or overflow the differences below.
-    const auto left = static_cast<int64_t>(std::max(world_pixel_clip_.x, 0));
-    const auto top = static_cast<int64_t>(std::max(world_pixel_clip_.y, 0));
-    const auto right =
-        std::min<int64_t>(
-            static_cast<int64_t>(world_pixel_clip_.x) + world_pixel_clip_.w, destination.width
-        ) -
-        1;
-    const auto bottom =
-        std::min<int64_t>(
-            static_cast<int64_t>(world_pixel_clip_.y) + world_pixel_clip_.h, destination.height
-        ) -
-        1;
-    if (right < left || bottom < top)
-        return;
-    double ax = x0, ay = y0, bx = x1, by = y1;
-    const auto outcode = [&](double x, double y) {
-        return (x < left ? 1 : 0) | (x > right ? 2 : 0) | (y < top ? 4 : 0) | (y > bottom ? 8 : 0);
-    };
-    for (int code_a = outcode(ax, ay), code_b = outcode(bx, by);;) {
-        if ((code_a | code_b) == 0)
-            break;
-        if ((code_a & code_b) != 0)
-            return;
-        const int code = code_a != 0 ? code_a : code_b;
-        double x = 0, y = 0;
-        if (code & 8) {
-            x = ax + (bx - ax) * (bottom - ay) / (by - ay);
-            y = static_cast<double>(bottom);
-        } else if (code & 4) {
-            x = ax + (bx - ax) * (top - ay) / (by - ay);
-            y = static_cast<double>(top);
-        } else if (code & 2) {
-            y = ay + (by - ay) * (right - ax) / (bx - ax);
-            x = static_cast<double>(right);
-        } else {
-            y = ay + (by - ay) * (left - ax) / (bx - ax);
-            x = static_cast<double>(left);
-        }
-        if (code == code_a) {
-            ax = x;
-            ay = y;
-            code_a = outcode(ax, ay);
-        } else {
-            bx = x;
-            by = y;
-            code_b = outcode(bx, by);
-        }
-    }
-    x0 = static_cast<int>(std::lround(ax));
-    y0 = static_cast<int>(std::lround(ay));
-    x1 = static_cast<int>(std::lround(bx));
-    y1 = static_cast<int>(std::lround(by));
-    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int error = dx + dy;
-    while (true) {
-        put_match_pixel(destination, x0, y0, color);
-        if (x0 == x1 && y0 == y1)
-            break;
-        const auto twice = error * 2;
-        if (twice >= dy) {
-            error += dy;
-            x0 += sx;
-        }
-        if (twice <= dx) {
-            error += dx;
-            y0 += sy;
-        }
-    }
+    draw_world_line(
+        whole_frame(
+            destination,
+            world_pixel_clip_.x,
+            world_pixel_clip_.y,
+            world_pixel_clip_.w,
+            world_pixel_clip_.h
+        ),
+        x0,
+        y0,
+        x1,
+        y1,
+        color
+    );
 }
 
 void Runtime::blit_gaf_on_world(
@@ -266,29 +238,20 @@ void Runtime::blit_gaf_on_world(
     const oa::PaletteBytes& palette,
     float scale
 ) {
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    const auto dest_w =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.width) * scale)));
-    const auto dest_h =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
-    for (int row = 0; row < dest_h; ++row) {
-        const auto source_row =
-            static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        for (int column = 0; column < dest_w; ++column) {
-            const auto source_column =
-                static_cast<std::size_t>(column) * frame.width / static_cast<std::size_t>(dest_w);
-            const auto offset = source_row * frame.width + source_column;
-            if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
-                continue;
-            const int x = destination_x + column;
-            const int y = destination_y + row;
-            const auto pal = static_cast<std::size_t>(frame.pixels[offset]) * 4U;
-            if (pal + 2 >= palette.size())
-                continue;
-            put_match_pixel(destination, x, y, {palette[pal], palette[pal + 1], palette[pal + 2]});
-        }
-    }
+    blit_world_frame(
+        whole_frame(
+            destination,
+            world_pixel_clip_.x,
+            world_pixel_clip_.y,
+            world_pixel_clip_.w,
+            world_pixel_clip_.h
+        ),
+        frame,
+        destination_x,
+        destination_y,
+        palette,
+        scale
+    );
 }
 
 void Runtime::blit_gaf_hotspot(
@@ -298,17 +261,19 @@ void Runtime::blit_gaf_hotspot(
     const oa::PaletteBytes& palette,
     float scale
 ) {
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    const auto x =
-        screen.x - static_cast<int>(
-                       std::lround(static_cast<double>(frame.origin_x) * static_cast<double>(scale))
-                   );
-    const auto y =
-        screen.y - static_cast<int>(
-                       std::lround(static_cast<double>(frame.origin_y) * static_cast<double>(scale))
-                   );
-    blit_gaf_on_world(destination, frame, x, y, palette, scale);
+    blit_world_hotspot(
+        whole_frame(
+            destination,
+            world_pixel_clip_.x,
+            world_pixel_clip_.y,
+            world_pixel_clip_.w,
+            world_pixel_clip_.h
+        ),
+        frame,
+        screen,
+        palette,
+        scale
+    );
 }
 
 std::array<uint8_t, 3> Runtime::ui_color_rgb(uint8_t index) const {
@@ -342,12 +307,25 @@ std::array<uint32_t, 3> fixed_point(int64_t x, int64_t y, int64_t z) {
 
 } // namespace
 
-void Runtime::draw_match_projectiles(
-    oa::present::world_renderer::Surface& destination,
-    const oa::present::world_renderer::BattlefieldViewport& viewport
+void Runtime::plan_match_projectiles(
+    WorldDrawList& draws, const oa::present::world_renderer::BattlefieldViewport& viewport
 ) {
     if (!match_)
         return;
+    // Each line and sprite joins the frame's draws in the order the pass
+    // draws them.
+    const auto line = [&](int x0, int y0, int x1, int y1, const std::array<uint8_t, 3>& color) {
+        draws.lines.push_back({x0, y0, x1, y1, color, 0});
+        add_world_draw(draws, WorldDrawKind::line, draws.lines.size() - 1);
+    };
+    const auto sprite = [&](const oa::formats::gaf::Frame& frame,
+                            const oa::present::world_renderer::ScreenPoint& screen) {
+        const auto* decoded = decoded_frame(draws, frame);
+        if (decoded == nullptr)
+            return;
+        draws.sprites.push_back({decoded, screen});
+        add_world_draw(draws, WorldDrawKind::sprite, draws.sprites.size() - 1);
+    };
     ensure_ui_colors();
     const uint32_t now = match_->simulation().tick;
     uint32_t jitter_seed = now * 0x343fdU + 0x269ec3U;
@@ -393,11 +371,9 @@ void Runtime::draw_match_projectiles(
                         std::swap(head, tail);
                     x0 = head.x - 1, y0 = head.y, x1 = tail.x + 1, y1 = tail.y;
                 }
-                draw_match_line(destination, x0, y0, x1, y1, ui_color_rgb(weapon->color2));
+                line(x0, y0, x1, y1, ui_color_rgb(weapon->color2));
             }
-            draw_match_line(
-                destination, head.x, head.y, tail.x, tail.y, ui_color_rgb(weapon->color)
-            );
+            line(head.x, head.y, tail.x, tail.y, ui_color_rgb(weapon->color));
             break;
         }
         case ProjectileRender::plasma: {
@@ -407,15 +383,7 @@ void Runtime::draw_match_projectiles(
             if (sequence == nullptr || sequence->frames.empty())
                 break;
             const auto frame = (now - shot.burst_tick) % sequence->frames.size();
-            const auto rendered = oa::formats::gaf::render_normal(sequence->frames[frame]);
-            if (rendered.ok())
-                blit_gaf_hotspot(
-                    destination,
-                    *rendered.frame,
-                    project_match_point(viewport, shot_position),
-                    match_palette_,
-                    viewport.scale
-                );
+            sprite(sequence->frames[frame], project_match_point(viewport, shot_position));
             break;
         }
         case ProjectileRender::flame: {
@@ -428,16 +396,10 @@ void Runtime::draw_match_projectiles(
             const auto frame = count - remaining * count / weapon->weapontimer_ticks;
             if (frame < 0 || frame >= count)
                 break;
-            const auto rendered =
-                oa::formats::gaf::render_normal(sequence->frames[static_cast<std::size_t>(frame)]);
-            if (rendered.ok())
-                blit_gaf_hotspot(
-                    destination,
-                    *rendered.frame,
-                    project_match_point(viewport, shot_position),
-                    match_palette_,
-                    viewport.scale
-                );
+            sprite(
+                sequence->frames[static_cast<std::size_t>(frame)],
+                project_match_point(viewport, shot_position)
+            );
             break;
         }
         case ProjectileRender::lightning: {
@@ -471,7 +433,7 @@ void Runtime::draw_match_projectiles(
                     );
                     const auto to =
                         project_match_point(viewport, fixed_point(point[0], point[1], point[2]));
-                    draw_match_line(destination, from.x, from.y, to.x, to.y, color);
+                    line(from.x, from.y, to.x, to.y, color);
                     previous = point;
                 }
             }
