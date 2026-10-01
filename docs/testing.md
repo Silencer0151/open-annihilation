@@ -185,6 +185,16 @@ covers the same code over a synthetic installer and runs everywhere.
   platform-specific code. The container keeps compiled objects in a Docker
   volume that every run and every checkout shares, so a rebuild compiles only
   what changed.
+- **Windows XP:** cross-compile for 32-bit (or 64-bit) Windows with a
+  mingw-w64 toolchain that links the C library every Windows release
+  includes (not the one Windows 10 added), with zlib and SDL3 built by the
+  same toolchain, and configure with
+  `-DOA_WINDOWS_XP=ON`. Engine code then compiles against the declarations of
+  Windows XP and every executable runs on it; see
+  [src/platform/xp-runtime](../src/platform/xp-runtime/README.md). Check an
+  executable's imports against a Windows XP installation's own system DLLs
+  before running it there: Windows XP refuses to start a program that imports
+  anything they do not export.
 
 ### What CI runs
 
