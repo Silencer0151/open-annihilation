@@ -29,13 +29,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-# The files Git tracks, the nested projects, and the C, C++ and Objective-C
-# sources as the style check reads them, and among them the C ones.
-from check_style import C_SUFFIXES, SOURCE_SUFFIXES, nested_projects, tracked  # noqa: E402,F401
-
-# Directory names that hold code from other projects, kept as its authors
-# wrote it; no file of the tree lies in one yet.
-THIRD_PARTY_DIRECTORIES = frozenset({"3rdparty", "external", "extern", "third-party", "third_party", "vendor"})
+# The files Git tracks, the nested projects, the directories of code from
+# other projects kept as its authors wrote it, and the C, C++ and
+# Objective-C sources as the style check reads them, and among them the C
+# ones.
+from check_style import (  # noqa: E402,F401
+    C_SUFFIXES, SOURCE_SUFFIXES, THIRD_PARTY_DIRECTORIES, is_third_party, nested_projects, tracked)
 # Sources that are fragments of another file, included in the middle of it
 # (a table inside an initializer, a list of macro calls): they have no
 # context of their own to format, and an #include added to one would land
@@ -44,15 +43,6 @@ FRAGMENT_SUFFIXES = frozenset({".inc", ".inl"})
 # The file a linked checkout holds in place of its .git directory.
 GIT_LINK_NAME = ".git"
 IGNORE_FILE = ".gitignore"
-
-
-def is_third_party(name):
-    """Tells whether a path lies in a directory of third-party code.
-
-    @param name path relative to the root, with '/' separators
-    @return true when a directory of the path is named as THIRD_PARTY_DIRECTORIES lists
-    """
-    return any(part in THIRD_PARTY_DIRECTORIES for part in name.split("/")[:-1])
 
 
 def ignore_patterns(root):

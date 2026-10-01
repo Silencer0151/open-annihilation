@@ -54,6 +54,13 @@ path = [
 SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
 SPDX-License-Identifier = "GPL-3.0-only"
 
+# The short encoded tones the music decoder's tests decode
+# (src/audio/tests/README.md says how they were made).
+[[annotations]]
+path = "src/audio/tests/data/**"
+SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
+SPDX-License-Identifier = "GPL-3.0-only"
+
 # Adapted from the Contributor Covenant, version 2.1, which is distributed
 # under the Creative Commons Attribution 4.0 licence.
 [[annotations]]

@@ -357,11 +357,12 @@ def test_lexer(scratch):
 
 
 def test_nested_projects(scratch):
-    """Leaves out nested projects and files that are not sources."""
+    """Leaves out nested projects, third-party code and files that are not sources."""
     source = "std::int32_t a{};\n"
     project = "cmake_minimum_required(VERSION 3.24)\nproject(nested)\nset(OA_ENGINE_DIR .. CACHE PATH \"\")\n"
     expect_findings(scratch, "nested", {"src/m/a.cpp": source, "nested/CMakeLists.txt": project,
-                                        "nested/src/a.cpp": source, "src/m/notes.txt": source}, {
+                                        "nested/src/a.cpp": source, "src/m/notes.txt": source,
+                                        "third_party/lib/lib.h": source}, {
         ("src/m/a.cpp", 1, "qualified-fixed-width", "std::int32_t"),
     })
 

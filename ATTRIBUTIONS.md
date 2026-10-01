@@ -20,6 +20,8 @@ in this repository or in the release packages.
 | [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
 | [FFmpeg](#ffmpeg) (libavcodec, libavformat, libavutil, libswresample, libswscale) | 9.0.2 | LGPL 2.1 or later | static, inside the app | DLLs beside `open-annihilation.exe` | shared libraries in `lib/` |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
+| [stb_vorbis](#stb_vorbis) | 1.22, changed | public domain or MIT | static | static | static |
+| [dr_mp3 and dr_flac](#dr_mp3-and-dr_flac) | 0.7.3 and 0.13.3, with later fixes | public domain or MIT No Attribution | static | static | static |
 | [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 12.0.0 (x64), 15.0.0 (ARM64) | ZPL 2.1, MIT, BSD | | static | |
 | [GCC runtime](#gcc-runtime) | 14.2.0 | GPL 3 with the GCC Runtime Library Exception | | static | |
 
@@ -31,6 +33,8 @@ the graphics, audio and windowing libraries, are not included.
 The table above describes the release packages. A build made from this
 repository with CMake links these components as follows:
 
+- stb_vorbis, dr_mp3 and dr_flac, which decode the music, are kept in
+  [`third_party/`](third_party/) and compiled into every build.
 - When CMake is pointed at the SDL that `tools/bootstrap_sdl.py` installs,
   as `run.sh` and the README do, SDL 3.4.16 is linked statically. Otherwise
   the build takes whichever SDL 3.2 or later CMake finds, which may be a
@@ -112,7 +116,7 @@ FFmpeg is Copyright (c) 2000-2026 the FFmpeg developers. The licence text is
 in [`licenses/FFmpeg-COPYING.LGPLv2.1`](licenses/FFmpeg-COPYING.LGPLv2.1), and the
 source and build details are in [`licenses/FFmpeg-SOURCE.txt`](licenses/FFmpeg-SOURCE.txt).
 
-The FFmpeg libraries decode the game's movies and music. They are built from
+The FFmpeg libraries decode the game's movies. They are built from
 the unmodified release archive
 <https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.gz>
 (SHA-256 `84960df915059e8754fef2cd7c9afeb614062b1b5458ec471eecee619ee04e98`),
@@ -149,6 +153,39 @@ To build against a modified FFmpeg, set the CMake cache variables
 `OA_AVUTIL_LIBRARY`, `OA_SWSCALE_LIBRARY` and `OA_SWRESAMPLE_LIBRARY` to its
 headers and libraries when you configure the source. The Windows
 cross-build takes it with `tools/build_windows.sh --ffmpeg PREFIX`.
+
+## stb_vorbis
+
+stb_vorbis 1.22, the Ogg Vorbis decoder of the stb libraries, from
+<https://github.com/nothings/stb>, decodes `.ogg` music files. It is
+compiled into the game from [`third_party/stb_vorbis/`](third_party/stb_vorbis/),
+with one change that its [README](third_party/stb_vorbis/README.md)
+describes. It is in the public domain, or, at your choice, licensed under
+the MIT licence; both texts are in
+[`licenses/stb_vorbis-LICENSE.txt`](licenses/stb_vorbis-LICENSE.txt).
+
+> Copyright (c) 2017 Sean Barrett
+>
+> Permission is hereby granted, free of charge, to any person obtaining a
+> copy of this software and associated documentation files (the
+> "Software"), to deal in the Software without restriction, including
+> without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit
+> persons to whom the Software is furnished to do so, subject to the
+> following conditions: The above copyright notice and this permission
+> notice shall be included in all copies or substantial portions of the
+> Software.
+
+## dr_mp3 and dr_flac
+
+dr_mp3 and dr_flac, David Reid's MP3 and FLAC decoders, from
+<https://github.com/mackron/dr_libs>, decode `.mp3` and `.flac` music
+files. They are compiled into the game unchanged from
+[`third_party/dr_libs/`](third_party/dr_libs/). They are in the public
+domain, or, at your choice, licensed under the MIT No Attribution licence
+(Copyright 2020 David Reid); both texts are in
+[`licenses/dr_libs-LICENSE.txt`](licenses/dr_libs-LICENSE.txt). dr_mp3 is
+based on minimp3, which is in the public domain (CC0).
 
 ## zlib
 

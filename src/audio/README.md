@@ -66,8 +66,8 @@ CD music runs the CD player (`cd_music`, `music_mood`) against a music-file
 disc: `music/<n>.mp3` (or .ogg/.wav/.flac) is disc track n, track 1 is the data
 track, so tracks 2..17 of the game's music are the sixteen playable tracks.
 An unknown 16-track data disc gets the game's default kinds: tracks 1-7 battle,
-8-16 building (calm). `sdl_music` decodes with FFmpeg on SDL's audio thread and
-maps the CD mixer line to the stream gain. `music_session` holds the game-side
+8-16 building (calm). `sdl_music` decodes each track with `MusicDecoder` on
+the sound output's thread and maps the CD mixer line to the stream gain. `music_session` holds the game-side
 music events: startup, main menu (kind 4), game loading (calm), teardown, the
 per-frame mood update fed by local hits (+1) and kills (+5), ARMOPT pause, the
 CDPlay/CDStop/MusicMode console commands and the MUSIC.GUI transport. The
@@ -75,6 +75,42 @@ whole mood (activity ring, applied kind, switch timer and last update tick)
 resets at match start and end, so each game's music is independent of the
 last; in 3.1c the applied kind, switch timer and last update tick carry over
 from one game to the next.
+
+## Music decoder
+
+`oa-audio-music-decoder` (`oa/audio/music_decoder.hpp`,
+`oa/audio/resampler.hpp`) decodes a music file to interleaved stereo float
+at 44100 Hz, a block of 4096 source frames per `decode` call. It recognises
+the encoding from the file's first bytes: RIFF WAVE (8-, 16-, 24- and 32-bit
+integer and 32-bit float PCM), Ogg Vorbis, FLAC (native or in Ogg) and,
+failing those, MPEG audio. The compressed formats are decoded by stb_vorbis,
+dr_mp3 and dr_flac, kept in [`third_party/`](../../third_party/) and built
+in `src/audio/src/music_codecs.c` with the options
+`src/audio/src/music_codecs.h` sets; MP3
+files with an encoder-delay tag play without the encoder's padding.
+
+Samples are scaled to -1..1 by 2^-(bits-1), and other channel counts are
+mixed to stereo as the header lists (mono at 1/sqrt(2) on both sides, a
+centre at 1/sqrt(2) to each side, back and side channels at 1/sqrt(2) to
+their own side, a back centre at 1/2 to each, no low-frequency channel).
+`Resampler` converts other rates with a Kaiser-windowed sinc kernel (16 zero
+crossings each side of the lower rate, cutoff 0.97, window 9), mirroring
+the input about its ends, and gives ceil(frames * 44100 / rate) frames; it
+is also the rate converter of the sound output's software mixer.
+
+Against the previous decoding of the same files: WAVE and FLAC at 44100 Hz
+give the same samples bit for bit; MP3 and Vorbis differ by float rounding
+only (about -128 dB and -135 dB); a converted rate agrees to -67..-115 dB
+with the same frame count. A final MP3 frame cut short by the end of the
+file is dropped rather than decoded from missing bytes; in the game's own
+tracks that frame is silence, so each track ends 1152 samples (26 ms)
+sooner.
+
+Tests: `audio-music-decoder` (the resampler's lengths, splits and accuracy,
+every WAVE depth and channel count, the encoded tones in `src/audio/tests/data`
+described in [tests/README.md](tests/README.md), and damaged files) and
+`audio-music-decoder-data`, which decodes every file of the installed
+game's music folder.
 
 ## Offline mix
 

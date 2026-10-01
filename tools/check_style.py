@@ -6,7 +6,8 @@
 
 The check reads every tracked C, C++ and Objective-C source (SOURCE_SUFFIXES)
 under --root, leaving out the nested projects that build on the engine (a
-directory whose CMakeLists.txt calls project() and takes OA_ENGINE_DIR), and
+directory whose CMakeLists.txt calls project() and takes OA_ENGINE_DIR) and
+code kept as its authors wrote it (THIRD_PARTY_DIRECTORIES), and
 counts each finding against the
 directory that owns its file: the nearest directory holding a CMakeLists.txt,
 else the file's first two path components (src/app). Rules:
@@ -116,6 +117,9 @@ UNTRACKED_DIR_RE = re.compile(r"^(?:\.git|__pycache__)$")
 BUILD_TREE_MARKER = "CMakeCache.txt"
 # A nested project's CMakeLists.txt: it calls project() and takes the engine
 # checkout as OA_ENGINE_DIR.
+# Directory names that hold code from other projects, kept as its authors
+# wrote it: third_party/ holds the music decoders.
+THIRD_PARTY_DIRECTORIES = frozenset({"3rdparty", "external", "extern", "third-party", "third_party", "vendor"})
 PROJECT_CALL_RE = re.compile(r"(?im)^\s*project\s*\(")
 ENGINE_DIR_VARIABLE_RE = re.compile(r"\bOA_ENGINE_DIR\b")
 # The rules, in the order the report lists them.
@@ -747,6 +751,15 @@ def tracked(root):
     return sorted(names)
 
 
+def is_third_party(name):
+    """Tells whether a path lies in a directory of third-party code.
+
+    @param name path relative to the root, with '/' separators
+    @return true when a directory of the path is named as THIRD_PARTY_DIRECTORIES lists
+    """
+    return any(part in THIRD_PARTY_DIRECTORIES for part in name.split("/")[:-1])
+
+
 def nested_projects(root, names):
     """Finds the directories below root that hold a project building on the engine.
 
@@ -767,7 +780,7 @@ def nested_projects(root, names):
 
 
 def read_sources(root):
-    """Reads the tracked sources under root outside nested projects.
+    """Reads the tracked sources under root outside nested projects and third-party directories.
 
     @param root the tree to read
     @return the sources, each with the directory that owns it
@@ -777,7 +790,7 @@ def read_sources(root):
     build_directories = {name.rsplit("/", 1)[0] for name in names if name.endswith("/CMakeLists.txt")}
     sources = []
     for name in names:
-        if name.startswith(projects) or Path(name).suffix not in SOURCE_SUFFIXES:
+        if name.startswith(projects) or is_third_party(name) or Path(name).suffix not in SOURCE_SUFFIXES:
             continue
         path = root / name
         try:

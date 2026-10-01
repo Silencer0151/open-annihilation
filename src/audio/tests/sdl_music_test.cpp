@@ -52,7 +52,7 @@ std::unique_ptr<Mixer> make_mixer(SdlMusicDevice* device, audio_test::FakeTimers
 void generated_disc() {
     // Every music file, WAV included, plays through the decoder.
     if (!sdl_music_decoder_available())
-        oa::test::skip_test("the generated music", "this build has no music decoder (FFmpeg)");
+        oa::test::skip_test("the generated music", "this build has no music decoder");
     const auto root = std::filesystem::temp_directory_path() / "oa-sdl-music-test";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
@@ -113,7 +113,7 @@ void generated_disc() {
 // install that plays its music from the disc has no such folder.
 void installed_disc(const std::filesystem::path& game_dir) {
     if (!sdl_music_decoder_available())
-        oa::test::skip_test("the installed music", "this build has no music decoder (FFmpeg)");
+        oa::test::skip_test("the installed music", "this build has no music decoder");
     const auto directory = music_disc_directory(game_dir);
     const MusicDisc disc = music_disc_scan(directory);
     if (!music_disc_present(disc))
