@@ -68,7 +68,6 @@ struct Dialog {
     int16_t authored_y = 0;
     int32_t placed_width = 0;
     int32_t placed_height = 0;
-    std::array<uint8_t, kPaletteColors> shade{}; // shade table row applied below the panel
     int32_t focus = kNoGadget;
     bool focus_initialized = false;
     int32_t hovered = kNoGadget;
@@ -169,10 +168,10 @@ bool dialog_compose(
     std::string* error,
     const uint8_t* layer_key
 );
-// Darkens a rectangle through the dialog's shade row, skipping pixels of the
-// layer key colour when one is given.
+// Darkens a rectangle as the panel below a shade_below panel is darkened
+// (renderer::shade_panel_below, through the GUI art's shade table), skipping
+// pixels of the layer key colour when one is given.
 void dialog_shade(
-    const Dialog& dialog,
     renderer::Surface& frame,
     int32_t x,
     int32_t y,

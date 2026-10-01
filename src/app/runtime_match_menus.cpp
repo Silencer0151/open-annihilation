@@ -22,7 +22,6 @@
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
 #include "engine_settings_state.hpp"
-#include "panel_shade.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -1378,6 +1377,10 @@ void Runtime::show_match_orders_page() {
 void Runtime::show_match_pause_menu() {
     if (match_finished_)
         return;
+    // Opened over the running game or from the tab menu, the menu darkens
+    // the panel below it; back from its own pages it opens over none.
+    if (!match_paused_ || team_panel_open())
+        keep_panel_below_darkened();
     match_menu_session().close_confirm = false;
     forget_team_panel();
     match_paused_ = true;
@@ -1418,6 +1421,7 @@ void Runtime::resume_match_pause() {
     match_menu_session().close_confirm = false;
     match_menu_session().ingame_panel = IngamePanel::options;
     forget_team_panel();
+    match_panels_below_.clear();
     match_paused_ = false;
     match_panels_keyboard_ = false;
     if (selected_match_unit_ != 0)
@@ -1768,6 +1772,27 @@ void Runtime::draw_end_overlay() {
 void Runtime::draw_battlefield_panel() {
     if (!match_hud_ || match_hud_->layout.gadgets.empty() || match_hud_cpu_.rgb.empty())
         return;
+    // The panels kept under the HUD panel show darkened where they lie over
+    // the battlefield, as they showed when the panel over each opened.
+    for (const auto& below : match_panels_below_) {
+        if (below.root.x + below.root.width <= kBattlefieldLeft || below.darkened.rgb.empty())
+            continue;
+        const auto top_left = hud_canvas(below.root.x, below.root.y);
+        const auto bottom_right =
+            hud_canvas(below.root.x + below.root.width, below.root.y + below.root.height);
+        scale_blit(
+            paint_target(),
+            below.darkened,
+            top_left.x,
+            top_left.y,
+            std::max(1, bottom_right.x - top_left.x),
+            std::max(1, bottom_right.y - top_left.y),
+            0,
+            0,
+            below.root.width,
+            below.root.height
+        );
+    }
     const auto& gadgets = match_hud_->layout.gadgets;
     const auto& root = gadgets.front().common;
     if (root.x + root.width <= kBattlefieldLeft || root.width <= 0 || root.height <= 0)
@@ -1933,6 +1958,10 @@ bool Runtime::open_match_dialog(
 std::optional<Runtime::MatchPanelUnder> Runtime::panel_under_dialog() {
     if (match_panel_under_)
         return match_panel_under_;
+    return capture_match_hud_panel();
+}
+
+std::optional<Runtime::MatchPanelUnder> Runtime::capture_match_hud_panel() {
     if (!match_ || !selected_tnt_ || !match_hud_ || match_hud_->layout.gadgets.empty())
         return std::nullopt;
     render_match_surface();
@@ -1951,6 +1980,60 @@ std::optional<Runtime::MatchPanelUnder> Runtime::panel_under_dialog() {
     return under;
 }
 
+void Runtime::keep_panel_below_darkened() {
+    if (match_finished_)
+        return;
+    // Over the running game the panel below is the side column's alone.
+    if (!match_paused_)
+        match_panels_below_.clear();
+    auto below = capture_match_hud_panel();
+    if (!below)
+        return;
+    below->shaded = true;
+    below->darkened = below->pixels;
+    renderer::shade_panel_below(
+        below->darkened,
+        0,
+        0,
+        static_cast<int>(below->darkened.width),
+        static_cast<int>(below->darkened.height),
+        match_palette_,
+        display_.context.shade_table
+    );
+    match_panels_below_.push_back(std::move(*below));
+}
+
+void Runtime::compose_panels_below(renderer::Surface& hud) {
+    if (match_panels_below_.empty() || !match_paused_ || match_finished_ || !match_hud_ ||
+        match_hud_->layout.gadgets.empty())
+        return;
+    // A placed dialog keeps its own pixels first (compose_match_dialog);
+    // any other HUD panel lies over them.
+    std::optional<oa::ui::display_layout::Rect> over;
+    if (match_hud_placement_ == 0) {
+        const auto& top = match_hud_->layout.gadgets.front().common;
+        over = oa::ui::display_layout::Rect{top.x, top.y, top.width, top.height};
+    }
+    for (const auto& below : match_panels_below_)
+        for (int32_t row = 0; row < static_cast<int32_t>(below.darkened.height); ++row)
+            for (int32_t column = 0; column < static_cast<int32_t>(below.darkened.width);
+                 ++column) {
+                const int32_t x = below.root.x + column;
+                const int32_t y = below.root.y + row;
+                if (x < 0 || y < 0 || x >= static_cast<int32_t>(hud.width) ||
+                    y >= static_cast<int32_t>(hud.height) ||
+                    (over && x >= over->x && y >= over->y && x < over->x + over->width &&
+                     y < over->y + over->height))
+                    continue;
+                std::copy_n(
+                    below.darkened.rgb.begin() +
+                        static_cast<std::ptrdiff_t>(rgb_offset(below.darkened, column, row)),
+                    3,
+                    hud.rgb.begin() + static_cast<std::ptrdiff_t>(rgb_offset(hud, x, y))
+                );
+            }
+}
+
 void Runtime::compose_match_dialog(renderer::Surface& hud) {
     if (match_hud_placement_ == 0 || !match_hud_ || match_hud_->layout.gadgets.empty())
         return;
@@ -1958,21 +2041,22 @@ void Runtime::compose_match_dialog(renderer::Surface& hud) {
     const oa::ui::display_layout::Rect dialog_root{root.x, root.y, root.width, root.height};
     match_dialog_pixels_ = copy_area(hud, dialog_root);
     const auto& dialog = match_dialog_pixels_;
-    // The side column shows what lies under the dialog there, and the panel
-    // kept under it as it showed.
+    // The side column shows what lies under the dialog there: the panels
+    // kept under the panel it opened over, and that panel as it showed.
     paste_area(hud, match_hud_side_backdrop_, root.x, root.y, 0);
+    compose_panels_below(hud);
     if (match_panel_under_) {
         auto& under = *match_panel_under_;
         if (under.shaded && under.darkened.rgb.empty()) {
             under.darkened = under.pixels;
-            shade_panel_below(
+            renderer::shade_panel_below(
                 under.darkened,
-                {0,
-                 0,
-                 static_cast<int32_t>(under.darkened.width),
-                 static_cast<int32_t>(under.darkened.height)},
+                0,
+                0,
+                static_cast<int>(under.darkened.width),
+                static_cast<int>(under.darkened.height),
                 match_palette_,
-                display_.context
+                display_.context.shade_table
             );
         }
         paste_area(
@@ -1985,12 +2069,18 @@ void Runtime::compose_match_dialog(renderer::Surface& hud) {
     paste_area(hud, dialog, root.x, root.y, kBattlefieldLeft);
 }
 
-int32_t Runtime::loaded_panel_focus() const {
-    if (!match_hud_ || match_hud_->layout.gadgets.empty())
-        return -1;
-    // The loader gives the focus with the records where the panel's GUI file
-    // has them: at their root's corner.
-    auto layout = match_hud_->layout;
+namespace {
+
+/// Loads a match panel into the gadget engine undrawn, with its records
+/// where the panel's GUI file has them: at their root's corner.
+///
+/// @param[out] panel the gadget engine context to load into
+/// @param layout the panel as shown
+/// @param name the panel's GUI file
+/// @return the loaded panel, or nullptr when it does not load
+oa::ui::gui_input::GadgetOwner* load_unplaced_panel(
+    oa::ui::gui_input::GadgetPanel& panel, oa::ui::gui_layout::Layout layout, std::string_view name
+) {
     const auto& root = layout.gadgets.front().common;
     for (std::size_t index = 1; index < layout.gadgets.size(); ++index) {
         auto& common = layout.gadgets[index].common;
@@ -1999,10 +2089,17 @@ int32_t Runtime::loaded_panel_focus() const {
         common.x = static_cast<int16_t>(common.x - root.x);
         common.y = static_cast<int16_t>(common.y - root.y);
     }
-    oa::ui::gui_input::GadgetPanel panel;
     oa::ui::gui_input::init_gadget_panel(panel);
-    const auto* owner =
-        oa::ui::gui_input::load_panel(panel, layout, match_hud_panel_, panel_flag::no_draw);
+    return oa::ui::gui_input::load_panel(panel, layout, name, panel_flag::no_draw);
+}
+
+} // namespace
+
+int32_t Runtime::loaded_panel_focus() const {
+    if (!match_hud_ || match_hud_->layout.gadgets.empty())
+        return -1;
+    oa::ui::gui_input::GadgetPanel panel;
+    const auto* owner = load_unplaced_panel(panel, match_hud_->layout, match_hud_panel_);
     return owner != nullptr ? owner->focus : -1;
 }
 
@@ -2447,6 +2544,69 @@ bool Runtime::enter_match_menu() {
         return false;
     activate_pause_gadget(ui::kExitConfirmDefault);
     return true;
+}
+
+bool Runtime::press_match_panel_key(const SDL_KeyboardEvent& key) {
+    namespace gui_input = oa::ui::gui_input;
+    if (!match_ || match_finished_ || !match_paused_ || !match_hud_ ||
+        match_hud_->layout.gadgets.empty())
+        return false;
+    // The in-game menu and the tab menu give the panels the keyboard; the
+    // surrender confirmation a close request opens over the running match
+    // takes only its Enter and Escape.
+    if (!match_panels_keyboard_ && match_hud_panel_ != kPreferencesLayout)
+        return false;
+    // Keys with Ctrl, Alt or the system key down type no character.
+    if ((key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+        return false;
+    const bool enter = key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER;
+    const bool escape = key.key == SDLK_ESCAPE;
+    const bool confirming =
+        match_menu_session().ingame_panel == IngamePanel::exit_confirm && !team_panel_open();
+    if (confirming && (enter || escape))
+        return false;
+    const auto& gadgets = match_hud_->layout.gadgets;
+    // Enter, Escape and Space go to the panel's key dispatch first.
+    if (enter || escape || key.key == SDLK_SPACE) {
+        gui_input::GadgetPanel panel;
+        auto* owner = load_unplaced_panel(panel, match_hud_->layout, match_hud_panel_);
+        if (owner == nullptr)
+            return false;
+        owner->focus =
+            match_hud_focus_ > 0 && static_cast<std::size_t>(match_hud_focus_) < gadgets.size()
+                ? match_hud_focus_
+                : oa::ui::gui_layout::kNoGadget;
+        const auto code = enter    ? gui_input::key_code::enter
+                          : escape ? gui_input::key_code::escape
+                                   : gui_input::key_code::space;
+        const auto left = gui_input::dispatch_key(panel, code);
+        if (panel.activated != oa::ui::gui_layout::kNoGadget) {
+            activate_match_hud(static_cast<std::size_t>(panel.activated));
+            return true;
+        }
+        if (left == 0)
+            return true;
+    }
+    // A key the dispatch leaves presses the first active button whose quick
+    // key it is in either case; a grayed-out button takes no key and passes
+    // it on.
+    const auto character = enter    ? gui_input::key_code::enter
+                           : escape ? gui_input::key_code::escape
+                                    : static_cast<int32_t>(key.key);
+    if (character <= 0 || character >= 0x7F)
+        return false;
+    const auto typed = std::tolower(character);
+    for (std::size_t index = 1; index < gadgets.size(); ++index) {
+        const auto& gadget = gadgets[index];
+        const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+        if (gadget.common.active == 0 || button == nullptr || button->grayed_out ||
+            button->quick_key == 0 ||
+            std::tolower(static_cast<unsigned char>(button->quick_key)) != typed)
+            continue;
+        activate_match_hud(index);
+        return true;
+    }
+    return false;
 }
 
 void Runtime::request_match_close() {

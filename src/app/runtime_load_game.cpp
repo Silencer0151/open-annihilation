@@ -6,7 +6,6 @@
 // screen below: the load and save dialogs (LOADGAME.GUI), over that screen
 // with its top panel darkened, and the in-game briefing over the paused match.
 #include "oa/app/runtime.hpp"
-#include "panel_shade.hpp"
 
 #include "oa/ui/gui_input/gadget_panel.hpp"
 
@@ -60,7 +59,15 @@ void Runtime::capture_load_game_parent() {
     }
     if (panel.width <= 0 || panel.height <= 0)
         panel = {0, 0, static_cast<int>(frame.width), static_cast<int>(frame.height)};
-    shade_panel_below(frame, panel, load_game_palette_, display_.context);
+    renderer::shade_panel_below(
+        frame,
+        panel.x,
+        panel.y,
+        panel.width,
+        panel.height,
+        load_game_palette_,
+        display_.context.shade_table
+    );
     load_game_parent_ = std::move(frame);
 }
 

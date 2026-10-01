@@ -559,6 +559,7 @@ Rect check_backdrop_panel(
 void Runtime::check_dialogs(const fs::path& report_directory) {
     namespace dialogs = oa::ui::frontend_dialogs;
     load(Screen::single_player);
+    check_frontend_keyboard();
     show_frontend_message(
         entry::message_text(entry::Message::multiplayer_disc),
         entry::disc_message_width,
@@ -567,6 +568,8 @@ void Runtime::check_dialogs(const fs::path& report_directory) {
     );
     if (dialogs::dialog_kind() != dialogs::DialogKind::message_box)
         throw std::runtime_error("navigation check did not open MSGBOX.GUI");
+    if (frontend_has_keyboard())
+        throw std::runtime_error("Single Player kept the keyboard under MSGBOX.GUI");
     rebuild_surface();
     write_ppm(report_directory / "native-msgbox.ppm", surface_);
     auto context = screen_context();
@@ -594,6 +597,116 @@ void Runtime::check_dialogs(const fs::path& report_directory) {
         dialogs::dialog_kind() != dialogs::DialogKind::none)
         throw std::runtime_error("HELP.GUI OK did not release the help panel");
     std::cout << "dialog check: MSGBOX.GUI, CDCHECK.GUI and HELP.GUI pages\n";
+}
+
+void Runtime::check_frontend_keyboard() {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("frontend keyboard check: " + what);
+    };
+    const auto light = assets_.read(kLightTable).bytes;
+    const auto& gadgets = resources_.layout.gadgets;
+    require(!gadgets.empty(), "Single Player has no panel");
+    const auto record_index = [&](std::string_view name) {
+        for (std::size_t index = 1; index < gadgets.size(); ++index)
+            if (gadgets[index].common.name == name)
+                return static_cast<int32_t>(index);
+        throw std::runtime_error("frontend keyboard check: no control " + std::string(name));
+    };
+    const auto& palette =
+        resources_.background.palette ? *resources_.background.palette : resources_.gui_palette;
+    // The focus marker's outline rings the focused record inside the panel's
+    // root, over the screen drawn with no record focused.
+    const auto check_focus = [&](const std::string& what, std::string_view name) {
+        const auto record = record_index(name);
+        require(
+            frontend_has_keyboard() && frontend_focus() == record,
+            what + " does not give " + std::string(name) + " the focus"
+        );
+        const auto focus = frontend_focus_;
+        frontend_focus_ = -1;
+        rebuild_surface();
+        auto unlit = surface_;
+        frontend_focus_ = focus;
+        rebuild_surface();
+        const auto& common = gadgets[static_cast<std::size_t>(record)].common;
+        const auto& root = gadgets.front().common;
+        std::size_t ring_pixels = 0;
+        const auto differing = differing_focus(
+            surface_,
+            unlit,
+            {common.x, common.y, common.width, common.height},
+            {root.x, root.y, root.width, root.height},
+            palette,
+            light,
+            ring_pixels
+        );
+        require(
+            ring_pixels > 0 && differing == 0,
+            what + " rings " + std::string(name) + " wrongly at " + std::to_string(differing) +
+                " pixels"
+        );
+    };
+    // Each button underlines its quick key's glyph in its centred caption,
+    // in the GUI palette's entry 2, on the row under the text. The caption
+    // starts (width - 1 - text width) / 2 + 1 across and
+    // (height - 1 - text height) / 2 down the button.
+    const auto check_quick_key = [&](std::string_view name, char key) {
+        const auto& gadget = gadgets[static_cast<std::size_t>(record_index(name))];
+        const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+        require(
+            button != nullptr && button->quick_key == key,
+            std::string(name) + " does not have the quick key " + key
+        );
+        const std::string_view text = button->text;
+        const auto at = text.find(key);
+        require(at != std::string_view::npos, std::string(name) + "'s caption lacks its quick key");
+        const auto& font = resources_.font;
+        const auto remap = oa::remap_palette(resources_.gui_palette, palette);
+        const auto* colour = &palette[remap[kUnderlineEntry] * oa::palette_entry_bytes];
+        const auto text_width = static_cast<int32_t>(oa::formats::fnt::measure_text(font, text));
+        const auto text_height = static_cast<int32_t>(oa::formats::fnt::line_height(font));
+        const auto& record = gadget.common;
+        const int32_t left =
+            record.x + (record.width - 1 - text_width) / 2 + 1 +
+            static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(0, at)));
+        const int32_t right =
+            left + static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(at, 1))) -
+            1;
+        const int32_t row = record.y + (record.height - 1 - text_height) / 2 + text_height - 1;
+        rebuild_surface();
+        std::size_t wrong = 0;
+        for (int32_t x = left; x <= right; ++x)
+            if (!std::equal(colour, colour + 3, pixel(surface_, x, row)))
+                ++wrong;
+        require(
+            right >= left && wrong == 0,
+            std::string(name) + " does not underline its quick key " + key
+        );
+    };
+    bool running = true;
+    const auto key = [&](SDL_Keycode code, SDL_Keymod modifiers) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = code;
+        event.key.mod = modifiers;
+        handle_sdl_event(event, running);
+    };
+    // Single Player has the GUI keyboard: the loader focuses NewCamp, the
+    // root's default focus, and Tab and Shift+Tab move the focus on and back.
+    check_focus("Single Player", "NewCamp");
+    check_quick_key("NewCamp", 'N');
+    check_quick_key("Skirmish", 'S');
+    key(SDLK_TAB, SDL_KMOD_NONE);
+    require(
+        frontend_focus() != record_index("NewCamp") && frontend_focus() > 0,
+        "Tab did not move the focus"
+    );
+    check_focus("Tab", gadgets[static_cast<std::size_t>(frontend_focus())].common.name);
+    key(SDLK_TAB, SDL_KMOD_LSHIFT);
+    check_focus("Shift+Tab", "NewCamp");
+    std::cout << "frontend keyboard check: Single Player rings its focus, which Tab moves, and "
+                 "underlines its quick keys\n";
 }
 
 void Runtime::check_match_dialogs() {
@@ -1510,47 +1623,48 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
     };
     // Each button underlines its quick key's glyph in its centred caption,
     // in the GUI palette's entry 2, on the HUD layer's row under the text:
-    // the caption's top, (height - text height) / 2 into the button, plus
-    // the text height (the 'I' glyph's and 2), less one.
-    const auto check_quick_keys =
-        [&](const std::string& what,
-            std::initializer_list<std::pair<std::string_view, char>> keys) {
-            render();
-            const auto& font = match_hud_->font;
-            const auto remap = oa::remap_palette(match_hud_->gui_palette, match_palette_);
-            const auto* colour = &match_palette_[remap[kUnderlineEntry] * oa::palette_entry_bytes];
-            for (const auto& [name, key] : keys) {
-                const auto& gadget = match_hud_->layout.gadgets[record_index(name)];
-                const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
-                require(
-                    button != nullptr && button->quick_key == key,
-                    what + "'s " + std::string(name) + " does not have the quick key " + key
-                );
-                const std::string_view text = button->text;
-                const auto at = text.find(key);
-                require(at != std::string_view::npos, what + "'s caption lacks its quick key");
-                const auto text_width =
-                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text));
-                const auto text_height = static_cast<int32_t>(oa::formats::fnt::line_height(font));
-                const auto& record = gadget.common;
-                const int32_t left =
-                    record.x + (record.width - text_width) / 2 + 1 +
-                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(0, at)));
-                const int32_t right =
-                    left +
-                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(at, 1))) -
-                    1;
-                const int32_t row = record.y + (record.height - text_height) / 2 + text_height - 1;
-                std::size_t wrong = 0;
-                for (int32_t x = left; x <= right; ++x)
-                    if (!std::equal(colour, colour + 3, pixel(match_hud_cpu_, x, row)))
-                        ++wrong;
-                require(
-                    right >= left && wrong == 0,
-                    what + "'s " + std::string(name) + " does not underline its quick key " + key
-                );
-            }
-        };
+    // the caption's top, (height - 1 - text height) / 2 into the button,
+    // plus the text height (the 'I' glyph's and 2), less one. The caption
+    // starts (width - 1 - text width) / 2 + 1 into the button.
+    const auto check_quick_keys = [&](
+                                      const std::string& what,
+                                      std::initializer_list<std::pair<std::string_view, char>> keys
+                                  ) {
+        render();
+        const auto& font = match_hud_->font;
+        const auto remap = oa::remap_palette(match_hud_->gui_palette, match_palette_);
+        const auto* colour = &match_palette_[remap[kUnderlineEntry] * oa::palette_entry_bytes];
+        for (const auto& [name, key] : keys) {
+            const auto& gadget = match_hud_->layout.gadgets[record_index(name)];
+            const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+            require(
+                button != nullptr && button->quick_key == key,
+                what + "'s " + std::string(name) + " does not have the quick key " + key
+            );
+            const std::string_view text = button->text;
+            const auto at = text.find(key);
+            require(at != std::string_view::npos, what + "'s caption lacks its quick key");
+            const auto text_width =
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, text));
+            const auto text_height = static_cast<int32_t>(oa::formats::fnt::line_height(font));
+            const auto& record = gadget.common;
+            const int32_t left =
+                record.x + (record.width - 1 - text_width) / 2 + 1 +
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(0, at)));
+            const int32_t right =
+                left +
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(at, 1))) - 1;
+            const int32_t row = record.y + (record.height - 1 - text_height) / 2 + text_height - 1;
+            std::size_t wrong = 0;
+            for (int32_t x = left; x <= right; ++x)
+                if (!std::equal(colour, colour + 3, pixel(match_hud_cpu_, x, row)))
+                    ++wrong;
+            require(
+                right >= left && wrong == 0,
+                what + "'s " + std::string(name) + " does not underline its quick key " + key
+            );
+        }
+    };
     // The focus marker's outline rings the focused record inside the panel's
     // root, over the HUD layer drawn while the panels take no keyboard.
     const auto check_focus = [&](const std::string& what, std::string_view name) {
@@ -1861,7 +1975,8 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
 
         // The removal question CONTROL.GUI asks in a multiplayer match hosted
         // here, over the tab menu: centred on the whole screen over its
-        // BackTile face, CONTROL.GUI left as it is under it.
+        // BackTile face, CONTROL.GUI left as it is under it and shown again
+        // once the question is answered.
         const Extension saved_extension = extension_;
         auto& world = match_->state();
         auto* my_info =
@@ -1928,7 +2043,14 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                 "the pointer over the question's No is not over it"
             );
             click_at(no_x, no_y);
-            require(!team_panel_open(), "No did not close the removal question" + on);
+            require(
+                team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI" &&
+                    match_panels_keyboard_,
+                "No did not return to CONTROL.GUI" + on
+            );
+            check_focus("CONTROL.GUI after the removal question" + on, "OK");
+            click_team_panel("OK");
+            require(!team_panel_open(), "OK did not close CONTROL.GUI" + on);
             std::cout << "placed dialog check: the removal question at " << asked.x << ','
                       << asked.y << " over its BackTile face and CONTROL.GUI" << on << '\n';
         } catch (...) {

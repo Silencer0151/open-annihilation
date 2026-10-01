@@ -1318,12 +1318,43 @@ class Runtime final : public menu::Host,
     /// @return the panel, or nothing without a match HUD to draw
     [[nodiscard]] std::optional<MatchPanelUnder> panel_under_dialog();
 
+    /// Captures the match HUD panel on screen: its root rectangle of a frame
+    /// drawn afresh, undarkened.
+    ///
+    /// @return the panel, or nothing without a match HUD to draw
+    [[nodiscard]] std::optional<MatchPanelUnder> capture_match_hud_panel();
+
+    /// Keeps the match HUD panel on screen drawn under the panel about to
+    /// open over it, darkened, as 3.1c's panel loader darkens the panel
+    /// below one it opens with panel_flag::shade_below: the in-game menu
+    /// (ARMOPT.GUI), the tab menu and the tab menu's SHARE, ALLIES and
+    /// CONTROL panels.
+    ///
+    /// Opened over the running game, the panel below is the side column's
+    /// order or build panel; opened from the tab menu, the tab menu, kept
+    /// over the side column's panel still darkened from when the tab menu
+    /// opened. The panels stay kept until the match resumes.
+    void keep_panel_below_darkened();
+
+    /// Pastes each panel kept under the match HUD panel (match_panels_below_)
+    /// into the HUD layer, darkened, bottom first.
+    ///
+    /// A HUD panel at its own position lies over them, so they go outside its
+    /// root: ARMOPT.GUI and PREFS.GUI cover the side column's panel, whose
+    /// root is the same rectangle. A placed dialog goes over them as it is
+    /// composed (compose_match_dialog), after its own pixels are kept.
+    ///
+    /// @param[in,out] hud the HUD layer, in 640x480 source space
+    void compose_panels_below(renderer::Surface& hud);
+
     /// Composes a placed match dialog with the panel kept under it in the HUD layer.
     ///
     /// The dialog's root rectangle as drawn is kept for the battlefield pass
-    /// (match_dialog_pixels_, draw_battlefield_panel). The kept panel's
-    /// pixels, darkened when the dialog shades it, go back over its root
-    /// rectangle, and the dialog stays over them right of the side column.
+    /// (match_dialog_pixels_, draw_battlefield_panel). The panels kept under
+    /// the panel it opened over go back, darkened (compose_panels_below),
+    /// then the kept panel's pixels, darkened when the dialog shades it, over
+    /// its root rectangle, and the dialog stays over them right of the side
+    /// column.
     /// The side column shows what lies under the dialog; the battlefield
     /// pass draws the part of the dialog over it at the canvas's pixels
     /// (match_dialog_side_), where placed_panel_area() puts it.
@@ -1372,6 +1403,22 @@ class Runtime final : public menu::Host,
     ///
     /// @return true when the confirmation took the key; false over any other menu
     bool enter_match_menu();
+
+    /// Answers a key over a paused match while its panels hold the keyboard
+    /// (the in-game menu or the tab menu opened them), as the gadget engine
+    /// takes keys: Enter presses the panel's Enter default, or the focused
+    /// control when it has none or that default cannot be pressed; Space
+    /// presses the focused control; Escape presses the panel's Escape default
+    /// when it is active; any other key presses the first active button,
+    /// grayed-out ones aside, whose quick key it is in either case. The
+    /// surrender confirmation leaves Enter and Escape to enter_match_menu()
+    /// and escape_match_menu(). The preferences a match opens take keys so
+    /// too.
+    ///
+    /// @param key the key pressed
+    /// @return true when the panel took the key; false when it goes on to the
+    ///         match's other keys
+    bool press_match_panel_key(const SDL_KeyboardEvent& key);
 
     /// Steps and draws the lightbar sweep of the preferences a match opens while it runs.
     ///
@@ -1543,7 +1590,9 @@ class Runtime final : public menu::Host,
     /// placed_panel_area() puts it, over the part of the panel kept under it
     /// that lies over the battlefield; the team panels whole over the side
     /// panel's tile, PREFS.GUI's part beside the side column at the side
-    /// column's scale, and any other panel control by control.
+    /// column's scale, and any other panel control by control. The panels
+    /// kept under them (match_panels_below_) show first, darkened, where
+    /// they lie over the battlefield.
     void draw_battlefield_panel();
 
     /// Places the loaded match HUD panel as 3.1c's panel loader places a panel
@@ -1752,7 +1801,11 @@ class Runtime final : public menu::Host,
 
     /// Opens CONTROL.GUI over a multiplayer match; nothing for a watching
     /// local player (ui::hud::open_control_panel).
-    void open_control_team_panel();
+    /// @param darken_panel_below whether the match HUD panel shown now stays
+    ///     under it, darkened (keep_panel_below_darkened); false when
+    ///     CONTROL.GUI comes back from the removal question asked over it,
+    ///     whose panels below are already kept
+    void open_control_team_panel(bool darken_panel_below = true);
 
     /// Opens YESORNO.GUI to ask whether to remove a player (CONTROL.GUI's LIVEPLYRn).
     ///
@@ -1865,6 +1918,19 @@ class Runtime final : public menu::Host,
     /// CONTROL.GUI and its removal question tell the host. Everything is put
     /// back afterwards. Throws std::runtime_error at the first failure.
     void check_team_panels();
+
+    /// Checks the keys the paused match's panels take while they hold the
+    /// keyboard, over the running skirmish.
+    ///
+    /// In the in-game menu a quick key presses its button in either case and
+    /// not with Ctrl down, and Enter, Space and Escape press the panel's Enter
+    /// default, focused control and Escape default, through EXITMENU.GUI,
+    /// RESTART.GUI, the surrender confirmation and PREFS.GUI; the tab menu of
+    /// a match taken as multiplayer opens ALLIES.GUI and SHARE.GUI by their
+    /// quick keys and closes them by Enter and Escape. Leaves the match
+    /// running with no menu open; throws std::runtime_error at the first
+    /// failure.
+    void check_match_panel_keys();
 
     /// Leaves the options screens for the screen they were opened from.
     ///
@@ -3986,6 +4052,40 @@ class Runtime final : public menu::Host,
     /// @param index gadget index in the current screen's layout
     /// @return false for a grayed-out button or an index past the layout, else true
     [[nodiscard]] bool frontend_gadget_pressable(std::size_t index) const;
+
+    /// Tells whether the frontend screen has the GUI keyboard: a frontend
+    /// screen with a panel of its own, with no dialog over it and its frame
+    /// not taken by a screen package.
+    ///
+    /// @return true while the screen's panel takes the keys
+    [[nodiscard]] bool frontend_has_keyboard() const;
+
+    /// Returns the record of the frontend screen's panel that holds the
+    /// keyboard focus.
+    ///
+    /// NEWGAME.GUI's is the control its setup focuses, then the control last
+    /// pressed (campaign_setup_focus_); any other panel's is the one its
+    /// loader gives it (the record its root names as its default focus,
+    /// else the one nearest after the root's corner, passed on to the next
+    /// when its setup hides it), moved by the GUI keyboard's keys
+    /// (move_frontend_focus) and given to a list pressed.
+    ///
+    /// @return the record, or -1 for none
+    [[nodiscard]] int32_t frontend_focus() const;
+
+    /// Checks Single Player's GUI keyboard: the focus marker's rings round
+    /// NewCamp, its loader's focus, then round the records Tab and Shift+Tab
+    /// move the focus to, and its buttons' quick keys underlined.
+    ///
+    /// @throws std::runtime_error naming the first difference
+    void check_frontend_keyboard();
+
+    /// Moves the frontend screen's keyboard focus to the nearest record that
+    /// takes it in a direction, as the GUI keyboard's Tab, Shift+Tab and
+    /// arrow keys do.
+    ///
+    /// @param direction where the focus goes
+    void move_frontend_focus(oa::ui::gui_input::FocusDirection direction);
 
     /// Activates the selected gadget of the current screen through its menu handler, then runs the
     /// frontend dispatcher when the menu asked for a new state.
@@ -7490,6 +7590,11 @@ class Runtime final : public menu::Host,
     uint32_t match_hud_placement_ = 0;
     // The panel the match dialog in match_hud_ opened over (open_match_dialog).
     std::optional<MatchPanelUnder> match_panel_under_;
+    // The panels kept drawn under the match HUD panel and the panel kept
+    // under a dialog, bottom first, each darkened by the panel that opened
+    // over it (keep_panel_below_darkened); empty while the match runs with
+    // no menu or team panel open.
+    std::vector<MatchPanelUnder> match_panels_below_;
     // The HUD background under the placed match_hud_'s root left of the
     // battlefield, as it was before the panel's face (place_match_panel).
     renderer::Surface match_hud_side_backdrop_{};
@@ -7826,6 +7931,9 @@ class Runtime final : public menu::Host,
     // NEWGAME.GUI's gadget with the keyboard focus: the one its setup
     // focuses, then the control last pressed.
     std::string campaign_setup_focus_{};
+    // The record of the frontend screen's panel holding the keyboard focus,
+    // -1 for none (frontend_focus()).
+    int32_t frontend_focus_ = -1;
     Screen briefing_parent_ = Screen::new_campaign;
     bool briefing_from_pause_ = false;
     std::string briefing_text_{};

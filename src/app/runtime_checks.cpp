@@ -1276,10 +1276,12 @@ void Runtime::check_navigation() {
     });
     show_match_build_page(1);
     write_ppm(report_directory / "native-match-build.ppm", surface_);
-    // The Pause key, the menus' hold and the team panels, over this game,
-    // which the victory check below leaves.
+    // The Pause key, the menus' hold, the team panels and the keys the
+    // paused panels take, over this game, which the victory check below
+    // leaves.
     check_pause_key();
     check_team_panels();
+    check_match_panel_keys();
     // The console check's Kill left this game without victory or defeat, so
     // the victory is played in a new one.
     return_to_skirmish_menu();

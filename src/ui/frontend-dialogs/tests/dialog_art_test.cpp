@@ -4,14 +4,21 @@
 // GUI art conversion for the gadget draw host: hand-encoded row runs of
 // synthetic GAF frames, and (with the installed game) every frame of the GUI
 // fonts and the common GUI art drawn back exactly over its covered pixels.
+// Also the darkening under a shade_below dialog through a synthetic shade
+// table.
 #include "dialog_internal.hpp"
 
 #include "oa/formats/gaf.hpp"
 #include "oa/present/blit.hpp"
 #include "oa/test/game_assets.hpp"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <memory>
+#include <utility>
 #include <vector>
 
 namespace dialogs = oa::ui::frontend_dialogs;
@@ -191,6 +198,45 @@ void test_installed_art(oa::AssetStore& assets) {
     expect(checked > 200, "the fonts' glyphs and the common art are all checked");
 }
 
+// The bottom dialog opened with shade_below darkens the panel below through
+// shade row 8 (level -0x18), entries 0x80 to 0xFF through the row before.
+void test_shade_below() {
+    auto& stack = dialogs::dialog_stack();
+    auto art = std::make_unique<dialogs::DialogArt>();
+    // Row 8 takes entry e to e + 1, row 7 to e + 2, every other row to 0.
+    art->shade_table.assign(32U * 256U, 0);
+    for (std::size_t entry = 0; entry < 256; ++entry) {
+        art->shade_table[8U * 256U + entry] = static_cast<uint8_t>(entry + 1);
+        art->shade_table[7U * 256U + entry] = static_cast<uint8_t>(entry + 2);
+    }
+    stack.art = std::move(art);
+    stack.count = 1;
+    stack.dialogs[0].flags = dialogs::panel_flag::shade_below;
+    // Entry e is (e, 255 - e, 3): every colour is its own entry.
+    oa::PaletteBytes palette{};
+    for (std::size_t entry = 0; entry < oa::palette_color_count; ++entry) {
+        palette[entry * oa::palette_entry_bytes] = static_cast<uint8_t>(entry);
+        palette[entry * oa::palette_entry_bytes + 1] = static_cast<uint8_t>(255 - entry);
+        palette[entry * oa::palette_entry_bytes + 2] = 3;
+    }
+    const std::vector<uint8_t> entries{0x20, 0x7f, 0x80, 0xc0};
+    oa::ui::frontend_renderer::Surface frame;
+    frame.width = static_cast<uint32_t>(entries.size());
+    frame.height = 1;
+    frame.rgb.resize(entries.size() * 3U);
+    for (std::size_t pixel = 0; pixel < entries.size(); ++pixel)
+        std::copy_n(&palette[entries[pixel] * oa::palette_entry_bytes], 3, &frame.rgb[pixel * 3U]);
+    dialogs::dialog_shade_below(frame, 0, 0, 4, 1, palette);
+    expect(frame.rgb[0] == 0x21, "entry 0x20 reads shade row 8");
+    expect(frame.rgb[3] == 0x80, "entry 0x7f reads shade row 8");
+    expect(frame.rgb[6] == 0x82, "entry 0x80 reads shade row 7");
+    expect(frame.rgb[9] == 0xc2, "entry 0xc0 reads shade row 7");
+    expect(frame.rgb[10] == 255 - 0xc2 && frame.rgb[11] == 3, "darkened through the palette");
+    stack.dialogs[0].flags = 0;
+    stack.count = 0;
+    stack.art.reset();
+}
+
 } // namespace
 
 // Without an argument the synthetic frames; with --data the installed game's
@@ -204,6 +250,7 @@ int main(int argc, char** argv) {
         test_row_runs();
         test_long_runs();
         test_raw_frame();
+        test_shade_below();
     }
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

@@ -360,7 +360,11 @@ void draw_button_text(
     const auto text_width = formats::fnt::measure_text(selected_font, text);
     const auto text_height = formats::fnt::line_height(selected_font);
     const int depressed_offset = condition == ButtonCondition::pressed ? 1 : 0;
-    const int rectangle_width = gadget.common.width;
+    // A caption is placed within the record's inclusive rectangle, whose far
+    // edges lie at x + width - 1 and y + height - 1: centred, it sits half the
+    // space that rectangle's span leaves, rounded toward zero.
+    const int rectangle_span_x = gadget.common.width - 1;
+    const int rectangle_span_y = gadget.common.height - 1;
     int x = gadget.common.x + depressed_offset + 1;
     const auto attributes = static_cast<uint32_t>(gadget.common.attributes);
     constexpr uint32_t align_left = 1U;
@@ -369,13 +373,13 @@ void draw_button_text(
     if ((attributes & align_left) != 0) {
         x = gadget.common.x + depressed_offset + 3;
     } else if ((attributes & align_right) != 0) {
-        x = gadget.common.x + std::max(0, rectangle_width - static_cast<int>(text_width) - 3);
+        x = gadget.common.x + std::max(0, rectangle_span_x - static_cast<int>(text_width) - 3);
     } else if ((attributes & align_center) != 0) {
-        x = gadget.common.x + (rectangle_width - static_cast<int>(text_width)) / 2 +
+        x = gadget.common.x + (rectangle_span_x - static_cast<int>(text_width)) / 2 +
             depressed_offset + 1;
     }
-    const int y = gadget.common.y + (gadget.common.height - static_cast<int>(text_height)) / 2 +
-                  depressed_offset;
+    const int y =
+        gadget.common.y + (rectangle_span_y - static_cast<int>(text_height)) / 2 + depressed_offset;
 
     const auto pixel_count = static_cast<std::size_t>(surface.width) * surface.height;
     std::vector<uint8_t> indices(pixel_count);

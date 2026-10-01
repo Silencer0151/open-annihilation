@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp src/scroll_bars.cpp
-  src/artless.cpp)
+  src/artless.cpp src/panel_shade.cpp)
 add_library(oa::ui::frontend_renderer ALIAS oa-ui-frontend-renderer)
 target_include_directories(oa-ui-frontend-renderer PUBLIC include)
 target_link_libraries(oa-ui-frontend-renderer PUBLIC

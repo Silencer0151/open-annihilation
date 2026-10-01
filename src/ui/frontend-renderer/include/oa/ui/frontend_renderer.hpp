@@ -284,4 +284,40 @@ void blend_rect(
     uint32_t opacity
 ) noexcept;
 
+/// Shade level the panel loader darkens the panel below a panel opened with
+/// gui_input::panel_flag::shade_below with.
+inline constexpr int32_t shade_below_level = -0x18;
+
+/// Darkens a rectangle of an RGB image as the panel loader darkens the panel
+/// below a panel opened with gui_input::panel_flag::shade_below.
+///
+/// Each pixel goes back to its palette entry (the lowest one holding its
+/// colour, else the nearest by summed channel difference), the rectangle is
+/// remapped as an 8-bit surface through the shade table at
+/// shade_below_level (present::shade_rect_level, whose entries 0x80 to 0xFF
+/// read the row before), and the entries come out through the palette
+/// again. The rectangle is clipped to the image; an image whose pixels do
+/// not fill its size, or a missing shade table, leaves the pixels as they
+/// are.
+///
+/// @param[in,out] surface the image
+/// @param x the rectangle's left column
+/// @param y the rectangle's top row
+/// @param width the rectangle's width; 0 or less darkens nothing
+/// @param height the rectangle's height; 0 or less darkens nothing
+/// @param palette palette the image's colours come from
+/// @param shade_table the 32x256 shade table (PALETTE.SHD); null darkens nothing
+/// @param keep colour, red, green and blue, whose pixels are left as they
+///     are; null darkens every pixel
+void shade_panel_below(
+    Surface& surface,
+    int x,
+    int y,
+    int width,
+    int height,
+    const PaletteBytes& palette,
+    const uint8_t* shade_table,
+    const uint8_t* keep = nullptr
+);
+
 } // namespace oa::ui::frontend_renderer

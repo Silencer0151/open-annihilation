@@ -232,7 +232,7 @@ void dialog_shade_below(
     auto& stack = dialog_stack();
     if (stack.count == 0 || (stack.dialogs[0].flags & panel_flag::shade_below) == 0)
         return;
-    dialog_shade(stack.dialogs[0], frame, x, y, width, height, palette, nullptr);
+    dialog_shade(frame, x, y, width, height, palette, nullptr);
 }
 
 void dialogs_bind_host(const DialogHost& host) noexcept {

@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
 #include "oa/media/intro_player.hpp"
+#include "oa/ui/gui_input/gadget_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -78,6 +79,33 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         (event.key.key == SDLK_UP || event.key.key == SDLK_DOWN)) {
         step_campaign_list(event.key.key == SDLK_DOWN);
         return;
+    }
+    // The frontend screen's panel takes the GUI keyboard: Tab and Shift+Tab
+    // move the focus to the next and the previous record, and the arrow keys
+    // move it on from a button.
+    if (event.type == SDL_EVENT_KEY_DOWN && frontend_has_keyboard()) {
+        namespace gui = oa::ui::gui_input;
+        const auto focus = frontend_focus();
+        const bool from_button =
+            focus < 0 || resources_.layout.gadgets[static_cast<std::size_t>(focus)].common.type ==
+                             oa::ui::gui_layout::GadgetType::button;
+        std::optional<gui::FocusDirection> direction;
+        if (event.key.key == SDLK_TAB)
+            direction = (event.key.mod & SDL_KMOD_SHIFT) != 0 ? gui::FocusDirection::previous
+                                                              : gui::FocusDirection::next;
+        else if (from_button && event.key.key == SDLK_LEFT)
+            direction = gui::FocusDirection::previous;
+        else if (from_button && event.key.key == SDLK_RIGHT)
+            direction = gui::FocusDirection::next;
+        else if (from_button && event.key.key == SDLK_UP)
+            direction = gui::FocusDirection::up;
+        else if (from_button && event.key.key == SDLK_DOWN)
+            direction = gui::FocusDirection::down;
+        if (direction) {
+            move_frontend_focus(*direction);
+            rebuild_surface();
+            return;
+        }
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         if (screen_ == Screen::main_menu) {
@@ -268,6 +296,12 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             selected_ = hovered_ && frontend_gadget_pressable(*hovered_)
                             ? static_cast<int32_t>(*hovered_)
                             : -1;
+            // A press on a frontend list gives it the keyboard focus.
+            if (screen_ != Screen::match && hovered_ &&
+                *hovered_ < resources_.layout.gadgets.size() &&
+                resources_.layout.gadgets[*hovered_].common.type ==
+                    oa::ui::gui_layout::GadgetType::list_box)
+                frontend_focus_ = static_cast<int32_t>(*hovered_);
             if (options_.trace_input)
                 std::cerr << "input down button=" << static_cast<int>(event.button.button)
                           << " selected=" << selected_ << '\n';

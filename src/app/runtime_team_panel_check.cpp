@@ -351,6 +351,47 @@ void Runtime::check_team_panels() {
         compose_match_frame(frame);
         write_ppm(fs::path("local/reports") / name, frame);
     };
+    // The HUD layer as drawn now, and the match HUD panel's root on it.
+    const auto hud_now = [&] {
+        render_match_surface();
+        return match_hud_cpu_;
+    };
+    const auto hud_root = [&] {
+        require(match_hud_ && !match_hud_->layout.gadgets.empty(), "no panel is loaded");
+        const auto& root = match_hud_->layout.gadgets.front().common;
+        return oa::ui::display_layout::Rect{root.x, root.y, root.width, root.height};
+    };
+    // The pixels of `area` where the HUD layer drawn now differs from
+    // `before`, darkened as the panel loader darkens the panel below a panel
+    // it opens with shade_below when `darkened` says so; nothing darkens to
+    // itself throughout.
+    const auto differing_from =
+        [&](renderer::Surface before, const oa::ui::display_layout::Rect& area, bool darkened) {
+            if (darkened) {
+                const auto undarkened = before;
+                renderer::shade_panel_below(
+                    before,
+                    area.x,
+                    area.y,
+                    area.width,
+                    area.height,
+                    match_palette_,
+                    display_.context.shade_table
+                );
+                require(
+                    changed_pixels(
+                        copy_rect(undarkened, {area.x, area.y, area.width, area.height}),
+                        copy_rect(before, {area.x, area.y, area.width, area.height})
+                    ) != 0,
+                    "the shade table darkens nothing under " + match_hud_panel_
+                );
+            }
+            const auto now = hud_now();
+            return changed_pixels(
+                copy_rect(before, {area.x, area.y, area.width, area.height}),
+                copy_rect(now, {area.x, area.y, area.width, area.height})
+            );
+        };
 
     try {
         clear_local_selection();
@@ -365,6 +406,9 @@ void Runtime::check_team_panels() {
         require(
             match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "F2 did not open ARMOPT.GUI"
         );
+        // The menu opened over the running game, as it shows in the side column.
+        const auto menu_root = hud_root();
+        const auto menu_over_game = hud_now();
         const auto menu_title = changed_pixels(before, title_pixels());
         require(
             menu_title < kTextMinPixels,
@@ -436,11 +480,25 @@ void Runtime::check_team_panels() {
         require(ticks_in_one_second() > 0, "the match did not resume when the pause bit cleared");
 
         // Tab opens the tab menu over the running match; ALLIES and SHARE
-        // show, CONTROL only for the host.
+        // show, CONTROL only for the host. The side column's panel, a local
+        // unit's, stays under it, darkened.
+        for (const auto& slot : match_->world().slots)
+            if (slot.unit_index != 0 && slot.unit != nullptr && slot.owner_index == local) {
+                adopt_selection(slot.unit_index);
+                break;
+            }
+        require(selected_match_unit_ != 0, "no local unit to select");
+        apply_match_hud_for_selection();
+        const auto side_root = hud_root();
+        const auto side_panel = hud_now();
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         require(
             team_panel_open() && match_hud_panel_ == "guis/TABMENU.GUI",
             "Tab did not open TABMENU.GUI"
+        );
+        require(
+            differing_from(side_panel, side_root, true) == 0,
+            "the side column's panel is not darkened under the tab menu"
         );
         require(
             shows("ALLIES") && shows("SHARE") && !shows("CONTROL"),
@@ -450,6 +508,33 @@ void Runtime::check_team_panels() {
         require(ticks_in_one_second() > 0, "the tab menu held the match");
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         require(!team_panel_open() && !match_paused_, "Tab did not close the tab menu");
+
+        // The tab menu's OPTIONS opens the in-game menu over it: the menu
+        // stays under it, darkened, and the menu covers the side column's
+        // panel as it does opened over the running game.
+        key(SDLK_TAB, SDL_SCANCODE_TAB);
+        const auto tab_root = hud_root();
+        const auto tab_menu = hud_now();
+        click("OPTIONS");
+        require(
+            match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+            "the tab menu's OPTIONS did not open ARMOPT.GUI"
+        );
+        require(
+            differing_from(tab_menu, tab_root, true) == 0,
+            "the tab menu is not darkened under ARMOPT.GUI"
+        );
+        require(
+            differing_from(menu_over_game, menu_root, false) == 0,
+            "ARMOPT.GUI opened from the tab menu does not cover the side column's panel"
+        );
+        key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
+        require(
+            !team_panel_open() && !match_paused_,
+            "Escape did not close ARMOPT.GUI opened from the tab menu"
+        );
+        clear_local_selection();
+        apply_match_hud_for_selection();
 
         // 'h' opens SHARE.GUI; OK gives the slider's metal and a chosen unit
         // to the computer player and shares the map.
@@ -602,12 +687,20 @@ void Runtime::check_team_panels() {
         told.log.clear();
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         require(shows("CONTROL"), "CONTROL does not show for the host");
+        const auto control_tab_root = hud_root();
+        const auto control_tab_menu = hud_now();
         click("CONTROL");
         require(
             team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI",
             "CONTROL did not open CONTROL.GUI"
         );
+        // The tab menu stays under it, darkened.
+        require(
+            differing_from(control_tab_menu, control_tab_root, true) == 0,
+            "the tab menu is not darkened under CONTROL.GUI"
+        );
         require(!shows("LIVEPLYR" + std::to_string(local)), "CONTROL.GUI shows the local player");
+        const auto control_panels_below = match_panels_below_.size();
         const auto watching = (my_info->options & OA_SETUP_OPTION_WATCHING_ALLOWED) != 0;
         click("WATCHING");
         snapshot("native-team-control.ppm");
@@ -623,9 +716,16 @@ void Runtime::check_team_panels() {
         );
         snapshot("native-team-removal.ppm");
         click("CHOICE1");
-        require(!team_panel_open(), "Yes did not close the removal question");
-        key(SDLK_TAB, SDL_SCANCODE_TAB);
-        click("CONTROL");
+        require(
+            team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI" && match_paused_ &&
+                match_panels_keyboard_,
+            "Yes did not return to CONTROL.GUI"
+        );
+        // It comes back over the panels it was opened over, and no more.
+        require(
+            match_panels_below_.size() == control_panels_below,
+            "CONTROL.GUI came back from the removal question over other panels"
+        );
         click("OK");
         require(!team_panel_open(), "OK did not close CONTROL.GUI");
         const auto removed = "remove " + std::to_string(computer) + " 1";

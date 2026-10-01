@@ -141,26 +141,27 @@ void test_quick_key_and_focus() {
         "YES", renderer::ButtonCondition::normal, std::nullopt, std::nullopt, std::nullopt
     };
     state.quick_key = 'Y';
-    // "Yes" is 9 wide: x = 10 + (20 - 9) / 2 + 1 = 16, y = 5 + (10 - 6) / 2 = 7.
+    // "Yes" is 9 wide: x = 10 + (20 - 1 - 9) / 2 + 1 = 16,
+    // y = 5 + (10 - 1 - 6) / 2 = 6, so the underline lies on row 6 + 6 - 1.
     auto drawn = renderer::render_screen(resources, {&state, 1});
-    CHECK(red_at(drawn, 16, 12) == underline_entry && red_at(drawn, 18, 12) == underline_entry);
-    CHECK(red_at(drawn, 15, 12) == button_fill && red_at(drawn, 19, 12) == button_fill);
-    CHECK(red_at(drawn, 16, 11) == button_fill);
+    CHECK(red_at(drawn, 16, 11) == underline_entry && red_at(drawn, 18, 11) == underline_entry);
+    CHECK(red_at(drawn, 15, 11) == button_fill && red_at(drawn, 19, 11) == button_fill);
+    CHECK(red_at(drawn, 16, 10) == button_fill);
     state.quick_key = 's';
     drawn = renderer::render_screen(resources, {&state, 1});
-    CHECK(red_at(drawn, 22, 12) == underline_entry && red_at(drawn, 16, 12) == button_fill);
+    CHECK(red_at(drawn, 22, 11) == underline_entry && red_at(drawn, 16, 11) == button_fill);
     // A key the caption does not hold in that case underlines nothing.
     state.quick_key = 'y';
     drawn = renderer::render_screen(resources, {&state, 1});
-    CHECK(red_at(drawn, 16, 12) == button_fill);
+    CHECK(red_at(drawn, 16, 11) == button_fill);
     state.quick_key = 'Y';
     state.condition = renderer::ButtonCondition::pressed;
     drawn = renderer::render_screen(resources, {&state, 1});
     // Pressed, the caption moves a pixel right and down with its underline.
-    CHECK(red_at(drawn, 17, 13) == 0 && red_at(drawn, 19, 13) == 0);
+    CHECK(red_at(drawn, 17, 12) == 0 && red_at(drawn, 19, 12) == 0);
     state.condition = renderer::ButtonCondition::disabled;
     drawn = renderer::render_screen(resources, {&state, 1});
-    CHECK(red_at(drawn, 16, 12) == grayed_fill);
+    CHECK(red_at(drawn, 16, 11) == grayed_fill);
     CHECK(red_at(drawn, 15, 4) == ground);
 
     state.condition = renderer::ButtonCondition::normal;
@@ -180,6 +181,62 @@ void test_quick_key_and_focus() {
     CHECK(red_at(drawn, 5, 10) == ground + 13);
     CHECK(red_at(drawn, 4, 10) == ground + 6);
     CHECK(red_at(drawn, 3, 10) == ground);
+}
+
+// A caption is placed within the button's inclusive rectangle, whose far
+// edges are a pixel inside its width and height: centred, it starts
+// (width - 1 - text width) / 2 + 1 across and (height - 1 - text height) / 2
+// down, halves rounded toward zero; right-aligned, it ends 3 pixels before
+// the far edge; left-aligned, it starts 3 pixels in, centred down.
+void test_caption_placement() {
+    namespace renderer = oa::ui::frontend_renderer;
+    constexpr uint8_t glyph_colour = 7;
+    constexpr uint8_t button_fill = 20;
+    constexpr int16_t origin = 5;
+    renderer::ScreenResources resources;
+    resources.background.width = 40;
+    resources.background.height = 40;
+    resources.background.rgb.assign(40U * 40U * 3U, 0);
+    for (std::size_t index = 0; index < 256; ++index)
+        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+    resources.background.palette = resources.gui_palette;
+    // Glyphs 3 pixels wide and 4 high: "AA" is 6 wide and the text is 6 high.
+    oa::formats::fnt::Glyph glyph;
+    glyph.width = 3;
+    glyph.height = 4;
+    glyph.pixels.assign(12, glyph_colour);
+    glyph.coverage.assign(12, 1);
+    for (const char character : {'I', 'A'})
+        resources.font.glyphs[static_cast<unsigned char>(character)] = glyph;
+    const renderer::ButtonPresentation state{
+        "CAPTION", renderer::ButtonCondition::normal, std::nullopt, std::nullopt, std::nullopt
+    };
+    // Returns whether the caption's top-left glyph pixel lies at (x, y), with
+    // the button's fill left of it and above it.
+    const auto caption_at = [&](int16_t width, int16_t height, uint32_t attributes, int x, int y) {
+        auto caption = button("CAPTION", origin, origin, width, height);
+        caption.common.attributes = static_cast<int32_t>(attributes);
+        std::get<oa::ui::gui_layout::ButtonFields>(caption.fields).text = "AA";
+        resources.layout.gadgets = {caption};
+        const auto drawn = renderer::render_screen(resources, {&state, 1});
+        const auto ux = static_cast<std::size_t>(x);
+        const auto uy = static_cast<std::size_t>(y);
+        return red_at(drawn, ux, uy) == glyph_colour && red_at(drawn, ux - 1, uy) == button_fill &&
+               red_at(drawn, ux, uy - 1) == button_fill;
+    };
+    constexpr uint32_t left = 1U;
+    constexpr uint32_t centred = 2U;
+    constexpr uint32_t right = 4U;
+    // Even differences (20 - 6): x = 5 + (19 - 6) / 2 + 1 = 12, y = 5 + 6 = 11.
+    CHECK(caption_at(20, 20, centred, 12, 11));
+    // Odd differences (21 - 6): x = 5 + (20 - 6) / 2 + 1 = 13, y = 5 + 7 = 12.
+    CHECK(caption_at(21, 21, centred, 13, 12));
+    // Right-aligned: x = 5 + 19 - 6 - 3 = 15, or 5 + 20 - 6 - 3 = 16.
+    CHECK(caption_at(20, 20, right, 15, 11));
+    CHECK(caption_at(21, 21, right, 16, 12));
+    // Left-aligned: x = 5 + 3 whatever the width.
+    CHECK(caption_at(20, 20, left, 8, 11));
+    CHECK(caption_at(21, 21, left, 8, 12));
 }
 
 // Six grayed-out 64x64 art buttons drawn in all 256 colours of a palette
@@ -341,6 +398,73 @@ void test_blend_rect() {
     surface.rgb.assign(3, 200);
     blend_rect(surface, 0, 0, 1, 1, {0, 0, 0}, blend_opaque);
     CHECK(surface.rgb[0] == 200);
+}
+
+// The panel under a shade_below panel: entries below 0x80 read shade row
+// 8 (level -0x18), entries 0x80 to 0xFF the row before, as 3.1c's
+// rectangle shade indexes the row as signed bytes.
+void test_shade_panel_below() {
+    using oa::ui::frontend_renderer::shade_below_level;
+    using oa::ui::frontend_renderer::shade_panel_below;
+    CHECK(shade_below_level == -0x18);
+    // Entry e is (e, 255 - e, 7): every colour is its own entry.
+    oa::PaletteBytes palette{};
+    for (std::size_t entry = 0; entry < oa::palette_color_count; ++entry) {
+        palette[entry * oa::palette_entry_bytes] = static_cast<uint8_t>(entry);
+        palette[entry * oa::palette_entry_bytes + 1] = static_cast<uint8_t>(255 - entry);
+        palette[entry * oa::palette_entry_bytes + 2] = 7;
+    }
+    // Row 8 takes entry e to e + 1, row 7 to e + 2, every other row to 0.
+    std::vector<uint8_t> shade(32U * 256U, 0);
+    for (std::size_t entry = 0; entry < 256; ++entry) {
+        shade[8U * 256U + entry] = static_cast<uint8_t>(entry + 1);
+        shade[7U * 256U + entry] = static_cast<uint8_t>(entry + 2);
+    }
+    const std::vector<uint8_t> entries{0x00, 0x10, 0x7f, 0x80, 0x90, 0xff};
+    oa::ui::frontend_renderer::Surface surface;
+    surface.width = static_cast<uint32_t>(entries.size());
+    surface.height = 2;
+    surface.rgb.resize(static_cast<std::size_t>(surface.width) * surface.height * 3U);
+    const auto paint = [&](std::size_t pixel, uint8_t entry) {
+        std::copy_n(&palette[entry * oa::palette_entry_bytes], 3, &surface.rgb[pixel * 3U]);
+    };
+    const auto entry_at = [&](std::size_t pixel) {
+        const auto* rgb = &surface.rgb[pixel * 3U];
+        return rgb[2] == 7 && rgb[0] == 255 - rgb[1] ? static_cast<int>(rgb[0]) : -1;
+    };
+    const auto fill = [&] {
+        for (std::size_t row = 0; row < surface.height; ++row)
+            for (std::size_t column = 0; column < entries.size(); ++column)
+                paint(row * surface.width + column, entries[column]);
+    };
+    fill();
+    shade_panel_below(surface, 0, 0, 6, 1, palette, shade.data());
+    CHECK(entry_at(0) == 0x01);
+    CHECK(entry_at(1) == 0x11);
+    CHECK(entry_at(2) == 0x80);
+    CHECK(entry_at(3) == 0x82);
+    CHECK(entry_at(4) == 0x92);
+    CHECK(entry_at(5) == 0x01);
+    for (std::size_t column = 0; column < entries.size(); ++column)
+        CHECK(entry_at(surface.width + column) == entries[column]);
+    // Clipped to the image; pixels of the kept colour stay.
+    fill();
+    shade_panel_below(
+        surface, 3, -1, 10, 10, palette, shade.data(), &palette[0x90 * oa::palette_entry_bytes]
+    );
+    for (std::size_t row = 0; row < surface.height; ++row) {
+        const std::size_t first = row * surface.width;
+        CHECK(entry_at(first) == 0x00 && entry_at(first + 2) == 0x7f);
+        CHECK(entry_at(first + 3) == 0x82 && entry_at(first + 4) == 0x90);
+        CHECK(entry_at(first + 5) == 0x01);
+    }
+    // Without a shade table, or with an empty rectangle, nothing changes.
+    fill();
+    const auto kept = surface.rgb;
+    shade_panel_below(surface, 0, 0, 6, 2, palette, nullptr);
+    shade_panel_below(surface, 0, 0, 0, 2, palette, shade.data());
+    shade_panel_below(surface, 6, 0, 2, 2, palette, shade.data());
+    CHECK(surface.rgb == kept);
 }
 
 } // namespace
@@ -657,7 +781,9 @@ int main() {
     test_grayed_art_frame();
     test_grayed_art_cost();
     test_quick_key_and_focus();
+    test_caption_placement();
     test_blend_rect();
+    test_shade_panel_below();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

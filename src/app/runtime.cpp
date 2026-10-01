@@ -10,6 +10,7 @@
 #include "oa/platform/app_loop.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
+#include "oa/ui/gui_input/gadget_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
@@ -66,6 +67,54 @@ namespace {
         return "briefing";
     }
     return "unnamed screen";
+}
+
+/// Returns the record of a frontend panel that holds the keyboard focus.
+///
+/// The panel is loaded as its loader loads it, undrawn, with its records
+/// where its GUI file has them: at their root's corner. With `from` -1 the
+/// focus is the loader's, passed on to the next record when the panel's
+/// setup hid it; otherwise it moves from `from` as focus_nearest() moves it.
+///
+/// @param source the panel's records as the screen holds them
+/// @param from the record holding the focus, or -1 for the loader's
+/// @param direction where the focus moves from `from`
+/// @return the record, or -1 for none
+int32_t frontend_panel_focus(
+    const oa::ui::gui_layout::Layout& source,
+    int32_t from = -1,
+    oa::ui::gui_input::FocusDirection direction = oa::ui::gui_input::FocusDirection::next
+) {
+    namespace gui = oa::ui::gui_input;
+    if (source.gadgets.empty())
+        return -1;
+    auto layout = source;
+    const auto& root = layout.gadgets.front().common;
+    for (std::size_t index = 1; index < layout.gadgets.size(); ++index) {
+        auto& common = layout.gadgets[index].common;
+        if (common.width <= 0 || common.height <= 0)
+            continue;
+        common.x = static_cast<int16_t>(common.x - root.x);
+        common.y = static_cast<int16_t>(common.y - root.y);
+    }
+    gui::GadgetPanel panel;
+    gui::init_gadget_panel(panel);
+    auto* owner = gui::load_panel(panel, layout, root.name, gui::panel_flag::no_draw);
+    if (owner == nullptr)
+        return -1;
+    const auto shown = [&source](int32_t index) {
+        return index > 0 && static_cast<std::size_t>(index) < source.gadgets.size() &&
+               source.gadgets[static_cast<std::size_t>(index)].common.active != 0;
+    };
+    if (from >= 0) {
+        owner->focus = from;
+        gui::focus_nearest(panel, direction);
+    } else if (owner->focus > 0 && !shown(owner->focus)) {
+        gui::focus_nearest(panel, gui::FocusDirection::next);
+    }
+    return owner->focus > 0 && static_cast<std::size_t>(owner->focus) < source.gadgets.size()
+               ? owner->focus
+               : -1;
 }
 
 } // namespace
@@ -642,6 +691,34 @@ void Runtime::load_all_sounds() {
     oa::data::defs::load_all_sounds(&files, nullptr, cache, &unit_table_.sound_categories);
 }
 
+bool Runtime::frontend_has_keyboard() const {
+    return screen_ != Screen::match && screen_ != Screen::loading && !frame_owned_by_package() &&
+           !resources_.layout.gadgets.empty() && oa::ui::frontend_dialogs::dialog_count() == 0;
+}
+
+int32_t Runtime::frontend_focus() const {
+    const auto& gadgets = resources_.layout.gadgets;
+    if ((screen_ == Screen::new_campaign || screen_ == Screen::any_mission) &&
+        !campaign_setup_focus_.empty()) {
+        for (std::size_t index = 1; index < gadgets.size(); ++index)
+            if (tdf_names_equal(gadgets[index].common.name, campaign_setup_focus_))
+                return static_cast<int32_t>(index);
+        return -1;
+    }
+    return frontend_focus_ > 0 && static_cast<std::size_t>(frontend_focus_) < gadgets.size()
+               ? frontend_focus_
+               : -1;
+}
+
+void Runtime::move_frontend_focus(oa::ui::gui_input::FocusDirection direction) {
+    const auto focus = frontend_focus();
+    const auto moved = frontend_panel_focus(resources_.layout, std::max(focus, 0), direction);
+    frontend_focus_ = moved;
+    if ((screen_ == Screen::new_campaign || screen_ == Screen::any_mission) && moved > 0)
+        campaign_setup_focus_ =
+            resources_.layout.gadgets[static_cast<std::size_t>(moved)].common.name;
+}
+
 void Runtime::load(Screen screen) {
     // The load and save dialogs are drawn over the screen they open from.
     if (screen == Screen::load_game && screen_ != Screen::load_game)
@@ -693,6 +770,11 @@ void Runtime::load(Screen screen) {
         bind_set_up_frontend_scrolls(desc->assets.layout, desc->assets.sprites);
     selected_ = -1;
     hovered_.reset();
+    // The panel takes the focus its loader gives it, from its records as its
+    // setup left them.
+    frontend_focus_ = -1;
+    if (desc->assets.layout != nullptr)
+        frontend_focus_ = frontend_panel_focus(resources_.layout);
     apply_output_mode();
     rebuild_surface();
 }
@@ -731,6 +813,8 @@ void Runtime::rebuild_surface() {
         return;
     std::vector<renderer::ButtonPresentation> presentation;
     presentation.reserve(resources_.layout.gadgets.size());
+    const bool keyboard = frontend_has_keyboard();
+    const auto focus = frontend_focus();
     for (std::size_t index = 0; index < resources_.layout.gadgets.size(); ++index) {
         auto condition = renderer::ButtonCondition::normal;
         // A button whose status is set (the chosen member of its group) shows
@@ -761,6 +845,12 @@ void Runtime::rebuild_surface() {
                  ? std::nullopt
                  : std::optional<renderer::SpriteOverride>(sprite->second)}
         );
+        // The button's quick key is underlined in its caption, and the record
+        // holding the keyboard focus is ringed while the screen has the
+        // keyboard.
+        if (button != nullptr)
+            presentation.back().quick_key = static_cast<char>(button->quick_key);
+        presentation.back().focused = keyboard && static_cast<int32_t>(index) == focus;
     }
     std::vector<renderer::ListPresentation> lists;
     if (screen_ == Screen::map_selection && !bound_map_names_.empty()) {

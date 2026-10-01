@@ -806,6 +806,9 @@ void Runtime::render_match_surface() {
                 0
             );
         }
+        // A placed dialog's panels below go under it as it is composed.
+        if (match_hud_placement_ == 0)
+            compose_panels_below(hud);
         place_preferences_rows(hud);
         compose_match_dialog(hud);
         phase_times_.hud += std::chrono::duration_cast<std::chrono::nanoseconds>(

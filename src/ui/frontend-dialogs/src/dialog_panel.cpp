@@ -22,8 +22,6 @@ constexpr int16_t kLabelHeight = 0xf;
 constexpr uint16_t kLabelColor = 0xf;
 constexpr std::size_t kLabelTextBytes = 0x7f;
 constexpr int32_t kLabelRightGap = 5;
-constexpr int32_t kShadeLevels = 32;
-constexpr int32_t kShadeBelow = -0x18;            // shade level applied below a shade_below panel
 constexpr const char* kGuiArtDirectory = "anims"; // set_gaf_path appends the separator
 
 uint8_t* pixel(renderer::Surface& frame, int32_t x, int32_t y) {
@@ -70,49 +68,9 @@ struct PaletteLookup {
     }
 };
 
-// The frame holds RGB, so each pixel is mapped back to its palette index
-// before the shade table row replaces it.
-void shade_area(
-    renderer::Surface& frame,
-    int32_t left,
-    int32_t top,
-    int32_t right,
-    int32_t bottom,
-    const PaletteBytes& palette,
-    const std::array<uint8_t, kPaletteColors>& shade,
-    const uint8_t* layer_key
-) {
-    PaletteLookup lookup(palette);
-    for (int32_t y = top; y <= bottom; ++y)
-        for (int32_t x = left; x <= right; ++x) {
-            auto* out = pixel(frame, x, y);
-            if (out == nullptr || (layer_key != nullptr && rgb_key(out) == rgb_key(layer_key)))
-                continue;
-            const auto at = static_cast<size_t>(shade[lookup.index(out)]) * palette_entry_bytes;
-            out[0] = palette[at];
-            out[1] = palette[at + 1];
-            out[2] = palette[at + 2];
-        }
-}
-
 bool frame_consistent(const renderer::Surface& frame) {
     return frame.width != 0 && frame.height != 0 &&
            frame.rgb.size() == static_cast<std::size_t>(frame.width) * frame.height * 3U;
-}
-
-bool load_shade_row(AssetStore& assets, std::array<uint8_t, kPaletteColors>& row) {
-    try {
-        const auto table = assets.read(kShadeTable).bytes;
-        if (table.size() != static_cast<std::size_t>(kShadeLevels) * kPaletteColors)
-            return false;
-        const auto start = static_cast<std::size_t>(kShadeLevels + kShadeBelow) * kPaletteColors;
-        std::copy_n(
-            table.begin() + static_cast<std::ptrdiff_t>(start), kPaletteColors, row.begin()
-        );
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
 }
 
 // The backdrop bitmap as an 8-bit surface of its own indices.
@@ -350,8 +308,6 @@ Dialog* dialog_push(
     }
     if (dialog.resources.layout.gadgets.empty())
         return nullptr;
-    if ((flags & panel_flag::shade_below) != 0 && !load_shade_row(*ctx->assets, dialog.shade))
-        return nullptr;
     dialog.kind = kind;
     dialog.flags = flags;
     dialog.stages.assign(dialog.resources.layout.gadgets.size(), 0);
@@ -494,7 +450,6 @@ std::string dialog_wrap(const Dialog& dialog, std::string_view text, int32_t wid
 }
 
 void dialog_shade(
-    const Dialog& dialog,
     renderer::Surface& frame,
     int32_t x,
     int32_t y,
@@ -503,7 +458,17 @@ void dialog_shade(
     const PaletteBytes& palette,
     const uint8_t* layer_key
 ) {
-    shade_area(frame, x, y, x + width - 1, y + height - 1, palette, dialog.shade, layer_key);
+    const auto& art = dialog_stack().art;
+    renderer::shade_panel_below(
+        frame,
+        x,
+        y,
+        width,
+        height,
+        palette,
+        art != nullptr ? art->shade_table.data() : nullptr,
+        layer_key
+    );
 }
 
 bool dialog_compose(
@@ -541,7 +506,7 @@ bool dialog_compose(
             width = frame_width;
             height = frame_height;
         }
-        dialog_shade(dialog, frame, x, y, width, height, palette, layer_key);
+        dialog_shade(frame, x, y, width, height, palette, layer_key);
     }
     return draw_panel_face(dialog, frame, palette, layer_key, error);
 }

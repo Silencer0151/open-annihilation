@@ -179,6 +179,10 @@ void dialog_draw_layer(uint32_t width, uint32_t height, std::vector<uint8_t>& rg
 
 /// Darkens a rectangle of a frame when the bottom dialog shades the panel below it.
 ///
+/// The rectangle is darkened as ui::frontend_renderer::shade_panel_below
+/// darkens it, through the shade table of the GUI art the dialogs were
+/// opened with.
+///
 /// @param[in,out] frame RGB frame.
 /// @param x Left edge of the rectangle in frame pixels.
 /// @param y Top edge of the rectangle.

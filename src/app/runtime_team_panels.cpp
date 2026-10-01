@@ -400,6 +400,7 @@ void Runtime::toggle_team_menu() {
     };
     loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
         auto& self = *static_cast<Runtime*>(user);
+        self.keep_panel_below_darkened();
         self.forget_team_panel();
         if (!self.load_team_panel(name))
             return false;
@@ -441,6 +442,7 @@ void Runtime::open_team_share_panel() {
     // With nobody to share with the panel closes as it opens.
     if (panel.recipient_count == 0)
         return;
+    keep_panel_below_darkened();
     forget_team_panel();
     if (!load_team_panel("SHARE.GUI"))
         return;
@@ -503,6 +505,7 @@ void Runtime::open_team_share_panel() {
 void Runtime::open_allies_team_panel() {
     if (!match_ || match_finished_ || !multiplayer_session())
         return;
+    keep_panel_below_darkened();
     forget_team_panel();
     if (!load_team_panel("ALLIES.GUI"))
         return;
@@ -512,9 +515,11 @@ void Runtime::open_allies_team_panel() {
     render_match_surface();
 }
 
-void Runtime::open_control_team_panel() {
+void Runtime::open_control_team_panel(bool darken_panel_below) {
     if (!match_ || match_finished_ || !multiplayer_session() || local_player_watches())
         return;
+    if (darken_panel_below)
+        keep_panel_below_darkened();
     forget_team_panel();
     if (!load_team_panel("CONTROL.GUI"))
         return;
@@ -736,10 +741,15 @@ void Runtime::click_team_panel(std::string_view clicked) {
     case TeamPanel::removal_question: {
         const auto result =
             hud::removal_question_click(name.c_str(), session.removal_player, team_panel_host_);
-        if (result.click == hud::TeamPanelClick::closed)
-            resume_match_pause();
-        else
+        if (result.click != hud::TeamPanelClick::closed) {
             render_match_surface();
+            return;
+        }
+        // Answered, the question gives way to the CONTROL.GUI it was asked
+        // over, its rows as the players now stand, over the same panels below.
+        open_control_team_panel(false);
+        if (team_session().panel != TeamPanel::control)
+            resume_match_pause();
         return;
     }
     }

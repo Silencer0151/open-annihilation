@@ -84,8 +84,8 @@ and `app-window-icon` that the embedded one decodes.
   dialog centred on the whole screen is drawn at the canvas's pixels over
   the side column too (`match_dialog_side_`); while
   the in-game menu or the tab menu is open the panels show their keyboard
-  focus. `panel_shade.hpp` and `panel_shade.cpp` hold the darkening of the
-  panel below, which the load and save dialogs share.
+  focus. The load and save dialogs darken the panel below with the frontend
+  renderer's `shade_panel_below`, as the frontend dialogs do.
 - `runtime_scroll_bars.cpp`: the scroll bars of the frontend screen's panel
   and of the match HUD's panel (`renderer::LayoutScrolls`), bound as each
   panel's first draw binds them, drawn over it, driven by the pointer and

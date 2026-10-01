@@ -30,13 +30,6 @@
 
 namespace oa::app {
 
-namespace {
-
-// The preferences a match opens, loaded as the match HUD's panel.
-constexpr std::string_view kMatchPreferencesLayout = "guis/PREFS.GUI";
-
-} // namespace
-
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     if (screen_ != Screen::match || !match_ || key.repeat)
         return false;
@@ -109,35 +102,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         press_unit_info_done();
         return true;
     }
-    // The preferences a match opens take Enter as their Enter default (PREV)
-    // and their buttons' quick keys (SOUND 's', MUSIC 'm', INTERFACE 'i',
-    // VISUALS 'v', OK 'o', Cancel 'c'); Escape reaches escape_match_menu.
-    if (match_paused_ && match_hud_ && !match_hud_->layout.gadgets.empty() &&
-        match_hud_panel_ == kMatchPreferencesLayout) {
-        const auto& gadgets = match_hud_->layout.gadgets;
-        if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
-            const auto* root =
-                std::get_if<oa::ui::gui_layout::PanelFields>(&gadgets.front().fields);
-            activate_pause_gadget(
-                root != nullptr && !root->carriage_return_default.empty()
-                    ? std::string_view(root->carriage_return_default)
-                    : std::string_view("PREV")
-            );
-            return true;
-        }
-        if (key.key < 0x80 && std::isalnum(static_cast<int>(key.key)) != 0) {
-            const auto typed = std::tolower(static_cast<int>(key.key));
-            for (std::size_t i = 1; i < gadgets.size(); ++i) {
-                const auto* button =
-                    std::get_if<oa::ui::gui_layout::ButtonFields>(&gadgets[i].fields);
-                if (button == nullptr || button->quick_key == 0 || gadgets[i].common.active == 0 ||
-                    std::tolower(static_cast<unsigned char>(button->quick_key)) != typed)
-                    continue;
-                activate_match_hud(i);
-                return true;
-            }
-        }
-    }
+    // The in-game menu's and the tab menu's panels, and the preferences a
+    // match opens, take the keys they answer while they hold the keyboard.
+    if (press_match_panel_key(key))
+        return true;
     if (handle_console_hotkey(key))
         return true;
     // Escape takes back an armed command and keeps the selection; with none
