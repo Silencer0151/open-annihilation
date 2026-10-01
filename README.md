@@ -93,63 +93,7 @@ Total Annihilation: Kingdoms:
 - Completing the rest of Total Annihilation's single-player game.
 - Support for **Total Annihilation: Kingdoms**.
 
-## Download
-
-Download the package for your platform from the
-[Releases](https://github.com/open-annihilation/open-annihilation/releases)
-page. On macOS, the `.pkg` installer puts **Open Annihilation.app** in
-Applications; the zip holds the same app.
-
-| Package | Runs on |
-|---|---|
-| `macos-universal` | macOS 11 or later, Intel and Apple silicon |
-| `windows-x64` | 64-bit Windows 7 and later (built to run on XP x64 and Vista too, untested there) |
-| `windows-x86` | 32-bit Windows: XP SP3 and later, on a Pentium III, Athlon XP or later processor |
-| `windows-arm64-experimental` | Windows 11 on ARM |
-| `linux-x86_64` | 64-bit PC Linux with glibc 2.28 or later: Debian 10, Ubuntu 20.04 and later |
-| `linux-arm64` | 64-bit ARM Linux with glibc 2.28 or later, such as 64-bit Raspberry Pi OS |
-| `linux-armhf` | 32-bit ARMv7 Linux with glibc 2.36 or later: Debian 12, 32-bit Raspberry Pi OS Bookworm |
-
-## Running
-
-Install the `.pkg` or unzip the file and start the game: **Open
-Annihilation.app** on macOS, `open-annihilation.exe` on Windows,
-`open-annihilation` on Linux.
-
-The first time it starts, Open Annihilation asks you to choose the folder
-where Total Annihilation is installed, and remembers your choice. To choose a
-different folder later, start it with `--choose-game-dir`. To use a folder
-for one run only, start it with `--game-dir <folder>`.
-
-- **macOS:** the app and the installer are signed with a Developer ID and
-  notarized by Apple, so they open without a warning.
-- **Linux:** run it from an X11 or Wayland desktop, or from the text
-  console with no desktop running. The folder dialog uses your desktop's
-  file chooser (the XDG portal, or `zenity`); from the console, name the
-  folder with `--game-dir`.
-- **Raspberry Pi:** see [Raspberry Pi](#raspberry-pi) below.
-
-Open Annihilation writes its log to a `logs` folder in its own per-user
-folder, not to the terminal:
-
-- **macOS:** `~/Library/Application Support/net.coreprime.open-annihilation/logs`
-- **Linux:** `~/.local/share/open-annihilation/logs`, or
-  `$XDG_DATA_HOME/open-annihilation/logs`
-- **Windows:** `%LOCALAPPDATA%\CorePrime\Open Annihilation\logs`; on
-  Windows XP, `Local Settings\Application Data\CorePrime\Open Annihilation\logs`
-  in your user folder
-
-A new file begins every UTC day, or when the current one reaches 10 MB. The
-folder keeps at most 25 files, none older than seven days, so the logs never
-take more than about 250 MB. An error that stops the game still shows in the
-terminal it was started from, or in an error box when it was started from
-the desktop. When a script or another program captures the game's output,
-the output goes there instead.
-
-To build and run it from source instead, see
-[CONTRIBUTING.md](CONTRIBUTING.md#build-and-test).
-
-### Settings
+## Settings
 
 Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or under Resume in the in-game menu (F2), and with
@@ -187,52 +131,6 @@ starts at a screen size of 800×600 (640×480 when the desktop is smaller),
 with the maximum frame rate at 60 frames a second and Enhanced
 anti-aliasing off. Each can be changed in the settings, and **Restore
 defaults** puts these back.
-
-### Raspberry Pi
-
-Open Annihilation runs on a Raspberry Pi 4, Pi 400 or Pi 5 with the 64-bit
-Raspberry Pi OS (Bookworm or later): download the Linux ARM64 package,
-`open-annihilation-<version>-linux-arm64.zip`. A Pi 2, Pi 3 or Pi 4 with the
-32-bit Raspberry Pi OS (Bookworm or later) needs the Linux 32-bit ARM package,
-`open-annihilation-<version>-linux-armhf.zip`. To see which system your Pi runs, type
-`dpkg --print-architecture` in a terminal: `arm64` is 64-bit, `armhf` is
-32-bit.
-
-1. Copy the game data to the Pi. Copy the whole folder of an installed
-   Total Annihilation 3.1c, the one that holds `totala1.hpi`, from a PC,
-   for example with a USB stick to `~/TotalA`:
-
-   ```sh
-   cp -r "/media/$USER/<stick>/Total Annihilation" ~/TotalA
-   ```
-
-   The 1997 demo works too: see [Playing the demo](#playing-the-demo).
-2. Unzip the package, for example into your home folder (with the 32-bit
-   package, `linux-armhf` in place of `linux-arm64`):
-
-   ```sh
-   unzip open-annihilation-<version>-linux-arm64.zip
-   cd open-annihilation-<version>-linux-arm64
-   ```
-
-3. Start the game from that folder:
-
-   ```sh
-   ./open-annihilation --game-dir ~/TotalA
-   ```
-
-   - **From the desktop:** run it in a terminal. Started without
-     `--game-dir`, it asks for the Total Annihilation folder the first time
-     and remembers it.
-   - **From the console** (Raspberry Pi OS Lite, or with the desktop
-     switched off): log in and run it there; the game draws straight to the
-     screen. There is no folder dialog on the console, so name the folder
-     with `--game-dir` each time.
-
-On a Raspberry Pi the game starts with the maximum frame rate at 60 frames
-a second and Enhanced anti-aliasing off, which the Pi's graphics keep up
-with. Both can be changed in the [settings](#settings) like on any other
-computer, and **Restore defaults** puts the Pi's back.
 
 ## Playing the demo
 

@@ -4,8 +4,8 @@ Every document in the repository, by what you want to do.
 
 ## Installing and playing
 
-- [README.md](../README.md): what Open Annihilation is, the packages for
-  each platform, running it, its settings and playing the free demo.
+- [README.md](../README.md): what Open Annihilation is, its settings and
+  playing the free demo.
 - Installation guides, step by step: downloading the release, getting the
   game data from your copy of Total Annihilation, and starting the game.
   - [macOS](installation/macos.md)
