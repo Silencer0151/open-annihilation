@@ -99,6 +99,20 @@ OA_TEST_THREADS=4 ctest --test-dir build -R '^installed-content$'
 The output is the same for any number of threads, apart from the time the
 sweep took.
 
+The game draws the terrain, the fog and each frame's conversion for the
+window in bands on spare cores ([job pool](../src/platform/job-pool/README.md)):
+up to four threads, one on a machine of one or two logical processors.
+`OA_DRAW_THREADS` (1 to 32) sets the count for every run of the game a test
+starts, and `--draw-threads N` for one run; every count draws the same
+frames, which `native-draw-threads`, `world-draw-bands` and
+`app-xrgb-conversion` check. To run the whole suite on one drawing thread,
+or on many:
+
+```sh
+OA_DRAW_THREADS=1 ctest --test-dir build
+OA_DRAW_THREADS=8 ctest --test-dir build
+```
+
 ### The demo's installer
 
 `OA_DEMO_INSTALLER` names the installer of the Total Annihilation demo (1997):

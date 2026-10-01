@@ -6,7 +6,7 @@ add_library(oa-present-world-renderer src/world_renderer.cpp src/unit_renderer.c
 add_library(oa::present::world_renderer ALIAS oa-present-world-renderer)
 target_include_directories(oa-present-world-renderer PUBLIC include)
 target_link_libraries(oa-present-world-renderer PUBLIC oa-formats-hpi oa-formats-tnt oa-sim-model-runtime oa-options oa-formats-gaf
-  oa-core-types oa-present oa-sim-visibility-state)
+  oa-core-types oa-present oa-sim-visibility-state oa-platform-job-pool)
 
 add_executable(oa-render-terrain EXCLUDE_FROM_ALL tools/render_crop.cpp)
 target_link_libraries(oa-render-terrain PRIVATE oa-present-world-renderer)
@@ -30,6 +30,11 @@ if(BUILD_TESTING)
   add_executable(oa-world-fog-test tests/world_fog_test.cpp)
   target_link_libraries(oa-world-fog-test PRIVATE oa-present-world-renderer)
   add_test(NAME world-fog COMMAND oa-world-fog-test)
+  # The terrain fill and the fog drawn in bands on pools of 2, 3, 4 and 8
+  # threads give the bytes the calling thread alone draws.
+  add_executable(oa-world-draw-bands-test tests/world_draw_bands_test.cpp)
+  target_link_libraries(oa-world-draw-bands-test PRIVATE oa-present-world-renderer oa-platform-job-pool)
+  add_test(NAME world-draw-bands COMMAND oa-world-draw-bands-test)
   add_executable(oa-world-draw-order-test tests/world_draw_order_test.cpp)
   target_link_libraries(oa-world-draw-order-test PRIVATE oa-present-world-renderer)
   add_test(NAME world-draw-order COMMAND oa-world-draw-order-test)

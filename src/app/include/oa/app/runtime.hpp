@@ -23,6 +23,7 @@
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_input.hpp"
+#include "oa/platform/job_pool.hpp"
 #include "oa/platform/memory_status.hpp"
 #include "oa/sim/map_runtime/feature_defs.hpp"
 #include "oa/sim/map_runtime.hpp"
@@ -8017,6 +8018,11 @@ class Runtime final : public menu::Host,
     // Per-channel table of the display gamma for the RGB layers.
     std::array<uint8_t, 256> gamma_table_{};
     bool gamma_identity_ = true;
+    // The threads the per-row drawing passes (the terrain fill, the fog and
+    // the frame's conversion for the window) run their bands on, made at
+    // start-up for Options::draw_threads or the machine's default; null
+    // when that is one thread, which draws them on the calling thread alone.
+    std::unique_ptr<oa::platform::job_pool::Pool> draw_pool_;
     std::vector<uint8_t> debug_font_; // smlfont.FNT as loaded, for the debug grid
     oa::present::world_renderer::FogTileSet fog_tiles_{};
     oa::present::world_renderer::FogShading fog_shading_{};

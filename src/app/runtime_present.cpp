@@ -3,11 +3,11 @@
 
 // SDL output textures, viewport sizing and frame presentation.
 #include "oa/app/runtime.hpp"
+#include "xrgb_conversion.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -26,44 +26,6 @@ namespace {
                std::chrono::steady_clock::now() - since
     )
         .count();
-}
-
-/// Packs one RGB24 row into SDL_PIXELFORMAT_XRGB8888 words (0xXXRRGGBB).
-///
-/// Four pixels are read as three little-endian words to keep the loop short.
-///
-/// @param[out] out `width` opaque words
-/// @param rgb 3 bytes per pixel
-/// @param width pixels in the row
-void pack_rgb24_row(uint32_t* out, const uint8_t* rgb, int width) {
-    static_assert(std::endian::native == std::endian::little);
-    constexpr uint32_t opaque = 0xff000000u;
-    int x = 0;
-    for (; x + 4 <= width; x += 4, rgb += 12, out += 4) {
-        uint32_t first = 0, second = 0, third = 0;
-        std::memcpy(&first, rgb, 4);
-        std::memcpy(&second, rgb + 4, 4);
-        std::memcpy(&third, rgb + 8, 4);
-        out[0] = opaque | ((first & 0xffu) << 16) | (first & 0xff00u) | ((first >> 16) & 0xffu);
-        out[1] =
-            opaque | ((first >> 8) & 0xff0000u) | ((second & 0xffu) << 8) | ((second >> 8) & 0xffu);
-        out[2] = opaque | (second & 0xff0000u) | ((second >> 16) & 0xff00u) | (third & 0xffu);
-        out[3] = opaque | ((third << 8) & 0xff0000u) | ((third >> 8) & 0xff00u) | (third >> 24);
-    }
-    for (; x < width; ++x, rgb += 3)
-        *out++ = opaque | (static_cast<uint32_t>(rgb[0]) << 16) |
-                 (static_cast<uint32_t>(rgb[1]) << 8) | static_cast<uint32_t>(rgb[2]);
-}
-
-// Packed XRGB pixels through the display gamma's per-channel table.
-void gamma_xrgb_row(uint32_t* row, int width, const std::array<uint8_t, 256>& table) {
-    for (int x = 0; x < width; ++x) {
-        const uint32_t pixel = row[x];
-        row[x] = (pixel & 0xff000000u) |
-                 (static_cast<uint32_t>(table[(pixel >> 16) & 0xffu]) << 16) |
-                 (static_cast<uint32_t>(table[(pixel >> 8) & 0xffu]) << 8) |
-                 static_cast<uint32_t>(table[pixel & 0xffu]);
-    }
 }
 
 } // namespace
@@ -226,18 +188,15 @@ void Runtime::upload_rgb24_xrgb(SDL_Texture* texture, const renderer::Surface& s
     int pitch = 0;
     if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch))
         throw std::runtime_error(std::string("SDL_LockTexture: ") + SDL_GetError());
-    const auto width = static_cast<int>(source.width);
-    const auto height = static_cast<int>(source.height);
-    for (int y = 0; y < height; ++y) {
-        auto* row = reinterpret_cast<uint32_t*>(
-            static_cast<uint8_t*>(pixels) + static_cast<std::size_t>(y) * pitch
-        );
-        pack_rgb24_row(
-            row, source.rgb.data() + static_cast<std::size_t>(y) * source.width * 3U, width
-        );
-        if (!gamma_identity_)
-            gamma_xrgb_row(row, width, gamma_table_);
-    }
+    convert_rgb24_xrgb(
+        source.rgb.data(),
+        source.width,
+        source.height,
+        static_cast<uint8_t*>(pixels),
+        static_cast<std::size_t>(pitch),
+        gamma_identity_ ? nullptr : &gamma_table_,
+        draw_pool_.get()
+    );
     SDL_UnlockTexture(texture);
 }
 

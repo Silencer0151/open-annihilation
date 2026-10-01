@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Host clock, sleep, thread start and fatal-message services.
+// Host clock, sleep, thread start, processor count and fatal-message services.
 
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +31,11 @@ using ThreadEntry = void (*)(void* argument);
 /// @param argument value passed to entry
 /// @return false when the thread could not be created
 [[nodiscard]] bool start_thread(ThreadEntry entry, std::size_t stack_size, void* argument) noexcept;
+
+/// Returns how many threads the machine runs at once.
+///
+/// @return the number of logical processors the system reports, at least 1
+[[nodiscard]] uint32_t processor_count() noexcept;
 
 using ErrorSink = void (*)(const char* message);
 

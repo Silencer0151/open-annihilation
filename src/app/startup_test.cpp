@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// oa-game command-line parsing of the trace stream, seed, game directory,
-// data folder, window size, frame rate, video capture and showcase options,
-// and of the options and switches an extension takes.
+// oa-game command-line parsing of the trace stream, seed, drawing threads,
+// game directory, data folder, window size, frame rate, video capture and
+// showcase options, and of the options and switches an extension takes.
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
@@ -263,6 +263,20 @@ int main() {
         expect(rejection({"-rkey"}, table) == "-r is the extension's", "the extension words -r");
     }
 
+    expect(parse({"--draw-threads", "1"}).draw_threads == 1u, "--draw-threads takes one thread");
+    expect(parse({"--draw-threads", "32"}).draw_threads == 32u, "--draw-threads takes 32 threads");
+    expect(
+        rejection({"--draw-threads", "0"}).find("--draw-threads") == 0,
+        "no drawing threads at all is refused"
+    );
+    expect(
+        rejection({"--draw-threads", "33"}).find("--draw-threads") == 0,
+        "more drawing threads than the pool runs is refused"
+    );
+    expect(
+        rejection({"--draw-threads", "4x"}).find("--draw-threads") == 0,
+        "trailing text after a thread count is refused"
+    );
     expect(parse({"--seed", "0"}).seed == 0u, "a zero seed is a seed");
     expect(parse({"--seed", "4294967295"}).seed == 4294967295u, "the widest seed fits");
     expect(

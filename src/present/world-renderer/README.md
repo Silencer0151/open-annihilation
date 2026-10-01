@@ -40,6 +40,27 @@ leaves the surface clip's inclusive right column and bottom row undrawn, so
 viewport-derived unit clips keep that one-pixel-short right and bottom edge
 while terrain and hit testing keep the full inclusive extent.
 
+## Drawing in bands
+
+The match's terrain fill (`fill_scaled_viewport`, the destination-sized
+sample of the mosaic at any zoom) and its fog (`draw_fog_grid`) take an
+optional [job pool](../../platform/job-pool/README.md) and split their rows
+into bands by the data: the fill by `terrain_band_rows` (32) destination
+rows, each band finding its first map row and fraction from its first row's
+index exactly as the row-by-row step reaches them; the fog by one row of its
+grid, which draws only the surface rows its map rows land on. Bands write
+nothing another reads, so a pool of any size draws the bytes the calling
+thread draws alone, and with no pool the bands run in order on the calling
+thread. A missing tile stops the band that finds it; the fill then reports
+it, and which rows were written is not specified.
+
+`world-draw-bands` fills a random map at zoom 1, 1.37, 0.6, 0.75 and 2, from
+the corner, the middle and past the map's edges, and draws a random fog grid
+with random tile art at four zooms, plain and dithered, without a pool and
+on pools of 2, 3, 4 and 8 threads: every pool gives the same bytes, each
+filled pixel is the map pixel its zoom names, no band writes past its row,
+and a missing tile is reported from a pool.
+
 ## Draw order
 
 `plan_battlefield_draws` (`world_draw_order.hpp`) orders a frame's features

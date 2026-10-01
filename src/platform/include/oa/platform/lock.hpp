@@ -7,6 +7,9 @@
 // worker thread. A caller acquires it with a nonzero token; re-entering with
 // the token that already owns it returns immediately without taking a second
 // hold, and only the call that actually acquired it releases it.
+//
+// Wake event: a signal that wakes one waiting thread, which the job pool's
+// workers wait on between jobs.
 
 #include <atomic>
 #include <condition_variable>
@@ -54,5 +57,25 @@ void token_lock_reset(TokenLock* lock) noexcept;
 /// @param[in,out] lock lock to release
 /// @param hold result of the matching token_lock_enter
 void token_lock_leave(TokenLock* lock, const TokenLockHold* hold) noexcept;
+
+/// A signal that wakes one waiting thread and then clears itself.
+///
+/// A signal given while no thread waits is kept until the next wait; signals
+/// given before that wait count as one.
+struct WakeEvent {
+    std::mutex mutex; // with condition and signalled, the event
+    std::condition_variable condition;
+    bool signalled{false};
+};
+
+/// Signals the event: wakes one thread waiting on it, or else the next to wait.
+///
+/// @param[in,out] event event to signal
+void wake_event_signal(WakeEvent* event) noexcept;
+
+/// Waits until the event is signalled, and clears it.
+///
+/// @param[in,out] event event to wait on
+void wake_event_wait(WakeEvent* event) noexcept;
 
 } // namespace oa::platform

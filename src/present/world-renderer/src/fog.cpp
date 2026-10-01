@@ -178,6 +178,75 @@ struct FogPainter {
     }
 };
 
+/// What every row of draw_fog_grid reads besides its painter.
+struct FogRows {
+    const FogGrid& grid;
+    const FogTileSet& tiles;
+    const FogShading& shading;
+    int32_t span_x{}; ///< map pixels the view covers across
+    int32_t span_z{}; ///< map pixels the view covers down
+    bool have_art{};  ///< the FOG.GAF tile art is loaded
+};
+
+/// Draws one row of the fog grid: the surface rows under its map rows alone.
+///
+/// @param painter the view's painter; it keeps no state of its own
+/// @param rows the grid, its art and its shading
+/// @param row grid row to draw
+void draw_fog_row(FogPainter painter, const FogRows& rows, int32_t row) noexcept {
+    const FogGrid& grid = rows.grid;
+    const FogShading& shading = rows.shading;
+    const auto zoom_fp = painter.zoom_fp;
+    const auto map_z0 = grid.offset_z + row * fog_cell_pixels;
+    if (map_z0 >= rows.span_z || map_z0 + fog_cell_pixels <= 0)
+        return;
+    const auto ys =
+        dest_span(zoom_fp, map_z0, map_z0 + fog_cell_pixels, painter.clip_y0, painter.clip_y1);
+    if (ys.empty())
+        return;
+    for (int32_t column = 0; column < grid.width; ++column) {
+        const auto& tile = grid.at(column, row);
+        if (tile.unmapped == 0 && tile.unseen == 0)
+            continue;
+        const auto map_x0 = grid.offset_x + column * fog_cell_pixels;
+        if (map_x0 >= rows.span_x || map_x0 + fog_cell_pixels <= 0)
+            continue;
+        const auto xs =
+            dest_span(zoom_fp, map_x0, map_x0 + fog_cell_pixels, painter.clip_x0, painter.clip_x1);
+        if (xs.empty())
+            continue;
+        if (tile.unmapped == fog_mask_full) {
+            painter.fill(xs, ys, shading.unmapped_rgb);
+            continue;
+        }
+        const auto variant = (row + column + grid.variant_phase) & (fog_tile_variants - 1);
+        if (tile.unseen == fog_mask_full) {
+            painter.shade(map_x0, map_x0 + fog_cell_pixels, map_z0, map_z0 + fog_cell_pixels);
+        } else if (tile.unseen != 0 && rows.have_art) {
+            painter.masked(
+                rows.tiles.at(FogTileSet::gray, variant, tile.unseen),
+                map_x0,
+                map_z0,
+                [&](uint8_t, int32_t mx, int32_t mz, PixelSpan tx, PixelSpan ty) {
+                    if (shading.dithered)
+                        painter.dither(mx, mz, tx, ty);
+                    else
+                        painter.gray(tx, ty);
+                }
+            );
+        }
+        if (tile.unmapped != 0 && rows.have_art)
+            painter.masked(
+                rows.tiles.at(FogTileSet::black, variant, tile.unmapped),
+                map_x0,
+                map_z0,
+                [&](uint8_t index, int32_t, int32_t, PixelSpan tx, PixelSpan ty) {
+                    painter.fill(tx, ty, shading.palette_rgb[index]);
+                }
+            );
+    }
+}
+
 } // namespace
 
 int32_t fog_map_span(uint32_t zoom_fp, int32_t count) noexcept {
@@ -279,12 +348,13 @@ void draw_fog_grid(
     const FogView& view,
     const FogGrid& grid,
     const FogTileSet& tiles,
-    const FogShading& shading
+    const FogShading& shading,
+    platform::job_pool::Pool* pool
 ) {
     if (grid.tiles.empty() || view.dest_width <= 0 || view.dest_height <= 0)
         return;
     const auto zoom_fp = view.zoom_fp == 0 ? fog_zoom_one : view.zoom_fp;
-    FogPainter painter{
+    const FogPainter painter{
         surface,
         view,
         shading,
@@ -296,60 +366,19 @@ void draw_fog_grid(
     };
     if (painter.clip_x0 >= painter.clip_x1 || painter.clip_y0 >= painter.clip_y1)
         return;
-    const auto span_x = fog_map_span(zoom_fp, view.dest_width);
-    const auto span_z = fog_map_span(zoom_fp, view.dest_height);
-    const bool have_art = tiles.loaded();
-    for (int32_t row = 0; row < grid.height; ++row) {
-        const auto map_z0 = grid.offset_z + row * fog_cell_pixels;
-        if (map_z0 >= span_z || map_z0 + fog_cell_pixels <= 0)
-            continue;
-        const auto ys =
-            dest_span(zoom_fp, map_z0, map_z0 + fog_cell_pixels, painter.clip_y0, painter.clip_y1);
-        if (ys.empty())
-            continue;
-        for (int32_t column = 0; column < grid.width; ++column) {
-            const auto& tile = grid.at(column, row);
-            if (tile.unmapped == 0 && tile.unseen == 0)
-                continue;
-            const auto map_x0 = grid.offset_x + column * fog_cell_pixels;
-            if (map_x0 >= span_x || map_x0 + fog_cell_pixels <= 0)
-                continue;
-            const auto xs = dest_span(
-                zoom_fp, map_x0, map_x0 + fog_cell_pixels, painter.clip_x0, painter.clip_x1
-            );
-            if (xs.empty())
-                continue;
-            if (tile.unmapped == fog_mask_full) {
-                painter.fill(xs, ys, shading.unmapped_rgb);
-                continue;
-            }
-            const auto variant = (row + column + grid.variant_phase) & (fog_tile_variants - 1);
-            if (tile.unseen == fog_mask_full) {
-                painter.shade(map_x0, map_x0 + fog_cell_pixels, map_z0, map_z0 + fog_cell_pixels);
-            } else if (tile.unseen != 0 && have_art) {
-                painter.masked(
-                    tiles.at(FogTileSet::gray, variant, tile.unseen),
-                    map_x0,
-                    map_z0,
-                    [&](uint8_t, int32_t mx, int32_t mz, PixelSpan tx, PixelSpan ty) {
-                        if (shading.dithered)
-                            painter.dither(mx, mz, tx, ty);
-                        else
-                            painter.gray(tx, ty);
-                    }
-                );
-            }
-            if (tile.unmapped != 0 && have_art)
-                painter.masked(
-                    tiles.at(FogTileSet::black, variant, tile.unmapped),
-                    map_x0,
-                    map_z0,
-                    [&](uint8_t index, int32_t, int32_t, PixelSpan tx, PixelSpan ty) {
-                        painter.fill(tx, ty, shading.palette_rgb[index]);
-                    }
-                );
-        }
-    }
+    const FogRows rows{
+        grid,
+        tiles,
+        shading,
+        fog_map_span(zoom_fp, view.dest_width),
+        fog_map_span(zoom_fp, view.dest_height),
+        tiles.loaded()
+    };
+    // A grid row draws the map rows [map_z0, map_z0 + fog_cell_pixels) and
+    // the surface rows they land on, which no other grid row touches.
+    platform::job_pool::run_bands(pool, static_cast<uint32_t>(grid.height), [&](uint32_t band) {
+        draw_fog_row(painter, rows, static_cast<int32_t>(band));
+    });
 }
 
 void build_gray_levels(const Palette& palette, std::array<uint8_t, OA_PALETTE_COLORS>& levels) {

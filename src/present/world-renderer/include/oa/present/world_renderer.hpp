@@ -5,6 +5,7 @@
 
 #include "oa/formats/hpi.hpp"
 #include "oa/formats/tnt.hpp"
+#include "oa/platform/job_pool.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -127,9 +128,15 @@ struct RenderResult {
     float scale
 );
 
+/// Rows of the destination each band of fill_scaled_viewport fills.
+inline constexpr uint32_t terrain_band_rows = 32;
+
 /// Writes a scaled sample of the TNT mosaic into caller storage without allocating.
 ///
-/// Samples as render_scaled_viewport does.
+/// Samples as render_scaled_viewport does. The rows are filled in bands of
+/// terrain_band_rows rows, on the pool's threads when one is given; every
+/// row is the same whichever thread fills it. After an error, which rows
+/// were written is not specified.
 ///
 /// @param map parsed TNT
 /// @param game_palette the game palette
@@ -140,6 +147,7 @@ struct RenderResult {
 /// @param scale screen pixels per map pixel; non-positive means 1
 /// @param[out] dest_rgb RGB rows of dest_stride_pixels pixels
 /// @param dest_stride_pixels destination row stride in pixels, at least dest_width
+/// @param pool threads to fill the bands on; null fills them on the calling thread
 /// @return an error for a missing destination, a malformed map or a missing tile; nullopt on success
 [[nodiscard]] std::optional<Error> fill_scaled_viewport(
     const formats::tnt::Map& map,
@@ -150,7 +158,8 @@ struct RenderResult {
     uint32_t dest_height,
     float scale,
     uint8_t* dest_rgb,
-    uint32_t dest_stride_pixels
+    uint32_t dest_stride_pixels,
+    platform::job_pool::Pool* pool = nullptr
 );
 
 /// Renders the battlefield crop into a full presentation surface.

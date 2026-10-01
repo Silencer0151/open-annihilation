@@ -72,7 +72,9 @@ void Runtime::apply_match_fog(
     // The fog pass reads the DitheredFog bit of the match's Game word.
     fog_shading_.dithered =
         (match_->state().game.graphics_flags & init::preference_flags::dithered_fog) != 0;
-    oa::present::world_renderer::draw_fog_grid(destination, view, grid, fog_tiles_, fog_shading_);
+    oa::present::world_renderer::draw_fog_grid(
+        destination, view, grid, fog_tiles_, fog_shading_, draw_pool_.get()
+    );
     phase_times_.fog += std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::steady_clock::now() - started
     )

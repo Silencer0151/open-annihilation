@@ -8,7 +8,9 @@
 #include "match_clock.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/platform/app_loop.hpp"
+#include "oa/platform/job_pool.hpp"
 #include "oa/platform/log_files.hpp"
+#include "oa/platform/system.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include <SDL3/SDL.h>
@@ -131,6 +133,11 @@ Runtime::Runtime(
       audio_player_(assets), offline_effects_(effect_boundary_, effect_boundary_) {
     if (extension_.frontend_game == nullptr)
         frontend_game_ = std::make_unique<oa::Game>();
+    if (const uint32_t draw_threads = options_.draw_threads.value_or(
+            oa::platform::job_pool::default_threads(oa::platform::processor_count())
+        );
+        draw_threads > 1)
+        draw_pool_ = std::make_unique<oa::platform::job_pool::Pool>(draw_threads);
     if (window != nullptr && renderer != nullptr) {
         sdl_.window = window;
         sdl_.renderer = renderer;

@@ -317,6 +317,11 @@ struct Options {
     // Argument for the generator seeder in place of mission start's
     // performance-counter sum, so two runs start from the same state.
     std::optional<uint32_t> seed;
+    // Threads the per-row drawing passes run on, the drawing thread
+    // included (--draw-threads N, else the OA_DRAW_THREADS environment
+    // variable); unset for the job pool's default for the machine. Every
+    // count draws the same frames.
+    std::optional<uint32_t> draw_threads;
     // The MP4 a video capture of the run makes (video_capture.hpp); empty
     // for none.
     fs::path capture_video;
@@ -333,8 +338,9 @@ struct Extension;
 /// Long options the engine knows set their fields; any other long option goes
 /// to `extension`, and every other argument joins the game switch line, which
 /// fills Options::launch. --help and a bare -h print the usage and exit. After
-/// the loop the combinations are checked, OA_DEBUG_ORDER_LINES is read, and
-/// fixed_clock and unattended follow from the checks and runs asked for.
+/// the loop the combinations are checked, OA_DEBUG_ORDER_LINES is read,
+/// OA_DRAW_THREADS stands in for an absent --draw-threads, and fixed_clock
+/// and unattended follow from the checks and runs asked for.
 /// Throws std::runtime_error on an unknown option, a missing or malformed
 /// value, a refused or over-long switch line, or options that cannot be used
 /// together.

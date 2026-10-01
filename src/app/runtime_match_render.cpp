@@ -851,7 +851,8 @@ void Runtime::render_match_surface() {
                 static_cast<uint32_t>(bf_h),
                 match_zoom(),
                 match_terrain_cache_.rgb.data(),
-                static_cast<uint32_t>(bf_w)
+                static_cast<uint32_t>(bf_w),
+                draw_pool_.get()
             ))
             throw std::runtime_error("cannot render match terrain: " + error->message);
         terrain_cache_cam_x_ = camera_x;

@@ -91,6 +91,7 @@ add_subdirectory(src/base/sha256)
 add_subdirectory(src/core)
 add_subdirectory(src/platform)
 add_subdirectory(src/platform/app-menu)
+add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/ui/services)
 add_subdirectory(src/present)
 add_subdirectory(src/ui/frontend-state)
@@ -173,7 +174,7 @@ add_library(oa-app-game-options src/app/startup.cpp)
 add_library(oa::app::game_options ALIAS oa-app-game-options)
 target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
 target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
-  oa-ui-screen-registry oa-app-command-line oa-platform-preferences PRIVATE oa-options)
+  oa-ui-screen-registry oa-app-command-line oa-platform-preferences PRIVATE oa-platform-job-pool oa-options)
 # oa-game's game folder: --game-dir, the remembered folder or the folder
 # dialog's choice, the installation checks, and the installer of the Total
 # Annihilation demo (1997) recognised and its archive unpacked.
@@ -287,6 +288,13 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-frame-stats-panel-test PRIVATE oa-app-headers oa-base-game-loop
     oa-ui-hud oa-ui-display-layout oa-options)
   add_test(NAME app-frame-stats-panel COMMAND oa-app-frame-stats-panel-test)
+  # The frame's conversion into the window's 32-bit pixels: each pixel
+  # packed through the gamma table, rows of any width, and the same bytes on
+  # pools of 2, 3, 4 and 8 threads as on the calling thread alone.
+  add_executable(oa-app-xrgb-conversion-test src/app/xrgb_conversion_test.cpp
+    src/app/xrgb_conversion.cpp)
+  target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool oa-options)
+  add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
   # Alt+Enter: the key, the mode it asks for while the window is still
   # switching, and a window of SDL's dummy video driver switched and back.
   add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
@@ -309,7 +317,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_match_hud.cpp src/app/runtime_match_menus.cpp src/app/runtime_load_game.cpp
   src/app/runtime_order_panel.cpp src/app/runtime_order_check.cpp
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
-  src/app/runtime_present.cpp src/app/runtime_display.cpp
+  src/app/runtime_present.cpp src/app/xrgb_conversion.cpp src/app/runtime_display.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
@@ -348,7 +356,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
-  oa-ui-engine-settings oa-platform-app-menu)
+  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -722,6 +730,14 @@ if(OA_BUILD_PLATFORM)
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-sim-independent-of-drawing PROPERTIES
           TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The seeded headless skirmish's fight drawn frame by frame with the
+        # camera's scroll held, at zoom 1, 1.37 and 0.6, on 1, 3 and 4 drawing
+        # threads: every count draws the same frames and reaches the same world.
+        add_test(NAME native-draw-threads COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_draw_threads.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-draw-threads PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # Arm mission 9 (AC09) at medium, its commander left idle, is lost to
         # the two Pyros its script sends: defeat follows the commander's death
         # after the outcome countdown, with no failed tick.

@@ -7,10 +7,12 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,6 +49,40 @@ constexpr int32_t kScrollSweep = 192;
 constexpr std::size_t kMissionOrderPeriod = 300;
 // Ticks of a mission between the unit counts a headless campaign run prints.
 constexpr std::size_t kCampaignCensusPeriod = 300;
+// The frames digest of a frame run: its start, and the odd multiplier each
+// word of a frame is folded in with.
+constexpr uint64_t kFramesDigestBasis = 0xcbf29ce484222325ULL;
+constexpr uint64_t kFramesDigestMultiplier = 0x9e3779b97f4a7c15ULL;
+
+/// Folds a drawn layer into a frame run's frames digest: its size, then its
+/// bytes eight at a time, little-endian, the last word padded with zeros.
+///
+/// Each word is xored into the digest, which is then multiplied by
+/// kFramesDigestMultiplier and turned left by 29 bits.
+///
+/// @param digest the digest so far; kFramesDigestBasis before the first frame
+/// @param layer the layer drawn for the frame
+/// @return the digest with the layer folded in
+[[nodiscard]] uint64_t fold_frame(uint64_t digest, const renderer::Surface& layer) {
+    const auto fold = [&](uint64_t word) {
+        digest = std::rotl((digest ^ word) * kFramesDigestMultiplier, 29);
+    };
+    fold((static_cast<uint64_t>(layer.width) << 32) | layer.height);
+    const uint8_t* bytes = layer.rgb.data();
+    const std::size_t size = layer.rgb.size();
+    std::size_t at = 0;
+    for (; at + sizeof(uint64_t) <= size; at += sizeof(uint64_t)) {
+        uint64_t word = 0;
+        std::memcpy(&word, bytes + at, sizeof(word));
+        fold(word);
+    }
+    if (at < size) {
+        uint64_t word = 0;
+        std::memcpy(&word, bytes + at, size - at);
+        fold(word);
+    }
+    return digest;
+}
 
 } // namespace
 
@@ -288,6 +324,8 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
         2;
     std::size_t between_ticks = 0;
     uint64_t frame = 0;
+    // Every frame's drawn battlefield, which no count of drawing threads changes.
+    uint64_t frames_digest = kFramesDigestBasis;
     while (match_timing_.tick < ticks) {
         if (frame >= frame_limit)
             throw std::runtime_error("the frame run's match clock stopped stepping");
@@ -306,6 +344,7 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
         frame_draws_.units_between_ticks = 0;
         frame_draws_.probe_drawn = false;
         rebuild_surface();
+        frames_digest = fold_frame(frames_digest, match_world_cpu_);
         between_ticks += presentation_alpha_ < 1.0F ? 1 : 0;
         if (log != nullptr) {
             const auto* unit = probe != 0 ? match_->world().slots[probe].unit : nullptr;
@@ -350,12 +389,14 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
     }
     std::printf(
         "frame run: %u frames a second, %llu frames, %u ticks, %zu frames between ticks, "
-        "world digest %016llx\n",
+        "world digest %016llx, frames digest %016llx, drawing threads %u\n",
         frames_per_second,
         static_cast<unsigned long long>(frame),
         match_timing_.tick,
         between_ticks,
-        static_cast<unsigned long long>(frame_run_digest())
+        static_cast<unsigned long long>(frame_run_digest()),
+        static_cast<unsigned long long>(frames_digest),
+        draw_pool_ ? draw_pool_->threads() : 1U
     );
     std::fflush(stdout);
     if (!options_.snapshot.empty())

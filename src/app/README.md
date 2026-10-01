@@ -191,7 +191,25 @@ and `app-window-icon` that the embedded one decodes.
   one world digest; that at 120 the camera moves evenly, each frame shows a
   quarter of a tick more, and the unit drawn moves on nearly every frame,
   none carrying more than half the most it moves in a tick; and that a
-  tracked unit is drawn at one place of the screen on every frame.
+  tracked unit is drawn at one place of the screen on every frame. The run
+  ends with a line giving the world digest, a frames digest of every
+  frame's drawn battlefield and the drawing threads it drew on.
+- `xrgb_conversion.hpp`, `xrgb_conversion.cpp`: each frame's RGB layers
+  converted into the window's 32-bit pixels (0xffRRGGBB) as they are
+  uploaded, through the display gamma's table when the gamma is not 1, in
+  bands of 32 rows. The Runtime keeps a [job pool](../platform/job-pool/README.md)
+  (`draw_pool_`) that this conversion, the terrain fill and the fog run
+  their bands on: `--draw-threads N` (1 to 32), else the `OA_DRAW_THREADS`
+  environment variable, else the pool's default, one thread on a machine of
+  one or two logical processors and otherwise one fewer than the
+  processors, at most four. With one thread there is no pool and every
+  band runs on the drawing thread. The bands are fixed by the rows, never
+  by the threads, so every count draws the same frames.
+  `app-xrgb-conversion` checks each pixel's packing and gamma for rows of
+  any width and that pools of 2, 3, 4 and 8 threads convert the same bytes;
+  `native-draw-threads` draws the seeded skirmish's fight frame by frame at
+  zoom 1, 1.37 and 0.6 on 1, 3 and 4 drawing threads and checks that every
+  count gives the same frames digest and world digest.
 - `full_screen.hpp`, `full_screen.cpp`: Alt+Enter (Return or keypad Enter,
   either Alt key; Option on macOS), which switches the window between full
   screen and a window on every screen, during the movies and while a match

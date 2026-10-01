@@ -5,6 +5,7 @@
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/platform/job_pool.hpp"
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -73,6 +74,26 @@ parse_frame_rate(std::string_view text, uint32_t least, bool zero_allowed, const
     if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
         !in_range)
         throw std::runtime_error(expected);
+    return value;
+}
+
+/// Returns the drawing threads a --draw-threads or OA_DRAW_THREADS value names.
+///
+/// Throws std::runtime_error naming `source` unless the whole text is a
+/// decimal integer from 1 through job_pool::max_threads.
+///
+/// @param text the value
+/// @param source the option or variable the value came from
+/// @return the threads, the drawing thread included
+[[nodiscard]] uint32_t parse_draw_threads(std::string_view text, std::string_view source) {
+    uint32_t value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+        value < 1 || value > oa::platform::job_pool::max_threads)
+        throw std::runtime_error(
+            std::string(source) + " expects threads from 1 through " +
+            std::to_string(oa::platform::job_pool::max_threads)
+        );
     return value;
 }
 
@@ -363,6 +384,8 @@ void check_director_options(Options& options) {
             result.trace_units = value(argument);
         else if (argument == "--seed")
             result.seed = parse_seed(value(argument));
+        else if (argument == "--draw-threads")
+            result.draw_threads = parse_draw_threads(value(argument), argument);
         else if (argument == "--capture-video")
             result.capture_video = path_from_utf8(value(argument));
         else if (argument == "--showcase")
@@ -399,7 +422,7 @@ void check_director_options(Options& options) {
                       << extension_text(extension, ExtensionText::usage_runs, "")
                       << "[--save-after TICK] "
                          "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
-                         "[--trace-digest FILE] [--trace-units FILE] "
+                         "[--trace-digest FILE] [--trace-units FILE] [--draw-threads N] "
                          "[--capture-video PATH.mp4] [--showcase arm-first-mission] "
                          "[--generate-script RECORDING [--output PATH.oascript|PATH.oamovie] "
                          "[--resolution WxH]] "
@@ -476,6 +499,9 @@ void check_director_options(Options& options) {
         extension.check_options(extension.context);
     if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
         result.debug_order_lines = true;
+    if (const char* env = std::getenv("OA_DRAW_THREADS");
+        !result.draw_threads && env != nullptr && env[0] != '\0')
+        result.draw_threads = parse_draw_threads(env, "OA_DRAW_THREADS");
     // The director view check runs headless, where SDL is never started.
     if (result.check_director_view || result.check_director_render || result.check_interpolation ||
         result.check_unit_playout) {

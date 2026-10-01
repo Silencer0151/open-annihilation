@@ -178,19 +178,23 @@ struct FogView {
 ///
 /// Wholly never-mapped tiles are filled, wholly unseen tiles grayed (or
 /// dithered), and partial tiles drawn through their FOG.GAF masks, gray before
-/// black.
+/// black. Each row of the grid is a band that draws only the surface rows
+/// under it, on the pool's threads when one is given; every row is the same
+/// whichever thread draws it.
 ///
 /// @param[in,out] surface RGB world surface
 /// @param view destination rectangle, camera and zoom
 /// @param grid fog grid from build_fog_grid
 /// @param tiles FOG.GAF tile art; without it partial tiles are skipped
 /// @param shading gray levels, palette and fill colours
+/// @param pool threads to draw the grid's rows on; null draws them on the calling thread
 void draw_fog_grid(
     Surface& surface,
     const FogView& view,
     const FogGrid& grid,
     const FogTileSet& tiles,
-    const FogShading& shading
+    const FogShading& shading,
+    platform::job_pool::Pool* pool = nullptr
 );
 
 /// Finds the nearest palette entry to each gray level among entries of similar brightness.
