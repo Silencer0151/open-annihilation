@@ -33,8 +33,8 @@ Every document in the repository, by what you want to do.
 
 ## Reference
 
-- [VARIANCES.md](../VARIANCES.md): where the engine deliberately differs
-  from 3.1c, each a candidate setting for a future options screen.
+- [VARIANCES.md](../VARIANCES.md): where the engine always differs from
+  3.1c, on purpose.
 - [formats.md](formats.md): the HPI archive (its encryption and SQSH
   compression) and PCX image formats as the asset reader implements them,
   and which archive's copy of a file wins.

@@ -1,9 +1,8 @@
 # Variances from 3.1c
 
 Open Annihilation plays as Total Annihilation 3.1c does. This document lists
-the places where it deliberately differs. Each entry is a candidate setting
-for a future options screen: it says what 3.1c does, what the engine does, and
-the value that keeps 3.1c's behaviour.
+the places where it always differs, on purpose: what 3.1c does, what the
+engine does, and why.
 
 ## Order markers over the fog
 
@@ -15,7 +14,8 @@ the value that keeps 3.1c's behaviour.
   path pips, order lines, labels, build footprints and range circles. The
   overlays show only the player's own orders, so nothing under the fog is
   revealed.
-- **As a setting:** on by default; off draws the fog over them, as 3.1c does.
+- **Why:** queued orders stay readable wherever they go. This is permanent;
+  there is no setting for it.
 - **Code:** `oa::app::Runtime::render_match_surface`
   (`src/app/runtime_match_render.cpp`).
 
@@ -27,9 +27,20 @@ the value that keeps 3.1c's behaviour.
   and four times that scale, by 15% a notch. The view eases to the new scale
   and keeps the ground under the pointer in place. Scrolling moves at the same
   speed on screen at any zoom.
-- **As a setting:** on by default; off keeps the battlefield at one map pixel
-  to one screen pixel, as 3.1c does.
+- **Why:** a closer or wider view of the battle.
 - **Code:** `oa::app::Runtime::handle_match_zoom` and
   `oa::app::Runtime::step_match_zoom` (`src/app/runtime_camera.cpp`); the
   limits are `kMinBattlefieldZoom`, `kMaxBattlefieldZoom` and
   `kZoomWheelFactor` (`src/app/include/oa/app/app.hpp`).
+
+## Tab selects the next unit
+
+- **3.1c:** in a game played alone, Tab opens the in-game menu, as F2 does. In
+  a multiplayer game it opens the team menu.
+- **Open Annihilation:** in a game played alone, Tab makes the next unit of
+  the selection the one the unit panel shows; Shift+Tab goes back. With
+  nothing selected it does nothing. F2 still opens the in-game menu, and a
+  multiplayer game's Tab still opens the team menu.
+- **Why:** a quicker way through a selection; the menu keeps its own key.
+- **Code:** `oa::app::Runtime::cycle_selected_primary`
+  (`src/app/runtime_hotkeys.cpp`).
