@@ -60,6 +60,9 @@ constexpr uint8_t pad_type = 3;
 constexpr size_t type_count = 4;
 
 constexpr uint32_t wait_attack = 0x100e8;
+constexpr uint32_t wait_attack_or_cancel = 0x100ea;
+// The standing fire order a unit fires at will on.
+constexpr uint32_t fire_at_will = 2;
 constexpr uint32_t wait_goal_or_cancel = 0xe2;
 
 struct Fixture {
@@ -452,6 +455,65 @@ void dogfight_flies_seek_goals() {
     CHECK(lead.point.x == enemy.record.position.x && lead.point.z == enemy.record.position.z);
 }
 
+// The attack command on a ground point gives an armed aircraft AirToGround
+// at that point, with no target unit. It takes off, closes on a point
+// halfway there, then flies at the point with its first weapon aimed at it,
+// pulls out three weapon ranges past it, swings a weapon range to one side
+// and runs at the point again until the order is given up.
+void air_to_ground_at_a_point() {
+    Fixture f;
+    f.defs[fighter_type].can_attack = true;
+    auto& gunship = f.spawn(0, fighter_type, 100, 100);
+    gunship.unit->flags |= OA_UNIT_FLAG_HAS_WEAPONS;
+    const sim::ground_orders::Point at{300 << 16, 0, 140 << 16};
+    auto* ordered = f.match->issue_attack_ground(gunship.unit_index, at, false);
+    CHECK(ordered && ordered->kind == sim::match_runtime::air_to_ground_kind);
+    CHECK(gunship.unit->primary == ordered && !ordered->next);
+    auto& order = *ordered;
+    step(order, f.dispatch(gunship, order, 0));
+    order.wait_events = 0;
+    CHECK(f.dispatch(gunship, order, 0) == 1 && order.wait_events == wait_attack);
+    CHECK(point_goal(air_goal(f, gunship), 0x80));
+    step(order, 1);
+    CHECK(f.dispatch(gunship, order, 0x20) == 1 && order.wait_events == wait_attack);
+    const auto& aim = gunship.record.weapons[0];
+    CHECK(aim.target_a == 300 && aim.target_b == 140);
+    const auto& run = air_goal(f, gunship);
+    CHECK(point_goal(run, 300) && run.point.x == at[0] && run.point.z == at[2]);
+    step(order, 1);
+    CHECK(f.dispatch(gunship, order, 0x20) == 1 && order.wait_events == wait_attack_or_cancel);
+    const auto& pull_out = air_goal(f, gunship);
+    CHECK(pull_out.arrival_radius >= 0x80 && pull_out.arrival_radius < 0x100);
+    // Three ranges past the point, on the far side from the aircraft.
+    CHECK(pull_out.point.x > at[0] + (800 << 16));
+    step(order, 1);
+    CHECK(f.dispatch(gunship, order, 0x20) == 1 && order.wait_events == wait_attack_or_cancel);
+    CHECK(point_goal(air_goal(f, gunship), 0x80));
+    step(order, 1);
+    CHECK(f.dispatch(gunship, order, 0x20) == 2 && order.phase == 2);
+    CHECK(f.dispatch(gunship, order, 0x20) == 1);
+    // Given up while it may fire, it looks for targets around the point.
+    gunship.unit->flags |= fire_at_will << OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
+    CHECK(f.dispatch(gunship, order, 0x2) == 5);
+    CHECK(order.next && order.next->kind == sim::match_runtime::vtol_seek_attack_kind);
+}
+
+// The attack command on a ground point resolves as the attack command on a
+// unit does: an armed unit that does not fly takes Suppress, and a unit that
+// cannot attack takes nothing.
+void attack_ground_resolves_by_type() {
+    Fixture f;
+    f.defs[fighter_type].can_attack = true;
+    f.defs[tank_type].can_attack = true;
+    auto& tank = f.spawn(0, tank_type, 100, 300);
+    tank.unit->flags |= OA_UNIT_FLAG_HAS_WEAPONS;
+    const sim::ground_orders::Point at{300 << 16, 0, 140 << 16};
+    auto* suppress = f.match->issue_attack_ground(tank.unit_index, at, false);
+    CHECK(suppress && suppress->kind == sim::match_runtime::suppress_kind);
+    auto& pad = f.spawn(0, pad_type, 400, 400);
+    CHECK(!f.match->issue_attack_ground(pad.unit_index, at, false) && !pad.unit->primary);
+}
+
 void evade() {
     Fixture f;
     auto& fighter = f.spawn(0, fighter_type, 100, 100);
@@ -479,5 +541,7 @@ int main() {
     hover_flies_air_goals();
     strike_and_seek_fly_air_goals();
     dogfight_flies_seek_goals();
+    air_to_ground_at_a_point();
+    attack_ground_resolves_by_type();
     std::cout << "air attack missions passed\n";
 }

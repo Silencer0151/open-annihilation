@@ -1298,14 +1298,22 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param unit Unit searching.
     /// @return The target, or null when none or not firing at will.
     sim::simulation_state::Unit* find_automatic_target(sim::simulation_state::Unit& unit);
-    /// Issues the attack command (3) on a ground point: Suppress, not
-    /// Attack_NoMove.
+    /// Gives a unit the attack command (3) on a ground point, as a player's
+    /// attack order on open ground or a forced attack gives it.
+    ///
+    /// The command resolver picks the mission with no target unit: Suppress
+    /// for an armed unit that does not fly, AirStrike for an aircraft whose
+    /// first weapon is dropped, AirToGround for any other armed aircraft
+    /// (gunships among them), Attack_Kamikaze for an unarmed kamikaze type,
+    /// and none for a unit whose first weapon only reaches aircraft or that
+    /// cannot attack. The order is issued as issue_order issues it, with the
+    /// point and no target.
     ///
     /// @param unit Unit slot.
     /// @param destination Signed 16.16 point.
     /// @param queue Whether the command was queued (shift held).
-    /// @return The new order.
-    sim::simulation_state::Order&
+    /// @return The new order, or null when no mission resolves.
+    sim::simulation_state::Order*
     issue_attack_ground(uint16_t unit, const sim::ground_orders::Point& destination, bool queue);
     /// Issues the special attack command (4): AttackSpecial with the third
     /// weapon slot, which turns into Attack_Chase or Suppress when it runs.

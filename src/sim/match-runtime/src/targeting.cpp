@@ -419,6 +419,21 @@ bool Match::issue_attack_command(
     return true;
 }
 
+sim::simulation_state::Order* Match::issue_attack_ground(
+    uint16_t source_index, const sim::ground_orders::Point& destination, bool queue
+) {
+    auto& from = slots_.at(source_index);
+    TargetHost host(*this);
+    const sim::combat_state::AttackSource request{
+        source_index, from.unit->flags, from.unit->position, 0
+    };
+    const auto kind =
+        host.resolve_order(sim::combat_state::attack_order_kind, request, nullptr, nullptr);
+    if (kind == 0)
+        return nullptr;
+    return &issue_order(source_index, kind, queue, 0, &destination, 0, 0);
+}
+
 void Match::retarget_weapon_slot(sim::unit_spawn::Slot& unit, uint8_t slot) {
     auto& world = state();
     const auto* weapon = oa::world_weapon_def(&world, unit.record.weapons[slot].def);

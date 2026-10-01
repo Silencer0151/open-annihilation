@@ -510,21 +510,6 @@ Match::issue_build_weapon(uint16_t index, int32_t weapon_slot, int32_t count) {
     return order;
 }
 
-sim::simulation_state::Order& Match::issue_attack_ground(
-    uint16_t index, const sim::ground_orders::Point& destination, bool queue
-) {
-    // Attack command (3) with no unit: Suppress (kind 46), not Attack_NoMove.
-    auto& order = issue_queued_command(index, suppress_kind, destination, queue, 0x410u);
-    for (auto& candidate : orders_)
-        if (&candidate->order == &order)
-            candidate->attack.destination = {
-                std::bit_cast<uint32_t>(destination[0]),
-                std::bit_cast<uint32_t>(destination[1]),
-                std::bit_cast<uint32_t>(destination[2])
-            };
-    return order;
-}
-
 sim::simulation_state::Order& Match::issue_attack_special(
     uint16_t index, const sim::ground_orders::Point& destination, bool queue, uint16_t target
 ) {

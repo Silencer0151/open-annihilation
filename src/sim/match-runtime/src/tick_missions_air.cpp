@@ -24,8 +24,11 @@ constexpr uint32_t event_goal = sim::ground_orders::arrived_event |
 constexpr uint32_t wait_goal_or_cancel = event_goal | event_cancel;
 constexpr uint32_t wait_attack = event_weapon | event_goal | event_target;
 constexpr uint32_t wait_attack_reposition = wait_attack | event_target_unreachable;
+constexpr uint32_t wait_attack_or_cancel = wait_attack | event_cancel;
 constexpr uint32_t wait_guard = event_goal | event_target_damaged | event_target;
+// End AirStrike and AirToGround.
 constexpr uint32_t air_strike_abort_events = event_weapon | event_target | event_cancel;
+// End AirToAir, AirToGroundHover and VTOL_Evade.
 constexpr uint32_t air_attack_abort_events = event_weapon | event_target;
 
 // Command flags bits, kept in OrderState.command_flags.
@@ -60,6 +63,12 @@ constexpr int32_t dogfight_misaligned_step = 0x2d;
 constexpr int32_t dogfight_misaligned_limit = 0x5a;
 constexpr int16_t dogfight_pursuit_distance = 0xa0;
 constexpr uint32_t dogfight_wait_ticks = 0x2d;
+// AirToGround: runs pull out three weapon ranges past the point and end
+// within a random 128 to 255 world units of it; an aircraft off the map
+// waits 30 ticks and runs at the point again.
+constexpr int32_t ground_run_pull_out_ranges = 3;
+constexpr uint32_t ground_run_pull_out_arrival = 0x80;
+constexpr uint32_t ground_run_off_map_wait = 0x1e;
 constexpr int16_t hover_arrival = 0x10;
 constexpr int32_t hover_unreachable_limit = 2;
 constexpr int32_t seek_orbit_margin = 0xa0;
@@ -170,6 +179,15 @@ class TickHost::AirAttackMissions {
     ///     queued), 5 (done: target lost, an abort event or past the leash) or
     ///     7 (invalid).
     uint32_t air_to_air(uint32_t events);
+    /// Runs one step of AirToGround: aircraft fly at a unit or a ground
+    /// point, firing their first weapon at it on the way in, pull out past
+    /// it, swing round to one side and run at it again until the order ends.
+    ///
+    /// @param events Events raised on the order since its last step.
+    /// @return 1 (next phase), 2 (keep waiting), 0 (restart: a landing was
+    ///     queued), 5 (done: an abort event, the unit target gone or past the
+    ///     leash; VTOL_SeekAttack follows when allowed) or 7 (invalid).
+    uint32_t air_to_ground(uint32_t events);
     /// Runs one step of AirToGroundHover: gunships close to half the distance,
     /// hover at weapon range, then strafe from side to side.
     ///
@@ -365,6 +383,10 @@ class TickHost::AirAttackMissions {
     /// @param[in,out] created Order to queue.
     void append(Match::RuntimeOrder& created);
     bool seek_after_target_lost(uint32_t events, uint32_t abort_events);
+    /// Tells whether the unit stands in the off-map bucket.
+    ///
+    /// @return True when the unit is off the map.
+    bool off_map() const;
     /// Steers a unit in the off-map bucket back toward the map centre.
     ///
     /// @return True when the unit was off the map and a goal toward the centre
@@ -460,9 +482,13 @@ bool TickHost::AirAttackMissions::seek_after_target_lost(uint32_t events, uint32
     return true;
 }
 
-bool TickHost::AirAttackMissions::return_to_map() {
+bool TickHost::AirAttackMissions::off_map() const {
     const auto& projected = host.match.spatial_units_.at(s.unit_index);
-    if (!projected.bucket_linked || projected.bucket)
+    return projected.bucket_linked && !projected.bucket;
+}
+
+bool TickHost::AirAttackMissions::return_to_map() {
+    if (!off_map())
         return false;
     const auto& game = world.game;
     AttackPoint centre{};
@@ -717,6 +743,78 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
     return result_stay;
 }
 
+uint32_t TickHost::AirAttackMissions::air_to_ground(uint32_t events) {
+    auto& attack = record.attack;
+    const auto range = primary_range();
+    if (seek_after_target_lost(events, air_strike_abort_events))
+        return result_done;
+    // The point follows a target unit; a ground attack keeps the point given.
+    if (attack.target)
+        store_destination(target_position());
+    if (off_map()) {
+        wait(ground_run_off_map_wait);
+        order.phase = 2;
+    }
+    if (leash_exceeded())
+        return result_done;
+    const auto destination = attack.destination;
+    switch (order.phase) {
+    case 0:
+        if (!can_fly())
+            return result_fail;
+        adapter.announce("Attacking");
+        host.take_off(s, order);
+        return result_next;
+    case 1: {
+        adapter.reset_weapons();
+        const auto from = here();
+        const auto distance =
+            horizontal_distance(destination[0] - from[0], destination[2] - from[2]);
+        const auto toward = bearing(from, destination);
+        const auto half = distance / 2;
+        const auto angle =
+            static_cast<uint16_t>(host.random(2 * eighth_turn) + toward - eighth_turn);
+        point_goal(forward(from, angle, half), loiter_arrival);
+        order.wait_events = wait_attack;
+        return result_next;
+    }
+    case 2:
+        adapter.release_weapon_targets(0);
+        if (attack.target)
+            adapter.assign_target(*attack.target, 0);
+        else
+            adapter.assign_ground(destination, 0);
+        point_goal(destination, range);
+        order.wait_events = wait_attack;
+        return result_next;
+    case 3: {
+        const auto pull_out =
+            signed_bits(static_cast<uint32_t>(range * ground_run_pull_out_ranges) << 16);
+        const auto arrival = static_cast<int32_t>(
+            host.random(ground_run_pull_out_arrival) + ground_run_pull_out_arrival
+        );
+        point_goal(forward(destination, bearing(here(), destination), pull_out), arrival);
+        order.wait_events = wait_attack_or_cancel;
+        return result_next;
+    }
+    case 4: {
+        if (health_low() && seek_repair_pad())
+            return result_restart;
+        const auto turn = host.random(2) != 0 ? static_cast<uint16_t>(unit.heading + quarter_turn)
+                                              : static_cast<uint16_t>(unit.heading - quarter_turn);
+        const auto swing = signed_bits(static_cast<uint32_t>(range) << 16);
+        point_goal(forward(here(), turn, swing), loiter_arrival);
+        order.wait_events = wait_attack_or_cancel;
+        return result_next;
+    }
+    case 5:
+        order.phase = 2;
+        return result_stay;
+    default:
+        return result_fail;
+    }
+}
+
 uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
     auto& attack = record.attack;
     if (seek_after_target_lost(events, air_attack_abort_events))
@@ -906,14 +1004,17 @@ bool TickHost::dispatch_air_attack_mission(
     sim::unit_spawn::Slot& s, sim::simulation_state::Order& order, uint32_t events, uint32_t& result
 ) {
     const auto kind = order.kind;
-    if (kind != air_strike_kind && kind != air_to_air_kind && kind != air_to_ground_hover_kind &&
-        kind != vtol_seek_attack_kind && kind != air_seek_guard_kind && kind != air_evade_kind)
+    if (kind != air_strike_kind && kind != air_to_air_kind && kind != air_to_ground_kind &&
+        kind != air_to_ground_hover_kind && kind != vtol_seek_attack_kind &&
+        kind != air_seek_guard_kind && kind != air_evade_kind)
         return false;
     AirAttackMissions missions(*this, s, owned(order));
     if (kind == air_strike_kind)
         result = missions.air_strike(events);
     else if (kind == air_to_air_kind)
         result = missions.air_to_air(events);
+    else if (kind == air_to_ground_kind)
+        result = missions.air_to_ground(events);
     else if (kind == air_to_ground_hover_kind)
         result = missions.air_to_ground_hover(events);
     else if (kind == vtol_seek_attack_kind)

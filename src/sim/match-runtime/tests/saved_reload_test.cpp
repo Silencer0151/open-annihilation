@@ -49,8 +49,8 @@ saved_reload(const std::array<uint8_t, data::persist::unit_record_bytes>& record
 /// @return the shooter
 sim::unit_spawn::Slot& shooter_in(Fixture& fixture) {
     auto& shooter = fixture.spawn(0, shooter_x, shooter_z);
-    (void)fixture.match->issue_attack_ground(
-        shooter.unit_index, {aim_x << 16, 0, aim_z << 16}, false
+    CHECK(
+        fixture.match->issue_attack_ground(shooter.unit_index, {aim_x << 16, 0, aim_z << 16}, false)
     );
     return shooter;
 }

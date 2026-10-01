@@ -25,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 using namespace combat_fixture;
 
@@ -672,6 +673,93 @@ void installed_gunship_moves_on_after_its_kill(test::InstalledUnits& units, std:
         );
 }
 
+// The missions the attack command on a ground point gives.
+constexpr uint8_t air_to_ground_order = sim::match_runtime::air_to_ground_kind;
+constexpr uint8_t air_strike_order = sim::match_runtime::air_strike_kind;
+constexpr uint8_t suppress_order = sim::match_runtime::suppress_kind;
+// Ticks a gunship attacking a ground point has, once it first fires, to pull
+// out and fire on its next run.
+constexpr uint32_t ground_attack_watch_ticks = 900;
+// Weapon ranges from the point beyond which a gunship has pulled out of its
+// run: it flies out three.
+constexpr int32_t ground_run_pulled_out_ranges = 2;
+
+// Commanded from out of reach to attack a point on open ground, an installed
+// gunship takes AirToGround at the point: it flies at the point with its
+// first weapon aimed there and fires within range of it, pulls out past it
+// and fires again on its next run, in the air throughout.
+void installed_gunship_attacks_the_ground(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells);
+    const sim::ground_orders::Point at{
+        coast_target_x * fixed_one, land_height * fixed_one, coast_target_z * fixed_one
+    };
+    auto& gunship = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    const auto range = weapon_range(land, gunship);
+    (void)land.match->issue_attack_ground(gunship.unit_index, at, false);
+    if (!head_is(gunship, air_to_ground_order))
+        throw std::runtime_error(std::string(name) + " did not take the attack on the ground");
+    ShotWatch shots{gunship, gunship.record.weapons[0].reload};
+    std::optional<double> first_shot;
+    land.run(approach_ticks, [&] {
+        if (shots.fired())
+            first_shot = distance_to(gunship, at);
+        return first_shot.has_value();
+    });
+    const auto& aim = gunship.record.weapons[0];
+    if (!first_shot || *first_shot > range || aim.target_a != coast_target_x ||
+        aim.target_b != coast_target_z)
+        throw std::runtime_error(
+            std::string(name) + " fired " + (first_shot ? std::to_string(*first_shot) : "never") +
+            " from the point, aimed at " + std::to_string(aim.target_a) + ", " +
+            std::to_string(aim.target_b)
+        );
+    const auto cruise = land.units.definitions[gunship.record.type_index].cruise_altitude;
+    int32_t lowest = cruise;
+    double farthest = 0.0;
+    bool fired_again = false;
+    land.run(ground_attack_watch_ticks, [&] {
+        farthest = std::max(farthest, distance_to(gunship, at));
+        lowest = std::min(lowest, height_above_surface(land, gunship));
+        fired_again = shots.fired() && farthest > range * ground_run_pulled_out_ranges;
+        return fired_again || !head_is(gunship, air_to_ground_order);
+    });
+    if (!fired_again || !head_is(gunship, air_to_ground_order) || lowest < cruise / 2)
+        throw std::runtime_error(
+            std::string(name) + " pulled out to " + std::to_string(farthest) +
+            (fired_again ? " and" : " but never") + " fired on its next run, and came down to " +
+            std::to_string(lowest) + " above the land"
+        );
+}
+
+// The attack command on a ground point resolves as the attack command on a
+// unit does: a bomber takes AirStrike, a fighter AirToGround, and a ground
+// unit Suppress.
+void installed_ground_attack_resolves_by_type(test::InstalledUnits& units) {
+    Land land(units);
+    const auto at = point(target_cell_x * 16 + 8, land_row * 16 + 8);
+    const std::pair<std::string_view, uint8_t> expected[] = {
+        {"ARMTHUND", air_strike_order},
+        {"ARMFIG", air_to_ground_order},
+        {"ARMBRAWL", air_to_ground_order},
+        {"CORAPE", air_to_ground_order},
+        {"ARMSTUMP", suppress_order},
+    };
+    int32_t x = 24;
+    for (const auto& [name, kind] : expected) {
+        auto& unit = land.spawn(0, name, x);
+        x += 64;
+        land.run(2);
+        (void)land.match->issue_attack_ground(unit.unit_index, at, false);
+        if (!head_is(unit, kind))
+            throw std::runtime_error(
+                std::string(name) + " took mission " +
+                std::to_string(unit.unit->primary ? unit.unit->primary->kind : 0) +
+                " for the attack on the ground, not " + std::to_string(kind)
+            );
+    }
+}
+
 void installed_attack_commands(const AssetStore& store) {
     test::InstalledUnits units(
         store,
@@ -690,7 +778,9 @@ void installed_attack_commands(const AssetStore& store) {
          "ARMBRAWL",
          "CORAPE",
          "ARMMH",
-         "CORMH"}
+         "CORMH",
+         "ARMTHUND",
+         "ARMFIG"}
     );
     // Kbots with lasers, lightning, flame, plasma cannon and rockets, and a
     // vehicle: all brake within the stretch the command finds them at.
@@ -710,13 +800,16 @@ void installed_attack_commands(const AssetStore& store) {
           "ARMSTUMP",
           "CORRAID"})
         installed_attack_command_closes_to_range(units, name);
-    // Gunships, which hover to attack and look for the next unit once their
-    // target is destroyed.
+    // Gunships, which hover to attack, look for the next unit once their
+    // target is destroyed and make runs at a point on the ground.
     for (const auto* name : {"ARMBRAWL", "CORAPE"}) {
         installed_gunship_hovers_facing_its_target(units, name);
         installed_gunship_seeks_after_its_kill(units, name);
         installed_gunship_moves_on_after_its_kill(units, name);
+        installed_gunship_attacks_the_ground(units, name);
     }
+    // Bombers, fighters, gunships and a vehicle commanded at the ground.
+    installed_ground_attack_resolves_by_type(units);
     // Missile hovercraft, whose missiles launch vertically and do not track.
     for (const auto* name : {"ARMMH", "CORMH"})
         installed_vertical_missile_comes_down_where_aimed(units, name);

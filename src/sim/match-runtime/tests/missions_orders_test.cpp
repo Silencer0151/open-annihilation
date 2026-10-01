@@ -540,7 +540,9 @@ void attack_orders() {
 
     // Suppress: phase 0 takes the range, phase 1 aims both guns at the point,
     // phase 2 moves within the shrinking range around it.
-    auto& suppress = f.match->issue_attack_ground(id, point(160, 100), false);
+    auto* ordered = f.match->issue_attack_ground(id, point(160, 100), false);
+    CHECK(ordered && ordered->kind == sim::match_runtime::suppress_kind);
+    auto& suppress = *ordered;
     CHECK(step(*f.match, unit, suppress) == 1);
     CHECK(step(*f.match, unit, suppress) == 1 && suppress.wait_events == 0x1c00);
     CHECK(unit.record.weapons[0].target_a == 160 && unit.record.weapons[0].target_b == 100);

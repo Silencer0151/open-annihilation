@@ -194,13 +194,7 @@ uint32_t TickHost::dispatch_mission(
         result = sim::ground_orders::move_ground(
             steering(), order, owned(order).extra, events, world.tick, *this
         );
-    else if (order.kind == air_to_ground_kind) {
-        if (order.phase == 0)
-            take_off(s, order);
-        auto& record = owned(order);
-        AttackAdapter adapter(*this, s, record);
-        result = air_to_ground(u, order, record.attack, events, world.tick, adapter);
-    } else if (order.kind == paralyze_order_kind) {
+    else if (order.kind == paralyze_order_kind) {
         // Paralyze. The first parameter is the duration.
         struct Paralyzed {
             TickHost& host;

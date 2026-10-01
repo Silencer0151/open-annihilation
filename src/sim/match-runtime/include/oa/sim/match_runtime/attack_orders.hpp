@@ -134,33 +134,4 @@ inline constexpr uint8_t wait_kind = 66;                // Wait
 
 inline constexpr uint8_t vtol_seek_attack_kind = 62; // VTOL_SeekAttack
 
-/// Runs one step of the AirToGround mission (shared by the sibling air
-/// attack records): require canfly, announce, fly an intercept toward the
-/// target, then fire while circling.
-///
-/// Phase 0 checks the unit flies and picks a weapon. Phase 1 stands the
-/// weapons down, sets a circle goal of the weapon's range on a point half
-/// the target's distance from the unit, at the target's heading randomised
-/// by up to an eighth of a turn either way, and engages when in reach.
-/// Phase 2 re-engages or stands down every 30 ticks until a goal event
-/// sends it back to phase 1.
-///
-/// @param unit Attacking aircraft.
-/// @param[in,out] order Its order; phase, wait events and wake tick change.
-/// @param[in,out] state The order's attack fields; the weapon slot is filled
-///     in when zero.
-/// @param events Events raised on the order since its last step.
-/// @param tick Current simulation tick.
-/// @param host Match services.
-/// @return 1 (next phase), 2 (keep waiting), 4 (phase chosen), 5 (done: the
-///     target is gone, the leash is exceeded or a cancel/target-lost event
-///     arrived) or 7 (invalid: the unit cannot fly or the phase is unknown).
-uint32_t air_to_ground(
-    sim::simulation_state::Unit& unit,
-    sim::simulation_state::Order& order,
-    AttackOrderState& state,
-    uint32_t events,
-    uint32_t tick,
-    AttackOrderHost& host
-);
 } // namespace oa::sim::match_runtime
