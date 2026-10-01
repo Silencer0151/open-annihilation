@@ -305,7 +305,7 @@ if(BUILD_TESTING)
   add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
   target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
   add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
-  set_tests_properties(app-full-screen PROPERTIES
+  set_tests_properties(app-full-screen PROPERTIES TIMEOUT 60
     ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp

@@ -19,10 +19,12 @@ if(OA_BUILD_INTRO_PLAYER)
     if(BUILD_TESTING)
       add_executable(oa-intro-player-test tests/intro_player_test.cpp)
       target_link_libraries(oa-intro-player-test PRIVATE oa-media-intro-player
-        oa-formats-smacker-test-movie oa-options)
+        oa-formats-smacker-test-movie oa-audio-output oa-options)
       add_test(NAME intro-player COMMAND oa-intro-player-test
         ${CMAKE_CURRENT_BINARY_DIR}/intro-player)
-      set_tests_properties(intro-player PROPERTIES
+      # A few seconds: one case waits out the player's 5 s bound on a sound
+      # device that stops taking samples. A hang fails at the time limit.
+      set_tests_properties(intro-player PROPERTIES TIMEOUT 60
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
     endif()
   else()

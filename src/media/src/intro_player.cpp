@@ -33,6 +33,10 @@ namespace smacker = formats::smacker;
 // presentation canvas below. The frame itself keeps its decoded dimensions.
 inline constexpr int kGamePresentationWidth = 640;
 inline constexpr int kGamePresentationHeight = 480;
+// The longest full playback waits for its queued samples to play out, 5 s:
+// a sound device that stops taking samples ends the movie with an error
+// after it instead of holding the game. Playback waits at most 5 ms at a
+// time, between looks at the window's events and the queue.
 inline constexpr uint64_t kAudioDrainTimeoutNs = 5000000000ULL;
 inline constexpr uint64_t kAudioDrainPollNs = 5000000ULL;
 // A negative frame-rate field counts 1/100000 s per frame and a positive one
@@ -100,6 +104,32 @@ bool write_snapshot(
         return false;
     }
     return true;
+}
+
+/// Starts the sound output for a movie and opens its playing stream.
+///
+/// @param track the movie's played track
+/// @param[out] started set once the output has started; the caller stops it
+///        once, after the stream is gone
+/// @param[out] reason why there is no stream
+/// @return the stream, or null when the movie plays without sound
+std::unique_ptr<oa::audio::OutputStream>
+open_movie_sound(const smacker::AudioFormat& track, bool& started, std::string& reason) {
+    auto& output = oa::audio::sound_output();
+    if (!output.start(reason))
+        return nullptr;
+    started = true;
+    oa::audio::StreamFormat format{};
+    format.sample = oa::audio::SampleFormat::s16;
+    format.channels = static_cast<uint8_t>(track.channels);
+    format.rate = track.sample_rate;
+    auto stream = output.open_stream(format, nullptr, nullptr, reason);
+    if (stream == nullptr || !stream->resume()) {
+        if (reason.empty())
+            reason = output.last_error();
+        return nullptr;
+    }
+    return stream;
 }
 
 } // namespace
@@ -226,6 +256,7 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     const bool host_display = window != nullptr && renderer != nullptr;
     SDL_Texture* texture = nullptr;
     std::unique_ptr<oa::audio::OutputStream> audio_stream;
+    bool sound_started = false;
     bool sdl_initialized = false;
     const auto canvas_width = std::max(kGamePresentationWidth, impl.width);
     const auto canvas_height = std::max(kGamePresentationHeight, impl.presentation_height);
@@ -237,6 +268,9 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     };
     auto cleanup = [&] {
         audio_stream.reset();
+        if (sound_started)
+            oa::audio::sound_output().stop();
+        sound_started = false;
         if (texture != nullptr)
             SDL_DestroyTexture(texture);
         if (!host_display) {
@@ -255,10 +289,7 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     };
     if (!options.headless_check) {
         if (!host_display) {
-            SDL_InitFlags flags = SDL_INIT_VIDEO;
-            if (options.play_audio && impl.has_audio())
-                flags |= SDL_INIT_AUDIO;
-            if (!SDL_Init(flags)) {
+            if (!SDL_Init(SDL_INIT_VIDEO)) {
                 playback.error = std::string("SDL_Init: ") + SDL_GetError();
                 return playback;
             }
@@ -267,12 +298,6 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
                 "Open Annihilation", canvas_width * 2, canvas_height * 2, SDL_WINDOW_RESIZABLE
             );
             renderer = window == nullptr ? nullptr : SDL_CreateRenderer(window, nullptr);
-        } else if (options.play_audio && impl.has_audio()) {
-            std::string error;
-            if (!oa::audio::sound_output().start(error)) {
-                playback.error = "sound output: " + error;
-                return playback;
-            }
         }
         texture = renderer == nullptr ? nullptr
                                       : SDL_CreateTexture(
@@ -293,25 +318,18 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
             cleanup();
             return playback;
         }
+        // A movie whose sound cannot play, as on a computer with no sound
+        // device, is shown without it.
         if (options.play_audio && impl.has_audio()) {
-            oa::audio::StreamFormat format{};
-            format.sample = oa::audio::SampleFormat::s16;
-            format.channels = static_cast<uint8_t>(impl.audio_format.channels);
-            format.rate = impl.audio_format.sample_rate;
-            std::string error;
-            audio_stream = oa::audio::sound_output().open_stream(format, nullptr, nullptr, error);
-            if (audio_stream == nullptr || !audio_stream->resume()) {
-                playback.error = "sound output setup: " +
-                                 (error.empty() ? oa::audio::sound_output().last_error() : error);
-                cleanup();
-                return playback;
-            }
+            std::string reason;
+            audio_stream = open_movie_sound(impl.audio_format, sound_started, reason);
+            if (audio_stream == nullptr)
+                std::fprintf(stderr, "intro plays without sound: %s\n", reason.c_str());
         }
         const auto* video_backend = SDL_GetCurrentVideoDriver();
         const auto* renderer_backend = SDL_GetRendererName(renderer);
-        const std::string audio_driver = options.play_audio && impl.has_audio()
-                                             ? oa::audio::sound_output().driver_name()
-                                             : std::string();
+        const std::string audio_driver =
+            audio_stream != nullptr ? oa::audio::sound_output().driver_name() : std::string();
         const char* audio_backend = audio_driver.empty() ? nullptr : audio_driver.c_str();
         std::fprintf(
             stderr,

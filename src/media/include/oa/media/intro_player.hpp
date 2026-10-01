@@ -101,10 +101,13 @@ class IntroPlayer {
 
     /// Plays the movie, or decodes it without a window for a headless check.
     ///
-    /// Escape, a quit event or closing the window skips the rest. Full
-    /// playback waits for the queued audio to drain. The player built
-    /// without SDL3 decodes nothing: one line is logged and the movie is
-    /// reported skipped.
+    /// Escape, a quit event or closing the window skips the rest. The sound
+    /// output is started for the movie's sound and stopped after it; when
+    /// it cannot start or take the movie's stream, one line is logged and
+    /// the movie is shown without sound. Full playback then waits at most
+    /// 5 s for the queued samples to play out, and reports an error if they
+    /// have not. The player built without SDL3 decodes nothing: one line is
+    /// logged and the movie is reported skipped.
     ///
     /// @param options Frame limit, headless mode, audio, snapshot path and an
     ///        optional window and renderer to play into.

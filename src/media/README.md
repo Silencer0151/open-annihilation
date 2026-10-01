@@ -15,14 +15,21 @@ the campaign: `IntroPlayer::open` reads a movie's header, tables and Huffman
 trees through `oa-formats-smacker`, and `play` reads one frame at a time
 from the file, decodes it with the engine's Smacker decoder, turns the palette
 indices into RGB and shows it through SDL3, with the first audio track's
-samples queued on an SDL audio stream. It needs SDL3 and nothing else; where
-SDL3 is missing, `oa-media-intro-player-null` checks each movie and skips it
-with one logged line.
+samples queued on a stream of the sound output (`oa/audio/sound_output.hpp`).
+It needs SDL3 and nothing else; where SDL3 is missing,
+`oa-media-intro-player-null` checks each movie and skips it with one logged
+line.
 
 - **Timing.** Frame n is shown n frame periods after the first frame, the
   period being the header's frame-rate field (a negative value counts
-  1/100000 s, a positive one milliseconds), in whole nanoseconds. Full
-  playback then waits for the queued samples to drain.
+  1/100000 s, a positive one milliseconds), in whole nanoseconds.
+- **Sound.** `play` starts the sound output for the movie and stops it
+  after, so each start has its stop. When the output cannot start (a
+  computer with no sound device) or will not take the movie's stream, one
+  line is logged and the movie is shown without sound. Full playback then
+  waits for the queued samples to play out, for at most 5 s: a sound device
+  that stops taking samples ends the movie with an error instead of holding
+  the game.
 - **Scaling.** Frames are centred on the 640x480 canvas and the canvas is
   letterboxed to fill the window (`letterbox_dest`). Height modes 2 and 4
   double the shown height; in mode 2 the odd rows repeat the decoded row on
@@ -37,9 +44,12 @@ with one logged line.
 `intro-player` plays the small movie of
 `src/formats/smacker/tests/support/smacker_test_movie.hpp` headless (the
 information it reports, three frames, six samples, a snapshot checked pixel
-by pixel, a frame limit, the audio and pixel bounds, a damaged frame) and
-through SDL with the dummy drivers. `intro-player-null` checks the player
-without SDL3.
+by pixel, a frame limit, the audio and pixel bounds, a damaged frame),
+through SDL with the dummy drivers, and on sound outputs of its own: one
+that cannot start, one that refuses the stream and one whose device stops
+taking samples, where playback ends within its bound. Each movie file is
+removed once its players are destroyed, which Windows allows only when they
+have closed it. `intro-player-null` checks the player without SDL3.
 
 ## Director
 
