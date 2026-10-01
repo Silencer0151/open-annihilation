@@ -4,6 +4,7 @@
 // Built-in frontend screens, dispatcher steps and the services table handed to
 // registered screen packages.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
 #include "oa/ui/campaign/endgame.hpp"
@@ -254,6 +255,8 @@ struct BuiltinScreens {
         auto& runtime = host(ctx);
         runtime.resources_ = load_main_menu(runtime);
         runtime.state_.state = frontend::state_id::main_menu;
+        // The next game's unit limit, should a frontend clear have emptied it.
+        Runtime::EngineSettingsState::keep_run_unit_limit(runtime);
         setup_main_menu_panel(runtime);
         // The game reaches the main menu only through the dispatcher,
         // which follows the setup with this step; screens that return here
@@ -627,6 +630,9 @@ void Runtime::register_screens() {
 #undef OA_REGISTER
     if (extension_.register_screens != nullptr)
         extension_.register_screens(extension_.context, &screens_);
+    // The OA button and the settings dialog, on the main menu and in a match.
+    register_engine_settings_overlays();
+    register_engine_settings_match_overlay();
     // Without screens of the extension's for them, the multiplayer unit
     // headers and a main-menu overlay's steps have nothing to do. The registry
     // refuses a second handler, so these fill only the steps nobody took.

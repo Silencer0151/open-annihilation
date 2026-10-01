@@ -1,0 +1,399 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/ui/frontend_renderer/artless.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <utility>
+#include <string_view>
+#include <vector>
+
+namespace oa::ui::frontend_renderer {
+
+namespace {
+
+/// The first byte a font draws or advances over; lower bytes are skipped.
+constexpr unsigned char first_printable = 0x20;
+
+/// A rectangle in source pixels with 64-bit edges: left and top inclusive,
+/// right and bottom exclusive.
+struct Span64 {
+    int64_t left{};   ///< first column
+    int64_t top{};    ///< first row
+    int64_t right{};  ///< column after the last
+    int64_t bottom{}; ///< row after the last
+};
+
+/// Divides, rounding towards negative infinity.
+///
+/// @param numerator the dividend
+/// @param denominator the divisor, above 0
+/// @return the quotient rounded down
+int64_t floor_divide(int64_t numerator, int64_t denominator) noexcept {
+    const int64_t quotient = numerator / denominator;
+    return (numerator % denominator != 0 && numerator < 0) ? quotient - 1 : quotient;
+}
+
+/// Clamps a value to the 32-bit range.
+///
+/// @param value the value
+/// @return the nearest 32-bit value
+int32_t clamp_to_int32(int64_t value) noexcept {
+    return static_cast<int32_t>(std::clamp<int64_t>(
+        value, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()
+    ));
+}
+
+/// Returns the source pixels whose blocks touch the surface.
+///
+/// @param surface the surface
+/// @param placement where source pixels land, its scale at least 1
+/// @return the source rectangle of every source pixel drawn at least in part
+Span64 visible_source(const Surface& surface, const Placement& placement) noexcept {
+    const int64_t scale = placement.scale;
+    return {
+        floor_divide(-int64_t{placement.x}, scale),
+        floor_divide(-int64_t{placement.y}, scale),
+        floor_divide(int64_t{surface.width} - placement.x - 1, scale) + 1,
+        floor_divide(int64_t{surface.height} - placement.y - 1, scale) + 1,
+    };
+}
+
+/// Tells whether a surface's pixels fill its size.
+///
+/// @param surface the surface
+/// @return true when it holds width x height RGB pixels
+bool whole(const Surface& surface) noexcept {
+    return surface.rgb.size() >= static_cast<std::size_t>(surface.width) * surface.height * 3U;
+}
+
+/// Returns a palette colour's brightness: 299 red + 587 green + 114 blue.
+///
+/// @param palette the palette, four bytes a colour
+/// @param index the colour's index
+/// @return the brightness, 0 to 255000
+uint32_t brightness(const oa::PaletteBytes& palette, std::size_t index) noexcept {
+    const std::size_t at = index * oa::palette_entry_bytes;
+    return 299U * palette[at] + 587U * palette[at + 1] + 114U * palette[at + 2];
+}
+
+/// Draws text in one colour, each covered glyph pixel at the ink its palette
+/// index has, or in the colour itself without ink.
+///
+/// @param[in,out] surface the surface
+/// @param placement where source pixels land
+/// @param font the font
+/// @param ink the share of the colour each palette index draws, or nullptr for all of it
+/// @param text the text, one byte a glyph
+/// @param x the pen column, in source pixels
+/// @param y the pen row, in source pixels, as raster_text takes it
+/// @param color the colour
+/// @return the pen column after the text, in source pixels
+int32_t draw_glyphs(
+    Surface& surface,
+    const Placement& placement,
+    const oa::formats::fnt::Font& font,
+    const GlyphInk* ink,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    Rgb color
+) {
+    // Bound the glyphs' pixels as raster_text places them, then only the part
+    // the surface shows.
+    Span64 box{
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::min(),
+        std::numeric_limits<int64_t>::min(),
+    };
+    int64_t pen = x;
+    for (const unsigned char byte : text) {
+        if (byte < first_printable || !font.glyphs[byte])
+            continue;
+        const auto& glyph = *font.glyphs[byte];
+        if (byte != first_printable && glyph.width != 0 && glyph.height != 0) {
+            const int64_t left = pen - glyph.origin_x;
+            const int64_t top = int64_t{y} - glyph.origin_y;
+            box.left = std::min(box.left, left);
+            box.top = std::min(box.top, top);
+            box.right = std::max(box.right, left + glyph.width);
+            box.bottom = std::max(box.bottom, top + glyph.height);
+        }
+        pen += glyph.width;
+    }
+    const int32_t end = clamp_to_int32(pen);
+    if (placement.scale < 1 || !whole(surface))
+        return end;
+    const Span64 shown = visible_source(surface, placement);
+    box.left = std::max(box.left, shown.left);
+    box.top = std::max(box.top, shown.top);
+    box.right = std::min(box.right, shown.right);
+    box.bottom = std::min(box.bottom, shown.bottom);
+    if (box.left >= box.right || box.top >= box.bottom)
+        return end;
+
+    const auto columns = static_cast<uint32_t>(box.right - box.left);
+    const auto rows = static_cast<uint32_t>(box.bottom - box.top);
+    const std::size_t count = static_cast<std::size_t>(columns) * rows;
+    std::vector<uint8_t> indices(count);
+    std::vector<uint8_t> coverage(count);
+    const oa::formats::fnt::IndexedSurface scratch{columns, rows, columns, indices, coverage};
+    static_cast<void>(oa::formats::fnt::raster_text(
+        scratch,
+        font,
+        text,
+        clamp_to_int32(int64_t{x} - box.left),
+        clamp_to_int32(int64_t{y} - box.top)
+    ));
+    for (uint32_t row = 0; row < rows; ++row)
+        for (uint32_t column = 0; column < columns; ++column) {
+            const std::size_t at = static_cast<std::size_t>(row) * columns + column;
+            if (coverage[at] == 0)
+                continue;
+            const uint32_t share = ink == nullptr ? blend_opaque : (*ink)[indices[at]];
+            if (share == 0)
+                continue;
+            blend_source_rect(
+                surface,
+                placement,
+                {static_cast<int32_t>(box.left + column),
+                 static_cast<int32_t>(box.top + row),
+                 1,
+                 1},
+                color,
+                share
+            );
+        }
+    return end;
+}
+
+/// Turns a picture drawn as rows of '#' (drawn) and '.' (not) into a mark's bytes.
+///
+/// @param rows the picture's rows, each `columns` characters
+/// @return 1 where a row holds '#', 0 elsewhere
+template <std::size_t columns, std::size_t rows>
+constexpr std::array<uint8_t, columns * rows>
+mark_bits(const std::array<std::string_view, rows>& picture) {
+    std::array<uint8_t, columns * rows> bits{};
+    for (std::size_t row = 0; row < rows; ++row)
+        for (std::size_t column = 0; column < columns; ++column)
+            bits[row * columns + column] = picture[row][column] == '#' ? 1 : 0;
+    return bits;
+}
+
+/// The thin OA mark's columns.
+constexpr std::size_t thin_mark_columns = 9;
+/// The thin OA mark's rows.
+constexpr std::size_t thin_mark_rows = 5;
+/// The thin OA mark's pixels.
+constexpr auto thin_mark_bits =
+    mark_bits<thin_mark_columns, thin_mark_rows>(std::array<std::string_view, thin_mark_rows>{
+        ".##...##.",
+        "#..#.#..#",
+        "#..#.####",
+        "#..#.#..#",
+        ".##..#..#",
+    });
+
+/// The bold OA mark's columns.
+constexpr std::size_t bold_mark_columns = 13;
+/// The bold OA mark's rows.
+constexpr std::size_t bold_mark_rows = 7;
+/// The bold OA mark's pixels.
+constexpr auto bold_mark_bits =
+    mark_bits<bold_mark_columns, bold_mark_rows>(std::array<std::string_view, bold_mark_rows>{
+        ".####...####.",
+        "##..##.##..##",
+        "##..##.##..##",
+        "##..##.######",
+        "##..##.##..##",
+        "##..##.##..##",
+        ".####..##..##",
+    });
+
+} // namespace
+
+const Mark oa_mark_thin{
+    static_cast<int32_t>(thin_mark_columns), static_cast<int32_t>(thin_mark_rows), thin_mark_bits
+};
+const Mark oa_mark_bold{
+    static_cast<int32_t>(bold_mark_columns), static_cast<int32_t>(bold_mark_rows), bold_mark_bits
+};
+
+void fill_source_rect(
+    Surface& surface, const Placement& placement, const SourceRect& rect, Rgb color
+) noexcept {
+    blend_source_rect(surface, placement, rect, color, blend_opaque);
+}
+
+void blend_source_rect(
+    Surface& surface,
+    const Placement& placement,
+    const SourceRect& rect,
+    Rgb color,
+    uint32_t opacity
+) noexcept {
+    if (placement.scale < 1 || rect.width <= 0 || rect.height <= 0)
+        return;
+    // Clip in 64 bits first, so that no placement or rectangle overflows.
+    const int64_t scale = placement.scale;
+    const int64_t left = std::max<int64_t>(placement.x + rect.x * scale, 0);
+    const int64_t top = std::max<int64_t>(placement.y + rect.y * scale, 0);
+    const int64_t right = std::min<int64_t>(
+        placement.x + (int64_t{rect.x} + rect.width) * scale, int64_t{surface.width}
+    );
+    const int64_t bottom = std::min<int64_t>(
+        placement.y + (int64_t{rect.y} + rect.height) * scale, int64_t{surface.height}
+    );
+    if (left >= right || top >= bottom)
+        return;
+    blend_rect(
+        surface,
+        static_cast<int>(left),
+        static_cast<int>(top),
+        static_cast<int>(right - left),
+        static_cast<int>(bottom - top),
+        color,
+        opacity
+    );
+}
+
+void draw_bevel(
+    Surface& surface, const Placement& placement, const SourceRect& rect, Rgb light, Rgb dark
+) noexcept {
+    if (rect.width <= 0 || rect.height <= 0)
+        return;
+    const int32_t right = rect.x + rect.width - 1;
+    const int32_t bottom = rect.y + rect.height - 1;
+    fill_source_rect(surface, placement, {rect.x, rect.y, rect.width - 1, 1}, light);
+    fill_source_rect(surface, placement, {rect.x, rect.y, 1, rect.height - 1}, light);
+    fill_source_rect(surface, placement, {rect.x, bottom, rect.width, 1}, dark);
+    fill_source_rect(surface, placement, {right, rect.y, 1, rect.height}, dark);
+}
+
+void draw_outline(
+    Surface& surface, const Placement& placement, const SourceRect& rect, Rgb color
+) noexcept {
+    draw_bevel(surface, placement, rect, color, color);
+}
+
+int32_t draw_text(
+    Surface& surface,
+    const Placement& placement,
+    const oa::formats::fnt::Font& font,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    Rgb color
+) {
+    return draw_glyphs(surface, placement, font, nullptr, text, x, y, color);
+}
+
+int32_t draw_text(
+    Surface& surface,
+    const Placement& placement,
+    const TextFont& font,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    Rgb color
+) {
+    return draw_glyphs(surface, placement, font.font, &font.ink, text, x, y, color);
+}
+
+TextFont text_font(oa::formats::fnt::Font font, const oa::PaletteBytes& palette) {
+    std::array<uint64_t, oa::palette_color_count> edge_pixels{};
+    std::array<bool, oa::palette_color_count> held{};
+    for (const auto& glyph : font.glyphs) {
+        if (!glyph)
+            continue;
+        const auto count = static_cast<std::size_t>(glyph->width) * glyph->height;
+        if (glyph->pixels.size() != count || glyph->coverage.size() != count)
+            continue;
+        const auto covered = [&](int64_t column, int64_t row) {
+            return column >= 0 && row >= 0 && column < glyph->width && row < glyph->height &&
+                   glyph->coverage
+                           [static_cast<std::size_t>(row) * glyph->width +
+                            static_cast<std::size_t>(column)] != 0;
+        };
+        for (int64_t row = 0; row < glyph->height; ++row)
+            for (int64_t column = 0; column < glyph->width; ++column) {
+                if (!covered(column, row))
+                    continue;
+                const uint8_t index = glyph->pixels
+                                          [static_cast<std::size_t>(row) * glyph->width +
+                                           static_cast<std::size_t>(column)];
+                held[index] = true;
+                if (!covered(column - 1, row) || !covered(column + 1, row) ||
+                    !covered(column, row - 1) || !covered(column, row + 1))
+                    ++edge_pixels[index];
+            }
+    }
+
+    // The ring: the colour most edge pixels hold, the darker on a tie. The
+    // brightest: the brightest colour held.
+    std::optional<uint32_t> ring;
+    std::optional<uint32_t> brightest;
+    uint64_t ring_pixels = 0;
+    for (std::size_t index = 0; index < held.size(); ++index) {
+        if (!held[index])
+            continue;
+        const uint32_t level = brightness(palette, index);
+        if (!brightest || level > *brightest)
+            brightest = level;
+        if (edge_pixels[index] > ring_pixels ||
+            (edge_pixels[index] == ring_pixels && edge_pixels[index] != 0 && level < *ring)) {
+            ring = level;
+            ring_pixels = edge_pixels[index];
+        }
+    }
+
+    TextFont readied{std::move(font), {}};
+    if (!brightest)
+        return readied;
+    const uint32_t dark = ring.value_or(*brightest);
+    for (std::size_t index = 0; index < held.size(); ++index) {
+        if (!held[index])
+            continue;
+        const uint32_t level = brightness(palette, index);
+        if (dark >= *brightest) {
+            readied.ink[index] = static_cast<uint16_t>(blend_opaque);
+        } else if (level > dark) {
+            const uint32_t range = *brightest - dark;
+            readied.ink[index] =
+                static_cast<uint16_t>(((level - dark) * blend_opaque + range / 2) / range);
+        }
+    }
+    return readied;
+}
+
+int32_t text_width(const oa::formats::fnt::Font& font, std::string_view text) noexcept {
+    const uint32_t width = oa::formats::fnt::measure_text(font, text);
+    return static_cast<int32_t>(std::min<uint32_t>(width, INT32_MAX));
+}
+
+int32_t text_width(const TextFont& font, std::string_view text) noexcept {
+    return text_width(font.font, text);
+}
+
+void draw_mark(
+    Surface& surface, const Placement& placement, const Mark& mark, int32_t x, int32_t y, Rgb color
+) noexcept {
+    if (mark.width <= 0 || mark.height <= 0)
+        return;
+    const std::size_t count = static_cast<std::size_t>(mark.width) * mark.height;
+    if (mark.bits.size() < count)
+        return;
+    for (int32_t row = 0; row < mark.height; ++row)
+        for (int32_t column = 0; column < mark.width; ++column)
+            if (mark.bits[static_cast<std::size_t>(row) * mark.width + column] != 0)
+                fill_source_rect(surface, placement, {x + column, y + row, 1, 1}, color);
+}
+
+} // namespace oa::ui::frontend_renderer

@@ -81,16 +81,19 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         if (screen_ == Screen::main_menu) {
-            // In state 7 escape belongs to the package that owns the frame.
-            if (!frame_owned_by_package())
+            // In state 7 escape belongs to the package that owns the frame. A
+            // held key's repeats do not quit: the press may have closed a
+            // dialog over the menu.
+            if (!frame_owned_by_package() && !event.key.repeat)
                 running = false;
         } else if (screen_ == Screen::map_selection)
             close_map_modal();
         else if (screen_ == Screen::match) {
             // A finished match leaves for the end screen on its own. Escape
-            // closes an open menu; it never opens one (F2 and MENU do), and a
-            // held key's repeats do nothing more.
-            if (!match_finished_ && match_paused_)
+            // closes an open menu; it opens one only with the Escape opens
+            // the game menu setting and nothing else to cancel (the match's
+            // keys), and a held key's repeats do nothing more.
+            if (!match_finished_ && match_paused_ && !event.key.repeat)
                 escape_match_menu();
         } else if (
             screen_ == Screen::options || screen_ == Screen::sound || screen_ == Screen::visuals ||
@@ -109,7 +112,9 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         return;
     }
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::match) {
-        if (!SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
+        // With the Mouse wheel zoom setting off the wheel does nothing here.
+        if (!engine_settings().wheel_zoom ||
+            !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
             return;
         handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
         return;

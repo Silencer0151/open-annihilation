@@ -3,6 +3,7 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "match_models.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/game_fields.hpp"
@@ -140,8 +141,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     if (handle_console_hotkey(key))
         return true;
     // Escape takes back an armed command and keeps the selection; with none
-    // armed it drops the selection. It never opens the in-game menu (F2 and
-    // MENU do); with the menu open, the event handler closes it.
+    // armed it drops the selection. With the Escape opens the game menu
+    // setting on and nothing selected, it opens the in-game menu as F2 does,
+    // which does not stop a shared game; with the menu open, the event
+    // handler closes it.
     if (key.key == SDLK_ESCAPE) {
         if (match_paused_)
             return false;
@@ -153,6 +156,11 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             );
             apply_match_hud_for_selection();
             status_ = "Command cancelled";
+            return true;
+        }
+        if (!match_finished_ && !has_local_selection() &&
+            EngineSettingsState::escape_opens_menu(*this)) {
+            show_match_pause_menu();
             return true;
         }
         clear_local_selection();

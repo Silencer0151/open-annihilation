@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-add_library(oa-present-model src/mesh_raster.cpp src/model_library.cpp src/model_draw.cpp src/rgb_bridge.cpp)
+add_library(oa-present-model src/mesh_raster.cpp src/model_library.cpp src/model_draw.cpp src/rgb_bridge.cpp
+  src/unit_supersampling.cpp)
 add_library(oa::present::model ALIAS oa-present-model)
 target_include_directories(oa-present-model PUBLIC include)
 target_link_libraries(oa-present-model PUBLIC oa-present oa-formats-objects3d oa-formats-gaf oa-sim-sprite-animation oa-formats-hpi

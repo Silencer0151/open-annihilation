@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp src/scroll_bars.cpp)
+add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp src/scroll_bars.cpp
+  src/artless.cpp)
 add_library(oa::ui::frontend_renderer ALIAS oa-ui-frontend-renderer)
 target_include_directories(oa-ui-frontend-renderer PUBLIC include)
 target_link_libraries(oa-ui-frontend-renderer PUBLIC
@@ -23,6 +24,14 @@ if(BUILD_TESTING)
   add_executable(oa-gadget-draw-test tests/gadget_draw_test.cpp)
   target_link_libraries(oa-gadget-draw-test PRIVATE oa-ui-frontend-renderer)
   add_test(NAME frontend-gadget-draw COMMAND oa-gadget-draw-test)
+
+  # Drawing without the game's art: fills, blends, bevels, outlines, text
+  # and marks, placed and scaled from source pixels; with --data, text in the
+  # installed game's fonts against the fonts' own drawing.
+  add_executable(oa-artless-draw-test tests/artless_test.cpp)
+  target_link_libraries(oa-artless-draw-test PRIVATE oa-ui-frontend-renderer oa-options oa-test-game-data)
+  add_test(NAME frontend-artless-draw COMMAND oa-artless-draw-test)
+  oa_add_game_data_test(frontend-artless-draw-data oa-artless-draw-test --data)
 
   # The installed game's MAINMENU.GUI, the one laid out for FrontendX, which
   # the main menu takes with no overlay drawn over it.

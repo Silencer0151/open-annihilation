@@ -183,6 +183,7 @@ void check_director_options(Options& options) {
         {options.check_director_render, "--check-director-render"},
         {options.check_interpolation, "--check-interpolation"},
         {options.check_unit_playout, "--check-unit-playout"},
+        {options.check_engine_settings, "--check-engine-settings"},
     };
     for (const auto& [given, name] : refused)
         if (given)
@@ -230,14 +231,15 @@ void check_director_options(Options& options) {
             result.benchmark_frames = parse_count(value(argument));
         else if (argument == "--match-ticks")
             result.match_ticks = parse_count(value(argument));
-        else if (argument == "--max-fps")
+        else if (argument == "--max-fps") {
             result.max_frames_per_second = parse_frame_rate(
                 value(argument),
                 kLowestMaxFramesPerSecond,
                 true,
                 "--max-fps expects 0 for no limit, or frames a second from 40 through 1000"
             );
-        else if (argument == "--frame-rate")
+            result.max_frames_per_second_given = true;
+        } else if (argument == "--frame-rate")
             result.frame_rate = parse_frame_rate(
                 value(argument),
                 1,
@@ -313,6 +315,8 @@ void check_director_options(Options& options) {
             result.check_frontend_controls = true;
         else if (argument == "--check-scroll-bars")
             result.check_scroll_bars = true;
+        else if (argument == "--check-engine-settings")
+            result.check_engine_settings = true;
         else if (argument == "--check-briefing-narration")
             result.check_briefing_narration = true;
         else if (argument == "--check-match-layers")
@@ -378,7 +382,7 @@ void check_director_options(Options& options) {
                          "[--check-pointer-interfaces] "
                          "[--check-multiplayer-menu] "
                          "[--check-load-save] [--check-frontend-controls] "
-                         "[--check-scroll-bars] "
+                         "[--check-scroll-bars] [--check-engine-settings] "
                          "[--check-briefing-narration] [--check-director-view] "
                          "[--check-director-render] [--check-interpolation] "
                          "[--check-unit-playout] "
@@ -482,10 +486,11 @@ void check_director_options(Options& options) {
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_match_dialogs ||
         result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
-        result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
-        result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
-        result.check_pointer_interfaces || result.check_director_view ||
-        result.check_director_render || result.check_interpolation || result.check_unit_playout;
+        result.check_engine_settings || result.check_match_orders || result.check_factory_orders ||
+        result.check_download_builds || result.check_kill_board || result.check_patrol_reclaim ||
+        result.check_reclaim_cursor || result.check_pointer_interfaces ||
+        result.check_director_view || result.check_director_render || result.check_interpolation ||
+        result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

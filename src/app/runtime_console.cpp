@@ -6,6 +6,7 @@
 // (audio, files, savegames, units, features, AI profiles) through the
 // ConsoleHost and HotkeyHost callbacks bound here.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/formats/cob.hpp"
@@ -328,8 +329,10 @@ console::Console* Runtime::match_console() {
         );
         console::console_init(&console_->state, world, &console_->host);
         std::copy(std::begin(contour), std::end(contour), console_->state.contour_values);
-        // "+stats" shows the frame statistics over the battlefield
-        // (draw_frame_stats); "+stats 1" and "+stats 0" show and hide them.
+        // "+stats" shows or hides the frame statistics over the battlefield
+        // (draw_frame_stats) and saves the choice, as the Show performance
+        // statistics setting does; "+stats 1" and "+stats 0" show and hide
+        // them for this run without saving.
         // 3.1c has no command that shows these times; its frame rate shows
         // on the debug keys' line (draw_debug_status_line). It is an option:
         // it needs no passphrase and echoes to this machine alone.
@@ -342,7 +345,10 @@ console::Console* Runtime::match_console() {
                     return;
                 auto* runtime = runtime_of(active->host->context);
                 const int32_t asked = oa::ui::services::token_line_get_int(line, 1, -1);
-                runtime->show_frame_stats(asked < 0 ? !runtime->frame_stats_shown_ : asked != 0);
+                if (asked < 0)
+                    EngineSettingsState::save_frame_stats(*runtime, !runtime->frame_stats_shown_);
+                else
+                    runtime->show_frame_stats(asked != 0);
             },
             console::command_class::option | console::command_class::private_echo
         );

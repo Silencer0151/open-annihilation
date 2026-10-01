@@ -125,6 +125,35 @@ the output goes there instead.
 To build and run it from source instead, see
 [CONTRIBUTING.md](CONTRIBUTING.md#build-and-test).
 
+### Settings
+
+Open Annihilation's own settings open from the **OA** button at the bottom
+right of the main menu, or under Resume in the in-game menu (F2), and with
+**Cmd+,** on macOS (also **Settings…** in the application menu) or
+**Ctrl+,** elsewhere. Changes show at once. **OK** (Enter) keeps them,
+**Cancel** (Escape) puts back what was there, and **Restore defaults** sets
+every setting back to its default. A game played alone stays paused while
+they are open; a multiplayer game keeps running.
+
+- **AI & Pathfinding:** Pathfinding cycles, 1× to 8×. More cycles find
+  routes faster but use more CPU.
+- **Controls & Input:** Mouse wheel zoom (on by default). Escape opens the
+  game menu (on by default on macOS): the first press cancels an order or
+  clears the selection, the next opens the in-game menu. Select groups
+  without Alt: a number key selects its group on its own.
+- **Gameplay:** Unit limit, 50 to 1500 units per player, from the next game.
+  It starts at the unit limit your Total Annihilation installation sets, or
+  250. A saved game keeps the limit it was saved with.
+- **Graphics:** Maximum frame rate, 40 to 120 frames a second. Enhanced
+  anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
+  and scaled down for smoother edges; 8× and 16× need a fast CPU.
+- **Developer:** Show performance statistics: frame and tick times over the
+  battlefield, as the `+stats` console command shows them.
+
+Pathfinding cycles and Unit limit cannot change during a game; in a
+multiplayer game the host's settings apply. `--max-fps N` on the command
+line sets the frame rate for that run without changing the setting.
+
 ## Playing the demo
 
 The Total Annihilation demo, released free in 1997, is enough to try Open

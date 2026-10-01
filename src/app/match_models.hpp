@@ -16,6 +16,7 @@
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
+#include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/unit_playout.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "presentation_interpolation.hpp"
@@ -73,6 +74,8 @@ struct MatchModels {
     oa::present::model::ModelDisplay display;
     oa::present::model::ModelRenderer renderer;
     oa::present::model::RgbBridge bridge;
+    // The buffers of units drawn finer than the frame (enhanced anti-aliasing).
+    oa::present::model::SupersampleScratch supersample;
     std::vector<UnitDrawState> units; // by unit slot
     // 3D features draw through one zeroed unit record marked as a z-buffered
     // building owned by the viewpoint player, kept here in place of its part

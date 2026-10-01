@@ -255,6 +255,11 @@ struct Options {
     // the local units, the world and, with no such player, every frame are
     // as without the playout. Implies --headless-check and --skip-intro.
     bool check_unit_playout = false;
+    // Drives the Open Annihilation settings through the SDL presenter: the OA
+    // button on the main menu and in the in-game menu, the dialog over each,
+    // its sections, controls, keys, OK, Cancel and Restore defaults, the
+    // preferences it writes, and each setting taking effect.
+    bool check_engine_settings = false;
     // --generate-script RECORDING: the recording a director script is
     // generated from; empty for none. Implies --headless-check and
     // --skip-intro.
@@ -276,6 +281,9 @@ struct Options {
     // for no limit. While nothing moves on its own and no input comes, the
     // loop draws fewer (frame_pacing.hpp).
     uint32_t max_frames_per_second = kDefaultMaxFramesPerSecond;
+    // --max-fps was given: its rate holds for the run whatever the settings
+    // say, and is never saved.
+    bool max_frames_per_second_given = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
     // advances a frame at a time, each frame between two ticks as the

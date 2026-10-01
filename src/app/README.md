@@ -210,6 +210,43 @@ and `app-window-icon` that the embedded one decodes.
   part of `--check-navigation`.
 - `runtime_match_menus.cpp` also registers the load-game overlay
   (`register_load_game_screens`).
+- The Open Annihilation settings ([oa/ui/engine_settings.hpp](../ui/engine-settings/README.md)):
+  `engine_settings_state.hpp` and `runtime_engine_settings.cpp` read them at
+  start, put them in effect, save them, and run the dialog for both of its
+  hosts. `engine_settings_menu_host.hpp` and
+  `runtime_engine_settings_menu.cpp` are the main menu's host: two overlays
+  on the main menu, the OA button at the picture's bottom-right corner (its
+  top-right corner while an extension's overlay stands over the main menu)
+  under the extensions' overlays, and the dialog centred over the darkened
+  menu above them, which takes every input while it shows. A press released
+  over the button, Cmd+, on macOS or Ctrl+, elsewhere, and the macOS
+  application menu's Settings… item open it; nothing opens over a message
+  box or a frame a package owns. Enter is OK and Escape is Cancel; the key
+  that closed the dialog does nothing more until it is released, so that a
+  held Escape never reaches the main menu's own Escape, which ends the
+  program. Another screen replacing the main menu closes the dialog as
+  Cancel does. `engine_settings_match_host.hpp` and
+  `runtime_engine_settings_match.cpp` are the in-game menu's host, and
+  `runtime_engine_settings_app_menu.cpp` the application menu's item.
+  `--check-engine-settings` (`native-engine-settings`) drives them through
+  the SDL presenter over a preferences file it empties first:
+  `runtime_engine_settings_check.cpp` holds the main menu's part, with each
+  look of the button and the darkened menu under the dialog compared pixel
+  for pixel with what they should draw;
+  `runtime_engine_settings_dialog_check.cpp` the dialog driven by the
+  pointer and the keys (every section, each setting in effect at once, OK,
+  Cancel, Restore defaults and the keys they save) and the main menu with
+  the button and the dialog as 640x480, 1280x720, 1920x1080 and 2560x1080
+  windows show them; `runtime_engine_settings_match_check.cpp` the in-game
+  menu's button and dialog at those sizes, with the locks of a game played
+  alone and of a shared game; and `runtime_engine_settings_wiring_check.cpp`
+  each setting taking effect in a match, Escape's order among them. With
+  `--snapshot`, the check writes each of those frames beside the named file.
+  `native-engine-settings-determinism`
+  (`tools/check_native_engine_settings.py`) checks that every setting at its
+  default plays the game as it plays without any, and that the settings that
+  change only the look or the input, enhanced anti-aliasing among them,
+  leave the world alone.
 - `runtime_notices.cpp`: the notices for the entries the game data cannot
   support, such as skirmish, multiplayer and the missions after the last in
   the Total Annihilation demo (1997): DEMOMSG.GUI when the data can draw it,

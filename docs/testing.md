@@ -67,6 +67,18 @@ added only when `OA_GAME_DIR` names one at configure time. The game is
 executable inside the application bundle `open-annihilation.app`), the file
 the `oa-game` target builds; tests start it through `$<TARGET_FILE:oa-game>`.
 
+Every native check names its preferences file with `--preferences-file`, so
+that it never reads or writes the player's own. With a named file, each
+Open Annihilation setting's default is the game's own behaviour on every
+platform, and the installation's `totala.ini` is not read for the unit
+limit, so a check plays the same on every machine. A check that depends on a
+setting writes the setting's key into its file first
+(`src/platform/preferences/README.md` lists the keys).
+`native-engine-settings-determinism` holds this in place: with every key at
+its default, the seeded skirmish writes the same trace stream and draws the
+same frame as with no file, and the director render keeps its pinned frames
+and sound.
+
 ### Threads
 
 `installed-content` spreads its work over one thread per logical core, so it

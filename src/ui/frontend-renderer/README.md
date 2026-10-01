@@ -87,3 +87,40 @@ and the rest of the pixel, rounded to the nearest; the rectangle is clipped
 to the surface. An opacity of 0 leaves the pixels and `blend_opaque` paints
 the colour, so it fills as well as tints. The match's "+stats" panel darkens
 the battlefield under it this way. `frontend-renderer` tests it.
+
+## Drawing without the game's art
+
+`oa/ui/frontend_renderer/artless.hpp` draws the Open Annihilation settings
+dialog and its OA button on the RGB surface in flat colours. Everything is
+given in source pixels (the 640x480 screen) and drawn through a `Placement`,
+which puts source pixel (0, 0) at a surface pixel and draws each source pixel
+as a square block of `scale` surface pixels; a scale below 1 draws nothing.
+Every primitive clips to the surface, and a surface whose pixels do not fill
+its size is left as it is.
+
+- `fill_source_rect` and `blend_source_rect` fill or blend a rectangle as
+  `blend_rect` does; a fill one pixel high or wide is a hairline, and a
+  blend darkens what lies under the dialog.
+- `draw_bevel` draws a one-pixel raised edge inside a rectangle: light along
+  the top and left, dark along the whole bottom and right, so the top right
+  and bottom left corners are dark. `draw_outline` draws a one-pixel ring.
+- `draw_text` draws text with a game font's glyphs, placed as
+  `oa::formats::fnt::raster_text` places them, in one colour, and returns
+  the pen column after it; `text_width` measures it. Given a plain `Font`,
+  every glyph pixel is drawn in the colour, which suits a one-bit FNT font.
+  Given a `TextFont` from `text_font`, each glyph pixel is blended by its
+  palette colour's brightness: the colour that rings most glyph edges, and
+  anything darker, draws nothing; the brightest colour draws the text
+  colour; the colours between draw in proportion. The game's shaded GUI
+  fonts (`hattfont12`, `hattfont11`) so keep their shading and lose their
+  dark outline, which on a flat panel would thicken every letter into a
+  block. Their glyphs at 0xD7 and 0xB7 are empty boxes.
+- `draw_mark` draws a one-bit picture. `oa_mark_thin` (9x5, strokes one
+  pixel wide) and `oa_mark_bold` (13x7, uprights two pixels wide) hold the
+  letters "OA" of the OA mark.
+
+`artless_test.cpp` (`frontend-artless-draw`) checks every primitive pixel by
+pixel at several placements and scales, clipping included, against synthetic
+fonts; with the installed game (`frontend-artless-draw-data`), it checks that
+text in `hattfont12` and `hattfont11` covers exactly what `raster_text`
+covers and blends each pixel at its ink.

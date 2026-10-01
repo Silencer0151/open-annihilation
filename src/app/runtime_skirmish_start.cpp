@@ -3,6 +3,7 @@
 
 // Skirmish match bootstrap from the selected map and players.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
@@ -321,7 +322,8 @@ bool Runtime::feature_sequence_frame(
 }
 
 void Runtime::apply_skirmish_players() {
-    bootstrap_match({.seat_roster = true});
+    // A new skirmish plays at the run's unit limit.
+    EngineSettingsState::start_skirmish(*this, EngineSettingsState::run_unit_limit(*this));
 }
 
 void Runtime::seat_skirmish_roster(oa::World& world) {
@@ -859,9 +861,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         world.game.unit_def_count = static_cast<int32_t>(world.unit_def_count);
         // A skirmish starts at the configured unit limit (Game.max_units_setting); a
         // save's Summary writes it back as "maxunits". A campaign plays at
-        // its mission's limit and leaves the setting alone.
-        world.game.max_units_setting =
-            campaign_mission_ ? kSkirmishUnitsPerPlayer : bootstrap.units_per_player;
+        // its mission's limit and keeps the run's limit in the setting.
+        world.game.max_units_setting = campaign_mission_
+                                           ? EngineSettingsState::run_unit_limit(*this)
+                                           : bootstrap.units_per_player;
         bind_session_options();
         // Game.player_count, the players Start counted (two in a campaign): the
         // kills board has a row for each.
@@ -1086,6 +1089,13 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             "cannot create the trace stream " + options_.trace_digest.string() +
             (options_.trace_units.empty() ? "" : " or " + options_.trace_units.string())
         );
+    // The path search's credit: the setting's in a game played alone; a
+    // shared game or a replay plays at the base credit on every machine.
+    EngineSettingsState::start_path_credit(
+        *this,
+        bootstrap.multiplayer || (current_extension_state() &
+                                  (extension_state::shared_match | extension_state::replay)) != 0
+    );
     status_ = "Offline match world prepared for " + selected_map_name_runtime_ + " with " +
               std::to_string(catalog.value.entries.size()) + " unit runtimes, " +
               std::to_string(feature_table_.defs.size()) + " feature definitions and " +

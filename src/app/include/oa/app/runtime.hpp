@@ -31,6 +31,7 @@
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.hpp"
 #include "oa/present/unit_playout.hpp"
+#include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/world_renderer/unit_renderer.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
@@ -43,6 +44,8 @@
 #include "oa/ui/services/timers.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/resource_palette.hpp"
+#include "oa/ui/engine_settings.hpp"
+#include "oa/ui/engine_settings/dialog.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
@@ -1909,6 +1912,205 @@ class Runtime final : public menu::Host,
 
     /// Shows the campaign screens' Difficulty button at the saved difficulty.
     void sync_campaign_option_widgets();
+
+    /// Tells whether the in-game menu's own column (ARMOPT.GUI) shows, with
+    /// no panel it opens over it or in its place.
+    ///
+    /// @return true while the in-game menu shows its own buttons
+    [[nodiscard]] bool ingame_menu_column_shown() const;
+
+    // The Open Annihilation settings (oa/ui/engine_settings.hpp): read at
+    // start and put in effect (runtime_engine_settings.cpp), and the dialog
+    // that changes them, opened from the OA button on the main menu
+    // (runtime_engine_settings_menu.cpp) and in the in-game menu's column
+    // (runtime_engine_settings_match.cpp), with Cmd+, on macOS or Ctrl+,
+    // elsewhere, and from the macOS application menu's Settings… item
+    // (runtime_engine_settings_app_menu.cpp).
+
+    /// The settings in effect and the open dialog (engine_settings_state.hpp).
+    struct EngineSettingsState;
+
+    /// Frees the settings' state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_engine_settings_state(EngineSettingsState* state) noexcept;
+
+    /// Returns the settings' state, made on first use.
+    ///
+    /// @return the state
+    EngineSettingsState& engine_settings_state();
+
+    /// Reads the settings from the preferences and the installation and puts
+    /// them in effect; the frontend's preferences are loaded first.
+    void load_engine_settings();
+
+    /// Returns the settings in effect.
+    ///
+    /// @return the settings; the defaults before load_engine_settings
+    [[nodiscard]] const oa::ui::engine_settings::EngineSettings& engine_settings();
+
+    /// Puts settings in effect at once: each takes effect as the settings
+    /// say, the ones that apply from the next game included.
+    ///
+    /// @param settings the settings
+    void apply_engine_settings(const oa::ui::engine_settings::EngineSettings& settings);
+
+    /// Writes the settings a player kept to the preferences file.
+    ///
+    /// @param opened the settings in effect when the dialog opened
+    /// @param chosen the settings kept
+    /// @param restored Restore defaults was pressed while the dialog was open
+    /// @return why the file was not written; nothing when it was
+    [[nodiscard]] std::optional<std::string> save_engine_settings(
+        const oa::ui::engine_settings::EngineSettings& opened,
+        const oa::ui::engine_settings::EngineSettings& chosen,
+        bool restored
+    );
+
+    /// Opens the dialog over the settings in effect, with the locks the
+    /// game puts on them, on the section it showed last.
+    ///
+    /// @return the dialog, open until take_engine_settings_action closes it
+    oa::ui::engine_settings::Dialog& open_engine_settings_dialog();
+
+    /// Returns the open dialog.
+    ///
+    /// @return the dialog; null while none is open
+    [[nodiscard]] oa::ui::engine_settings::Dialog* engine_settings_dialog();
+
+    /// Does what a dialog event asks: puts changed settings in effect, saves
+    /// and closes on OK (a failed save is reported on the screen it happens
+    /// on), and puts the opened settings back and closes on Cancel.
+    ///
+    /// @param action what the event asked
+    /// @return true when the dialog closed
+    bool take_engine_settings_action(oa::ui::engine_settings::DialogAction action);
+
+    /// Returns the dialog's fonts, loaded on first use.
+    ///
+    /// @return the fonts; null when the game's files lack them
+    [[nodiscard]] const oa::ui::engine_settings::DialogFonts* engine_settings_fonts();
+
+    /// Returns the meaning a key has in the dialog.
+    ///
+    /// @param key SDL keycode
+    /// @param modifiers SDL_Keymod bits
+    /// @return the dialog's key; nothing for a key it does not answer to
+    [[nodiscard]] static std::optional<oa::ui::engine_settings::DialogKey>
+    engine_settings_dialog_key(uint32_t key, uint16_t modifiers) noexcept;
+
+    /// Checks that each setting takes effect, in step with its console
+    /// command and the command line (part of --check-engine-settings).
+    void check_engine_settings_wiring();
+
+    /// The main menu's OA button and dialog (engine_settings_menu_host.hpp).
+    struct EngineSettingsMenuHost;
+
+    /// Frees the main menu's settings host.
+    ///
+    /// @param host host to free; null is allowed
+    static void destroy_engine_settings_menu_host(EngineSettingsMenuHost* host) noexcept;
+
+    /// Returns the main menu's settings host, made on first use.
+    ///
+    /// @return the host
+    EngineSettingsMenuHost& engine_settings_menu_host();
+
+    /// Registers the main menu's overlays: the OA button under the
+    /// extensions' overlays and the dialog over them.
+    void register_engine_settings_overlays();
+
+    /// Opens the dialog over the darkened main menu.
+    void open_engine_settings_from_menu();
+
+    /// Tells whether a key opens the settings: Cmd+, on macOS, Ctrl+, elsewhere.
+    ///
+    /// @param key SDL keycode
+    /// @param modifiers SDL_Keymod bits
+    /// @return true for the shortcut
+    [[nodiscard]] static bool engine_settings_shortcut(uint32_t key, uint16_t modifiers) noexcept;
+
+    /// Opens the settings on the screen shown: the main menu, or a match,
+    /// where the in-game menu opens under the dialog; elsewhere nothing.
+    void request_engine_settings();
+
+    /// Takes the application menu's request to open the settings.
+    ///
+    /// @param event the event just received
+    /// @return true when the event was the request
+    bool take_engine_settings_request(const SDL_Event& event);
+
+    /// Runs --check-engine-settings: the main menu's part, the match's and
+    /// the settings taking effect.
+    void check_engine_settings();
+
+    /// Checks the main menu's OA button and dialog (part of --check-engine-settings).
+    void check_engine_settings_in_menu();
+
+    /// Checks the dialog on the main menu through the pointer and the keys:
+    /// every section, each setting in effect at once, OK, Cancel and Restore
+    /// defaults and the preferences they save (part of --check-engine-settings).
+    void check_engine_settings_dialog();
+
+    /// Checks the main menu with its OA button, and the dialog on each of its
+    /// sections, as windows of several sizes show them (part of
+    /// --check-engine-settings).
+    void check_engine_settings_window_sizes();
+
+    /// The in-game menu's OA button and dialog (engine_settings_match_host.hpp).
+    struct EngineSettingsMatchHost;
+
+    /// Frees the match's settings host.
+    ///
+    /// @param host host to free; null is allowed
+    static void destroy_engine_settings_match_host(EngineSettingsMatchHost* host) noexcept;
+
+    /// Returns the match's settings host, made on first use.
+    ///
+    /// @return the host
+    EngineSettingsMatchHost& engine_settings_match_host();
+
+    /// Registers the match's overlay: the OA button under Resume and the
+    /// dialog beside the in-game menu's column.
+    void register_engine_settings_match_overlay();
+
+    /// Opens the dialog beside the darkened in-game menu, opening the menu
+    /// first from play; a game played alone stays paused, a shared game runs on.
+    void open_engine_settings_in_match();
+
+    /// Returns the locks the game shown puts on the settings.
+    ///
+    /// @return the locks
+    [[nodiscard]] oa::ui::engine_settings::Locks engine_settings_locks() const;
+
+    /// Draws the match's settings layer, the OA button and the dialog with the
+    /// column darkened, over a composed match frame at the display gamma.
+    ///
+    /// @param[in,out] frame the composed frame, at the window's size
+    void compose_engine_settings_layer(renderer::Surface& frame);
+
+    /// Draws the match's settings layer over the presented layers, under the
+    /// message boxes and the cursor.
+    void present_engine_settings_layer();
+
+    /// Destroys the match's settings layer's textures.
+    void destroy_engine_settings_textures();
+
+    /// Checks the in-game menu's OA button and dialog (part of --check-engine-settings).
+    void check_engine_settings_in_match();
+
+    /// Puts the Settings… item in the macOS application menu, with an action
+    /// that posts engine_settings_menu_event_; nothing elsewhere.
+    void install_engine_settings_menu_item();
+
+    /// Enables the Settings… item on the main menu and in a match, and greys it elsewhere.
+    void sync_engine_settings_menu_item();
+
+    /// Tells whether an event is the Settings… item's request.
+    ///
+    /// @param event the event
+    /// @return true for the request
+    [[nodiscard]] bool is_engine_settings_menu_event(const SDL_Event& event) const noexcept;
 
     /// Flips a bit of the saved graphics word, saves it under a preference key and redraws the
     /// toggles.
@@ -5951,7 +6153,10 @@ class Runtime final : public menu::Host,
     /// changes start two ticks before the save. A victory or defeat decided
     /// during the ticks is printed with its tick ("saveload: outcome"). A save
     /// made between missions loads into its mission's briefing, which the run
-    /// reports instead. Throws std::runtime_error when the save does not load.
+    /// reports instead. The match's unit limit, its setting and the run-wide
+    /// limit are printed before the final digest ("saveload: units per
+    /// player"). Throws std::runtime_error when the save does not load,
+    /// a unit limit out of range included.
     void run_headless_saveload();
 
     /// Switches meteor storms on or off, as "Meteor <n>" does (MeteorState.enabled).
@@ -8033,6 +8238,25 @@ class Runtime final : public menu::Host,
     // Director mode's state; null outside director mode.
     std::unique_ptr<DirectorState, void (*)(DirectorState*) noexcept> director_{
         nullptr, destroy_director_state
+    };
+    // The Open Annihilation settings in effect and their dialog; null until first used.
+    std::unique_ptr<EngineSettingsState, void (*)(EngineSettingsState*) noexcept> engine_settings_{
+        nullptr, destroy_engine_settings_state
+    };
+    // The main menu's OA button and dialog; null until first used.
+    std::unique_ptr<EngineSettingsMenuHost, void (*)(EngineSettingsMenuHost*) noexcept>
+        engine_settings_menu_{nullptr, destroy_engine_settings_menu_host};
+    // The in-game menu's OA button and dialog; null until first used.
+    std::unique_ptr<EngineSettingsMatchHost, void (*)(EngineSettingsMatchHost*) noexcept>
+        engine_settings_match_{nullptr, destroy_engine_settings_match_host};
+    // The SDL event type the macOS Settings… item posts; 0 while none is registered.
+    uint32_t engine_settings_menu_event_{};
+    // Whether the Settings… item was last enabled; empty before the first sync.
+    std::optional<bool> engine_settings_menu_enabled_{};
+    // How finely units are drawn (enhanced anti-aliasing); the match's
+    // drawing reads it, director frames always draw at off.
+    oa::present::model::UnitSupersampling unit_supersampling_{
+        oa::present::model::UnitSupersampling::off
     };
     SessionDisplay display_{};
     CapturedFrame captured_frame_{};

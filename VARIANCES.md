@@ -19,20 +19,6 @@ engine does, and why.
 - **Code:** `oa::app::Runtime::render_match_surface`
   (`src/app/runtime_match_render.cpp`).
 
-## Mouse-wheel zoom
-
-- **3.1c:** has no zoom. The battlefield is always drawn at one map pixel to
-  one screen pixel.
-- **Open Annihilation:** the mouse wheel zooms the battlefield between half
-  and four times that scale, by 15% a notch. The view eases to the new scale
-  and keeps the ground under the pointer in place. Scrolling moves at the same
-  speed on screen at any zoom.
-- **Why:** a closer or wider view of the battle.
-- **Code:** `oa::app::Runtime::handle_match_zoom` and
-  `oa::app::Runtime::step_match_zoom` (`src/app/runtime_camera.cpp`); the
-  limits are `kMinBattlefieldZoom`, `kMaxBattlefieldZoom` and
-  `kZoomWheelFactor` (`src/app/include/oa/app/app.hpp`).
-
 ## Tab selects the next unit
 
 - **3.1c:** in a game played alone, Tab opens the in-game menu, as F2 does. In

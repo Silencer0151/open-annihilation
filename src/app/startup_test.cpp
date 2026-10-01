@@ -125,6 +125,11 @@ int main() {
         "120 frames a second unless --max-fps says otherwise"
     );
     expect(parse({"--max-fps", "60"}).max_frames_per_second == 60, "--max-fps takes its rate");
+    expect(!plain.max_frames_per_second_given, "no --max-fps, none given");
+    expect(
+        parse({"--max-fps", "120"}).max_frames_per_second_given,
+        "--max-fps at the default rate is given all the same"
+    );
     expect(parse({"--max-fps", "0"}).max_frames_per_second == 0, "--max-fps 0 is no limit");
     expect(
         rejection({"--max-fps", "1001"}) ==
@@ -334,6 +339,7 @@ int main() {
         {"--check-load-save"},
         {"--check-frontend-controls"},
         {"--check-scroll-bars"},
+        {"--check-engine-settings"},
         {"--check-briefing-narration"},
         {"--benchmark", "60"},
         {"--frames", "120"},

@@ -5,6 +5,7 @@
 // src/data/persist and the HUD over the canonical World, the start of a skirmish
 // or campaign mission from a savegame, and the match's meteor-storm state
 // they carry.
+#include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
 
 #include "oa/data/campaign/campaign_file.hpp"
@@ -20,6 +21,7 @@
 #include "oa/sim/script_state.hpp"
 #include "oa/sim/session.hpp"
 #include "oa/sim/state_hash.hpp"
+#include "oa/sim/unit_spawn/spawn.hpp"
 #include "oa/sim/trace.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/player_records.hpp"
@@ -34,7 +36,9 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -500,6 +504,10 @@ struct Runtime::SaveLoadState {
     static persist::SaveContext match_context(
         oa::World& world, SaveLoadState& state, uint8_t* mapping, const persist::SaveHooks& hooks
     );
+    static uint16_t run_unit_limit(Runtime& runtime);
+    static std::optional<uint16_t> buildable_unit_limit(int32_t limit);
+    static std::optional<uint16_t> saved_unit_limit(Runtime& runtime, persist::Bank* bank);
+    static void adopt_saved_unit_limit(Runtime& runtime, oa::World& world, persist::Bank* bank);
 };
 
 void Runtime::destroy_saveload_state(SaveLoadState* state) noexcept {
@@ -677,6 +685,69 @@ persist::SaveContext Runtime::SaveLoadState::match_context(
         &hooks,
         world.placed_features != nullptr ? world.placed_feature_count : 0u
     };
+}
+
+/// Returns the run-wide unit limit a new skirmish plays at: the frontend Game
+/// block's max_units_setting, or the Unit limit setting while nothing has set
+/// it (EngineSettingsState::run_unit_limit).
+///
+/// @param runtime the runtime whose frontend Game block holds the setting
+/// @return units per player
+uint16_t Runtime::SaveLoadState::run_unit_limit(Runtime& runtime) {
+    return EngineSettingsState::run_unit_limit(runtime);
+}
+
+/// Returns a unit limit as units per player when a unit pool can be built for it.
+///
+/// @param limit units per player, as a save holds it
+/// @return the limit, or nullopt when it is not positive or its pool would pass
+///     65535 slots
+std::optional<uint16_t> Runtime::SaveLoadState::buildable_unit_limit(int32_t limit) {
+    if (limit <= 0 || limit > std::numeric_limits<uint16_t>::max())
+        return std::nullopt;
+    try {
+        (void)oa::sim::unit_spawn::offline_pool_size(static_cast<uint16_t>(limit));
+    } catch (const std::invalid_argument&) {
+        return std::nullopt;
+    }
+    return static_cast<uint16_t>(limit);
+}
+
+/// Returns the unit limit a skirmish save's world is built at: its Summary
+/// "maxunits" as the save gives it, or the run-wide limit when the save has
+/// none.
+///
+/// @param runtime the runtime whose run-wide limit stands in for a missing field
+/// @param[in,out] bank the save, with its Summary account open
+/// @return units per player, or nullopt when the save's value cannot size a unit pool
+std::optional<uint16_t>
+Runtime::SaveLoadState::saved_unit_limit(Runtime& runtime, persist::Bank* bank) {
+    if (!persist::bank_has_field(bank, save_key::max_units))
+        return run_unit_limit(runtime);
+    return buildable_unit_limit(persist::bank_get_int(bank, save_key::max_units, 0));
+}
+
+/// Reads a save's Summary "maxunits" into the match's unit-limit setting and the
+/// run-wide one; a save without the field leaves both alone.
+///
+/// The match keeps playing at the limit its world was built at. The match's
+/// setting takes the value as given, for the next save to write; the run-wide
+/// setting takes it only when a unit pool can be built for it.
+///
+/// @param runtime the runtime whose frontend Game block holds the run-wide setting
+/// @param[in,out] world the loaded match, whose Game.max_units_setting receives the value
+/// @param[in,out] bank the save, with its Summary account open
+/// @quirk The loaded game's limit becomes the run-wide setting, so the next new
+///        skirmish of the run plays at it. The preferences file is not written.
+void Runtime::SaveLoadState::adopt_saved_unit_limit(
+    Runtime& runtime, oa::World& world, persist::Bank* bank
+) {
+    if (!persist::bank_has_field(bank, save_key::max_units))
+        return;
+    const int32_t saved = persist::bank_get_int(bank, save_key::max_units, 0);
+    world.game.max_units_setting = static_cast<uint16_t>(saved);
+    if (const std::optional<uint16_t> limit = buildable_unit_limit(saved))
+        runtime.frontend_game().max_units_setting = *limit;
 }
 
 // The skirmish rule words the Summary reads through Game.skirmish_info.
@@ -1185,9 +1256,7 @@ bool Runtime::restore_saved_session(persist::Bank* bank) {
     persist::SaveContext save =
         SaveLoadState::match_context(world, state, state.mapping.data(), hooks);
     persist::bank_open_account(bank, save_key::summary);
-    if (persist::bank_has_field(bank, save_key::max_units))
-        world.game.max_units_setting =
-            static_cast<uint16_t>(persist::bank_get_int(bank, save_key::max_units, 0));
+    SaveLoadState::adopt_saved_unit_limit(*this, world, bank);
     const bool players = hud::load_players_section(world, *bank);
     persist::save_read_camera(&save, bank);
     persist::save_read_features(&save, bank);
@@ -1248,6 +1317,14 @@ bool Runtime::load_saved_game(const fs::path& path) {
         status_ = "Invalid savegame file";
         return false;
     }
+    // A skirmish's world is built at the limit it was saved at, so each
+    // player's units come back into that player's own slots. A campaign
+    // mission plays at its mission's limit instead.
+    const std::optional<uint16_t> units_per_player = SaveLoadState::saved_unit_limit(*this, bank);
+    if (!units_per_player) {
+        status_ = "Invalid savegame file: unit limit out of range";
+        return false;
+    }
     // The controllers come from a scratch game block: the match is not built yet.
     std::array<hud::SkirmishSlot, OA_PLAYER_COUNT> controllers{};
     {
@@ -1300,7 +1377,9 @@ bool Runtime::load_saved_game(const fs::path& path) {
     {
         // The match is built for the save, which places its features.
         const ResumedSave resumed(saveload_state().resumed_save, bank);
-        bootstrap_match({.place_commanders = false, .seat_roster = true});
+        bootstrap_match(
+            {.units_per_player = *units_per_player, .place_commanders = false, .seat_roster = true}
+        );
     }
     if (!match_ || altitude_sight_blocked_) {
         status_ = "Saved game start was blocked";
@@ -1725,6 +1804,15 @@ void Runtime::run_headless_saveload() {
         live += slot.unit != nullptr && slot.record.type_index != 0 ? 1 : 0;
     print_saved_orders();
     print_saved_features();
+    // The limit the match plays at, its setting as a save writes it, and the
+    // run-wide limit a new skirmish would take.
+    const oa::Game& game = match_->state().game;
+    std::printf(
+        "saveload: units per player %u setting %u run-wide %u\n",
+        static_cast<unsigned>(game.units_per_player),
+        static_cast<unsigned>(game.max_units_setting),
+        static_cast<unsigned>(SaveLoadState::run_unit_limit(*this))
+    );
     std::printf(
         "saveload: tick %u units %zu digest %016llx\n",
         match_timing_.tick,

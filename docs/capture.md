@@ -21,7 +21,9 @@ ends. While it runs:
   renderer just before it is presented, at the window's size: the frontend's
   screens as the window shows them, letterboxed, and the match at its full
   size. `--resolution WxH` opens the window at that size; both must be even.
-  The window must keep its size until the capture ends.
+  The window must keep its size until the capture ends. The main menu shows
+  the OA button in its bottom-right corner, as players see it, and so do
+  `--snapshot` pictures of the main menu.
 - **Pace.** The video has 30 frames a second of the sound device's clock:
   frame *n* shows the screen as it was *n* / 30 seconds after the start.
   When the game is late, the frame before is written again; when it draws

@@ -13,6 +13,7 @@
 #include "oa/present/span_sample.hpp"
 #include "oa/base/geometry.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +41,17 @@ constexpr int64_t image_max_pixels = 16 * 1024 * 1024;
 
 int32_t hi(int32_t value) noexcept {
     return static_cast<int16_t>(static_cast<uint32_t>(value) >> 16);
+}
+
+// The whole part of a 16.16 value counted in samples, `samples` to a game
+// pixel, rounded down: at one sample, its high word.
+int32_t hi_at(int32_t value, uint32_t samples) noexcept {
+    return static_cast<int32_t>((static_cast<int64_t>(value) * samples) >> 16);
+}
+
+// A margin of bounds_margin game pixels, in samples.
+int32_t margin_at(uint32_t samples) noexcept {
+    return bounds_margin * static_cast<int32_t>(samples);
 }
 
 int32_t wrap_add(int32_t a, int32_t b) noexcept {
@@ -146,19 +158,21 @@ std::size_t plane_size(const Sprite& sprite) noexcept {
     return static_cast<std::size_t>(sprite.width) * sprite.height;
 }
 
-// Projects a piece's vertices into image space.
+// Projects a piece's vertices into image space, `samples` to a game pixel;
+// depths stay in game pixels.
 void project_image_vertices(
     const PieceState& piece,
     const Sprite& target,
     bool doubled,
     int32_t depth_base,
+    uint32_t samples,
     std::vector<present::DepthVertex>& out
 ) {
     out.clear();
     for (const FixedVector3& v : piece.transformed_vertices) {
-        int32_t x = hi(v.x);
-        int32_t y = hi(v.y);
-        int32_t z = hi(wrap_sub(0, v.z));
+        int32_t x = hi_at(v.x, samples);
+        int32_t y = hi_at(v.y, samples);
+        int32_t z = hi_at(wrap_sub(0, v.z), samples);
         if (doubled) {
             x <<= 1;
             y <<= 1;
@@ -167,17 +181,18 @@ void project_image_vertices(
         present::DepthVertex vertex{};
         vertex.x = x + target.origin_x;
         vertex.y = z - (y >> 1) + target.origin_y;
-        vertex.depth = depth_base + (doubled ? y / 2 : y);
+        vertex.depth = depth_base + hi(v.y);
         out.push_back(vertex);
     }
 }
 
 // Starts the double-size pass of an anti-aliased building image in the
-// composite buffer; returns the target to draw into.
+// composite buffer; returns the target to draw into. An image drawn finer
+// than the game's pixels is drawn straight into.
 Sprite*
 begin_image_pass(ModelRenderer& renderer, Sprite& image, const ModelRef& model, int32_t pass) {
-    if ((renderer.graphics_flags & graphics_anti_alias) == 0 || !is_building(*model.unit) ||
-        pass == 0)
+    if (renderer.samples != 1 || (renderer.graphics_flags & graphics_anti_alias) == 0 ||
+        !is_building(*model.unit) || pass == 0)
         return &image;
     ensure_composite(renderer, static_cast<int64_t>(image.width) * 2 * image.height * 2);
     Sprite& composite = renderer.composite.sprite;
@@ -218,6 +233,184 @@ void allocate_planes(present::SpriteBuffer& buffer, int32_t width, int32_t heigh
     std::memset(sprite.data, image_key, size);
 }
 
+// Measures a model's visible pieces as measure_model_bounds does, `samples`
+// to a game pixel, the margin included.
+ImageFrame measure_bounds_at(
+    const sim::model_runtime::Instance& instance, const FixedVector3* offset, uint32_t samples
+) {
+    int32_t min_x = 0;
+    int32_t max_x = 0;
+    int32_t min_y = 0;
+    int32_t max_y = 0;
+    const auto pieces = instance.pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) == 0)
+            continue;
+        for (const FixedVector3& v : piece.transformed_vertices) {
+            int32_t x = 0;
+            int32_t y = 0;
+            int32_t z = 0;
+            if (offset == nullptr) {
+                x = hi_at(v.x, samples);
+                y = hi_at(v.y, samples);
+                z = hi_at(wrap_sub(0, v.z), samples);
+            } else {
+                x = hi_at(wrap_add(v.x, offset->x), samples);
+                z = hi_at(wrap_sub(offset->z, v.z), samples);
+                y = hi_at(wrap_add(v.y, offset->y), samples);
+            }
+            const int32_t sy = z - (y >> 1);
+            min_x = x < min_x ? x : min_x;
+            max_x = max_x < x ? x : max_x;
+            min_y = sy < min_y ? sy : min_y;
+            max_y = max_y < sy ? sy : max_y;
+        }
+    }
+    const int32_t margin = margin_at(samples);
+    return {
+        (max_x - (min_x - margin)) + margin,
+        (max_y - (min_y - margin)) + margin,
+        -(min_x - margin),
+        -(min_y - margin)
+    };
+}
+
+// Grows bounds as expand_model_bounds does, `samples` to a game pixel.
+void expand_bounds_at(
+    ModelBounds& bounds,
+    const sim::model_runtime::Instance& instance,
+    int32_t x,
+    int32_t y,
+    int32_t z,
+    uint32_t samples
+) {
+    int32_t min_x = 0;
+    int32_t max_x = 0;
+    int32_t min_y = 0;
+    int32_t max_y = 0;
+    const auto pieces = instance.pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) == 0)
+            continue;
+        for (const FixedVector3& v : piece.transformed_vertices) {
+            const int32_t sx = hi_at(wrap_add(v.x, x), samples);
+            const int32_t sy =
+                hi_at(wrap_sub(z, v.z), samples) - (hi_at(wrap_add(v.y, y), samples) >> 1);
+            min_x = sx < min_x ? sx : min_x;
+            max_x = max_x < sx ? sx : max_x;
+            min_y = sy < min_y ? sy : min_y;
+            max_y = max_y < sy ? sy : max_y;
+        }
+    }
+    const int32_t margin = margin_at(samples);
+    if (min_x - margin < bounds.left)
+        bounds.left = min_x - margin;
+    if (min_y - margin < bounds.top)
+        bounds.top = min_y - margin;
+    if (bounds.right < max_x + margin)
+        bounds.right = max_x + margin;
+    if (bounds.bottom < max_y + margin)
+        bounds.bottom = max_y + margin;
+}
+
+// Measures a model's sheared ground silhouette as measure_shadow_bounds
+// does, `samples` to a game pixel.
+ImageFrame shadow_bounds_at(const sim::model_runtime::Instance& instance, uint32_t samples) {
+    int32_t min_x = 0;
+    int32_t max_x = 0;
+    int32_t min_y = 0;
+    int32_t max_y = 0;
+    const auto pieces = instance.pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) == 0)
+            continue;
+        for (const FixedVector3& v : piece.transformed_vertices) {
+            const int32_t lean = hi_at(v.y, samples) >> 2;
+            const int32_t sx = hi_at(v.x, samples) + lean;
+            const int32_t sy = hi_at(wrap_sub(0, v.z), samples) - lean;
+            min_x = sx < min_x ? sx : min_x;
+            max_x = max_x < sx ? sx : max_x;
+            min_y = sy < min_y ? sy : min_y;
+            max_y = max_y < sy ? sy : max_y;
+        }
+    }
+    const int32_t margin = margin_at(samples);
+    return {
+        (max_x - (min_x - margin)) + margin,
+        (max_y - (min_y - margin)) + margin,
+        -(min_x - margin),
+        -(min_y - margin)
+    };
+}
+
+// Fills the sheared silhouette as draw_shadow_silhouette does, `samples` to
+// a game pixel; depths stay in game pixels.
+void shadow_silhouette_at(Sprite& target, const ModelRef& model, uint32_t samples) {
+    thread_local std::vector<present::DepthVertex> projected;
+    thread_local std::vector<present::DepthVertex> corners;
+    const formats::objects3d::Model& source = model.instance->model();
+    const auto pieces = model.instance->pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) == 0 || (piece.flags & piece_cached) == 0)
+            continue;
+        projected.clear();
+        for (const FixedVector3& v : piece.transformed_vertices) {
+            const int32_t height = hi(v.y);
+            const int32_t lean = hi_at(v.y, samples) >> 2;
+            projected.push_back(
+                {hi_at(v.x, samples) + lean + target.origin_x,
+                 hi_at(wrap_sub(0, v.z), samples) - lean + target.origin_y,
+                 height + shadow_depth_base}
+            );
+        }
+        const formats::objects3d::Object& object = source.objects[piece.object_index];
+        const PreparedObject& prepared = model.prepared->objects[piece.object_index];
+        for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
+            if (gather(source_of(object, prepared.primitives[i]), projected, corners))
+                present::fill_depth_polygon(
+                    target, corners.data(), static_cast<int32_t>(corners.size()), 0
+                );
+        }
+    }
+}
+
+// Outlines the visible pieces as outline_model does, `samples` to a game
+// pixel: each edge is drawn `samples` times, a sample further right each
+// time, so that it stays a game pixel wide.
+void outline_at(Sprite& image, const ModelRef& model, uint8_t color, uint32_t samples) {
+    thread_local std::vector<present::DepthVertex> projected;
+    thread_local std::vector<present::DepthVertex> corners;
+    const formats::objects3d::Model& source = model.instance->model();
+    const int32_t base = vertex_depth_base(model);
+    const auto pieces = model.instance->pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) == 0)
+            continue;
+        project_image_vertices(piece, image, false, base, samples, projected);
+        const formats::objects3d::Object& object = source.objects[piece.object_index];
+        const PreparedObject& prepared = model.prepared->objects[piece.object_index];
+        for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
+            if (!gather(source_of(object, prepared.primitives[i]), projected, corners) ||
+                corners.empty())
+                continue;
+            corners.push_back(corners.front());
+            for (uint32_t shift = 0; shift < samples; ++shift) {
+                if (shift != 0)
+                    for (present::DepthVertex& corner : corners)
+                        ++corner.x;
+                present::outline_depth_polygon(
+                    image, corners.data(), static_cast<int32_t>(corners.size()), color
+                );
+            }
+        }
+    }
+}
+
 // A model as the composer callbacks see it.
 struct ComposeContext {
     ModelRenderer* renderer{};
@@ -239,12 +432,13 @@ bool compose_bounds(void* user, const Unit& unit, ui::hud::SpriteBounds& out) {
     // walked to; the unit draws where the record model_of handed back stands,
     // which a draw between ticks places elsewhere.
     ModelBounds bounds{};
-    expand_model_bounds(
+    expand_bounds_at(
         bounds,
         *model.instance,
         wrap_sub(model.unit->position.x, unit.position.x),
         wrap_sub(model.unit->position.y, unit.position.y),
-        wrap_sub(model.unit->position.z, unit.position.z)
+        wrap_sub(model.unit->position.z, unit.position.z),
+        context->renderer->samples
     );
     out = {bounds.left, bounds.right, bounds.top, bounds.bottom};
     return true;
@@ -302,6 +496,80 @@ void compose_finish(void* user, const ui::hud::SpriteFrame&) {
     apply_build_effect(*context->renderer, context->renderer->composite.sprite, *context->model);
 }
 
+// Blends colour 0 through the display alpha table into the target pixels
+// under a raw image's opaque pixels, in one pass: what draw_sprite_blended
+// draws of the image's colour-0 silhouette (copy_silhouette).
+void draw_silhouette_blended(Surface& target, const Sprite& image, int32_t x, int32_t y) {
+    const present::DisplayContext* display = present::display_context();
+    if (display == nullptr || (display->flags & present::display_flag_alpha_table) == 0 ||
+        display->alpha_table == nullptr || image.data == nullptr)
+        return;
+    Rect32 source{0, 0, image.width - 1, image.height - 1};
+    Rect32 placed{
+        x - image.origin_x,
+        y - image.origin_y,
+        x - image.origin_x + image.width - 1,
+        y - image.origin_y + image.height - 1
+    };
+    present::trim_to_clip(source, placed, target.clip);
+    if (placed.x1 > placed.x2 || placed.y1 > placed.y2 || source.x1 > source.x2 ||
+        source.y1 > source.y2)
+        return;
+    Surface mask{};
+    mask.width = image.width;
+    mask.height = image.height;
+    mask.pitch = image.width;
+    mask.pixels = static_cast<uint8_t*>(image.data);
+    // Row 0 of the alpha table: colour 0 over each target colour.
+    present::remap_under_mask(target, mask, source, placed, image.key, display->alpha_table);
+}
+
+// Grows sprite bounds to hold a part.
+void include_part(ui::hud::SpriteBounds& into, const ui::hud::SpriteBounds& part) noexcept {
+    into.left = std::min(into.left, part.left);
+    into.right = std::max(into.right, part.right);
+    into.top = std::min(into.top, part.top);
+    into.bottom = std::max(into.bottom, part.bottom);
+}
+
+// Composes a unit's sprite as ui::hud::compose_unit_sprite does, with every
+// extent and offset counted in samples (ModelRenderer::samples): the frame
+// that holds the image and the models of the unit and the units it carries,
+// the image copied or redrawn into it, then the build effect.
+void compose_finer_sprite(
+    ComposeContext& context, const Unit& unit, const ui::hud::SpriteFrame& source
+) {
+    const uint32_t samples = context.renderer->samples;
+    World& world = *context.renderer->world;
+    ui::hud::SpriteBounds bounds{0, 0, 0, 0};
+    ui::hud::SpriteBounds extent{};
+    if (compose_bounds(&context, unit, extent))
+        include_part(bounds, extent);
+    for (const Unit* child = world_unit(&world, unit.attach_first_child); child != nullptr;
+         child = world_unit(&world, child->attach_next)) {
+        if ((child->flags & unit_flag_attached_without_piece) != 0)
+            continue;
+        ui::hud::SpriteBounds part{0, 0, 0, 0};
+        if (compose_bounds(&context, *child, extent))
+            include_part(part, extent);
+        const int32_t across = hi_at(wrap_sub(child->position.x, unit.position.x), samples);
+        const int32_t lifted = hi_at(wrap_sub(child->position.z, unit.position.z), samples) -
+                               (hi_at(wrap_sub(child->position.y, unit.position.y), samples) >> 1);
+        include_part(
+            bounds,
+            {part.left + across, part.right + across, part.top + lifted, part.bottom + lifted}
+        );
+    }
+    const ui::hud::SpriteFrame frame = ui::hud::unit_sprite_frame(source, &bounds, 1);
+    if (frame.width == source.width && frame.height == source.height)
+        compose_copy(&context, frame);
+    else
+        compose_redraw(
+            &context, frame, frame.origin_x - source.origin_x, frame.origin_y - source.origin_y
+        );
+    compose_finish(&context, frame);
+}
+
 // Draws coloured primitives filled and textured quads mapped, from vertices
 // already on the target surface.
 template <typename Texture>
@@ -344,41 +612,7 @@ void set_model_light(ModelRenderer& renderer, int32_t x, int32_t y, int32_t z) n
 
 ImageFrame
 measure_model_bounds(const sim::model_runtime::Instance& instance, const FixedVector3* offset) {
-    int32_t min_x = 0;
-    int32_t max_x = 0;
-    int32_t min_y = 0;
-    int32_t max_y = 0;
-    const auto pieces = instance.pieces();
-    for (std::size_t n = pieces.size(); n != 0; --n) {
-        const PieceState& piece = pieces[n - 1];
-        if ((piece.flags & piece_visible) == 0)
-            continue;
-        for (const FixedVector3& v : piece.transformed_vertices) {
-            int32_t x = 0;
-            int32_t y = 0;
-            int32_t z = 0;
-            if (offset == nullptr) {
-                x = hi(v.x);
-                y = hi(v.y);
-                z = hi(wrap_sub(0, v.z));
-            } else {
-                x = hi(wrap_add(v.x, offset->x));
-                z = hi(wrap_sub(offset->z, v.z));
-                y = hi(wrap_add(v.y, offset->y));
-            }
-            const int32_t sy = z - (y >> 1);
-            min_x = x < min_x ? x : min_x;
-            max_x = max_x < x ? x : max_x;
-            min_y = sy < min_y ? sy : min_y;
-            max_y = max_y < sy ? sy : max_y;
-        }
-    }
-    return {
-        (max_x - (min_x - bounds_margin)) + bounds_margin,
-        (max_y - (min_y - bounds_margin)) + bounds_margin,
-        -(min_x - bounds_margin),
-        -(min_y - bounds_margin)
-    };
+    return measure_bounds_at(instance, offset, 1);
 }
 
 void expand_model_bounds(
@@ -388,32 +622,7 @@ void expand_model_bounds(
     int32_t y,
     int32_t z
 ) {
-    int32_t min_x = 0;
-    int32_t max_x = 0;
-    int32_t min_y = 0;
-    int32_t max_y = 0;
-    const auto pieces = instance.pieces();
-    for (std::size_t n = pieces.size(); n != 0; --n) {
-        const PieceState& piece = pieces[n - 1];
-        if ((piece.flags & piece_visible) == 0)
-            continue;
-        for (const FixedVector3& v : piece.transformed_vertices) {
-            const int32_t sx = hi(wrap_add(v.x, x));
-            const int32_t sy = hi(wrap_sub(z, v.z)) - (hi(wrap_add(v.y, y)) >> 1);
-            min_x = sx < min_x ? sx : min_x;
-            max_x = max_x < sx ? sx : max_x;
-            min_y = sy < min_y ? sy : min_y;
-            max_y = max_y < sy ? sy : max_y;
-        }
-    }
-    if (min_x - bounds_margin < bounds.left)
-        bounds.left = min_x - bounds_margin;
-    if (min_y - bounds_margin < bounds.top)
-        bounds.top = min_y - bounds_margin;
-    if (bounds.right < max_x + bounds_margin)
-        bounds.right = max_x + bounds_margin;
-    if (bounds.bottom < max_y + bounds_margin)
-        bounds.bottom = max_y + bounds_margin;
+    expand_bounds_at(bounds, instance, x, y, z, 1);
 }
 
 void draw_model(
@@ -463,12 +672,14 @@ void draw_piece_flat(
     thread_local std::vector<present::PolygonVertex> projected;
     const int32_t dx = wrap_sub(unit.position.x, camera_x);
     const int32_t dz = wrap_sub(unit.position.z, camera_z);
+    const uint32_t samples = renderer.samples;
     projected.clear();
     for (const FixedVector3& v : piece.transformed_vertices) {
         present::PolygonVertex vertex{};
-        vertex.x = hi(wrap_add(v.x, dx)) + renderer.origin_x;
-        vertex.y =
-            (hi(wrap_sub(dz, v.z)) - (hi(wrap_add(v.y, unit.position.y)) >> 1)) + renderer.origin_y;
+        vertex.x = hi_at(wrap_add(v.x, dx), samples) + renderer.origin_x;
+        vertex.y = (hi_at(wrap_sub(dz, v.z), samples) -
+                    (hi_at(wrap_add(v.y, unit.position.y), samples) >> 1)) +
+                   renderer.origin_y;
         projected.push_back(vertex);
     }
     const uint8_t team = renderer.team_colors[owner % 10];
@@ -492,7 +703,7 @@ bool prepare_model_image(
 ) {
     const Unit& unit = *model.unit;
     ModelState& state = *model.state;
-    const ImageFrame frame = measure_model_bounds(*model.instance, nullptr);
+    const ImageFrame frame = measure_bounds_at(*model.instance, nullptr, renderer.samples);
     if (!attached && (unit.flags2 & OA_UNIT_FLAG2_Z_BUFFER) == 0 && unit.build_remaining == 0.0F)
         allocate_image(state.image, frame.width, frame.height);
     else
@@ -506,6 +717,7 @@ bool prepare_model_image(
         build_model_image(renderer, state.image.sprite, model, unit.owner_index, pass);
     else
         build_shaded_model_image(renderer, state.image.sprite, model, unit.owner_index, pass);
+    ++state.image_builds;
     return true;
 }
 
@@ -599,33 +811,12 @@ bool apply_build_effect(const ModelRenderer& renderer, Sprite& image, const Mode
             image, static_cast<uint8_t>((progress * 0xff) / 0x1e), remap_keep, remap_keep, color_a
         );
     }
-    outline_model(image, model, static_cast<uint8_t>(color_b));
+    outline_at(image, model, static_cast<uint8_t>(color_b), renderer.samples);
     return true;
 }
 
 void outline_model(Sprite& image, const ModelRef& model, uint8_t color) {
-    thread_local std::vector<present::DepthVertex> projected;
-    thread_local std::vector<present::DepthVertex> corners;
-    const formats::objects3d::Model& source = model.instance->model();
-    const int32_t base = vertex_depth_base(model);
-    const auto pieces = model.instance->pieces();
-    for (std::size_t n = pieces.size(); n != 0; --n) {
-        const PieceState& piece = pieces[n - 1];
-        if ((piece.flags & piece_visible) == 0)
-            continue;
-        project_image_vertices(piece, image, false, base, projected);
-        const formats::objects3d::Object& object = source.objects[piece.object_index];
-        const PreparedObject& prepared = model.prepared->objects[piece.object_index];
-        for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
-            if (!gather(source_of(object, prepared.primitives[i]), projected, corners) ||
-                corners.empty())
-                continue;
-            corners.push_back(corners.front());
-            present::outline_depth_polygon(
-                image, corners.data(), static_cast<int32_t>(corners.size()), color
-            );
-        }
-    }
+    outline_at(image, model, color, 1);
 }
 
 void draw_unit_model(
@@ -646,11 +837,15 @@ void draw_unit_model(
     const int32_t ground = renderer.ground_height != nullptr
                                ? renderer.ground_height(renderer.user, unit.position)
                                : 0;
+    // Places are counted in samples; heights and depths stay in game pixels.
+    const uint32_t samples = renderer.samples;
+    const auto scale = static_cast<int32_t>(samples);
     const int32_t unit_height = hi(unit.position.y);
-    const int32_t sx = hi(dx);
-    const int32_t shadow_y = hi(dz) - (ground >> 1) + renderer.origin_y;
-    const int32_t unit_y = hi(dz) - (unit_height >> 1) + renderer.origin_y;
-    const int32_t shadow_x = sx + renderer.origin_x + shadow_offset_x;
+    const int32_t sx = hi_at(dx, samples);
+    const int32_t shadow_y = hi_at(dz, samples) - ((ground * scale) >> 1) + renderer.origin_y;
+    const int32_t unit_y =
+        hi_at(dz, samples) - (hi_at(unit.position.y, samples) >> 1) + renderer.origin_y;
+    const int32_t shadow_x = sx + renderer.origin_x + shadow_offset_x * scale;
     const int32_t image_x = sx + renderer.origin_x;
     const uint32_t flags = def_flags(model);
     const bool shadows = (renderer.graphics_flags & graphics_shadows) != 0 &&
@@ -674,6 +869,8 @@ void draw_unit_model(
         if (shadows) {
             if (is_building(unit) && (flags & OA_UNIT_DEF_FLAG_DIGGER) == 0)
                 draw_building_shadow();
+            else if (vehicle_shadow && samples != 1 && target != nullptr)
+                draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
             else if (vehicle_shadow)
                 present::draw_sprite_blended(
                     target, &copy_silhouette(renderer, state.image.sprite), shadow_x, shadow_y
@@ -742,6 +939,11 @@ void draw_unit_model(
             present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
         } else if (is_building(unit)) {
             draw_building_shadow();
+        } else if (
+            vehicle_shadow && static_cast<int32_t>(game.sea_level) - unit_height <= 0 &&
+            samples != 1 && target != nullptr
+        ) {
+            draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
         } else if (vehicle_shadow) {
             Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
             const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
@@ -765,7 +967,10 @@ void draw_unit_model(
     const ui::hud::SpriteFrame source_frame{
         image.width, image.height, image.origin_x, image.origin_y
     };
-    ui::hud::compose_unit_sprite(*renderer.world, unit, source_frame, composer);
+    if (samples == 1)
+        ui::hud::compose_unit_sprite(*renderer.world, unit, source_frame, composer);
+    else
+        compose_finer_sprite(context, unit, source_frame);
     Sprite& composite = renderer.composite.sprite;
     if (!is_building(unit) || unit.build_remaining == 0.0F)
         build_model_image(renderer, composite, model, unit.owner_index, pass_moving_pieces);
@@ -784,7 +989,11 @@ void draw_unit_model(
         const int32_t cy = wrap_sub(carried.unit->position.y, unit.position.y);
         const int32_t cz = wrap_sub(carried.unit->position.z, unit.position.z);
         present::composite_depth_sprite(
-            carried.state->image.sprite, composite, hi(cx), hi(cz) - (hi(cy) >> 1), hi(cy)
+            carried.state->image.sprite,
+            composite,
+            hi_at(cx, samples),
+            hi_at(cz, samples) - (hi_at(cy, samples) >> 1),
+            hi(cy)
         );
     }
     const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
@@ -819,7 +1028,7 @@ void build_model_image(
         const PieceState& piece = pieces[n - 1];
         if (!piece_passes(piece, pass, *model.unit))
             continue;
-        project_image_vertices(piece, *target, doubled, base, projected);
+        project_image_vertices(piece, *target, doubled, base, renderer.samples, projected);
         const formats::objects3d::Object& object = source.objects[piece.object_index];
         const PreparedObject& prepared = model.prepared->objects[piece.object_index];
         for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
@@ -864,7 +1073,7 @@ void build_shaded_model_image(
         if (!piece_passes(piece, pass, *model.unit))
             continue;
         const auto& points = piece.transformed_vertices;
-        project_image_vertices(piece, *target, doubled, base, projected);
+        project_image_vertices(piece, *target, doubled, base, renderer.samples, projected);
         uses.assign(points.size(), 0);
         sums.assign(points.size(), Normal{0.0F, 0.0F, 0.0F});
         const formats::objects3d::Object& object = source.objects[piece.object_index];
@@ -977,67 +1186,18 @@ Sprite& copy_silhouette(ModelRenderer& renderer, const Sprite& image) {
 }
 
 ImageFrame measure_shadow_bounds(const sim::model_runtime::Instance& instance) {
-    int32_t min_x = 0;
-    int32_t max_x = 0;
-    int32_t min_y = 0;
-    int32_t max_y = 0;
-    const auto pieces = instance.pieces();
-    for (std::size_t n = pieces.size(); n != 0; --n) {
-        const PieceState& piece = pieces[n - 1];
-        if ((piece.flags & piece_visible) == 0)
-            continue;
-        for (const FixedVector3& v : piece.transformed_vertices) {
-            const int32_t lean = hi(v.y) >> 2;
-            const int32_t sx = hi(v.x) + lean;
-            const int32_t sy = hi(wrap_sub(0, v.z)) - lean;
-            min_x = sx < min_x ? sx : min_x;
-            max_x = max_x < sx ? sx : max_x;
-            min_y = sy < min_y ? sy : min_y;
-            max_y = max_y < sy ? sy : max_y;
-        }
-    }
-    return {
-        (max_x - (min_x - bounds_margin)) + bounds_margin,
-        (max_y - (min_y - bounds_margin)) + bounds_margin,
-        -(min_x - bounds_margin),
-        -(min_y - bounds_margin)
-    };
+    return shadow_bounds_at(instance, 1);
 }
 
 void draw_shadow_silhouette(Sprite& target, const ModelRef& model) {
-    thread_local std::vector<present::DepthVertex> projected;
-    thread_local std::vector<present::DepthVertex> corners;
-    const formats::objects3d::Model& source = model.instance->model();
-    const auto pieces = model.instance->pieces();
-    for (std::size_t n = pieces.size(); n != 0; --n) {
-        const PieceState& piece = pieces[n - 1];
-        if ((piece.flags & piece_visible) == 0 || (piece.flags & piece_cached) == 0)
-            continue;
-        projected.clear();
-        for (const FixedVector3& v : piece.transformed_vertices) {
-            const int32_t height = hi(v.y);
-            const int32_t lean = height >> 2;
-            projected.push_back(
-                {hi(v.x) + lean + target.origin_x,
-                 hi(wrap_sub(0, v.z)) - lean + target.origin_y,
-                 height + shadow_depth_base}
-            );
-        }
-        const formats::objects3d::Object& object = source.objects[piece.object_index];
-        const PreparedObject& prepared = model.prepared->objects[piece.object_index];
-        for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
-            if (gather(source_of(object, prepared.primitives[i]), projected, corners))
-                present::fill_depth_polygon(
-                    target, corners.data(), static_cast<int32_t>(corners.size()), 0
-                );
-        }
-    }
+    shadow_silhouette_at(target, model, 1);
 }
 
 bool build_shadow_image(ModelRenderer& renderer, const ModelRef& model, const Sprite& image) {
     thread_local present::RleEncoder encoder;
     thread_local std::vector<uint8_t> stream;
-    const ImageFrame frame = measure_shadow_bounds(*model.instance);
+    const uint32_t samples = renderer.samples;
+    const ImageFrame frame = shadow_bounds_at(*model.instance, samples);
     ensure_composite(renderer, static_cast<int64_t>(frame.width) * frame.height);
     if (static_cast<int64_t>(frame.width) * frame.height > composite_plane(renderer))
         return false;
@@ -1050,8 +1210,10 @@ bool build_shadow_image(ModelRenderer& renderer, const ModelRef& model, const Sp
         composite.data, composite.key, static_cast<std::size_t>(frame.width) * frame.height
     );
     std::memset(composite.aux, 0, static_cast<std::size_t>(frame.width) * frame.height);
-    draw_shadow_silhouette(composite, model);
-    present::stamp_sprite_mask(image, composite, shadow_offset_x, 0);
+    shadow_silhouette_at(composite, model, samples);
+    present::stamp_sprite_mask(
+        image, composite, shadow_offset_x * static_cast<int32_t>(samples), 0
+    );
     const int32_t size = present::encode_rle_sprite(encoder, nullptr, composite);
     stream.assign(static_cast<std::size_t>(size > 0 ? size : 0), 0);
     present::encode_rle_sprite(encoder, stream.data(), composite);
@@ -1140,12 +1302,10 @@ void update_linked_transforms(const ModelRenderer& renderer, const ModelRef& mod
     }
 }
 
-void draw_linked_model(
-    ModelRenderer& renderer, Surface* target, const ModelRef& model, bool movement_idle
-) {
+LinkedDraw prepare_linked_draw(ModelRenderer& renderer, const ModelRef& model, bool movement_idle) {
     const Unit& unit = *model.unit;
     if (unit.attach_parent != 0)
-        return;
+        return {};
     update_linked_transforms(renderer, model);
     ModelState& state = *model.state;
     // The build finished since the image was built: the image goes, as the
@@ -1164,6 +1324,15 @@ void draw_linked_model(
         prepare_model_image(renderer, model, false, pass_cached_pieces);
     state.cache.has_image = has_image(state);
     state.cache.image_has_mask = state.image.sprite.aux != nullptr;
+    return {true, draw.unlit};
+}
+
+void draw_linked_model(
+    ModelRenderer& renderer, Surface* target, const ModelRef& model, bool movement_idle
+) {
+    const LinkedDraw draw = prepare_linked_draw(renderer, model, movement_idle);
+    if (!draw.drawn)
+        return;
     draw_model(
         renderer,
         target,

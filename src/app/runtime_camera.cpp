@@ -3,6 +3,7 @@
 
 // Radar interaction, zoom, camera panning and move/patrol orders.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include <SDL3/SDL.h>
@@ -233,7 +234,37 @@ void Runtime::apply_zoom_anchor() {
     ));
 }
 
+void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, float target) {
+    if (!runtime.match_ || !runtime.selected_tnt_)
+        return;
+    // The point at the battlefield's centre stays there while the zoom eases.
+    const auto& layout = runtime.match_layout_;
+    const int centre_x = layout.battlefield_width() / 2;
+    const int centre_y = layout.battlefield_height() / 2;
+    const auto zoom = static_cast<double>(runtime.match_zoom_ <= 0.0F ? 1.0F : runtime.match_zoom_);
+    runtime.zoom_anchor_map_x_ = static_cast<uint32_t>(std::max<int64_t>(
+        0,
+        std::llround(
+            static_cast<double>(runtime.match_camera_x_) + static_cast<double>(centre_x) / zoom
+        )
+    ));
+    runtime.zoom_anchor_map_y_ = static_cast<uint32_t>(std::max<int64_t>(
+        0,
+        std::llround(
+            static_cast<double>(runtime.match_camera_z_) + static_cast<double>(centre_y) / zoom
+        )
+    ));
+    runtime.zoom_anchor_sx_ = centre_x;
+    runtime.zoom_anchor_sy_ = centre_y;
+    runtime.zoom_anchored_ = true;
+    runtime.match_zoom_target_ = std::clamp(target, kMinBattlefieldZoom, kMaxBattlefieldZoom);
+    runtime.stop_match_tracking();
+}
+
 void Runtime::step_match_zoom() {
+    // Each frame of a match: a match that turns out to be shared or a replay
+    // goes back to the base path credit (the AI & Pathfinding setting).
+    EngineSettingsState::hold_path_credit(*this, current_extension_state());
     // The director sets the zoom of every frame itself, off the wall clock.
     if (director_mode())
         return;

@@ -596,13 +596,16 @@ void Runtime::blit_gaf_blended_hotspot(
 void Runtime::release_model_images() {
     if (!match_models_)
         return;
+    // Images drawn finer (enhanced anti-aliasing) go with the game's.
     for (auto& tracked : match_models_->units) {
         tracked.state.image = {};
         tracked.state.shadow = {};
+        tracked.state.finer.reset();
     }
     for (auto& motion : match_models_->presentation.units) {
         motion.state.image = {};
         motion.state.shadow = {};
+        motion.state.finer.reset();
     }
     for (auto& feature : match_features_) {
         feature.state.image = {};
@@ -1240,6 +1243,9 @@ void Runtime::render_match_surface() {
             frame_draws_.probe_z = drawn.position.z;
         }
     };
+    // How finely units are drawn (enhanced anti-aliasing); director frames
+    // draw them as without it.
+    const auto unit_level = directed ? model_render::UnitSupersampling::off : unit_supersampling_;
     const auto draw_unit = [&](uint16_t unit_index) {
         const auto model = unit_model(models, unit_index);
         if (model.instance == nullptr)
@@ -1285,12 +1291,16 @@ void Runtime::render_match_surface() {
             if (carried)
                 return;
             model_render::update_linked_transforms(renderer, shown);
-            model_render::bridge_open(
+            model_render::draw_unit_supersampled(
+                renderer,
                 models.bridge,
-                unit_region(renderer, shown, terrain_height(&models, shown.unit->position))
+                models.supersample,
+                shown,
+                unit_region(renderer, shown, terrain_height(&models, shown.unit->position)),
+                idle,
+                unit_level,
+                bridge_holds_draws
             );
-            model_render::draw_linked_model(renderer, &models.bridge.surface, shown, idle);
-            bridge_holds_draws = true;
             return;
         }
         note_unit_drawn(unit_index, *model.unit, false);
@@ -1306,12 +1316,16 @@ void Runtime::render_match_surface() {
                 model.instance->model().objects.front()
             );
         model_render::note_piece_changes(model);
-        model_render::bridge_open(
+        model_render::draw_unit_supersampled(
+            renderer,
             models.bridge,
-            unit_region(renderer, model, terrain_height(&models, model.unit->position))
+            models.supersample,
+            model,
+            unit_region(renderer, model, terrain_height(&models, model.unit->position)),
+            idle,
+            unit_level,
+            bridge_holds_draws
         );
-        model_render::draw_linked_model(renderer, &models.bridge.surface, model, idle);
-        bridge_holds_draws = true;
     };
     // A record's shatter fragment, drawn into
     // the model bridge and written back before the record's sprite.

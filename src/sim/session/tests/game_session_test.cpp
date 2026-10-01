@@ -92,6 +92,12 @@ void init_tests() {
     r.unit_limit = 3;
     session_init(&session, &host);
     expect(session.unit_limit == kMinUnitLimit, "unit limit clamps low");
+    static_assert(clamp_installed_unit_limit(kMinUnitLimit - 1) == kMinUnitLimit);
+    static_assert(clamp_installed_unit_limit(kMinUnitLimit) == kMinUnitLimit);
+    static_assert(clamp_installed_unit_limit(kDefaultUnitLimit) == kDefaultUnitLimit);
+    static_assert(clamp_installed_unit_limit(kMaxUnitLimit) == kMaxUnitLimit);
+    static_assert(clamp_installed_unit_limit(kMaxUnitLimit + 1) == kMaxUnitLimit);
+    expect(clamp_installed_unit_limit(-5) == kMinUnitLimit, "a negative limit clamps low");
     session_shutdown(&session, &host);
     expect(
         session.skirmish_info == nullptr && r.steps.back() == SessionStep::free_subsystem_object,

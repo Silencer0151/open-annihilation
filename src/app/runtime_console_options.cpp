@@ -6,6 +6,7 @@
 // the preferences and hands its values back before they are saved or another
 // screen reads them.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/engine_settings.hpp"
 
 #include "oa/platform/preferences.hpp"
 #include "oa/ui/console/game_fields.hpp"
@@ -123,8 +124,12 @@ void Runtime::check_console_option_commands(const std::function<void(const char*
     const auto alt_saved = saved("SwitchAlt");
     enter_line("+switchalt 0");
     require(!switch_alt() && saved("SwitchAlt") == alt_saved, "+switchalt 0 saved or left the bit");
+    require(
+        !engine_settings().switch_alt, "+switchalt 0 left the Select groups without Alt setting"
+    );
     enter_line("+switchalt");
     require(switch_alt() && saved("SwitchAlt") == 1, "+switchalt did not set and save the bit");
+    require(engine_settings().switch_alt, "+switchalt left the Select groups without Alt setting");
 
     uint16_t commander = 0;
     for (const auto& slot : match_->world().slots)
@@ -160,6 +165,7 @@ void Runtime::check_console_option_commands(const std::function<void(const char*
 
     enter_line("+switchalt");
     require(!switch_alt() && saved("SwitchAlt") == 0, "+switchalt did not clear and save the bit");
+    require(!engine_settings().switch_alt, "+switchalt left the Select groups without Alt setting");
     digit(SDLK_2, SDL_SCANCODE_2, SDL_KMOD_NONE);
     require(match_build_page_ == 1, "2 did not show build page 1 with SwitchAlt off");
     digit(SDLK_1, SDL_SCANCODE_1, SDL_KMOD_NONE);
@@ -183,9 +189,33 @@ void Runtime::check_console_option_commands(const std::function<void(const char*
     match_camera_x_ = kept_camera_x;
     match_camera_z_ = kept_camera_z;
     squad_double_tap_ = 0;
+
+    // +stats alone shows or hides the frame statistics and saves the Show
+    // performance statistics setting; with an argument it saves nothing.
+    const auto saved_stats = [&] {
+        const auto values = oa::platform::preferences::load(preference_path_);
+        const auto found = values.find(std::string(oa::ui::engine_settings::key::frame_stats));
+        return found != values.end() ? found->second : std::string();
+    };
+    show_frame_stats(false);
+    const auto stats_saved = saved_stats();
+    enter_line("+stats 1");
+    require(frame_stats_shown_ && saved_stats() == stats_saved, "+stats 1 saved or hid the panel");
+    require(engine_settings().frame_stats, "+stats 1 left the Show performance statistics setting");
+    enter_line("+stats");
+    require(!frame_stats_shown_ && saved_stats() == "0", "+stats did not hide and save");
+    enter_line("+stats");
+    require(frame_stats_shown_ && saved_stats() == "1", "+stats did not show and save");
+    require(engine_settings().frame_stats, "+stats left the Show performance statistics setting");
+    enter_line("+stats 0");
+    require(!frame_stats_shown_ && saved_stats() == "1", "+stats 0 saved or showed the panel");
+    enter_line("+stats");
+    enter_line("+stats");
+    require(!frame_stats_shown_ && saved_stats() == "0", "+stats did not hide and save again");
     std::cout << "console option check: +scrollspeed and +iface set and save their options, "
                  "a save takes the match's sound flags, +switchalt toggles and saves (with an "
-                 "argument sets without saving) and the digit keys follow it\n";
+                 "argument sets without saving) and the digit keys and the settings follow it, "
+                 "and +stats toggles and saves (with an argument sets without saving)\n";
 }
 
 } // namespace oa::app

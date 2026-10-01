@@ -99,13 +99,11 @@ void session_init(Session* session, const SessionHost* host) {
     app_mode(host, AppMode::boot);
     run(host, SessionStep::clear_state_buffer);
     game->gui_clear_quick_keys_on_draw = 1;
-    int32_t limit = host != nullptr && host->read_setting != nullptr
-                        ? host->read_setting(host->context, "UnitLimit", kDefaultUnitLimit)
-                        : kDefaultUnitLimit;
-    if (limit > kMaxUnitLimit)
-        limit = kMaxUnitLimit;
-    else if (limit < kMinUnitLimit)
-        limit = kMinUnitLimit;
+    const int32_t limit = clamp_installed_unit_limit(
+        host != nullptr && host->read_setting != nullptr
+            ? host->read_setting(host->context, "UnitLimit", kDefaultUnitLimit)
+            : kDefaultUnitLimit
+    );
     session->unit_limit = limit;
     game->max_units_setting = static_cast<uint16_t>(limit);
 }

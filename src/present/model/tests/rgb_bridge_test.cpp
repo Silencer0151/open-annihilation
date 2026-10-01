@@ -134,6 +134,106 @@ void test_scaled() {
     CHECK(is_entry(frame.at(7, 8), palette.entries[3]));
 }
 
+// Colours outside the palette resolve to the same entry however often they
+// are looked up, and whatever other colours took their slot in between.
+void test_nearest_remembered() {
+    RgbBridge bridge;
+    const oa::Palette palette = ramp_palette();
+    Frame frame(8, 8, palette.entries[0]);
+    bridge_begin(bridge, frame.view(), {0, 0, 7, 7}, 1.0F, palette);
+    const uint8_t first = bridge_index(bridge, 41, 214, 21);
+    for (int r = 0; r < 256; ++r)
+        for (int b = 0; b < 256; b += 3)
+            (void)bridge_index(bridge, static_cast<uint8_t>(r), 7, static_cast<uint8_t>(b));
+    CHECK(bridge_index(bridge, 41, 214, 21) == first);
+    CHECK(first == 41);
+}
+
+// A sampled region starts as the captured indices under it, and with nothing
+// drawn leaves the frame as it was, colours outside the palette included.
+void test_sampled_untouched() {
+    const oa::Palette palette = ramp_palette();
+    const oa::PaletteEntry odd{7, 9, 11, 0};
+    Frame frame(20, 20, odd);
+    const std::vector<uint8_t> before = frame.rgb;
+    RgbBridge bridge;
+    bridge_begin(bridge, frame.view(), {0, 0, 19, 19}, 1.0F, palette);
+    SampledRegion sampled;
+    bridge_open_sampled(bridge, sampled, {-3, 2, 5, 6}, 4);
+    CHECK(sampled.region.x1 == 0);
+    CHECK(sampled.region.x2 == 5);
+    CHECK(sampled.surface.width == 24);
+    CHECK(sampled.surface.height == 20);
+    const uint8_t under = bridge_index(bridge, odd.r, odd.g, odd.b);
+    CHECK(sampled.surface.pixels[0] == under);
+    CHECK(sampled.surface.pixels[24 * 20 - 1] == under);
+    bridge_end_sampled(bridge, sampled);
+    CHECK(frame.rgb == before);
+    // A region off the surface covers nothing and writes nothing.
+    bridge_open_sampled(bridge, sampled, {30, 30, 40, 40}, 4);
+    CHECK(sampled.region.x1 > sampled.region.x2);
+    bridge_end_sampled(bridge, sampled);
+    CHECK(frame.rgb == before);
+}
+
+// A bridge pixel drawn all over in one index takes that palette colour; one
+// drawn in part takes the average of its samples, those not drawn counting
+// as the frame's own colour, rounded to nearest.
+void test_sampled_coverage() {
+    const oa::Palette palette = ramp_palette();
+    const oa::PaletteEntry odd{7, 9, 11, 0};
+    Frame frame(20, 20, odd);
+    RgbBridge bridge;
+    bridge_begin(bridge, frame.view(), {0, 0, 19, 19}, 1.0F, palette);
+    SampledRegion sampled;
+    bridge_open_sampled(bridge, sampled, {2, 2, 9, 9}, 4);
+    const auto sample = [&](int x, int y) -> uint8_t& {
+        return sampled.surface.pixels[y * sampled.surface.pitch + x];
+    };
+    // Bridge pixel (2, 2) in full; (3, 2) in its left half; (4, 2) in one
+    // sample of 50 and one of 60.
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 6; ++x)
+            sample(x, y) = 100;
+    sample(8, 0) = 50;
+    sample(11, 3) = 60;
+    bridge_end_sampled(bridge, sampled);
+    CHECK(is_entry(frame.at(2, 2), palette.entries[100]));
+    const oa::PaletteEntry& ink = palette.entries[100];
+    CHECK(frame.at(3, 2)[0] == (ink.r * 8 + odd.r * 8 + 8) / 16);
+    CHECK(frame.at(3, 2)[1] == (ink.g * 8 + odd.g * 8 + 8) / 16);
+    CHECK(frame.at(3, 2)[2] == (ink.b * 8 + odd.b * 8 + 8) / 16);
+    const oa::PaletteEntry& a = palette.entries[50];
+    const oa::PaletteEntry& b = palette.entries[60];
+    CHECK(frame.at(4, 2)[0] == (a.r + b.r + odd.r * 14 + 8) / 16);
+    CHECK(frame.at(4, 2)[1] == (a.g + b.g + odd.g * 14 + 8) / 16);
+    CHECK(is_entry(frame.at(5, 2), odd));
+    CHECK(is_entry(frame.at(2, 3), odd));
+}
+
+// With a scale of 2 each frame pixel of a bridge pixel blends with its own
+// colour, and the frame pixels map to bridge pixels as bridge_end maps them.
+void test_sampled_scaled() {
+    const oa::Palette palette = ramp_palette();
+    Frame frame(40, 40, palette.entries[3]);
+    frame.rgb[static_cast<std::size_t>((9 * 40 + 9) * 3)] = 200; // one pixel off the palette
+    RgbBridge bridge;
+    bridge_begin(bridge, frame.view(), {0, 0, 39, 39}, 2.0F, palette);
+    SampledRegion sampled;
+    bridge_open_sampled(bridge, sampled, {4, 4, 4, 4}, 2);
+    CHECK(sampled.surface.width == 2);
+    sampled.surface.pixels[0] = 50;
+    sampled.surface.pixels[1] = 50;
+    bridge_end_sampled(bridge, sampled);
+    const oa::PaletteEntry& ink = palette.entries[50];
+    const oa::PaletteEntry& ground = palette.entries[3];
+    CHECK(frame.at(8, 8)[1] == (ink.g * 2 + ground.g * 2 + 2) / 4);
+    CHECK(frame.at(9, 8)[1] == frame.at(8, 8)[1]);
+    CHECK(frame.at(9, 9)[0] == (ink.r * 2 + 200 * 2 + 2) / 4);
+    CHECK(is_entry(frame.at(10, 9), ground));
+    CHECK(is_entry(frame.at(7, 8), ground));
+}
+
 } // namespace
 
 int main() {
@@ -141,6 +241,10 @@ int main() {
     test_draw_and_commit();
     test_blended_draw();
     test_scaled();
+    test_nearest_remembered();
+    test_sampled_untouched();
+    test_sampled_coverage();
+    test_sampled_scaled();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return EXIT_FAILURE;

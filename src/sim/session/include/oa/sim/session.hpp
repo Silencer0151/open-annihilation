@@ -143,6 +143,14 @@ inline constexpr int32_t kDefaultUnitLimit = 250;
 inline constexpr int32_t kMinUnitLimit = 21;
 inline constexpr int32_t kMaxUnitLimit = 500;
 
+/// Returns an installation's unit limit as a game plays it.
+///
+/// @param limit the [UnitLimit] value as read, in units per player
+/// @return `limit` clamped to kMinUnitLimit..kMaxUnitLimit
+[[nodiscard]] constexpr int32_t clamp_installed_unit_limit(int32_t limit) noexcept {
+    return limit > kMaxUnitLimit ? kMaxUnitLimit : limit < kMinUnitLimit ? kMinUnitLimit : limit;
+}
+
 struct Session {
     World* world;                               // live game block and match tables
     oa::data::campaign::CampaignFile* campaign; // Game.game_options

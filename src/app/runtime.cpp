@@ -115,6 +115,8 @@ Runtime::Runtime(
     load_common_fonts();
     init::reset_player_slots(state_, player_storage_, false);
     init::load_preferences(state_, skirmish_settings_, preferences_, *this);
+    // The Open Annihilation settings, after the frontend's preferences hold SwitchAlt.
+    load_engine_settings();
     // Session start sets the display gamma from the saved Gamma.
     apply_saved_gamma();
     audio_player_.set_volume(wave_volume_, preferences_.fx_volume);
@@ -230,6 +232,11 @@ int Runtime::run() {
     }
     if (options_.check_scroll_bars) {
         check_scroll_bars();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_engine_settings) {
+        check_engine_settings();
         flush_preferences();
         return 0;
     }
@@ -355,6 +362,12 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // presses a dialog's default button.
     if (take_full_screen_event(event))
         return;
+    // The macOS application menu's Settings… item asks for the settings on
+    // whatever screen shows.
+    if (take_engine_settings_request(event)) {
+        apply_screen_request();
+        return;
+    }
     if (!dispatch_screen_input(event))
         handle_sdl_event(event, running);
     apply_screen_request();
@@ -364,6 +377,7 @@ void Runtime::idle_tick() {
     take_frame_time();
     camera_moved_ = false;
     tick_screen_packages();
+    sync_engine_settings_menu_item();
     step_music();
     present_unit_announcements();
     if (exit_requested_)

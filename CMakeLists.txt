@@ -90,6 +90,7 @@ add_subdirectory(src/base/geometry)
 add_subdirectory(src/base/sha256)
 add_subdirectory(src/core)
 add_subdirectory(src/platform)
+add_subdirectory(src/platform/app-menu)
 add_subdirectory(src/ui/services)
 add_subdirectory(src/present)
 add_subdirectory(src/ui/frontend-state)
@@ -159,6 +160,7 @@ add_subdirectory(src/data/defs)
 add_subdirectory(src/present/world-renderer)
 add_subdirectory(src/present/unit-playout)
 add_subdirectory(src/ui/frontend-renderer)
+add_subdirectory(src/ui/engine-settings)
 add_subdirectory(src/audio)
 # The app's headers: its extension table, Runtime and the other headers an
 # extension compiles against.
@@ -330,17 +332,23 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
   src/app/runtime_director_view.cpp src/app/runtime_director.cpp
   src/app/presentation_interpolation.cpp src/app/runtime_interpolation_check.cpp
-  src/app/runtime_unit_playout_check.cpp)
-# The run manifest of a director render names the engine's version.
-set_property(SOURCE src/app/runtime_director.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-  "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
+  src/app/runtime_unit_playout_check.cpp
+  src/app/runtime_engine_settings.cpp src/app/runtime_engine_settings_wiring_check.cpp
+  src/app/runtime_engine_settings_menu.cpp src/app/runtime_engine_settings_check.cpp
+  src/app/runtime_engine_settings_match.cpp src/app/runtime_engine_settings_match_check.cpp
+  src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp)
+# The run manifest of a director render and the settings dialog's header
+# name the engine's version.
+set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp APPEND
+  PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
   oa-app-video-capture
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
   oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
-  oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions)
+  oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
+  oa-ui-engine-settings oa-platform-app-menu)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -456,6 +464,19 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_scroll_bars_dir}/scroll-bars.conf")
       set_tests_properties(native-scroll-bars PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_scroll_bars_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The Open Annihilation settings through the SDL presenter: the OA
+      # button on the main menu and under Resume in the in-game menu, the
+      # dialog over each, its sections, controls and keys, OK, Cancel and
+      # Restore defaults, the preferences it writes, the locks a game puts on
+      # it, and each setting taking effect.
+      set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
+      file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
+      add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-engine-settings
+        --preferences-file "${oa_engine_settings_dir}/engine-settings.conf")
+      set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_engine_settings_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The first mission's briefing opened from NEWGAME.GUI with sound on the
       # dummy device: its narration is heard exactly while SHUTUP is on,
@@ -664,6 +685,20 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-trace PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The Open Annihilation settings leave the game as it plays without
+        # them: the seeded skirmish, drawn, writes the same trace stream and
+        # last frame with every key at its default as with no preferences;
+        # the look and input settings and every enhanced anti-aliasing level
+        # leave its world alone; Pathfinding cycles at 2x and a unit limit of
+        # 500 repeat; and the director render keeps its pinned frames and
+        # sound at every default and at 16x anti-aliasing.
+        add_test(NAME native-engine-settings-determinism COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_engine_settings.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks"
+          --director-hashes "${oa_director_render_hashes}")
+        set_tests_properties(native-engine-settings-determinism PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The seeded headless skirmish, its army marching, played through
         # the match clock and drawn every frame at 30, 60, 120 and 144
         # frames a second writes one trace stream and reaches one world

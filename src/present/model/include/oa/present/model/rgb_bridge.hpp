@@ -17,8 +17,8 @@
 
 #include "oa/present/surface.hpp"
 
+#include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace oa::present::model {
@@ -46,7 +46,11 @@ struct RgbBridge {
     Palette palette{};
     std::vector<uint32_t> exact_keys; // open-addressed RGB -> index for palette colours
     std::vector<uint8_t> exact_values;
-    std::unordered_map<uint32_t, uint8_t> nearest; // other colours, resolved once
+    /// Other colours and the index of their nearest entry, one slot per
+    /// colour's hash: a colour remembered there is not searched for again
+    /// until another colour takes its slot.
+    std::vector<uint32_t> nearest_keys;
+    std::vector<uint8_t> nearest_values; ///< by slot, as nearest_keys
 };
 
 /// Covers a rectangle of an RGB frame with an 8-bit surface of the rectangle's size divided by the scale.
@@ -81,6 +85,56 @@ void bridge_open(RgbBridge& bridge, const Rect32& region);
 ///
 /// @param[in,out] bridge bridge whose captured tiles are committed
 void bridge_end(RgbBridge& bridge);
+
+/// Slots of the colours outside the palette a bridge remembers the nearest
+/// entry of; a power of two.
+inline constexpr std::size_t bridge_nearest_slots = std::size_t{1} << 16;
+
+/// An 8-bit surface laid over a region of a bridge's surface at a whole
+/// number of samples along each axis of a bridge pixel, for drawing finer
+/// than the bridge (enhanced anti-aliasing). Writing it back blends each
+/// frame pixel with the samples drawn over its bridge pixel.
+struct SampledRegion {
+    Surface surface{};             ///< the samples the routines draw into
+    std::vector<uint8_t> samples;  ///< the surface's pixels
+    std::vector<uint8_t> baseline; ///< each bridge pixel's index as captured, row by row
+    /// The first sample row of each bridge row as captured, so that a sample
+    /// row nothing was drawn into is passed over at once.
+    std::vector<uint8_t> captured_rows;
+    Rect32 region{0, 0, -1, -1}; ///< bridge pixels covered, inclusive; empty when x1 > x2
+    uint32_t factor{1};          ///< samples along each axis of a bridge pixel
+};
+
+/// Covers a region of a bridge's surface with samples.
+///
+/// The region is clipped to the bridge's surface. Each bridge pixel is
+/// captured as bridge_open captures it, and every sample of it starts as
+/// that index, so that blended draws blend with what lies under them. The
+/// surface's clip is the whole region. The bridge's own tiles are left as
+/// they are.
+///
+/// @param bridge bridge set up by bridge_begin; its colour lookup learns
+///     the colours captured
+/// @param[out] sampled region to set up; its buffers are reused
+/// @param region inclusive rectangle in the bridge's 8-bit pixels
+/// @param factor samples along each axis of a bridge pixel; 0 counts as 1
+void bridge_open_sampled(
+    RgbBridge& bridge, SampledRegion& sampled, const Rect32& region, uint32_t factor
+);
+
+/// Writes a sampled region back to the frame.
+///
+/// A sample whose index differs from its bridge pixel's captured index was
+/// drawn. Each frame pixel of a bridge pixel with drawn samples becomes the
+/// average of its samples, a drawn one counting as its palette colour and
+/// one not drawn as the frame pixel's own colour, rounded to nearest. A
+/// bridge pixel drawn all over in one index becomes that palette colour, as
+/// bridge_end writes it, and one with no sample drawn is left as it is.
+/// Frame pixels map to bridge pixels as bridge_end maps them.
+///
+/// @param bridge bridge whose frame receives the samples
+/// @param sampled region set up by bridge_open_sampled and drawn into
+void bridge_end_sampled(const RgbBridge& bridge, const SampledRegion& sampled);
 
 /// Returns the palette index of an RGB colour.
 ///

@@ -21,6 +21,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "panel_shade.hpp"
 #include <algorithm>
 #include <cctype>
@@ -327,6 +328,7 @@ struct RestartRun {
     Runtime* runtime = nullptr;
     bool campaign = false;
     std::string error;
+    uint16_t units_per_player = 0; // the unit limit the match was started with
 };
 
 template <typename Step>
@@ -2681,7 +2683,12 @@ ui::GameSettingsView Runtime::game_settings_view() {
 
 void Runtime::restart_match() {
     auto& session = match_menu_session();
-    RestartRun run{this, session.ingame.session == ui::SessionKind::campaign, {}};
+    RestartRun run{
+        this,
+        session.ingame.session == ui::SessionKind::campaign,
+        {},
+        EngineSettingsState::restart_unit_limit(*this)
+    };
     ui::RestartHost host;
     host.context = &run;
     host.bound_mission = [](void* context) {
@@ -2709,8 +2716,12 @@ void Runtime::restart_match() {
             (void)runtime.map_player_capacity();
         });
     };
+    // A restart plays at the limit the match was started with, whatever the
+    // run's limit is now.
     host.apply_roster = [](void* context) {
-        restart_do(context, [](RestartRun& run) { run.runtime->apply_skirmish_players(); });
+        restart_do(context, [](RestartRun& run) {
+            EngineSettingsState::start_skirmish(*run.runtime, run.units_per_player);
+        });
     };
     host.enter_frontend = [](void* context, bool in_game) {
         restart_do(context, [in_game](RestartRun& run) {
@@ -2930,6 +2941,14 @@ void Runtime::forget_match_preferences() {
 
 bool Runtime::pause_menu_shown() const {
     return match_paused_ && (!match_finished_ || outcome_over_menu_);
+}
+
+bool Runtime::ingame_menu_column_shown() const {
+    const auto& session = match_menu_session();
+    return screen_ == Screen::match && match_ && !match_finished_ && match_paused_ && match_hud_ &&
+           match_hud_panel_ == "guis/ARMOPT.GUI" && session.ingame_panel == IngamePanel::options &&
+           !session.close_confirm && !team_panel_open() &&
+           oa::ui::frontend_dialogs::dialog_count() == 0;
 }
 
 void Runtime::sync_visual_option_widgets() {

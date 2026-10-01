@@ -23,6 +23,7 @@
 #include "oa/ui/hud/sprite_placement.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace oa::present::model {
@@ -94,6 +95,8 @@ struct ModelBounds {
     int32_t bottom{};
 };
 
+struct FinerModel;
+
 // Draw state kept with a model instance; the pieces themselves live in
 // sim::model_runtime::Instance.
 struct ModelState {
@@ -115,6 +118,22 @@ struct ModelState {
     };
 
     std::vector<PieceSnapshot> pieces;
+    /// Counts the builds of `image`, so that the image a finer draw keeps
+    /// (FinerModel) is built again exactly when this one is.
+    uint32_t image_builds{};
+    /// The model drawn finer than the game's pixels (enhanced
+    /// anti-aliasing); null until it first is.
+    std::unique_ptr<FinerModel> finer{};
+};
+
+/// A model's draw state for draws finer than the game's pixels (enhanced
+/// anti-aliasing): the image and building silhouette of its unit drawn at a
+/// number of samples along each axis of a game pixel, built again whenever
+/// the game's image is.
+struct FinerModel {
+    ModelState state{};      ///< holds the finer image and silhouette
+    uint32_t samples{};      ///< samples along each axis they are drawn at; 0 before the first
+    uint32_t image_builds{}; ///< the ModelState::image_builds of the game's image they follow
 };
 
 // One model as the drawing functions see it: the loaded model with texture
@@ -150,6 +169,17 @@ struct ModelRenderer {
     // unit draws where the returned ModelRef's record stands, which may be a
     // copy of `unit` placed elsewhere (a draw between two ticks).
     ModelRef (*model_of)(void* user, const Unit& unit){};
+    /// Samples along each axis of a game pixel models are drawn at: 1 draws
+    /// the game's pixels; more draws every position, size and image that
+    /// many times finer, origin_x and origin_y counted in samples too
+    /// (enhanced anti-aliasing). Depths stay in game pixels.
+    uint32_t samples{1};
+};
+
+/// What one draw of a unit and its carried units draws with (prepare_linked_draw).
+struct LinkedDraw {
+    bool drawn{}; ///< false for a carried unit, which its carrier draws
+    bool unlit{}; ///< animated textures show their first frame
 };
 
 /// Allocates the context's 600x600 two-plane composite buffer.
@@ -420,6 +450,20 @@ void update_linked_transforms(const ModelRenderer& renderer, const ModelRef& mod
 ///
 /// @param model model whose state is updated
 void note_piece_changes(const ModelRef& model);
+
+/// Readies a unit for a draw, as draw_linked_model does before drawing.
+///
+/// Updates the transforms of the unit and its carried units
+/// (update_linked_transforms), counts the draw in the image cache and builds
+/// the cached image again when the cache asks for it, dropping an image
+/// built while the unit was unfinished once it is finished. A carried unit
+/// is left as it is: its carrier draws it.
+///
+/// @param[in,out] renderer drawing context
+/// @param model model to draw
+/// @param movement_idle the movement object's idle flag, for mobile units
+/// @return whether the unit draws, and whether unlit
+LinkedDraw prepare_linked_draw(ModelRenderer& renderer, const ModelRef& model, bool movement_idle);
 
 /// Draws a unit and its carried units.
 ///

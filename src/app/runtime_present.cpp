@@ -189,6 +189,7 @@ void Runtime::initialize_sdl() {
     load_game_cursors();
     if (cursors_loaded_)
         SDL_HideCursor();
+    install_engine_settings_menu_item();
 }
 
 bool Runtime::take_full_screen_event(const SDL_Event& event) {
@@ -261,6 +262,7 @@ void Runtime::destroy_match_layer_textures() {
         SDL_DestroyTexture(match_dialog_side_tex_);
         match_dialog_side_tex_ = nullptr;
     }
+    destroy_engine_settings_textures();
     match_dialog_tex_w_ = match_dialog_tex_h_ = 0;
     match_dialog_side_tex_w_ = match_dialog_side_tex_h_ = 0;
     match_hud_tex_w_ = match_hud_tex_h_ = 0;
@@ -340,6 +342,7 @@ void Runtime::compose_match_frame(renderer::Surface& frame) {
         return;
     const auto pixels = static_cast<std::size_t>(frame.width) * frame.height;
     apply_gamma_rgb(frame.rgb.data(), pixels, 3);
+    compose_engine_settings_layer(frame);
     if (!match_use_layers_ || oa::ui::frontend_dialogs::dialog_count() == 0 ||
         match_dialog_rgba_.size() != pixels * 4U)
         return;
@@ -470,6 +473,7 @@ void Runtime::present_match_layers() {
         if (!SDL_RenderTexture(sdl_.renderer, match_dialog_side_tex_, nullptr, &side))
             throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
     }
+    present_engine_settings_layer();
     if (dialogs && !SDL_RenderTexture(sdl_.renderer, match_dialog_tex_, nullptr, nullptr))
         throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
     present_software_cursor();
