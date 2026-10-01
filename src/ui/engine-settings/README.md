@@ -19,9 +19,16 @@ the locks a running game puts on them (`settings_locks`).
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
 | Gameplay | Unit limit | 50 to 1500 per player, steps of 50 | the installation's `totala.ini` UnitLimit, else 250 | `open-annihilation.unit-limit` |
-| Graphics | Maximum frame rate | 40 to 120, steps of 5 | 120 | `open-annihilation.max-fps` |
-| | Enhanced anti-aliasing | Off, 2×, 3×, 4×, 8×, 16× | Off | `open-annihilation.anti-aliasing` |
+| Graphics | Maximum frame rate | 40 to 120, steps of 5 | 120; 60 on a Raspberry Pi with the player's own preferences file | `open-annihilation.max-fps` |
+| | Enhanced anti-aliasing | Off, 2×, 3×, 4×, 8×, 16× | Off, a Raspberry Pi included | `open-annihilation.anti-aliasing` |
 | Developer | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
+
+The game counts a machine as a Raspberry Pi when Linux names its board's
+model, in `/proc/device-tree/model`, starting "Raspberry Pi"
+(`oa/platform/machine.hpp`). Its graphics keep up with 60 frames a second at
+the game's resolutions, so it starts there; the player can raise the rate and
+turn on anti-aliasing in the dialog like anywhere else, and Restore defaults
+puts the Pi's defaults back.
 
 With every default the game plays as it does without the settings. Pathfinding
 cycles and Unit limit are locked during a game; a shared game or a replay
@@ -75,7 +82,7 @@ it.
 
 ## Tests
 
-`ui-engine-settings` covers the defaults, the keys read and written and the
+`ui-engine-settings` covers the defaults, a Raspberry Pi's included, the keys read and written and the
 locks; `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches, slider stops, level
 strip, keys, footer buttons, locks and the faces it draws; and

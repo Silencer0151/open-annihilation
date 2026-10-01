@@ -14,6 +14,9 @@ static_assert(default_unit_limit == oa::sim::session::kDefaultUnitLimit);
 static_assert(lowest_stored_unit_limit == oa::sim::session::kMinUnitLimit);
 static_assert(lowest_stored_unit_limit <= lowest_unit_limit);
 static_assert(oa::sim::session::kMaxUnitLimit <= highest_unit_limit);
+static_assert(raspberry_pi_frame_rate >= lowest_frame_rate);
+static_assert(raspberry_pi_frame_rate <= highest_frame_rate);
+static_assert((raspberry_pi_frame_rate - lowest_frame_rate) % frame_rate_step == 0);
 
 namespace {
 
@@ -161,6 +164,10 @@ EngineSettings default_settings(const Inputs& inputs) {
     if (inputs.players_own_profile)
         settings.unit_limit =
             installation_unit_limit(inputs.installation_ini).value_or(default_unit_limit);
+    if (inputs.players_own_profile && inputs.raspberry_pi) {
+        settings.max_frame_rate = raspberry_pi_frame_rate;
+        settings.anti_aliasing = AntiAliasing::off;
+    }
     return settings;
 }
 

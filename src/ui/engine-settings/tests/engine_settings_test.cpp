@@ -87,6 +87,44 @@ void the_unit_limit_defaults_to_the_installations_with_the_players_own_file() {
     CHECK(absent.unit_limit == 500);
 }
 
+void a_raspberry_pi_starts_at_60_frames_without_anti_aliasing() {
+    constexpr settings::Inputs pi{true, false, {}, true};
+    const auto defaults = settings::default_settings(pi);
+    CHECK(defaults.max_frame_rate == settings::raspberry_pi_frame_rate);
+    CHECK(defaults.max_frame_rate == 60);
+    CHECK(defaults.anti_aliasing == settings::AntiAliasing::off);
+    // Every other default is as on any other machine.
+    auto others = defaults;
+    others.max_frame_rate = settings::highest_frame_rate;
+    CHECK(others == settings::default_settings(players_own_on_linux));
+    // A named preferences file plays as the game does everywhere.
+    CHECK(settings::default_settings({false, false, {}, true}) == settings::default_settings({}));
+    CHECK(settings::default_settings(players_own_on_linux).max_frame_rate == 120);
+
+    // Without a stored value the Pi's defaults hold; a stored value wins.
+    CHECK(settings::read_settings({}, pi, false) == defaults);
+    const auto faster =
+        settings::read_settings(one_key(settings::key::max_frame_rate, "120"), pi, false);
+    CHECK(faster.max_frame_rate == 120);
+    const auto smoother =
+        settings::read_settings(one_key(settings::key::anti_aliasing, "4"), pi, false);
+    CHECK(smoother.anti_aliasing == settings::AntiAliasing::x4);
+    CHECK(smoother.max_frame_rate == 60);
+
+    // The player's choice is stored; Restore defaults puts the Pi's back.
+    auto chosen = defaults;
+    chosen.max_frame_rate = 90;
+    chosen.anti_aliasing = settings::AntiAliasing::x2;
+    Values values;
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.at(std::string{settings::key::max_frame_rate}) == "90");
+    CHECK(values.at(std::string{settings::key::anti_aliasing}) == "2");
+    CHECK(settings::read_settings(values, pi, false) == chosen);
+    settings::write_settings(values, chosen, defaults, defaults, true);
+    CHECK(values.empty());
+    CHECK(settings::read_settings(values, pi, false) == defaults);
+}
+
 void totala_ini_gives_its_unit_limit_as_the_game_reads_it() {
     using settings::installation_unit_limit;
     CHECK(!installation_unit_limit(""));
@@ -351,6 +389,7 @@ int main() {
     defaults_play_as_without_the_settings();
     escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file();
     the_unit_limit_defaults_to_the_installations_with_the_players_own_file();
+    a_raspberry_pi_starts_at_60_frames_without_anti_aliasing();
     totala_ini_gives_its_unit_limit_as_the_game_reads_it();
     absent_keys_and_values_that_are_not_numbers_give_the_defaults();
     stored_values_are_read_and_clamped_into_their_ranges();

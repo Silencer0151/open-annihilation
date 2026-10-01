@@ -63,6 +63,9 @@ inline constexpr uint32_t lowest_frame_rate = 40;
 inline constexpr uint32_t highest_frame_rate = 120;
 /// The maximum frame rate setting's step, in frames a second.
 inline constexpr uint32_t frame_rate_step = 5;
+/// The maximum frame rate a Raspberry Pi starts with, in frames a second:
+/// what its graphics keep up with at the game's resolutions.
+inline constexpr uint32_t raspberry_pi_frame_rate = 60;
 
 /// The most bytes of an installation's totala.ini the defaults read.
 inline constexpr std::size_t installation_ini_limit = std::size_t{64} * 1024;
@@ -115,6 +118,7 @@ struct Inputs {
     /// The installation's totala.ini, at most installation_ini_limit bytes
     /// of it; empty when it has none.
     std::string_view installation_ini{};
+    bool raspberry_pi{}; ///< the game runs on a Raspberry Pi
 };
 
 /// Returns the settings a player has before changing any.
@@ -122,7 +126,9 @@ struct Inputs {
 /// Escape opens the game menu by default on macOS with the player's own
 /// preferences file; the unit limit is the installation's
 /// (installation_unit_limit) with the player's own file, else
-/// default_unit_limit.
+/// default_unit_limit. On a Raspberry Pi with the player's own file the
+/// maximum frame rate is raspberry_pi_frame_rate and enhanced
+/// anti-aliasing is off.
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults

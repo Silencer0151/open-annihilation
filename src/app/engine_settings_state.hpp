@@ -23,6 +23,8 @@ struct Runtime::EngineSettingsState {
     /// The installation's totala.ini, as read; empty when it has none or
     /// --preferences-file names the preferences file.
     std::string installation_ini;
+    /// The game runs on a Raspberry Pi, as read once at start.
+    bool raspberry_pi{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
     /// The section the dialog showed when it last closed; it opens there.
     oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};
@@ -42,7 +44,8 @@ struct Runtime::EngineSettingsState {
     ///
     /// @param runtime the runtime
     /// @return the platform, whether the preferences file is the player's
-    ///     own, and the installation's totala.ini
+    ///     own, the installation's totala.ini and whether the machine is a
+    ///     Raspberry Pi
     [[nodiscard]] static oa::ui::engine_settings::Inputs inputs(const Runtime& runtime);
 
     /// Reads the installation's totala.ini, its name matched without regard

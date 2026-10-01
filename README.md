@@ -104,8 +104,11 @@ for one run only, start it with `--game-dir <folder>`.
 
 - **macOS:** the app and the installer are signed with a Developer ID and
   notarized by Apple, so they open without a warning.
-- **Linux:** an X11 or Wayland desktop is required. The folder dialog uses
-  your desktop's file chooser (the XDG portal, or `zenity`).
+- **Linux:** run it from an X11 or Wayland desktop, or from the text
+  console with no desktop running. The folder dialog uses your desktop's
+  file chooser (the XDG portal, or `zenity`); from the console, name the
+  folder with `--game-dir`.
+- **Raspberry Pi:** see [Raspberry Pi](#raspberry-pi) below.
 
 Open Annihilation writes its log to a `logs` folder in its own per-user
 folder, not to the terminal:
@@ -153,6 +156,51 @@ they are open; a multiplayer game keeps running.
 Pathfinding cycles and Unit limit cannot change during a game; in a
 multiplayer game the host's settings apply. `--max-fps N` on the command
 line sets the frame rate for that run without changing the setting.
+
+### Raspberry Pi
+
+Open Annihilation runs on a Raspberry Pi 4, Pi 400 or Pi 5 with the 64-bit
+Raspberry Pi OS (Bookworm or later): download the Linux ARM64 package,
+`open-annihilation-<version>-linux-arm64.zip`. A Pi 2, Pi 3 or Pi 4 with the
+32-bit Raspberry Pi OS needs the Linux 32-bit ARM package, which is not
+released yet. To see which system your Pi runs, type
+`dpkg --print-architecture` in a terminal: `arm64` is 64-bit, `armhf` is
+32-bit.
+
+1. Copy the game data to the Pi. Copy the whole folder of an installed
+   Total Annihilation 3.1c, the one that holds `totala1.hpi`, from a PC,
+   for example with a USB stick to `~/TotalA`:
+
+   ```sh
+   cp -r "/media/$USER/<stick>/Total Annihilation" ~/TotalA
+   ```
+
+   The 1997 demo works too: see [Playing the demo](#playing-the-demo).
+2. Unzip the package, for example into your home folder:
+
+   ```sh
+   unzip open-annihilation-<version>-linux-arm64.zip
+   cd open-annihilation-<version>-linux-arm64
+   ```
+
+3. Start the game from that folder:
+
+   ```sh
+   ./open-annihilation --game-dir ~/TotalA
+   ```
+
+   - **From the desktop:** run it in a terminal. Started without
+     `--game-dir`, it asks for the Total Annihilation folder the first time
+     and remembers it.
+   - **From the console** (Raspberry Pi OS Lite, or with the desktop
+     switched off): log in and run it there; the game draws straight to the
+     screen. There is no folder dialog on the console, so name the folder
+     with `--game-dir` each time.
+
+On a Raspberry Pi the game starts with the maximum frame rate at 60 frames
+a second and Enhanced anti-aliasing off, which the Pi's graphics keep up
+with. Both can be changed in the [settings](#settings) like on any other
+computer, and **Restore defaults** puts the Pi's back.
 
 ## Playing the demo
 

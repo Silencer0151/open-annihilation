@@ -7,6 +7,7 @@
 #include "engine_settings_state.hpp"
 
 #include "oa/app/runtime.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
 
 #include <SDL3/SDL.h>
@@ -72,8 +73,10 @@ settings::Inputs Runtime::EngineSettingsState::inputs(const Runtime& runtime) {
 #if defined(SDL_PLATFORM_MACOS)
     inputs.macos = true;
 #endif
-    if (runtime.engine_settings_)
+    if (runtime.engine_settings_) {
         inputs.installation_ini = runtime.engine_settings_->installation_ini;
+        inputs.raspberry_pi = runtime.engine_settings_->raspberry_pi;
+    }
     return inputs;
 }
 
@@ -196,6 +199,7 @@ void Runtime::load_engine_settings() {
     state.installation_ini = options_.preferences_file
                                  ? std::string{}
                                  : EngineSettingsState::read_installation_ini(options_.game_dir);
+    state.raspberry_pi = oa::platform::running_on_raspberry_pi();
     const bool switch_alt = (preferences_.graphics_flags & init::preference_flags::switch_alt) != 0;
     const auto read =
         settings::read_settings(preference_values_, EngineSettingsState::inputs(*this), switch_alt);
