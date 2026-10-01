@@ -3,6 +3,8 @@
 
 #include "oa/base/threads.hpp"
 
+#include "oa/base/float_precision.hpp"
+
 #include <new>
 
 #if defined(_WIN32)
@@ -49,6 +51,7 @@ CRITICAL_SECTION* critical_section(unsigned char* storage) {
 
 /// Runs a started thread's entry and frees what start_thread allocated.
 unsigned __stdcall run_thread(void* context) {
+    base::float_precision::use_double_precision();
     const ThreadStart start = *static_cast<ThreadStart*>(context);
     delete static_cast<ThreadStart*>(context);
     start.entry(start.argument);
@@ -75,6 +78,7 @@ HANDLE begin_thread(ThreadEntry entry, void* argument) noexcept {
 #else
 /// Runs a started thread's entry and frees what start_thread allocated.
 void* run_thread(void* context) {
+    base::float_precision::use_double_precision();
     const ThreadStart start = *static_cast<ThreadStart*>(context);
     delete static_cast<ThreadStart*>(context);
     start.entry(start.argument);

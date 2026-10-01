@@ -168,9 +168,10 @@ class SoundOutput {
 /// Returns the sound output of the process.
 ///
 /// Unless set_sound_output() chose another, it is SDL's where the build has
-/// SDL, and the wave-out mixer otherwise. On Windows the environment
-/// variable OA_SOUND_OUTPUT set to "waveout" chooses the wave-out mixer in
-/// a build that has SDL too.
+/// SDL, and the wave-out mixer otherwise; on Windows XP, which lacks the
+/// sound interface SDL prefers, SDL plays through the older one XP has. On
+/// Windows the environment variable OA_SOUND_OUTPUT set to "waveout" chooses
+/// the wave-out mixer in a build that has SDL too.
 ///
 /// @return the output, which lives until the process ends
 [[nodiscard]] SoundOutput& sound_output();

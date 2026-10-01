@@ -25,7 +25,9 @@ standard library and POSIX threads.
 - `Event` wakes one waiting thread and clears itself; a signal that comes
   before the wait is kept.
 - `start_thread` and `join_thread` start a thread and wait for it;
-  `start_detached_thread` starts one nobody waits for.
+  `start_detached_thread` starts one nobody waits for. Each started thread
+  first sets double operations to round to a double's precision
+  ([src/base/float-precision](../float-precision/README.md)).
 - `processor_count` and `sleep_ms` report the machine's logical processors and
   suspend the calling thread.
 

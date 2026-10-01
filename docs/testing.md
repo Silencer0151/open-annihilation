@@ -58,8 +58,7 @@ Without an installation, each game-data test prints one line saying what it
 skipped and exits with code 77, which ctest reports as skipped, not passed.
 Configure with `-DOA_REQUIRE_GAME_DATA=ON` to make a missing installation a
 failure instead; a test that skips because the installation lacks optional
-content (a music folder, say) or the build lacks the FFmpeg music decoder
-still reports skipped.
+content (a music folder, say) still reports skipped.
 
 The native checks, which run the game headless over the installation, are
 added only when `OA_GAME_DIR` names one at configure time. The game is
@@ -194,12 +193,23 @@ covers the same code over a synthetic installer and runs everywhere.
   [src/platform/xp-runtime](../src/platform/xp-runtime/README.md). Check an
   executable's imports against a Windows XP installation's own system DLLs
   before running it there: Windows XP refuses to start a program that imports
-  anything they do not export.
+  anything they do not export. On XP, which lacks the sound interface SDL
+  prefers, SDL plays sound through the older one XP has;
+  `OA_SOUND_OUTPUT=waveout` in the environment plays it through the
+  engine's own wave-out output instead.
+- **32-bit x86:** a 32-bit x86 build needs no SSE2: floats are computed
+  with SSE (`OA_X86_FLOAT=sse`, the default; `fpu` computes them on the
+  older floating-point unit, which changes the simulation's results) and
+  doubles at a double's precision on the older unit
+  ([src/base/float-precision](../src/base/float-precision/README.md)). Its
+  results must equal a 64-bit build's: run the pinned-digest tests
+  (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`,
+  `game-math-extended`) on it.
 
 ### What CI runs
 
 Continuous integration builds the tree on macOS, Windows and Linux, starts
-`open-annihilation` on each, builds the FFmpeg intro player on macOS and Linux, runs
+`open-annihilation` on each, runs
 every test that needs no game data, and runs the suite once more under
 AddressSanitizer and UndefinedBehaviorSanitizer and once with the recorder
 test extensions (`-DOA_RECORD_EXTENSION_HOOKS=ON`). CI has no game installation: the game-data tests and the

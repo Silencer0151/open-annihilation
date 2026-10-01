@@ -88,6 +88,7 @@ add_subdirectory(src/sim/unit-activation)
 add_subdirectory(src/base/game-math)
 add_subdirectory(src/base/geometry)
 add_subdirectory(src/base/sha256)
+add_subdirectory(src/base/float-precision)
 add_subdirectory(src/base/threads)
 add_subdirectory(src/core)
 add_subdirectory(src/platform)
@@ -375,8 +376,8 @@ if(BUILD_TESTING)
   add_test(NAME app-extension-list COMMAND oa-app-extension-list-test)
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaExtensions.cmake")
-# Without FFmpeg, oa-game links the intro player that skips each movie with
-# one logged line, so the game builds wherever the SDL3 shell does.
+# Without SDL3's intro player, oa-game links the one that skips each movie
+# with one logged line.
 if(TARGET oa-media-intro-player)
   set(oa_game_intro_player oa-media-intro-player)
 else()

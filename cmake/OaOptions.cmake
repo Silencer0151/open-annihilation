@@ -35,12 +35,29 @@ if(NOT TARGET oa-options)
   endif()
   # A 32-bit x86 build rounds each float operation to a 24-bit and each
   # double operation to a 53-bit significand as it is computed, as x86-64
-  # does, instead of carrying intermediate results at extended precision
-  # until they are stored; the processor it needs has SSE2. A build that
-  # takes /fp:strict does this already.
+  # does, instead of carrying intermediate results at a wider precision
+  # until they are stored. Its processor floor is the Pentium III and the
+  # Athlon XP: nothing needs SSE2.
+  # - Doubles are computed on the processor's older floating-point unit,
+  #   which every executable sets to a double's precision before main()
+  #   runs, and every thread the engine starts sets again
+  #   (src/base/float-precision, taken whole into each executable).
+  # - Floats: OA_X86_FLOAT=sse (the default) computes them with SSE, which
+  #   rounds each to a float; fpu computes them on the same unit as the
+  #   doubles, at a double's precision, which changes the simulation's
+  #   results.
+  # A build that takes /fp:strict rounds both as written already.
   if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT MSVC AND
      CMAKE_SYSTEM_PROCESSOR MATCHES "^([iI][3-6]86|[xX]86|[xX]86_64|AMD64|amd64)$")
-    target_compile_options(oa-options INTERFACE -msse2 -mfpmath=sse)
+    set(OA_X86_FLOAT "sse" CACHE STRING "How a 32-bit x86 build computes floats: sse or fpu")
+    set_property(CACHE OA_X86_FLOAT PROPERTY STRINGS sse fpu)
+    if(OA_X86_FLOAT STREQUAL "sse")
+      target_compile_options(oa-options INTERFACE -msse -mfpmath=sse)
+    elseif(NOT OA_X86_FLOAT STREQUAL "fpu")
+      message(FATAL_ERROR "OA_X86_FLOAT is '${OA_X86_FLOAT}'; it must be sse or fpu")
+    endif()
+    target_link_libraries(oa-options INTERFACE
+      "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:$<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_NAME_IF_EXISTS:oa-base-float-precision>>>")
   endif()
   # A 32-bit POSIX build uses 64-bit file offsets and file serial numbers,
   # so it can examine every file and folder a file system holds, however
