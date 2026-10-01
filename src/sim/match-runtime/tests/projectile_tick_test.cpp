@@ -461,7 +461,7 @@ void interception(
 ) {
     auto& world = match.state();
     // The silo's missile is in flight toward the anti-nuke, which holds one round.
-    const FixedVec3 pad{fx(450), fx(ground_height), fx(60)};
+    const FixedVec3 pad{fx(350), fx(ground_height), fx(60)};
     const FixedVec3 aim{fx(70), fx(ground_height), fx(60)};
     auto* nuke = sim::weapon_execution::allocate_projectile(world);
     CHECK(nuke != nullptr);
@@ -867,7 +867,7 @@ int main() {
     feature_contact(match);
 
     auto* antinuke = match.create({0, 1, {70u << 16, ground_height << 16, 60u << 16}, true, 1, 0});
-    auto* silo = match.create({1, 2, {450u << 16, ground_height << 16, 60u << 16}, true, 1, 0});
+    auto* silo = match.create({1, 2, {350u << 16, ground_height << 16, 60u << 16}, true, 1, 0});
     CHECK(antinuke && silo);
     for (auto* unit : {antinuke, silo}) {
         unit->unit->object_present = false;

@@ -54,6 +54,11 @@ inline constexpr uint32_t weapon_no_explode_flag =
 inline constexpr uint32_t weapon_noautorange_flag = 0x08000000U; // TDF noautorange
 // TDF weaponvelocity (world units per second) to 16.16 world units per tick.
 inline constexpr double weapon_velocity_tdf_to_fixed = 65536.0 / 30.0;
+// TDF weaponacceleration (world units per second per second) to 16.16 world
+// units per tick per tick.
+inline constexpr double weapon_acceleration_tdf_to_fixed = 65536.0 / 900.0;
+// TDF turnrate (angle units per second) to angle units per tick.
+inline constexpr double weapon_turn_rate_tdf_to_tick = 1.0 / 30.0;
 
 struct WeaponDefinition {
     uint16_t reload_time_ticks{};
@@ -72,7 +77,7 @@ struct WeaponDefinition {
     uint16_t pitch_tolerance{};   // TDF pitchtolerance, WeaponDef.pitch_tolerance
     int32_t start_velocity{};     // TDF startvelocity, WeaponDef.start_velocity
     int32_t acceleration{};       // TDF weaponacceleration, WeaponDef.weapon_acceleration
-    uint16_t turn_rate{};         // TDF turnrate, WeaponDef.turn_rate
+    uint16_t turn_rate{};         // TDF turnrate / 30, angle units per tick, WeaponDef.turn_rate
     uint16_t burst{};             // TDF burst, WeaponDef.burst
     uint16_t burst_rate_ticks{};  // TDF burstrate seconds * 30, WeaponDef.burst_rate
     uint8_t rendertype{};         // WeaponDef.render_type
@@ -308,8 +313,9 @@ class WeaponRegistry {
     /// @param tolerance TDF tolerance, angle units
     /// @param pitch_tolerance TDF pitchtolerance, angle units
     /// @param start_velocity TDF startvelocity, world units per second; stored as 16.16 per tick
-    /// @param acceleration TDF weaponacceleration, world units per second; stored as 16.16 per tick
-    /// @param turn_rate TDF turnrate, angle units per tick
+    /// @param acceleration TDF weaponacceleration, world units per second per second; stored as
+    ///     16.16 per tick per tick
+    /// @param turn_rate TDF turnrate, angle units per second; stored as angle units per tick
     /// @param selfprop TDF selfprop flag
     /// @param guidance TDF guidance flag
     /// @param burnblow TDF burnblow flag

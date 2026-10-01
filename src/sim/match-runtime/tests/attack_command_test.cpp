@@ -462,6 +462,70 @@ void installed_gunship_hovers_facing_its_target(
         );
 }
 
+// Ticks a vertical-launch missile has, from launch, to come down.
+constexpr uint32_t missile_flight_ticks = 900;
+// How far the unit drives off once the missile is away, in world units, and
+// how near its aim point a missile counts as at it.
+constexpr int32_t missile_target_drive = 160;
+constexpr double missile_aim_reach = 32.0;
+// Ticks a missile may spend at its aim point before it comes down: a dive
+// passes through in two or three.
+constexpr uint32_t missile_ticks_at_aim = 4;
+
+// The live shot of a weapon launched from `origin`, if it still flies.
+const oa::Projectile* shot_launched(const Land& land, oa_ref32 def, const oa::FixedVec3& origin) {
+    for (const auto& shot : land.match->projectiles())
+        if (shot.def == def && shot.origin.x == origin.x && shot.origin.z == origin.z)
+            return &shot;
+    return nullptr;
+}
+
+// A vertical-launch missile that does not track homes on where its target
+// stood at launch. With the target driven off, it turns at its weapon's
+// turnrate, angle units per second, and comes down at that point rather than
+// circling over it.
+void installed_vertical_missile_comes_down_where_aimed(
+    test::InstalledUnits& units, std::string_view name
+) {
+    Land land(units);
+    auto& target = land.target();
+    auto& launcher = land.spawn(0, name, target_cell_x * 16 + 8 - 500);
+    land.run(2);
+    CHECK(land.match->issue_attack_command(launcher.unit_index, target.unit_index, false, nullptr));
+    land.run(approach_ticks, [&] { return !land.match->projectiles().empty(); });
+    CHECK(!land.match->projectiles().empty());
+    const auto launched = land.match->projectiles().front();
+    // The launcher holds its fire, so that the missile watched is the only one
+    // launched from where it stands.
+    (void)land.match->issue_stop(launcher.unit_index);
+    launcher.record.flags &= ~OA_UNIT_FLAG_FIRE_ORDER_MASK;
+    (void)land.match->issue_ground_move(
+        target.unit_index,
+        point(target_cell_x * 16 + 8, land_row * 16 + 8 + missile_target_drive),
+        false
+    );
+    uint32_t at_aim = 0;
+    bool flying = true;
+    land.run(missile_flight_ticks, [&] {
+        const auto* shot = shot_launched(land, launched.def, launched.origin);
+        if (shot == nullptr) {
+            flying = false;
+            return true;
+        }
+        const auto dx = static_cast<double>(shot->position.x - shot->target.x) / fixed_one;
+        const auto dy = static_cast<double>(shot->position.y - shot->target.y) / fixed_one;
+        const auto dz = static_cast<double>(shot->position.z - shot->target.z) / fixed_one;
+        if (std::hypot(dx, dy, dz) < missile_aim_reach)
+            ++at_aim;
+        return false;
+    });
+    if (flying || at_aim > missile_ticks_at_aim)
+        throw std::runtime_error(
+            std::string(name) + " missile spent " + std::to_string(at_aim) +
+            " ticks at its aim point and " + (flying ? "was still flying" : "came down")
+        );
+}
+
 void installed_attack_commands(const AssetStore& store) {
     test::InstalledUnits units(
         store,
@@ -478,7 +542,9 @@ void installed_attack_commands(const AssetStore& store) {
          "ARMSTUMP",
          "CORRAID",
          "ARMBRAWL",
-         "CORAPE"}
+         "CORAPE",
+         "ARMMH",
+         "CORMH"}
     );
     // Kbots with lasers, lightning, flame, plasma cannon and rockets, and a
     // vehicle: all brake within the stretch the command finds them at.
@@ -501,6 +567,9 @@ void installed_attack_commands(const AssetStore& store) {
     // Gunships, which hover to attack.
     for (const auto* name : {"ARMBRAWL", "CORAPE"})
         installed_gunship_hovers_facing_its_target(units, name);
+    // Missile hovercraft, whose missiles launch vertically and do not track.
+    for (const auto* name : {"ARMMH", "CORMH"})
+        installed_vertical_missile_comes_down_where_aimed(units, name);
 }
 
 } // namespace

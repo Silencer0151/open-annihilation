@@ -219,8 +219,10 @@ void WeaponRegistry::install_target_fields(
     definition.start_velocity =
         truncate_low32(floating(start_velocity, 0.0) * weapon_velocity_tdf_to_fixed);
     definition.acceleration =
-        truncate_low32(floating(acceleration, 0.0) * weapon_velocity_tdf_to_fixed);
-    definition.turn_rate = static_cast<uint16_t>(truncate_low32(floating(turn_rate, 0.0)));
+        truncate_low32(floating(acceleration, 0.0) * weapon_acceleration_tdf_to_fixed);
+    definition.turn_rate = static_cast<uint16_t>(
+        truncate_low32(floating(turn_rate, 0.0) * weapon_turn_rate_tdf_to_tick)
+    );
     // burst is read as an integer (WeaponDef.burst); burstrate seconds times
     // 30, truncated, is WeaponDef.burst_rate.
     definition.burst = static_cast<uint16_t>(integer(burst, 0));
