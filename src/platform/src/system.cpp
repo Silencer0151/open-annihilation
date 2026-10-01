@@ -3,6 +3,8 @@
 
 #include "oa/platform/system.hpp"
 
+#include "oa/base/threads.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -10,7 +12,6 @@
 #include <cstring>
 #include <string>
 #include <string_view>
-#include <thread>
 
 namespace oa::platform {
 namespace {
@@ -26,16 +27,11 @@ uint32_t tick_ms() noexcept {
 }
 
 void sleep_ms(uint32_t milliseconds) noexcept {
-    std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+    base::threads::sleep_ms(milliseconds);
 }
 
 bool start_thread(ThreadEntry entry, std::size_t, void* argument) noexcept {
-    try {
-        std::thread(entry, argument).detach();
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return base::threads::start_detached_thread(entry, argument);
 }
 
 uint32_t processor_count() noexcept {

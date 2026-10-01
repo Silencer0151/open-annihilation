@@ -9,8 +9,7 @@ namespace oa::platform {
 
 void token_lock_reset(TokenLock* lock) noexcept {
     lock->word.store(0);
-    std::lock_guard guard(lock->event_mutex);
-    lock->signaled = false;
+    lock->released.reset();
 }
 
 TokenLockHold token_lock_enter(TokenLock* lock, int32_t token) noexcept {
@@ -23,9 +22,7 @@ TokenLockHold token_lock_enter(TokenLock* lock, int32_t token) noexcept {
         if (lock->owner.load() == token) {
             return {previous, token};
         }
-        std::unique_lock guard(lock->event_mutex);
-        lock->event.wait(guard, [lock] { return lock->signaled; });
-        lock->signaled = false;
+        lock->released.wait();
     }
 }
 
@@ -35,11 +32,7 @@ void token_lock_leave(TokenLock* lock, const TokenLockHold* hold) noexcept {
     }
     lock->owner.store(0);
     lock->word.store(0);
-    {
-        std::lock_guard guard(lock->event_mutex);
-        lock->signaled = true;
-    }
-    lock->event.notify_one();
+    lock->released.signal();
 }
 
 void wake_event_signal(WakeEvent* event) noexcept {

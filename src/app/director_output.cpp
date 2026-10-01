@@ -6,21 +6,19 @@
 #include "oa/app/director_output.hpp"
 
 #include "oa/audio/offline_mix.hpp"
+#include "oa/base/threads.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -38,6 +36,7 @@ namespace oa::app {
 namespace fs = std::filesystem;
 namespace oascript = oa::formats::oascript;
 namespace sha256 = oa::base::sha256;
+namespace threads = oa::base::threads;
 namespace zip = oa::formats::zip;
 
 static_assert(director_sample_rate == oa::audio::offline_mix::sample_rate);
@@ -596,28 +595,26 @@ struct DirectorOutput::FrameHashing {
         bool done{}; ///< the digest is ready; guarded by the mutex
     };
 
-    std::mutex mutex{};
-    std::condition_variable work{};     ///< a job came, or the threads stop
-    std::condition_variable finished{}; ///< a job is done
-    std::deque<Frame*> jobs{};          ///< frames no thread took yet; guarded by the mutex
-    bool stopping{};                    ///< guarded by the mutex
+    threads::Mutex mutex{};
+    threads::ConditionVariable work{};     ///< a job came, or the threads stop
+    threads::ConditionVariable finished{}; ///< a job is done
+    std::deque<Frame*> jobs{};             ///< frames no thread took yet; guarded by the mutex
+    bool stopping{};                       ///< guarded by the mutex
     // The render's thread alone uses these.
     std::deque<std::unique_ptr<Frame>> in_flight{}; ///< in frame order
     std::vector<std::unique_ptr<Frame>> spare{};    ///< frames whose memory is kept for reuse
     size_t capacity{};                              ///< the most frames in flight
-    std::vector<std::thread> threads{};
+    std::vector<threads::Thread> workers{};
 
     /// Starts the hashing threads.
     ///
     /// @param count threads, at least 1
-    explicit FrameHashing(unsigned count) : capacity(count + kExtraFramesInFlight) {
-        threads.reserve(count);
-        try {
-            for (unsigned thread = 0; thread < count; ++thread)
-                threads.emplace_back([this] { run(); });
-        } catch (...) {
-            stop();
-            throw;
+    explicit FrameHashing(unsigned count) : capacity(count + kExtraFramesInFlight), workers(count) {
+        for (auto& worker : workers) {
+            if (!threads::start_thread(worker, run_worker, this)) {
+                stop();
+                throw std::runtime_error("cannot start the threads that hash a render's frames");
+            }
         }
     }
 
@@ -630,23 +627,27 @@ struct DirectorOutput::FrameHashing {
     /// Stops and joins the threads once no frame waits for one.
     void stop() noexcept {
         {
-            const std::lock_guard lock(mutex);
+            const threads::LockGuard lock(mutex);
             stopping = true;
         }
         work.notify_all();
-        for (auto& thread : threads)
-            if (thread.joinable())
-                thread.join();
-        threads.clear();
+        for (auto& worker : workers)
+            threads::join_thread(worker);
+        workers.clear();
     }
+
+    /// Runs one hashing thread.
+    ///
+    /// @param hashing the FrameHashing whose frames the thread hashes
+    static void run_worker(void* hashing) { static_cast<FrameHashing*>(hashing)->run(); }
 
     /// Hashes frames until the threads stop and no frame waits.
     void run() noexcept {
         for (;;) {
             Frame* job = nullptr;
             {
-                std::unique_lock lock(mutex);
-                work.wait(lock, [this] { return stopping || !jobs.empty(); });
+                const threads::LockGuard lock(mutex);
+                work.wait(mutex, [this] { return stopping || !jobs.empty(); });
                 if (jobs.empty())
                     return;
                 job = jobs.front();
@@ -654,7 +655,7 @@ struct DirectorOutput::FrameHashing {
             }
             const auto digest = sha256::digest_of(job->rgb);
             {
-                const std::lock_guard lock(mutex);
+                const threads::LockGuard lock(mutex);
                 job->digest = digest;
                 job->done = true;
             }
@@ -674,7 +675,7 @@ DirectorOutput::DirectorOutput(DirectorOutputSettings settings) : settings_(std:
     fs::create_directories(settings_.paths.directory, error);
     if (error || !fs::is_directory(settings_.paths.directory))
         fail_file(settings_.paths.directory, "cannot make the output directory");
-    const unsigned machine_threads = std::max(1U, std::thread::hardware_concurrency());
+    const unsigned machine_threads = std::max(1U, threads::processor_count());
     hashing_ = std::make_unique<FrameHashing>(
         std::clamp(machine_threads / kHashThreadShare, 1U, kMaxHashThreads)
     );
@@ -741,7 +742,7 @@ void DirectorOutput::add_frame(uint64_t frame, uint32_t tick, std::span<const ui
     FrameHashing::Frame* job = slot.get();
     hashing.in_flight.push_back(std::move(slot));
     {
-        const std::lock_guard lock(hashing.mutex);
+        const threads::LockGuard lock(hashing.mutex);
         hashing.jobs.push_back(job);
     }
     hashing.work.notify_one();
@@ -778,11 +779,11 @@ void DirectorOutput::retire_frames(size_t in_flight) {
     while (!hashing.in_flight.empty()) {
         const auto& oldest = *hashing.in_flight.front();
         {
-            std::unique_lock lock(hashing.mutex);
+            const threads::LockGuard lock(hashing.mutex);
             if (!oldest.done) {
                 if (hashing.in_flight.size() <= in_flight)
                     return;
-                hashing.finished.wait(lock, [&oldest] { return oldest.done; });
+                hashing.finished.wait(hashing.mutex, [&oldest] { return oldest.done; });
             }
         }
         const auto line = manifest_line(oldest.frame, oldest.tick, oldest.digest);

@@ -11,19 +11,17 @@
 // Wake event: a signal that wakes one waiting thread, which the job pool's
 // workers wait on between jobs.
 
+#include "oa/base/threads.hpp"
+
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 
 namespace oa::platform {
 
 struct TokenLock {
-    std::atomic<int32_t> word{0};  // exchanged with the caller's token
-    std::atomic<int32_t> owner{0}; // token of the current holder
-    std::mutex event_mutex;        // with event and signaled, an auto-reset event
-    std::condition_variable event;
-    bool signaled{false};
+    std::atomic<int32_t> word{0};    // exchanged with the caller's token
+    std::atomic<int32_t> owner{0};   // token of the current holder
+    base::threads::Event released{}; // signalled by each release, wakes one waiter
 };
 
 // Result of token_lock_enter kept by the caller for token_lock_leave.

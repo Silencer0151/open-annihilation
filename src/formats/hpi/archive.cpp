@@ -3,6 +3,8 @@
 
 #include "oa/formats/hpi.hpp"
 
+#include "oa/base/threads.hpp"
+
 #include "oa/formats/sqsh.hpp"
 
 #include <zlib.h>
@@ -13,7 +15,6 @@
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -232,7 +233,7 @@ struct HpiArchive::Impl {
     // read seeks and copies stored bytes; decrypting and decompressing run
     // outside it, so reads on several threads decode at the same time.
     mutable std::ifstream stream;
-    mutable std::mutex stream_lock;
+    mutable base::threads::Mutex stream_lock;
 
     explicit Impl(const std::filesystem::path& archive_path) : path(archive_path) {
         archive_size = file_size_of(path);
@@ -393,7 +394,7 @@ struct HpiArchive::Impl {
     /// @param[out] output receives the bytes
     /// @return the count read; a read past the end of the archive is short
     std::size_t read_stored(uint64_t offset, std::span<uint8_t> output) const {
-        const std::lock_guard guard(stream_lock);
+        const base::threads::LockGuard guard(stream_lock);
         return read_at(stream, offset, output);
     }
 

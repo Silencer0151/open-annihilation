@@ -3,10 +3,11 @@
 
 #include "oa/platform/files.hpp"
 
+#include "oa/base/threads.hpp"
+
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
-#include <mutex>
 
 namespace oa::platform {
 namespace {
@@ -53,7 +54,19 @@ void stdio_close(void*, FileHandle* file) {
     }
 }
 
-std::mutex log_mutex;
+/// Holds the lock that keeps log lines whole without ever destroying it, so
+/// that a thread still logging while the program exits finds it intact.
+union LogLock {
+    constexpr LogLock() : mutex() {}
+
+    ~LogLock() {}
+
+    LogLock(const LogLock&) = delete;
+    LogLock& operator=(const LogLock&) = delete;
+    base::threads::Mutex mutex;
+};
+
+constinit LogLock log_lock;
 
 } // namespace
 
@@ -62,7 +75,7 @@ Files stdio_files() noexcept {
 }
 
 int log_message(const char* format, ...) noexcept {
-    std::lock_guard guard(log_mutex);
+    const base::threads::LockGuard guard(log_lock.mutex);
     va_list arguments;
     va_start(arguments, format);
     const int written = std::vfprintf(stderr, format, arguments);

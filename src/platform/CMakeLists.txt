@@ -8,12 +8,10 @@ add_library(oa-platform-shims src/allocator.cpp src/crash.cpp src/files.cpp src/
 add_library(oa::platform::shims ALIAS oa-platform-shims)
 target_include_directories(oa-platform-shims PUBLIC include)
 target_compile_features(oa-platform-shims PUBLIC cxx_std_20)
-target_link_libraries(oa-platform-shims PUBLIC oa-options)
+target_link_libraries(oa-platform-shims PUBLIC oa-base-threads oa-options)
 if(WIN32)
   target_link_libraries(oa-platform-shims PRIVATE psapi)
 endif()
-find_package(Threads REQUIRED)
-target_link_libraries(oa-platform-shims PUBLIC Threads::Threads)
 
 if(BUILD_TESTING)
   add_executable(oa-platform-shims-test tests/platform_test.cpp)

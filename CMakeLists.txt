@@ -88,6 +88,7 @@ add_subdirectory(src/sim/unit-activation)
 add_subdirectory(src/base/game-math)
 add_subdirectory(src/base/geometry)
 add_subdirectory(src/base/sha256)
+add_subdirectory(src/base/threads)
 add_subdirectory(src/core)
 add_subdirectory(src/platform)
 add_subdirectory(src/platform/app-menu)
@@ -223,7 +224,7 @@ if(OA_BUILD_PLATFORM)
   add_library(oa-app-director-output src/app/director_output.cpp)
   add_library(oa::app::director_output ALIAS oa-app-director-output)
   target_link_libraries(oa-app-director-output PUBLIC oa-app-headers oa-formats-zip oa-formats-oascript
-    oa-base-sha256 SDL3::SDL3 PRIVATE oa-audio-offline-mix oa-options)
+    oa-base-sha256 SDL3::SDL3 PRIVATE oa-audio-offline-mix oa-base-threads oa-options)
   if(BUILD_TESTING)
     # File names, encoder arguments, the files of a render with encoding
     # off, the environment's settings and bundles, malformed ones included.

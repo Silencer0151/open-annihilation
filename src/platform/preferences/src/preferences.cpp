@@ -3,6 +3,7 @@
 
 #include "oa/platform/preferences.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -87,13 +88,15 @@ namespace {
 /// Returns Local AppData/CorePrime/Open Annihilation, which holds the
 /// preferences file and the data the engine keeps.
 std::filesystem::path application_folder() {
-    PWSTR directory = nullptr;
-    const HRESULT result =
-        SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &directory);
+    // The folder lookup every Windows release since XP has; on Vista and
+    // later it names the same folder as the Local AppData known folder.
+    std::array<wchar_t, MAX_PATH> directory{};
+    const HRESULT result = SHGetFolderPathW(
+        nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, directory.data()
+    );
     if (FAILED(result))
         throw std::runtime_error("Local AppData directory unavailable");
-    const std::filesystem::path root(directory);
-    CoTaskMemFree(directory);
+    const std::filesystem::path root(directory.data());
     return root / "CorePrime" / "Open Annihilation";
 }
 } // namespace

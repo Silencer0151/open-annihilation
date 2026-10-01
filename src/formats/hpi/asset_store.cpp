@@ -3,12 +3,13 @@
 
 #include "oa/formats/hpi.hpp"
 
+#include "oa/base/threads.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <limits>
-#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -180,7 +181,7 @@ struct AssetStore::LooseIndex {
     /// Drops every listing and enables the index again.
     void reset();
 
-    std::mutex lock;
+    base::threads::Mutex lock;
     const std::size_t entry_limit;
     std::size_t entry_count = 0; // entries held across every listing
     std::atomic<bool> enabled{true};
@@ -221,7 +222,7 @@ AssetStore::LooseIndex::listing(const std::string& key, const std::filesystem::p
 }
 
 void AssetStore::LooseIndex::reset() {
-    const std::lock_guard guard(lock);
+    const base::threads::LockGuard guard(lock);
     folders.clear();
     entry_count = 0;
     enabled.store(true);
@@ -360,7 +361,7 @@ std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view res
     const auto key = normalized_path(resource);
     if (!loose_index_ || !loose_index_->enabled.load())
         return loose_path_listed(key);
-    const std::lock_guard guard(loose_index_->lock);
+    const base::threads::LockGuard guard(loose_index_->lock);
     auto loose = loose_root_;
     std::string folder;
     for (std::size_t begin = 0; begin < key.size();) {
