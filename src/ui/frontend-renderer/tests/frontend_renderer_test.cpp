@@ -16,6 +16,22 @@ namespace {
 
 int failures = 0;
 
+// Whether render times compare the drawing code. A build with the address
+// sanitizer checks every memory access, which slows the grayed buttons'
+// shade-table reads far more than the normal buttons' copies, so its times
+// are not compared.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool render_times_compared = false;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+constexpr bool render_times_compared = false;
+#else
+constexpr bool render_times_compared = true;
+#endif
+#else
+constexpr bool render_times_compared = true;
+#endif
+
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         if (!(condition)) {                                                                        \
@@ -341,18 +357,20 @@ void test_grayed_art_cost() {
         quickest_normal = std::min(quickest_normal, std::chrono::steady_clock::now() - start);
         CHECK(grayed_surface.rgb.size() == normal_surface.rgb.size());
     }
-    CHECK(quickest_grayed <= 2 * quickest_normal);
-    if (quickest_grayed > 2 * quickest_normal)
-        std::fprintf(
-            stderr,
-            "grayed buttons took %lld us, normal ones %lld us\n",
-            static_cast<long long>(
-                std::chrono::duration_cast<std::chrono::microseconds>(quickest_grayed).count()
-            ),
-            static_cast<long long>(
-                std::chrono::duration_cast<std::chrono::microseconds>(quickest_normal).count()
-            )
-        );
+    if constexpr (render_times_compared) {
+        CHECK(quickest_grayed <= 2 * quickest_normal);
+        if (quickest_grayed > 2 * quickest_normal)
+            std::fprintf(
+                stderr,
+                "grayed buttons took %lld us, normal ones %lld us\n",
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(quickest_grayed).count()
+                ),
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(quickest_normal).count()
+                )
+            );
+    }
 }
 
 // A colour blended over a rectangle: each channel mixed by the opacity in
