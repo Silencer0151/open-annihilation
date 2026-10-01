@@ -374,6 +374,84 @@ void seek_guard() {
     (void)ally;
 }
 
+// The goal an aircraft attack mission last handed its unit's air driver. No
+// such mission steers the unit through the ground navigator, which would hold
+// it to ground paths and bring it down to the ground at each point it reaches.
+const sim::air::AirGoal& air_goal(Fixture& f, const sim::unit_spawn::Slot& slot) {
+    const auto* driver = f.match->air_driver(slot.unit_index);
+    CHECK(driver && driver->goal);
+    const auto* ground = f.match->ground_runtime(slot.unit_index);
+    CHECK(ground && ground->navigation.goal == nullptr);
+    return *driver->goal;
+}
+
+// A target goal on a fixed point that arrives within a radius.
+bool point_goal(const sim::air::AirGoal& goal, int16_t arrival) {
+    return goal.kind == sim::air::AirGoalKind::target && goal.target == nullptr &&
+           (goal.flags & sim::air::goal_arrival_radius) != 0 && goal.arrival_radius == arrival;
+}
+
+// A gunship's attack flies air goals: a point halfway to its target, the
+// target's position within weapon range, then strafe points beside it that
+// keep it facing the target at its cruise altitude over the ground there.
+void hover_flies_air_goals() {
+    Fixture f;
+    auto& gunship = f.spawn(0, fighter_type, 100, 100);
+    auto& tank = f.spawn(1, tank_type, 200, 100);
+    auto& order = f.attack(gunship, tank, sim::match_runtime::air_to_ground_hover_kind);
+    step(order, f.dispatch(gunship, order, 0));
+    step(order, f.dispatch(gunship, order, 0));
+    CHECK(point_goal(air_goal(f, gunship), 0x80));
+    step(order, f.dispatch(gunship, order, 0));
+    const auto& closing = air_goal(f, gunship);
+    CHECK(point_goal(closing, 300));
+    CHECK(closing.point.x == tank.record.position.x && closing.point.z == tank.record.position.z);
+    CHECK(f.dispatch(gunship, order, 0) == 2);
+    const auto& strafe = air_goal(f, gunship);
+    CHECK(strafe.kind == sim::air::AirGoalKind::target && strafe.target == &tank.record);
+    CHECK((strafe.flags & sim::air::goal_face_target) != 0 && strafe.arrival_radius == 0x10);
+    CHECK((strafe.flags & sim::air::goal_fixed_altitude) != 0 && strafe.altitude == 100);
+}
+
+// Bombers follow their target into the run with an air goal on it, and the
+// passes, breakaways and VTOL_SeekAttack's circling fly air point goals.
+void strike_and_seek_fly_air_goals() {
+    Fixture f;
+    auto& bomber = f.spawn(0, fighter_type, 100, 100);
+    auto& tank = f.spawn(1, tank_type, 300, 100);
+    auto& order = f.attack(bomber, tank, sim::match_runtime::air_strike_kind);
+    order.phase = 4;
+    CHECK(f.dispatch(bomber, order, 0) == 2);
+    const auto& follow = air_goal(f, bomber);
+    CHECK(follow.kind == sim::air::AirGoalKind::target && follow.target == &tank.record);
+    CHECK((follow.flags & sim::air::goal_track_unit) != 0);
+    CHECK((follow.flags & sim::air::goal_arrival_radius) != 0);
+    order.phase = 6;
+    CHECK(f.dispatch(bomber, order, 0) == 2);
+    CHECK(point_goal(air_goal(f, bomber), 0x80));
+
+    auto& seeker = f.spawn(0, fighter_type, 500, 500);
+    auto& seek = f.match->insert_ground_order(seeker.unit_index, 62);
+    step(seek, f.dispatch(seeker, seek, 0));
+    seek.wait_events = 0;
+    CHECK(f.dispatch(seeker, seek, 0) == 2);
+    CHECK(point_goal(air_goal(f, seeker), 0x80));
+}
+
+// Fighters chase a target with a seek goal that leads it.
+void dogfight_flies_seek_goals() {
+    Fixture f;
+    auto& fighter = f.spawn(0, fighter_type, 100, 100);
+    auto& enemy = f.spawn(1, fighter_type, 400, 400);
+    auto& order = f.attack(fighter, enemy, sim::match_runtime::air_to_air_kind);
+    step(order, f.dispatch(fighter, order, 0));
+    order.wait_events = 0;
+    CHECK(f.dispatch(fighter, order, 0) == 2);
+    const auto& lead = air_goal(f, fighter);
+    CHECK(lead.kind == sim::air::AirGoalKind::seek);
+    CHECK(lead.point.x == enemy.record.position.x && lead.point.z == enemy.record.position.z);
+}
+
 void evade() {
     Fixture f;
     auto& fighter = f.spawn(0, fighter_type, 100, 100);
@@ -398,5 +476,8 @@ int main() {
     seek_attack();
     seek_guard();
     evade();
+    hover_flies_air_goals();
+    strike_and_seek_fly_air_goals();
+    dogfight_flies_seek_goals();
     std::cout << "air attack missions passed\n";
 }

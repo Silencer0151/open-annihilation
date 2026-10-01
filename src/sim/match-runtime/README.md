@@ -232,8 +232,13 @@ repair, load and guard choices, with the packed capability bytes from
 `pack_command_capabilities`. The ground mission family (`ground_missions.hpp`
 with the command, attack and construction handlers) and the aircraft
 families step every order kind with its phase results, wait events, timers,
-leashes and goal retries. Orders link into their target's list of observing
-orders and lose the target when it dies.
+leashes and goal retries. The aircraft missions fly their unit through its
+air driver's goals (a point, a unit followed or faced, or a point sliding
+along a step), never along ground paths, so an aircraft keeps its cruise
+height over water and slopes between the legs of an attack or a search
+(ctests `match-missions-air` and `match-attack-command-data`). Orders link
+into their target's list of observing orders and lose the target when it
+dies.
 
 ## Combat
 

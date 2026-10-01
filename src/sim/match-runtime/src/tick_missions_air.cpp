@@ -68,8 +68,6 @@ constexpr uint16_t seek_guard_turn = 0x4000;
 constexpr uint16_t seek_turn_jitter = 0x2000;
 constexpr uint32_t seek_wait_ticks = 0x1e;
 constexpr int32_t repair_pad_search_radius = 0xf00;
-// Seek goals arrive within 48 world units.
-constexpr int16_t seek_goal_arrival = 48;
 
 int32_t signed_bits(uint32_t n) {
     return std::bit_cast<int32_t>(n);
@@ -77,6 +75,14 @@ int32_t signed_bits(uint32_t n) {
 
 AttackPoint point_of(const oa::FixedVec3& v) {
     return {static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), static_cast<uint32_t>(v.z)};
+}
+
+/// Returns a point held as bit patterns as signed 16.16 coordinates.
+///
+/// @param point Signed 16.16 point as bit patterns.
+/// @return The same point.
+oa::FixedVec3 fixed_point(const AttackPoint& point) {
+    return {signed_bits(point[0]), signed_bits(point[1]), signed_bits(point[2])};
 }
 
 /// Returns the bearing of `from` as seen from `to`.
@@ -252,36 +258,72 @@ class TickHost::AirAttackMissions {
         order.wake_tick = host.match.simulation_.tick + ticks;
     }
 
-    void point_goal(const AttackPoint& point, int32_t arrival) {
+    /// Removes the order's movement goal: the air driver flies on to no
+    /// point, and holds where it is.
+    void clear_goal() {
+        if (record.extra.goal)
+            adapter.clear_goal();
         host.install_air_goal(s, order, nullptr);
-        adapter.circle_goal(point, arrival);
     }
 
-    /// Flies the air driver to a fixed point while the unit keeps facing the
-    /// target, as gunships hover and strafe.
+    /// Hands the air driver a goal of this order in place of its last one.
     ///
-    /// @param point Signed 16.16 point as bit patterns; its altitude follows
-    ///     the terrain at cruise height.
-    /// @param arrival Arrival radius in world units.
-    void facing_goal(const AttackPoint& point, int16_t arrival) {
-        adapter.clear_goal();
-        auto goal = sim::air::air_goal_facing_unit(
-            &order.raised_events,
-            &unit,
-            &target_record(),
-            {signed_bits(point[0]), signed_bits(point[1]), signed_bits(point[2])}
-        );
-        sim::air::air_goal_set_arrival_radius(&goal, arrival);
+    /// @param goal The goal; it is copied into the order.
+    void install_goal(const sim::air::AirGoal& goal) {
+        if (record.extra.goal)
+            adapter.clear_goal();
         host.install_air_goal(s, order, &goal);
     }
 
-    // Goals that track a unit or slide along a step are held at their start
-    // point until aircraft goals replace the ground navigator.
-    void follow_goal(const AttackPoint& target_point, int32_t arrival) {
-        point_goal(target_point, arrival);
+    /// Flies the air driver to a fixed point at cruise height, arriving
+    /// anywhere within a radius of it.
+    ///
+    /// @param point Signed 16.16 point as bit patterns.
+    /// @param arrival Arrival radius in world units, kept to 16 bits.
+    void point_goal(const AttackPoint& point, int32_t arrival) {
+        auto goal = sim::air::air_goal_at_point(&order.raised_events, &unit, fixed_point(point));
+        sim::air::air_goal_set_arrival_radius(&goal, static_cast<int16_t>(arrival));
+        install_goal(goal);
     }
 
-    void seek_goal(const AttackPoint& from) { point_goal(from, seek_goal_arrival); }
+    /// Flies the air driver to a fixed point at the type's cruise altitude
+    /// over the ground there, the unit facing the target, as gunships strafe.
+    ///
+    /// @param point Signed 16.16 point as bit patterns.
+    /// @param arrival Arrival radius in world units.
+    void facing_goal(const AttackPoint& point, int16_t arrival) {
+        auto goal = sim::air::air_goal_facing_unit(
+            &order.raised_events, &unit, &target_record(), fixed_point(point)
+        );
+        sim::air::air_goal_set_arrival_radius(&goal, arrival);
+        sim::air::air_goal_set_altitude(&goal, host.air_host(), def().cruise_alt);
+        install_goal(goal);
+    }
+
+    /// Flies the air driver after a unit, arriving within a radius of it.
+    ///
+    /// @param target The unit followed; a flying one is shadowed from the
+    ///     first weapon's range along its heading.
+    /// @param arrival Arrival radius in world units, kept to 16 bits.
+    void follow_goal(oa::Unit& target, int32_t arrival) {
+        auto goal =
+            sim::air::air_goal_follow_unit(host.air_host(), &order.raised_events, &unit, &target);
+        sim::air::air_goal_set_arrival_radius(&goal, static_cast<int16_t>(arrival));
+        install_goal(goal);
+    }
+
+    /// Flies the air driver after a point that moves by a step every tick;
+    /// the goal arrives within 48 world units of the point.
+    ///
+    /// @param from Signed 16.16 start point as bit patterns.
+    /// @param step Signed 16.16 displacement per tick as bit patterns.
+    void seek_goal(const AttackPoint& from, const AttackPoint& step) {
+        install_goal(
+            sim::air::air_goal_seek(
+                &order.raised_events, &unit, fixed_point(from), fixed_point(step)
+            )
+        );
+    }
 
     uint16_t speed_high() const {
         const auto* ground = host.match.ground_runtime(s.unit_index);
@@ -456,7 +498,7 @@ bool TickHost::AirAttackMissions::seek_repair_pad() {
     }
     if (pads.empty())
         return false;
-    adapter.clear_goal();
+    clear_goal();
     auto& pad = *pads[host.random(static_cast<uint32_t>(pads.size()))];
     push_front(new_order(sim::ground_orders::vtol_landing_kind, &host.unit_view(pad), nullptr));
     order.wait_events = 0;
@@ -569,7 +611,7 @@ uint32_t TickHost::AirAttackMissions::air_strike(uint32_t events) {
             lead + static_cast<int32_t>(static_cast<uint16_t>(def().attack_run_length)) + 1
         );
         if (attack.target)
-            follow_goal(target_position(), arrival);
+            follow_goal(target_record(), arrival);
         else
             point_goal(destination, arrival);
         wait(1);
@@ -635,13 +677,13 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
         const auto speed = def().max_velocity;
         const auto run = signed_bits(static_cast<uint32_t>(speed) * dogfight_run_ticks);
         const auto from = forward(here(), unit.heading, run);
-        seek_goal(from);
+        seek_goal(from, forward({}, unit.heading, speed));
         wait(host.random(dogfight_run_ticks) + 0x3c);
         misaligned = 0;
         return result_stay;
     }
     if (goal_events || misaligned >= dogfight_misaligned_limit) {
-        adapter.clear_goal();
+        clear_goal();
         push_front(new_order(air_evade_kind, attack.target, nullptr));
         misaligned = 0;
         order.wait_events = 0;
@@ -660,7 +702,15 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
         auto from = point_of(target.position);
         from[0] += static_cast<uint32_t>(velocity[0]) * dogfight_lead_ticks;
         from[2] += static_cast<uint32_t>(velocity[2]) * dogfight_lead_ticks;
-        seek_goal(from);
+        // The point starts where the target's velocity takes it in 45 ticks
+        // and moves each tick by that velocity plus half the target's top
+        // speed along its heading.
+        const AttackPoint drift{
+            static_cast<uint32_t>(velocity[0]),
+            static_cast<uint32_t>(velocity[1]),
+            static_cast<uint32_t>(velocity[2])
+        };
+        seek_goal(from, forward(drift, target.heading, def_of(target).max_velocity / 2));
     }
     wait(dogfight_wait_ticks);
     order.wait_events |= wait_attack;
@@ -706,7 +756,7 @@ uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
     case 2:
         adapter.release_weapon_targets(0);
         adapter.assign_target(*attack.target, 0);
-        facing_goal(target, static_cast<int16_t>(range));
+        point_goal(target, range);
         side = 0;
         unreachable = 0;
         order.wait_events = wait_attack;
@@ -808,7 +858,7 @@ uint32_t TickHost::AirAttackMissions::seek_guard(uint32_t events) {
         return result_restart;
     const auto sight = static_cast<int32_t>(static_cast<uint32_t>(def().sight_distance) << 16);
     if (auto* found = first_guard_candidate(sight)) {
-        adapter.clear_goal();
+        clear_goal();
         const auto kind = guard_kind(*found);
         push_front(new_order(kind, &host.unit_view(*found), nullptr));
         order.wait_events = 0;

@@ -6,13 +6,16 @@
 // fire or its position takes it. Run with --data, the installed game's units
 // commanded on the move brake where the command finds them and fire from
 // there, and commanded from rest at a unit out of reach close until it is in
-// range.
+// range; gunships hover facing their target and, once it is destroyed, stay
+// in the air circling the command's point until they find the next unit.
 #include "combat_fixture.hpp"
 #include "installed_units.hpp"
 #include "oa/base/game_math.hpp"
 #include "oa/sim/ai.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -245,14 +248,20 @@ struct LandScenario : sim::scenario::DefinitionHost {
 // Two players who each order their own units, on level land.
 struct Land {
     test::InstalledUnits& units;
-    test::Seascape ground{
-        land_columns, land_rows, land_sea_level, 0, 0, land_height, land_height, land_height
-    };
+    test::Seascape ground;
     LandServices services;
     LandScenario scenario;
     std::unique_ptr<sim::match_runtime::Match> match;
 
-    explicit Land(test::InstalledUnits& loaded) : units(loaded) {
+    // Land of `columns` by `rows` 16-unit cells, with open sea, its floor at
+    // height 0, west of column `shore`.
+    explicit Land(
+        test::InstalledUnits& loaded,
+        int32_t columns = land_columns,
+        int32_t rows = land_rows,
+        int32_t shore = 0
+    )
+        : units(loaded), ground(columns, rows, land_sea_level, shore, shore, 0, 0, land_height) {
         sim::match_runtime::OfflineInputs input{
             ground.map,
             units.loaded,
@@ -261,8 +270,8 @@ struct Land {
             units.weapons,
             ground.terrain_values,
             ground.masks,
-            land_columns / 2,
-            land_rows / 2,
+            columns / 2,
+            rows / 2,
             32,
             2,
             0,
@@ -291,11 +300,13 @@ struct Land {
         match->configure_outcomes(0, local_allies, false);
     }
 
-    sim::unit_spawn::Slot& spawn(uint8_t player, std::string_view name, int32_t x) {
+    // A finished unit at (x, z) in whole world units.
+    sim::unit_spawn::Slot&
+    spawn(uint8_t player, std::string_view name, int32_t x, int32_t z = land_row * 16 + 8) {
         auto* slot = match->create(
             {player,
              units.type(name),
-             {static_cast<uint32_t>(x * fixed_one), 0, (land_row * 16 + 8) * uint32_t{1 << 16}},
+             {static_cast<uint32_t>(x * fixed_one), 0, static_cast<uint32_t>(z * fixed_one)},
              true,
              1,
              0}
@@ -315,8 +326,9 @@ struct Land {
 
     // A target that neither fires nor moves: the standing orders a finished
     // unit takes up in its first ticks are cleared after them.
-    sim::unit_spawn::Slot& target() {
-        auto& slot = spawn(1, "CORAK", target_cell_x * 16 + 8);
+    sim::unit_spawn::Slot&
+    target(int32_t x = target_cell_x * 16 + 8, int32_t z = land_row * 16 + 8) {
+        auto& slot = spawn(1, "CORAK", x, z);
         run(2);
         slot.record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
         return slot;
@@ -526,6 +538,140 @@ void installed_vertical_missile_comes_down_where_aimed(
         );
 }
 
+// The VTOL_SeekAttack mission a finished aircraft attack hands over to.
+constexpr uint8_t seek_attack_order = sim::match_runtime::vtol_seek_attack_kind;
+// Unit.flags occupancy of a unit in the air.
+constexpr uint32_t airborne = 2;
+// Ticks a gunship that has destroyed its target is watched looking for the
+// next one.
+constexpr uint32_t seek_watch_ticks = 1500;
+// Ticks a gunship has to find and destroy a second unit once it has
+// destroyed the first.
+constexpr uint32_t next_target_ticks = 3000;
+// World units beyond its weapon's range at which a seeking aircraft circles
+// its point.
+constexpr int32_t seek_orbit_margin = 160;
+// World units a gunship may pass beyond its circle: the radius within which
+// it arrives at each point it flies to.
+constexpr int32_t seek_arrival = 128;
+// Where the second unit stands: south of the first, away from the way a
+// gunship comes in, and inside the circle it flies around the first once it
+// has destroyed it.
+constexpr int32_t next_target_offset = 400;
+// Cells along each side of the square map a gunship circles over: its circle
+// stays clear of the map's edges, where an aircraft turns back toward the
+// centre at the height of the off-map area.
+constexpr int32_t coast_cells = 192;
+// The first column of land: the sea lies west of it.
+constexpr int32_t coast_shore = coast_cells / 2;
+// Where the first target stands: on the land, 160 world units from the
+// shore, halfway down the map. A gunship circling it passes over the sea.
+constexpr int32_t coast_target_x = coast_shore * 16 + 160;
+constexpr int32_t coast_target_z = coast_cells * 16 / 2;
+
+// The ground under the pointer when a player commands an attack on a unit:
+// the unit's own position.
+sim::ground_orders::Point point_on(const sim::unit_spawn::Slot& slot) {
+    const std::array<uint32_t, 3> position = slot.unit->position;
+    return {
+        std::bit_cast<int32_t>(position[0]),
+        std::bit_cast<int32_t>(position[1]),
+        std::bit_cast<int32_t>(position[2])
+    };
+}
+
+double distance_to(const sim::unit_spawn::Slot& slot, const sim::ground_orders::Point& at) {
+    const auto dx = static_cast<double>(slot.record.position.x - at[0]) / fixed_one;
+    const auto dz = static_cast<double>(slot.record.position.z - at[2]) / fixed_one;
+    return std::hypot(dx, dz);
+}
+
+// Whole world units above the surface under a unit: the land, or the sea
+// where the ground lies below it.
+int32_t height_above_surface(Land& land, const sim::unit_spawn::Slot& slot) {
+    const auto ground = land.match->map_height(
+        static_cast<uint32_t>(slot.record.position.x), static_cast<uint32_t>(slot.record.position.z)
+    );
+    return slot.record.position.y / fixed_one - std::max<int32_t>(ground, land_sea_level);
+}
+
+// Commands an installed gunship, from out of reach to the north, at a unit of
+// the other player with the unit's position as the command's point, and runs
+// until the gunship has destroyed it.
+sim::unit_spawn::Slot&
+gunship_destroys(Land& land, std::string_view name, sim::unit_spawn::Slot& target) {
+    auto& gunship = land.spawn(
+        0,
+        name,
+        target.record.position.x / fixed_one,
+        target.record.position.z / fixed_one - distant_start
+    );
+    land.run(2);
+    const auto at = point_on(target);
+    CHECK(land.match->issue_attack_command(gunship.unit_index, target.unit_index, false, &at));
+    land.run(approach_ticks + hover_watch_ticks, [&] { return target.record.health == 0; });
+    if (target.record.health != 0)
+        throw std::runtime_error(std::string(name) + " did not destroy its target");
+    return gunship;
+}
+
+// A gunship that has destroyed the unit it was commanded at stays in the
+// air: its attack hands over to VTOL_SeekAttack at the command's point, and
+// it circles that point at its cruise height, beyond its weapon's range and
+// over land and sea alike, looking for the next unit, rather than settling to
+// the ground.
+void installed_gunship_seeks_after_its_kill(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells, coast_shore);
+    auto& target = land.target(coast_target_x, coast_target_z);
+    const auto at = point_on(target);
+    auto& gunship = gunship_destroys(land, name, target);
+    land.run(hover_watch_ticks, [&] { return head_is(gunship, seek_attack_order); });
+    CHECK(head_is(gunship, seek_attack_order));
+    const auto cruise = land.units.definitions[gunship.record.type_index].cruise_altitude;
+    const auto orbit = weapon_range(land, gunship) + seek_orbit_margin;
+    int32_t lowest = cruise;
+    double farthest = 0.0;
+    uint32_t watched = 0;
+    land.run(seek_watch_ticks, [&] {
+        ++watched;
+        lowest = std::min(lowest, height_above_surface(land, gunship));
+        farthest = std::max(farthest, distance_to(gunship, at));
+        return !head_is(gunship, seek_attack_order) ||
+               (gunship.record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != airborne;
+    });
+    if (watched != seek_watch_ticks || lowest < cruise / 2 || farthest > orbit + seek_arrival)
+        throw std::runtime_error(
+            std::string(name) + " seeking for " + std::to_string(watched) + " ticks came down to " +
+            std::to_string(lowest) + " above the surface at cruise height " +
+            std::to_string(cruise) + " and strayed " + std::to_string(farthest) +
+            " from its point, circling at " + std::to_string(orbit)
+        );
+}
+
+// A gunship that has destroyed the unit it was commanded at goes after the
+// next unit it finds while it circles, and destroys it too, without coming
+// down to the ground in between.
+void installed_gunship_moves_on_after_its_kill(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells, coast_shore);
+    auto& target = land.target(coast_target_x, coast_target_z);
+    auto& next = land.spawn(1, "CORAK", coast_target_x, coast_target_z + next_target_offset);
+    land.run(2);
+    next.record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
+    auto& gunship = gunship_destroys(land, name, target);
+    const auto cruise = land.units.definitions[gunship.record.type_index].cruise_altitude;
+    int32_t lowest = cruise;
+    land.run(next_target_ticks, [&] {
+        lowest = std::min(lowest, height_above_surface(land, gunship));
+        return next.record.health == 0;
+    });
+    if (next.record.health != 0 || lowest < cruise / 2)
+        throw std::runtime_error(
+            std::string(name) + " left the next unit with " + std::to_string(next.record.health) +
+            " health and came down to " + std::to_string(lowest) +
+            " above the surface at cruise height " + std::to_string(cruise)
+        );
+}
+
 void installed_attack_commands(const AssetStore& store) {
     test::InstalledUnits units(
         store,
@@ -564,9 +710,13 @@ void installed_attack_commands(const AssetStore& store) {
           "ARMSTUMP",
           "CORRAID"})
         installed_attack_command_closes_to_range(units, name);
-    // Gunships, which hover to attack.
-    for (const auto* name : {"ARMBRAWL", "CORAPE"})
+    // Gunships, which hover to attack and look for the next unit once their
+    // target is destroyed.
+    for (const auto* name : {"ARMBRAWL", "CORAPE"}) {
         installed_gunship_hovers_facing_its_target(units, name);
+        installed_gunship_seeks_after_its_kill(units, name);
+        installed_gunship_moves_on_after_its_kill(units, name);
+    }
     // Missile hovercraft, whose missiles launch vertically and do not track.
     for (const auto* name : {"ARMMH", "CORMH"})
         installed_vertical_missile_comes_down_where_aimed(units, name);
