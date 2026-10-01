@@ -242,7 +242,7 @@ def compose(layout: dict) -> tuple[int, int, bytearray, str]:
 
 
 def main() -> None:
-    out = Path(__file__).resolve().parents[1] / "docs" / "resolution-proofs"
+    out = Path(__file__).resolve().parents[1] / "docs" / "development" / "resolution-proofs"
     out.mkdir(parents=True, exist_ok=True)
     lines = []
     for w, h in RESOLUTIONS:

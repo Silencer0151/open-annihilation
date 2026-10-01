@@ -5,7 +5,7 @@ The precision each double operation rounds to. Target
 `oa::base::float_precision`.
 
 The simulation rounds each double operation to a 53-bit significand
-([docs/conventions.md](../../../docs/conventions.md)). Every processor the
+([docs/conventions.md](../../../docs/development/conventions.md)). Every processor the
 engine runs on does so, except a 32-bit x86 build whose double arithmetic
 runs on the processor's older floating-point unit: that unit keeps each
 result to the precision it is set to, and some C libraries start a program

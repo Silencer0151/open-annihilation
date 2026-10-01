@@ -4,7 +4,7 @@
 
 """Rewrite std::-qualified fixed-width integer types to their unqualified names in the engine's sources.
 
-docs/conventions.md writes the fixed-width types unqualified: int32_t, not
+docs/development/conventions.md writes the fixed-width types unqualified: int32_t, not
 std::int32_t. This tool makes every engine source say so. It reads the C,
 C++ and Objective-C sources the engine owns (tools/engine_files.py: the
 files Git tracks, and new ones it does not ignore, less the nested projects
@@ -21,7 +21,7 @@ signed and unsigned) in code and in comments. It leaves alone:
 
 The unqualified names come from <stdint.h>. Strictly, <cstdint> promises
 only the std:: names, but every toolchain the engine supports declares both
-there (docs/conventions.md). So that each rewritten file names what it uses,
+there (docs/development/conventions.md). So that each rewritten file names what it uses,
 one that includes none of <cstdint>, <cinttypes>, <stdint.h> and
 <inttypes.h> itself gains '#include <cstdint>' (<stdint.h> in a C file):
 

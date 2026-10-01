@@ -24,12 +24,12 @@ Keep game assets and local captures out of Git.
 
 ## Rules
 
-[docs/conventions.md](docs/conventions.md) holds the rules every change
+[docs/development/conventions.md](docs/development/conventions.md) holds the rules every change
 follows, with their reasons and the directories they cover: compatibility
 with 3.1c save files, game data and simulation results; describing behaviour,
 never derivation; naming every field by what it holds, and constants; the language rules of
 each layer; seams; `///` documentation; comments; tests; the extension
-boundary and `run.sh`. [docs/testing.md](docs/testing.md) explains running
+boundary and `run.sh`. [docs/development/testing.md](docs/development/testing.md) explains running
 and writing tests. Read both before changing code: they bind agents exactly
 as they bind people, and this file adds only how agents work.
 
@@ -52,6 +52,6 @@ as they bind people, and this file adds only how agents work.
 - Before reporting completion, build the tree and run the relevant checks:
   for a change to sources, build files or documentation, the full ctest in a
   build configured with `OA_GAME_DIR` (see
-  [docs/testing.md](docs/testing.md)), which includes the source checks
+  [docs/development/testing.md](docs/development/testing.md)), which includes the source checks
   (`doc-links`, `style-ratchet`, `format-check`, `licensing-check`). Report
   what ran, what skipped and what failed.

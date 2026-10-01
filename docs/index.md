@@ -2,19 +2,54 @@
 
 Every document in the repository, by what you want to do.
 
-## Start here
+## Installing and playing
 
-- [README.md](../README.md): what Open Annihilation is, how to download and
-  run a release, and the documents that govern the project.
+- [README.md](../README.md): what Open Annihilation is, the packages for
+  each platform, running it, its settings and playing the free demo.
+- Installation guides, step by step: downloading the release, getting the
+  game data from your copy of Total Annihilation, and starting the game.
+  - [macOS](installation/macos.md)
+  - [Windows](installation/windows.md), including Windows XP
+  - [Linux and Raspberry Pi](installation/linux.md)
+- [VARIANCES.md](../VARIANCES.md): where the engine always differs from
+  3.1c, on purpose.
+- [capture.md](capture.md): capturing the game as an MP4 video with
+  `--capture-video` (it needs the `ffmpeg` program), and the scripted run
+  `--showcase` plays for showcase videos.
+- [director.md](director.md): director scripts (`.oascript`) and bundles
+  (`.oamovie`): planning a script's camera shots from a recorded game with
+  `--generate-script`, rendering it to video with its sound with
+  `--render-script`, the script format, the files a render writes, and what
+  stays the same on every platform.
+
+## Developing
+
 - [CONTRIBUTING.md](../CONTRIBUTING.md): the developer guide: what the engine
   does today, what it needs, how to build, test and run it from source, the
   layout of the tree, the checks and what to do when one fails, and how a
   change gets in (the licence of contributions, pull requests and review).
-- [conventions.md](conventions.md): the rules every change follows, each with
-  its reason, examples and the directories it covers.
-- [testing.md](testing.md): running the tests and checks, and writing a new
-  test: the kinds of test, the installed game (`OA_GAME_DIR`), pinned values
-  and malformed input.
+- [development/conventions.md](development/conventions.md): the rules every
+  change follows, each with its reason, examples and the directories it
+  covers.
+- [development/testing.md](development/testing.md): running the tests and
+  checks, and writing a new test: the kinds of test, the installed game
+  (`OA_GAME_DIR`), pinned values and malformed input.
+- [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
+  rules it points to are in [development/conventions.md](development/conventions.md).
+- [development/releasing.md](development/releasing.md): building, signing,
+  notarizing and checking the macOS release packages with
+  `tools/release_macos.sh`, on the maintainer's Mac.
+- [development/formats.md](development/formats.md): the HPI archive (its
+  encryption and SQSH compression) and PCX image formats as the asset reader
+  implements them, and which archive's copy of a file wins.
+- [development/platform.md](development/platform.md): `oa-platform`, the
+  SDL3 presentation and audio smoke tool.
+- [development/resolution-proofs/](development/resolution-proofs):
+  diagrams of the match screen's layout (radar, orders panel, resource bars
+  and battlefield) at nine window sizes from 640x480 to 7680x4320, with
+  their bounds in `bounds.txt`. They are drawn by
+  `tools/resolution_proofs.py`, which mirrors the layout rules of the match
+  display layout; run it again after changing those rules.
 
 ## Project
 
@@ -25,34 +60,6 @@ Every document in the repository, by what you want to do.
   behaves.
 - [SECURITY.md](../SECURITY.md): reporting a security problem privately.
 - [CONTRIBUTORS.md](../CONTRIBUTORS.md): the people behind the project.
-- [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
-  rules it points to are in [conventions.md](conventions.md).
-- [releasing.md](releasing.md): building, signing, notarizing and checking
-  the macOS release packages with `tools/release_macos.sh`, on the
-  maintainer's Mac.
-
-## Reference
-
-- [VARIANCES.md](../VARIANCES.md): where the engine always differs from
-  3.1c, on purpose.
-- [formats.md](formats.md): the HPI archive (its encryption and SQSH
-  compression) and PCX image formats as the asset reader implements them,
-  and which archive's copy of a file wins.
-- [capture.md](capture.md): capturing the game as an MP4 video with
-  `--capture-video` (it needs the `ffmpeg` program), and the scripted run
-  `--showcase` plays for showcase videos.
-- [director.md](director.md): director scripts (`.oascript`) and bundles
-  (`.oamovie`): planning a script's camera shots from a recorded game with
-  `--generate-script`, rendering it to video with its sound with
-  `--render-script`, the script format, the files a render writes, and what
-  stays the same on every platform.
-- [platform.md](platform.md): `oa-platform`, the SDL3 presentation and audio
-  smoke tool.
-- [resolution-proofs/](resolution-proofs): diagrams of the match screen's
-  layout (radar, orders panel, resource bars and battlefield) at nine window
-  sizes from 640x480 to 7680x4320, with their bounds in `bounds.txt`. They
-  are drawn by `tools/resolution_proofs.py`, which mirrors the layout rules
-  of the match display layout; run it again after changing those rules.
 
 ## Modules
 

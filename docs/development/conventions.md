@@ -2,7 +2,7 @@
 
 These are the rules every change to the engine follows, whoever writes it.
 Each rule says what it asks, why, which directories it covers and what checks
-it, with a good and a bad example. [CONTRIBUTING.md](../CONTRIBUTING.md)
+it, with a good and a bad example. [CONTRIBUTING.md](../../CONTRIBUTING.md)
 covers the process around a change (the licence of contributions, pull
 requests and review), and [testing.md](testing.md) covers writing and running tests in
 more detail.
@@ -188,7 +188,7 @@ differently from one compiler or processor to the next:
   of a step: each changes the results.
 - State each floating-point result by its precision and rounding: which
   steps are rounded to `float` and which to `double`, and in what order, as
-  [src/base/game-math](../src/base/game-math/README.md) does.
+  [src/base/game-math](../../src/base/game-math/README.md) does.
 - Every operation is rounded as written. Never rely on the compiler fusing a
   multiply and an add into one step or rearranging arithmetic: build
   simulation code with both turned off (`-ffp-contract=off -fno-fast-math`,
@@ -201,7 +201,7 @@ differently from one compiler or processor to the next:
   function such as `std::sin` or `std::atan2` may differ between platforms in
   its last bit, and `long double` has a different precision on each; use
   neither. The game's arctangent, sine, cosine, arccosine and vector length
-  come from [src/base/game-math](../src/base/game-math/README.md), which
+  come from [src/base/game-math](../../src/base/game-math/README.md), which
   computes them with integer arithmetic at the precision 3.1c keeps.
 
 - **Why:** a replayed, saved and reloaded or shared match must play out the
@@ -638,7 +638,7 @@ short:
 
 ## Application, extensions and run.sh
 
-[`run.sh`](../run.sh) is the entry point for seeing the engine's actual
+[`run.sh`](../../run.sh) is the entry point for seeing the engine's actual
 progress. It builds the current source and launches the current native
 application, `open-annihilation` (the `oa-game` target); a failed build stops
 it rather than starting an older executable. Keep it that way as the application changes, and never let
@@ -656,7 +656,7 @@ through that table and declared headers: meet a new need with a hook or a
 declared header, never with a new `Runtime` member or friend or another use
 of a private `Runtime` name. The `Runtime` members an extension still adds
 are frozen and may only shrink. Raise `OA_EXTENSION_API_VERSION` with any
-change to the table's contract. [src/app/README.md](../src/app/README.md)
+change to the table's contract. [src/app/README.md](../../src/app/README.md)
 describes the table and the frozen members.
 
 - **Why:** the engine must build, test and ship on its own, and an extension
@@ -687,7 +687,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
 ```
 
 The command is written for a POSIX shell. On Windows, use the PowerShell
-commands in [CONTRIBUTING.md](../CONTRIBUTING.md#build-and-test). A
+commands in [CONTRIBUTING.md](../../CONTRIBUTING.md#build-and-test). A
 generator that holds several configurations, such as Visual Studio's, also
 needs the configuration named when ctest runs:
 `ctest --test-dir build -C Debug --output-on-failure`.
@@ -759,10 +759,10 @@ build files and scripts open with two SPDX lines in their own comment style
 <!-- REUSE-IgnoreEnd -->
 
 The copyright line names the project's authors and points to
-[COPYRIGHT](../COPYRIGHT) at the root, which states the holder once for the
+[COPYRIGHT](../../COPYRIGHT) at the root, which states the holder once for the
 whole repository, so no file names a person. The documents, and files that
 cannot hold a comment (images, JSON, data), are covered by an annotation in
-[REUSE.toml](../REUSE.toml) instead, and licence texts (`LICENSE`,
+[REUSE.toml](../../REUSE.toml) instead, and licence texts (`LICENSE`,
 `licenses/`) state their own terms. Run `python3 tools/spdx_headers.py` to
 add the header to the files you create; `licensing-check` fails on a file
 that states no terms, or whose header names another licence or another

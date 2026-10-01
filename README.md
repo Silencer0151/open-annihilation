@@ -45,6 +45,17 @@ the Boneyards online service. Total Annihilation, Total Annihilation: Kingdoms
 and Boneyards, including their names, game data and other content, are the
 copyright and trademarks of their respective owners.
 
+## Installation guides
+
+Step-by-step guides to downloading Open Annihilation, getting the game data
+from your copy of Total Annihilation and starting the game:
+
+| | Platform | Guide |
+|---|---|---|
+| <img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white"> | macOS 11 or later, Intel and Apple silicon | [Installing on macOS](docs/installation/macos.md) |
+| <img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge"> | Windows XP SP3 to Windows 11: 64-bit, 32-bit and ARM | [Installing on Windows](docs/installation/windows.md) |
+| <img alt="Linux" src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black"> <img alt="Raspberry Pi" src="https://img.shields.io/badge/Raspberry%20Pi-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white"> | Linux and Raspberry Pi: 64-bit PC, 64-bit ARM and 32-bit ARM | [Installing on Linux](docs/installation/linux.md) |
+
 ## How the project works
 
 These documents set out how the project is run and how changes are made:
@@ -52,8 +63,8 @@ These documents set out how the project is run and how changes are made:
 | Document | What it covers | Link |
 |---|---|---|
 | Contributing guide | The developer guide: what the engine does today, building, testing and running it from source, the layout of the tree, the checks every change passes, and how a pull request is reviewed and merged | [View Document](CONTRIBUTING.md) |
-| Code conventions | The rules every change follows, each with its reason, examples and the directories it covers | [View Document](docs/conventions.md) |
-| Testing guide | Running the tests and checks, and writing a new test | [View Document](docs/testing.md) |
+| Code conventions | The rules every change follows, each with its reason, examples and the directories it covers | [View Document](docs/development/conventions.md) |
+| Testing guide | Running the tests and checks, and writing a new test | [View Document](docs/development/testing.md) |
 | Variances from 3.1c | Where the engine always differs from 3.1c, on purpose | [View Document](VARIANCES.md) |
 | Documentation index | Every document in the repository, the module guides and file format notes among them | [View Document](docs/index.md) |
 | Code of Conduct | How everyone taking part is expected to behave, and how to report a problem | [View Document](CODE_OF_CONDUCT.md) |

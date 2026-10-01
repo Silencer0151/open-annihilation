@@ -7,7 +7,7 @@ explains them and shows how to follow them.
 ## Running the tests
 
 Build the pinned SDL once (`python3 tools/bootstrap_sdl.py`, see
-[CONTRIBUTING.md](../CONTRIBUTING.md#build-and-test)), then:
+[CONTRIBUTING.md](../../CONTRIBUTING.md#build-and-test)), then:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
@@ -100,7 +100,7 @@ sweep took.
 
 The game draws the terrain, the fog, the battlefield's units, features and
 effects and each frame's conversion for the window in bands on spare cores
-([job pool](../src/platform/job-pool/README.md)):
+([job pool](../../src/platform/job-pool/README.md)):
 up to four threads, one on a machine of one or two logical processors.
 `OA_DRAW_THREADS` (1 to 32) sets the count for every run of the game a test
 starts, and `--draw-threads N` for one run; every count draws the same
@@ -173,7 +173,7 @@ covers the same code over a synthetic installer and runs everywhere.
   ```
 
 - **Windows:** build with the PowerShell commands in
-  [CONTRIBUTING.md](../CONTRIBUTING.md#build-and-test), which install zlib
+  [CONTRIBUTING.md](../../CONTRIBUTING.md#build-and-test), which install zlib
   through vcpkg and use the vcpkg toolchain. The commands above are for a
   POSIX shell. A generator that holds several configurations, such as Visual
   Studio's, also needs the configuration named when ctest runs:
@@ -190,7 +190,7 @@ covers the same code over a synthetic installer and runs everywhere.
   same toolchain, and configure with
   `-DOA_WINDOWS_XP=ON`. Engine code then compiles against the declarations of
   Windows XP and every executable runs on it; see
-  [src/platform/xp-runtime](../src/platform/xp-runtime/README.md). Check an
+  [src/platform/xp-runtime](../../src/platform/xp-runtime/README.md). Check an
   executable's imports against a Windows XP installation's own system DLLs
   before running it there: Windows XP refuses to start a program that imports
   anything they do not export. On XP, which lacks the sound interface SDL
@@ -201,7 +201,7 @@ covers the same code over a synthetic installer and runs everywhere.
   with SSE (`OA_X86_FLOAT=sse`, the default; `fpu` computes them on the
   older floating-point unit, which changes the simulation's results) and
   doubles at a double's precision on the older unit
-  ([src/base/float-precision](../src/base/float-precision/README.md)). Its
+  ([src/base/float-precision](../../src/base/float-precision/README.md)). Its
   results must equal a 64-bit build's: run the pinned-digest tests
   (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`,
   `game-math-extended`) on it.

@@ -140,7 +140,7 @@ ctest --test-dir build -C Debug --output-on-failure
 From macOS or Linux, `tools/build_windows.sh` cross-compiles the tree for
 x86-64 Windows with mingw-w64, including static zlib and SDL3, and
 `tools/test_windows.sh` builds it in a container and runs its
-tests under Wine. [docs/testing.md](docs/testing.md) covers the other
+tests under Wine. [docs/development/testing.md](docs/development/testing.md) covers the other
 builds, what CI runs, and writing a new test.
 
 ## Run
@@ -209,9 +209,9 @@ changes.
 ## Documenting code
 
 The rules every change follows are in
-[docs/conventions.md](docs/conventions.md), each with its reason, a good and
+[docs/development/conventions.md](docs/development/conventions.md), each with its reason, a good and
 a bad example and the directories it covers, and
-[docs/testing.md](docs/testing.md) explains how to run and write tests. In
+[docs/development/testing.md](docs/development/testing.md) explains how to run and write tests. In
 short: every function has one `///` block directly above its declaration in
 the header. It starts with a verb-first summary in the present tense, may
 add what a caller needs to know (order of effects, the canonical state it
@@ -233,9 +233,9 @@ the name, and give byte offsets only in file-format code.
 Constants have names, and fixed-width types are written unqualified
 (`int32_t`, not `std::int32_t`). Comments and documentation describe
 behaviour, not how it was worked out:
-[the conventions](docs/conventions.md#describe-behaviour-never-derivation)
+[the conventions](docs/development/conventions.md#describe-behaviour-never-derivation)
 draw the line and give examples, and
-[a worked example](docs/conventions.md#documenting-code) shows a documented
+[a worked example](docs/development/conventions.md#documenting-code) shows a documented
 record and function.
 
 ## Checks
@@ -252,7 +252,7 @@ scripts behind the source checks also run on their own, for example
 ## When a source check fails
 
 `style-ratchet` counts, per directory, the breaches of the naming and
-language rules in [the conventions](docs/conventions.md) against
+language rules in [the conventions](docs/development/conventions.md) against
 `tools/style-baseline.json`, and a run fails when a count grows. Each
 finding prints as `path:line: rule: text`; fix it as the rule's section of
 the conventions says. When a change removes findings, lower the counts with
@@ -261,7 +261,7 @@ the conventions says. When a change removes findings, lower the counts with
 `format-check` fails on a source that is not laid out as `.clang-format`
 says, and `licensing-check` on a file that states no copyright and licence:
 run `python3 tools/format_sources.py` and `python3 tools/spdx_headers.py`,
-which fix both (see [the conventions](docs/conventions.md#formatting)).
+which fix both (see [the conventions](docs/development/conventions.md#formatting)).
 
 The `doc-links` check fails when a relative Markdown link, an anchor or a
 repository path written in backticks does not resolve; fix the link or the
@@ -298,12 +298,12 @@ your GitHub account, so that your commits are credited to you.
    description become the commit message on `main`. Maintainers check the
    title, the description and every commit message against the same wording
    rules as the sources (see
-   [the conventions](docs/conventions.md#describe-behaviour-never-derivation)).
+   [the conventions](docs/development/conventions.md#describe-behaviour-never-derivation)).
 
 ## Where to read next
 
-1. [docs/conventions.md](docs/conventions.md): the code conventions in
-   full, and [docs/testing.md](docs/testing.md): running and writing tests.
+1. [docs/development/conventions.md](docs/development/conventions.md): the code conventions in
+   full, and [docs/development/testing.md](docs/development/testing.md): running and writing tests.
 2. [src/core/README.md](src/core/README.md): the canonical game records
    every system shares.
 3. [src/app/README.md](src/app/README.md): the game application, how to add a

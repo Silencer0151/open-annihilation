@@ -7,7 +7,7 @@
 // operation done on the processor's older floating-point unit keeps its
 // result to the precision that unit is set to, which some C libraries start
 // a program at 64 bits; the simulation needs each double result rounded to a
-// 53-bit significand, as on every other processor (docs/conventions.md).
+// 53-bit significand, as on every other processor (docs/development/conventions.md).
 
 namespace oa::base::float_precision {
 

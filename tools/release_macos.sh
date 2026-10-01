@@ -5,7 +5,7 @@
 # Build the macOS release of Open Annihilation on a Mac and package it: a zip
 # that holds the application and the notices, and an installer package that
 # puts the application in /Applications. With a Developer ID and notary
-# credentials in the environment (docs/releasing.md) both are signed,
+# credentials in the environment (docs/development/releasing.md) both are signed,
 # notarized and stapled; without them the application is signed ad hoc and
 # the installer package is left unsigned, which is for testing only.
 set -euo pipefail
@@ -72,7 +72,7 @@ then both are checked. Nothing is installed.
   --previous-zip ZIP     compare the zip's file list with an earlier release's
   -h, --help             show this help
 
-Environment (see docs/releasing.md):
+Environment (see docs/development/releasing.md):
   OA_MACOS_APP_IDENTITY        the Developer ID Application identity to sign
                                the application with; unset, it is signed ad hoc
   OA_MACOS_INSTALLER_IDENTITY  the Developer ID Installer identity to sign the
@@ -328,7 +328,7 @@ echo "$staged_app"
 # the application. The game has none today, since SDL3 and zlib are
 # linked into its executable, but a library or helper added later is signed
 # where it lies. A Developer ID signature carries the hardened runtime and a
-# secure timestamp, and no entitlements (docs/releasing.md).
+# secure timestamp, and no entitlements (docs/development/releasing.md).
 step "sign"
 sign() {
     if [[ -n "$app_identity" ]]; then
@@ -477,7 +477,7 @@ awk -v title="$app_name" '{ print }
 grep -q '<title>' "$work/distribution.xml" || fail "productbuild wrote an unexpected distribution"
 # productbuild writes the product unsigned and productsign signs it, so that
 # one tool signs every installer package and the keychain is asked to let
-# only that tool use the Developer ID Installer key (docs/releasing.md).
+# only that tool use the Developer ID Installer key (docs/development/releasing.md).
 if [[ -n "$installer_identity" ]]; then
     productbuild --distribution "$work/distribution.xml" --package-path "$work/component" "$work/unsigned.pkg"
     productsign --sign "$installer_identity" --timestamp "$work/unsigned.pkg" "$pkg_path"
