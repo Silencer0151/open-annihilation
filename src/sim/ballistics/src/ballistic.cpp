@@ -77,6 +77,9 @@ bool acceptable_second_angle(const std::optional<Extended>& angle, float minimum
 
 int16_t pitch_from_radians(double angle) noexcept {
     const double scaled = rounded(angle * ta_angle_half_turn) * reciprocal_pi;
+    // A NaN angle, which acceptable_first_angle lets through, gives pitch 0.
+    if (std::isnan(scaled))
+        return 0;
     return static_cast<int16_t>(static_cast<int64_t>(scaled));
 }
 
