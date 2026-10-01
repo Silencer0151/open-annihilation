@@ -3,8 +3,8 @@
 
 // The WAV player's one stream on SDL's dummy device, which plays in real
 // time: it waits out its delay, plays once, stops at once, and a new stream
-// takes the place of the one playing; and stop_all, which silences every
-// effect, the loop and the stream at once.
+// takes the place of the one playing; stop_all, which silences every
+// effect, the loop and the stream at once; and the effects' voice policy.
 #include "audio_test_support.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/formats/hpi.hpp"
@@ -62,6 +62,8 @@ int main() {
     std::filesystem::create_directories(root / "sounds");
     write_tone(root / "sounds" / "long.wav", 5000);
     write_tone(root / "sounds" / "short.wav", 100);
+    for (int other = 0; other < 6; ++other)
+        write_tone(root / "sounds" / ("other" + std::to_string(other) + ".wav"), 5000);
     {
         const oa::AssetStore assets(root);
         SdlWavPlayer player(assets);
@@ -127,6 +129,26 @@ int main() {
         require(player.play_stream("sounds/long.wav", 0, error), "a stream starts after stop_all");
         require(player.stream_busy(), "a stream after stop_all plays");
         player.stop_all();
+        require(player.effect_voices() == 0, "stop_all frees every voice");
+
+        // One sound plays on four voices at most; a fifth start restarts one,
+        // which then holds two voices.
+        for (int start = 1; start <= 4; ++start) {
+            require(player.play_resource("sounds/long.wav", error), "a sound starts again");
+            require(player.effect_voices() == start, "each start of a sound takes a voice");
+        }
+        require(player.play_resource("sounds/long.wav", error), "a fifth start restarts one");
+        require(player.effect_voices() == 5, "a restarted sound holds two voices");
+        // Eight voices at most: further sounds stop the oldest voices.
+        for (int other = 0; other < 6; ++other)
+            require(
+                player.play_resource("sounds/other" + std::to_string(other) + ".wav", error),
+                "another sound starts"
+            );
+        require(player.effect_voices() == 8, "no more than eight voices play");
+        require(player.playing(), "the newest sounds play on");
+        player.stop_all();
+        require(player.effect_voices() == 0 && !player.playing(), "stop_all ends them all");
     }
     std::filesystem::remove_all(root);
     SDL_Quit();

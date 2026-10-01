@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -44,14 +45,75 @@ void refill_loop(void* userdata, OutputStream& stream, int32_t additional) {
     }
 }
 
-struct PlayingSound {
+/// The most bytes of decoded sound files the player keeps.
+constexpr std::size_t max_cached_sound_bytes = std::size_t{4} << 20;
+/// The most streams the player keeps open for its effects while none plays on them.
+constexpr std::size_t max_idle_streams = 8;
+
+/// Tells whether two stream formats are the same.
+///
+/// @param a a format
+/// @param b a format
+/// @return true when the sample format, channels and rate match
+bool same_format(const StreamFormat& a, const StreamFormat& b) noexcept {
+    return a.sample == b.sample && a.channels == b.channels && a.rate == b.rate;
+}
+
+/// One of a sound's buffers, as the game's mixer keeps up to sample_buffers
+/// of them per sound: it plays one start at a time, on a stream it holds
+/// while it plays.
+struct SoundBuffer {
+    bool present{}; ///< made: the first with the sound, the others as starts need them
     std::unique_ptr<OutputStream> stream;
-    float level{1.0F}; // the voice volume relative to the near volume
+    StreamFormat format{}; ///< the stream's format
+    int32_t put_bytes{};   ///< bytes the start it plays put to the stream
+    float level{1.0F};     ///< the voice volume relative to the near volume
 };
+
+/// A sound file as SDL decoded it, and its buffers.
+struct CachedSound {
+    SDL_AudioSpec spec{};
+    std::vector<uint8_t> pcm;
+    std::array<SoundBuffer, sample_buffers> buffers{};
+    uint64_t last_started{}; ///< the count of starts when it last started
+};
+
+/// One of the default_voice_limit voices; a restarted buffer holds two.
+struct SoundVoice {
+    SoundBuffer* buffer{};
+    int32_t serial{}; ///< start order, for the oldest-voice rule
+};
+
+/// Tells whether a buffer's stream has samples left to play.
+///
+/// @param buffer the buffer
+/// @return true while it plays
+bool buffer_playing(const SoundBuffer& buffer) noexcept {
+    return buffer.stream != nullptr &&
+           (buffer.stream->queued_bytes() > 0 || buffer.stream->available_bytes() > 0);
+}
+
+/// Returns how much of its start a buffer has played.
+///
+/// @param buffer the buffer
+/// @return bytes in its stream's format
+int32_t buffer_played(const SoundBuffer& buffer) noexcept {
+    if (buffer.stream == nullptr)
+        return 0;
+    return buffer.put_bytes - buffer.stream->queued_bytes() - buffer.stream->available_bytes();
+}
 
 struct SdlWavPlayer::Impl {
     const oa::AssetStore& assets;
-    std::vector<PlayingSound> streams;
+    // Each sound file played, decoded once, under its path with its letters
+    // lowered; at most max_cached_sound_bytes of samples.
+    std::map<std::string, CachedSound, std::less<>> sounds;
+    std::size_t cached_bytes{};
+    std::vector<SoundVoice> voices;
+    int32_t serial{};
+    uint64_t starts{};
+    // Streams no buffer plays on, kept to play the next starts on.
+    std::vector<std::pair<StreamFormat, std::unique_ptr<OutputStream>>> idle_streams;
     std::unique_ptr<OutputStream> looping;
     LoopingTrack loop_track;
     std::unique_ptr<OutputStream> stream; // the one streamed sound, played once
@@ -63,7 +125,50 @@ struct SdlWavPlayer::Impl {
     ~Impl() {
         looping.reset();
         stream.reset();
-        streams.clear();
+        voices.clear();
+        sounds.clear();
+        idle_streams.clear();
+    }
+
+    /// Takes a buffer's stream back once it has stopped playing, keeping up
+    /// to max_idle_streams of them for later starts.
+    ///
+    /// @param buffer a buffer that does not play
+    void release_stream(SoundBuffer& buffer) {
+        if (buffer.stream == nullptr)
+            return;
+        buffer.stream->clear();
+        if (idle_streams.size() < max_idle_streams)
+            idle_streams.emplace_back(buffer.format, std::move(buffer.stream));
+        buffer.stream.reset();
+    }
+
+    /// Frees the voices whose buffer no longer plays, and the streams of
+    /// buffers that have stopped.
+    void collect_voices() {
+        std::erase_if(voices, [](const SoundVoice& voice) {
+            return !buffer_playing(*voice.buffer);
+        });
+        for (auto& [key, sound] : sounds)
+            for (auto& buffer : sound.buffers)
+                if (buffer.stream != nullptr && !buffer_playing(buffer))
+                    release_stream(buffer);
+    }
+
+    /// Stops the buffer of the oldest voice and frees that voice.
+    ///
+    /// @return false when no voice plays
+    bool evict_oldest_voice() {
+        if (voices.empty())
+            return false;
+        const auto oldest = std::min_element(
+            voices.begin(), voices.end(), [](const SoundVoice& a, const SoundVoice& b) {
+                return a.serial < b.serial;
+            }
+        );
+        release_stream(*oldest->buffer);
+        voices.erase(oldest);
+        return true;
     }
 };
 
@@ -177,15 +282,108 @@ bool SdlWavPlayer::play_resource(std::string_view resource, std::string& error) 
     return play_placed(resource, oa::audio::volume_near, oa::audio::Spatial{}, error);
 }
 
+namespace {
+
+/// Returns the key a sound file is cached under: its path with ASCII letters lowered.
+///
+/// @param resource the file's path in the archives
+/// @return the key
+std::string sound_key(std::string_view resource) {
+    std::string key(resource);
+    for (auto& character : key)
+        if (character >= 'A' && character <= 'Z')
+            character = static_cast<char>(character - 'A' + 'a');
+    return key;
+}
+
+} // namespace
+
 bool SdlWavPlayer::play_placed(
     std::string_view resource, int32_t volume, const oa::audio::Spatial& spatial, std::string& error
 ) {
+    auto& impl = *impl_;
     collect_finished();
-    SDL_AudioSpec spec{};
-    Uint8* wav = nullptr;
-    Uint32 length = 0;
-    if (!load_wav(impl_->assets, resource, spec, wav, length, error))
+    // The sound, decoded on its first start and kept while the cache has room.
+    const std::string key = sound_key(resource);
+    auto found = impl.sounds.find(key);
+    if (found == impl.sounds.end()) {
+        SDL_AudioSpec spec{};
+        Uint8* wav = nullptr;
+        Uint32 length = 0;
+        if (!load_wav(impl.assets, resource, spec, wav, length, error))
+            return false;
+        // The least recently started sounds that no buffer plays make room.
+        while (impl.cached_bytes + length > max_cached_sound_bytes) {
+            auto oldest = impl.sounds.end();
+            for (auto it = impl.sounds.begin(); it != impl.sounds.end(); ++it) {
+                const bool busy = std::any_of(
+                    it->second.buffers.begin(), it->second.buffers.end(), buffer_playing
+                );
+                if (!busy && (oldest == impl.sounds.end() ||
+                              it->second.last_started < oldest->second.last_started))
+                    oldest = it;
+            }
+            if (oldest == impl.sounds.end())
+                break;
+            impl.cached_bytes -= oldest->second.pcm.size();
+            impl.sounds.erase(oldest);
+        }
+        CachedSound& sound = impl.sounds[key];
+        sound.spec = spec;
+        sound.pcm.assign(wav, wav + length);
+        sound.buffers[0].present = true;
+        impl.cached_bytes += length;
+        SDL_free(wav);
+        found = impl.sounds.find(key);
+    }
+    CachedSound& sound = found->second;
+    sound.last_started = ++impl.starts;
+
+    // The game's voice policy: at most default_voice_limit voices, the
+    // oldest stopping for a start that finds them all taken.
+    while (default_voice_limit <= static_cast<int32_t>(impl.voices.size()))
+        if (!impl.evict_oldest_voice())
+            break;
+    // An idle buffer of the sound, a new one while fewer than sample_buffers
+    // exist (the last empty index first), or else the one that has played
+    // furthest (the lowest index among equals).
+    SoundBuffer* chosen = nullptr;
+    int32_t furthest = 0;
+    std::size_t furthest_index = 0;
+    std::size_t empty_index = 0;
+    for (std::size_t k = 0; k < sample_buffers; ++k) {
+        SoundBuffer& buffer = sound.buffers[k];
+        if (!buffer.present) {
+            empty_index = k;
+            continue;
+        }
+        if (!buffer_playing(buffer)) {
+            chosen = &buffer;
+            break;
+        }
+        if (furthest < buffer_played(buffer)) {
+            furthest = buffer_played(buffer);
+            furthest_index = k;
+        }
+    }
+    if (chosen == nullptr) {
+        if (empty_index < 1) {
+            chosen = &sound.buffers[furthest_index];
+        } else {
+            chosen = &sound.buffers[empty_index];
+            chosen->present = true;
+        }
+    }
+
+    // The start's samples: the sound as decoded, or panned for its placement.
+    SDL_AudioSpec spec = sound.spec;
+    auto length = static_cast<Uint32>(sound.pcm.size());
+    auto* wav = static_cast<Uint8*>(SDL_malloc(std::max<std::size_t>(sound.pcm.size(), 1)));
+    if (wav == nullptr) {
+        error = SDL_GetError();
         return false;
+    }
+    std::memcpy(wav, sound.pcm.data(), sound.pcm.size());
     if (spatial.mode == oa::audio::SpatialMode::normal &&
         !place_samples(spec, wav, length, spatial)) {
         error = SDL_GetError();
@@ -198,24 +396,46 @@ bool SdlWavPlayer::play_placed(
         SDL_free(wav);
         return false;
     }
+    // A restarted buffer plays its new start on the stream it has; another
+    // takes an idle stream of the format, or opens one.
     SoundOutput& output = sound_output();
-    auto stream = output.open_stream(format, nullptr, nullptr, error);
-    if (!stream) {
+    if (chosen->stream != nullptr && !same_format(chosen->format, format))
+        chosen->stream.reset();
+    if (chosen->stream != nullptr) {
+        chosen->stream->clear();
+    } else {
+        const auto idle = std::find_if(
+            impl.idle_streams.begin(), impl.idle_streams.end(), [&](const auto& entry) {
+                return same_format(entry.first, format);
+            }
+        );
+        if (idle != impl.idle_streams.end()) {
+            chosen->stream = std::move(idle->second);
+            impl.idle_streams.erase(idle);
+        } else {
+            chosen->stream = output.open_stream(format, nullptr, nullptr, error);
+        }
+        chosen->format = format;
+    }
+    if (chosen->stream == nullptr) {
         SDL_free(wav);
         return false;
     }
-    if (!stream->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume) * level)) {
-        error = output.last_error();
-        SDL_free(wav);
-        return false;
-    }
-    const bool queued = stream->put(wav, static_cast<int32_t>(length));
+    chosen->put_bytes = static_cast<int32_t>(length);
+    chosen->level = level;
+    const bool queued =
+        chosen->stream->set_gain(output_gain(impl.wave_out_volume, impl.fx_volume) * level) &&
+        chosen->stream->put(wav, static_cast<int32_t>(length)) && chosen->stream->flush() &&
+        chosen->stream->resume();
     SDL_free(wav);
-    if (!queued || !stream->flush() || !stream->resume()) {
+    if (!queued) {
         error = output.last_error();
+        chosen->stream.reset();
         return false;
     }
-    impl_->streams.push_back({std::move(stream), level});
+    // A restarted buffer keeps the voice it had and gains another, as the
+    // game's mixer counts it: it holds two of the voices until it stops.
+    impl.voices.push_back({chosen, ++impl.serial});
     error.clear();
     return true;
 }
@@ -305,15 +525,19 @@ bool SdlWavPlayer::stream_busy() const noexcept {
 }
 
 void SdlWavPlayer::stop_all() noexcept {
-    impl_->streams.clear();
+    impl_->voices.clear();
+    for (auto& [key, sound] : impl_->sounds)
+        for (auto& buffer : sound.buffers)
+            buffer.stream.reset();
+    impl_->idle_streams.clear();
     stop_loop();
     stop_stream();
 }
 
 bool SdlWavPlayer::playing() const noexcept {
     const bool effect =
-        std::any_of(impl_->streams.begin(), impl_->streams.end(), [](const PlayingSound& sound) {
-            return sound.stream->queued_bytes() > 0 || sound.stream->available_bytes() > 0;
+        std::any_of(impl_->voices.begin(), impl_->voices.end(), [](const SoundVoice& voice) {
+            return buffer_playing(*voice.buffer);
         });
     return effect || impl_->looping != nullptr || stream_busy();
 }
@@ -322,18 +546,27 @@ void SdlWavPlayer::set_volume(uint32_t wave_out_volume, uint32_t fx_volume) noex
     impl_->wave_out_volume = wave_out_volume;
     impl_->fx_volume = fx_volume;
     const float gain = output_gain(wave_out_volume, fx_volume);
-    for (auto& sound : impl_->streams)
-        sound.stream->set_gain(gain * sound.level);
+    for (auto& [key, sound] : impl_->sounds)
+        for (auto& buffer : sound.buffers)
+            if (buffer.stream != nullptr)
+                buffer.stream->set_gain(gain * buffer.level);
     if (impl_->looping != nullptr)
         impl_->looping->set_gain(gain);
     if (impl_->stream != nullptr)
         impl_->stream->set_gain(gain);
 }
 
+int32_t SdlWavPlayer::effect_voices() const noexcept {
+    return static_cast<int32_t>(impl_->voices.size());
+}
+
 void SdlWavPlayer::collect_finished() noexcept {
-    std::erase_if(impl_->streams, [](const PlayingSound& sound) {
-        return sound.stream->queued_bytes() == 0 && sound.stream->available_bytes() == 0;
-    });
+    try {
+        impl_->collect_voices();
+    } catch (const std::exception&) {
+        // Keeping an idle stream can only fail for memory; it is dropped instead.
+        impl_->idle_streams.clear();
+    }
     if (impl_->stream != nullptr && !stream_busy())
         stop_stream();
 }

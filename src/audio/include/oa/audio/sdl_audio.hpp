@@ -46,6 +46,13 @@ class SdlWavPlayer {
 
     /// Plays a resource at a voice volume with a 3D placement.
     ///
+    /// The effects keep the game's voice policy: at most
+    /// default_voice_limit voices, and a start that finds them all taken
+    /// stops the oldest; a sound plays on at most sample_buffers voices at
+    /// once, and a further start of it restarts the one that has played
+    /// furthest, which then holds two voices until it stops. Each sound file
+    /// is decoded on its first start and kept, with up to 4 MiB of others.
+    ///
     /// @param resource Archive path of the WAV file.
     /// @param volume Voice volume in hundredths of a decibel, heard relative to
     ///        audio::volume_near, the volume the game gives every unplaced effect.
@@ -108,6 +115,11 @@ class SdlWavPlayer {
 
     /// Releases the streams of sounds, the one stream included, that have finished playing.
     void collect_finished() noexcept;
+
+    /// Returns how many voices the effects hold (play_placed's voice policy).
+    ///
+    /// @return the voices, counting a restarted sound's two
+    [[nodiscard]] int32_t effect_voices() const noexcept;
 
   private:
 

@@ -17,6 +17,19 @@ left to the caller.
 The SDL backend reads WAV data through `oa::AssetStore`, so loose-file and HPI
 precedence remain centralized in the asset layer.
 
+The WAV player's effects (`play_placed`, `play_resource`) keep the game's
+voice policy, as the offline mix below does: at most eight voices
+(`default_voice_limit`); a start that finds them all taken stops the voice
+that started first; a sound plays on at most four of its buffers
+(`sample_buffers`) at once, a start taking an idle one, else making one
+while fewer than four exist (the highest free index first), else restarting
+the one that has played furthest, which then holds two voices until it
+stops. Each sound file is read and decoded on its first start and kept,
+with up to 4 MiB of others, the least recently started that no voice plays
+giving way first; a buffer plays on a stream it holds while it plays, and
+up to eight idle streams are kept for the next starts. `effect_voices`
+counts the voices.
+
 Besides its effects and its one looping sound, the WAV player keeps one
 stream, as the game keeps one: the briefing's narration and the end screen's
 glamour sound. `SdlWavPlayer::play_stream` plays a sound once, after a delay
