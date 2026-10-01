@@ -93,6 +93,95 @@ void test_grayed_art_frame() {
     CHECK(red_at(oa::ui::frontend_renderer::render_screen(resources, {&grayed, 1}), 1, 1) == 12);
 }
 
+// A centred caption underlines its quick key's glyph on the row below the
+// text, in GUI palette entry 2, or 0 while pressed, and not while grayed;
+// the focused record gets the focus marker's six rings, lit through the
+// light table, corners twice, inside the root.
+void test_quick_key_and_focus() {
+    namespace renderer = oa::ui::frontend_renderer;
+    constexpr uint8_t ground = 99;
+    constexpr uint8_t glyph_colour = 7;
+    constexpr uint8_t underline_entry = 2;
+    constexpr uint8_t button_fill = 20;
+    constexpr uint8_t grayed_fill = 19;
+    renderer::ScreenResources resources;
+    resources.background.width = 60;
+    resources.background.height = 30;
+    resources.background.rgb.assign(60U * 30U * 3U, 0);
+    for (std::size_t pixel = 0; pixel < 60U * 30U; ++pixel)
+        resources.background.rgb[pixel * 3] = ground;
+    for (std::size_t index = 0; index < 256; ++index)
+        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+    resources.background.palette = resources.gui_palette;
+    // Every light level adds itself to the entry, so a pixel lit twice shows it.
+    resources.light_table.resize(32U * 256U);
+    for (std::size_t level = 0; level < 32; ++level)
+        for (std::size_t index = 0; index < 256; ++index)
+            resources.light_table[level * 256 + index] = static_cast<uint8_t>(index + level);
+    // Glyphs 3 pixels wide and 4 high: the text is 'I' + 2 = 6 high.
+    oa::formats::fnt::Glyph glyph;
+    glyph.width = 3;
+    glyph.height = 4;
+    glyph.pixels.assign(12, glyph_colour);
+    glyph.coverage.assign(12, 1);
+    for (const char character : {'I', 'Y', 'e', 's'})
+        resources.font.glyphs[static_cast<unsigned char>(character)] = glyph;
+    oa::ui::gui_layout::Gadget root;
+    root.common.type = oa::ui::gui_layout::GadgetType::panel;
+    root.common.name = "ROOT";
+    root.common.y = 2;
+    root.common.width = 60;
+    root.common.height = 26;
+    root.common.active = 1;
+    auto yes = button("YES", 10, 5, 20, 10);
+    yes.common.attributes = 2; // centred caption
+    std::get<oa::ui::gui_layout::ButtonFields>(yes.fields).text = "Yes";
+    resources.layout.gadgets = {root, yes};
+    renderer::ButtonPresentation state{
+        "YES", renderer::ButtonCondition::normal, std::nullopt, std::nullopt, std::nullopt
+    };
+    state.quick_key = 'Y';
+    // "Yes" is 9 wide: x = 10 + (20 - 9) / 2 + 1 = 16, y = 5 + (10 - 6) / 2 = 7.
+    auto drawn = renderer::render_screen(resources, {&state, 1});
+    CHECK(red_at(drawn, 16, 12) == underline_entry && red_at(drawn, 18, 12) == underline_entry);
+    CHECK(red_at(drawn, 15, 12) == button_fill && red_at(drawn, 19, 12) == button_fill);
+    CHECK(red_at(drawn, 16, 11) == button_fill);
+    state.quick_key = 's';
+    drawn = renderer::render_screen(resources, {&state, 1});
+    CHECK(red_at(drawn, 22, 12) == underline_entry && red_at(drawn, 16, 12) == button_fill);
+    // A key the caption does not hold in that case underlines nothing.
+    state.quick_key = 'y';
+    drawn = renderer::render_screen(resources, {&state, 1});
+    CHECK(red_at(drawn, 16, 12) == button_fill);
+    state.quick_key = 'Y';
+    state.condition = renderer::ButtonCondition::pressed;
+    drawn = renderer::render_screen(resources, {&state, 1});
+    // Pressed, the caption moves a pixel right and down with its underline.
+    CHECK(red_at(drawn, 17, 13) == 0 && red_at(drawn, 19, 13) == 0);
+    state.condition = renderer::ButtonCondition::disabled;
+    drawn = renderer::render_screen(resources, {&state, 1});
+    CHECK(red_at(drawn, 16, 12) == grayed_fill);
+    CHECK(red_at(drawn, 15, 4) == ground);
+
+    state.condition = renderer::ButtonCondition::normal;
+    state.focused = true;
+    drawn = renderer::render_screen(resources, {&state, 1});
+    // Ring 1 (level 31) lies a pixel outside the record, ring 2 (28) two.
+    CHECK(red_at(drawn, 15, 4) == ground + 31);
+    CHECK(red_at(drawn, 9, 10) == ground + 31);
+    CHECK(red_at(drawn, 9, 4) == ground + 2 * 31);
+    CHECK(red_at(drawn, 15, 3) == ground + 28);
+    CHECK(red_at(drawn, 8, 3) == ground + 2 * 28);
+    // Ring 3 (24) lies on the root's top row; ring 4 above it is left out.
+    CHECK(red_at(drawn, 15, 2) == ground + 24);
+    CHECK(red_at(drawn, 15, 1) == ground);
+    // Rings 4 to 6 are lit where the root holds them.
+    CHECK(red_at(drawn, 6, 10) == ground + 19);
+    CHECK(red_at(drawn, 5, 10) == ground + 13);
+    CHECK(red_at(drawn, 4, 10) == ground + 6);
+    CHECK(red_at(drawn, 3, 10) == ground);
+}
+
 // Six grayed-out 64x64 art buttons drawn in all 256 colours of a palette
 // whose colours all differ, as a builder's page of empty build slots is:
 // every pixel is darkened to the shade table's colour for its own, and the
@@ -522,6 +611,7 @@ int main() {
 
     test_grayed_art_frame();
     test_grayed_art_cost();
+    test_quick_key_and_focus();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

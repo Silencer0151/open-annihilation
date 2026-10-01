@@ -3,6 +3,8 @@
 
 #include "test_support.hpp"
 
+#include "oa/ui/gui_layout/gui_gadget.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -107,6 +109,40 @@ OA_TEST(load_layout_takes_status_as_group_value) {
     const auto* other = panel_control(panel, "Side1");
     OA_CHECK(chosen != nullptr && chosen->group_value == 1 && chosen->stage == 0);
     OA_CHECK(other != nullptr && other->group_value == 0 && other->stage == 0);
+}
+
+OA_TEST(set_text_gives_a_button_the_first_free_quick_key) {
+    ui::gui_layout::Layout layout;
+    layout.gadgets.resize(5);
+    layout.gadgets[0].common.type = ui::gui_layout::GadgetType::panel;
+    const char* names[] = {"", "SAVE", "SEND", "CYCLE", "PLAIN"};
+    for (std::size_t index = 1; index < layout.gadgets.size(); ++index) {
+        auto& gadget = layout.gadgets[index];
+        gadget.common.type = ui::gui_layout::GadgetType::button;
+        gadget.common.name = names[index];
+        ui::gui_layout::ButtonFields fields;
+        fields.quick_key = index == 1 ? 'S' : 0;
+        fields.stages = index == 3 ? 2 : 0;
+        gadget.fields = fields;
+    }
+    layout.gadgets[4].common.attributes =
+        static_cast<int32_t>(ui::gui_layout::attribute::no_quick_key);
+    Panel panel;
+    panel_load_layout(panel, layout);
+    OA_CHECK(panel_control(panel, "SAVE")->quick_key == 'S');
+    // SAVE holds 's' in either case, so "Send" takes its 'e'.
+    panel_set_text(panel, "SEND", "Send");
+    OA_CHECK(panel_control(panel, "SEND")->quick_key == 'e');
+    // A caption set again gives up the key it had before it looks.
+    panel_set_text(panel, "SAVE", "Save");
+    OA_CHECK(panel_control(panel, "SAVE")->quick_key == 'S');
+    // An empty caption keeps the key; stages and no_quick_key take none.
+    panel_set_text(panel, "SEND", "");
+    OA_CHECK(panel_control(panel, "SEND")->quick_key == 'e');
+    panel_set_text(panel, "CYCLE", "One|Two");
+    OA_CHECK(panel_control(panel, "CYCLE")->quick_key == 0);
+    panel_set_text(panel, "PLAIN", "Plain");
+    OA_CHECK(panel_control(panel, "PLAIN")->quick_key == 0);
 }
 
 OA_GAME_DATA_TEST(tab_panel_routes_and_closes) {

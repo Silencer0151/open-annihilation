@@ -257,7 +257,12 @@ void Runtime::destroy_match_layer_textures() {
         SDL_DestroyTexture(match_dialog_tex_);
         match_dialog_tex_ = nullptr;
     }
+    if (match_dialog_side_tex_ != nullptr) {
+        SDL_DestroyTexture(match_dialog_side_tex_);
+        match_dialog_side_tex_ = nullptr;
+    }
     match_dialog_tex_w_ = match_dialog_tex_h_ = 0;
+    match_dialog_side_tex_w_ = match_dialog_side_tex_h_ = 0;
     match_hud_tex_w_ = match_hud_tex_h_ = 0;
     match_world_tex_w_ = match_world_tex_h_ = 0;
     match_cursor_tex_w_ = match_cursor_tex_h_ = 0;
@@ -316,6 +321,17 @@ void Runtime::compose_match_layers(renderer::Surface& frame) {
         static_cast<int>(match_world_cpu_.width),
         static_cast<int>(match_world_cpu_.height)
     );
+    if (!match_dialog_side_.rgb.empty() && placed_panel_area())
+        blit_rect(
+            frame,
+            match_dialog_side_,
+            match_dialog_side_at_.x,
+            match_dialog_side_at_.y,
+            0,
+            0,
+            static_cast<int>(match_dialog_side_.width),
+            static_cast<int>(match_dialog_side_.height)
+        );
 }
 
 void Runtime::compose_match_frame(renderer::Surface& frame) {
@@ -433,8 +449,28 @@ void Runtime::present_match_layers() {
         static_cast<float>(match_world_cpu_.width),
         static_cast<float>(match_world_cpu_.height)
     };
-    if (!SDL_RenderTexture(sdl_.renderer, match_world_tex_, nullptr, &world) ||
-        (dialogs && !SDL_RenderTexture(sdl_.renderer, match_dialog_tex_, nullptr, nullptr)))
+    if (!SDL_RenderTexture(sdl_.renderer, match_world_tex_, nullptr, &world))
+        throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+    // A placed dialog's part over the side column goes over the HUD layer.
+    if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
+        match_dialog_side_tex_ = ensure_xrgb_texture(
+            match_dialog_side_tex_,
+            static_cast<int>(match_dialog_side_.width),
+            static_cast<int>(match_dialog_side_.height),
+            match_dialog_side_tex_w_,
+            match_dialog_side_tex_h_
+        );
+        upload_rgb24_xrgb(match_dialog_side_tex_, match_dialog_side_);
+        const SDL_FRect side{
+            static_cast<float>(match_dialog_side_at_.x),
+            static_cast<float>(match_dialog_side_at_.y),
+            static_cast<float>(match_dialog_side_.width),
+            static_cast<float>(match_dialog_side_.height)
+        };
+        if (!SDL_RenderTexture(sdl_.renderer, match_dialog_side_tex_, nullptr, &side))
+            throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+    }
+    if (dialogs && !SDL_RenderTexture(sdl_.renderer, match_dialog_tex_, nullptr, nullptr))
         throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
     present_software_cursor();
     capture_render_target();

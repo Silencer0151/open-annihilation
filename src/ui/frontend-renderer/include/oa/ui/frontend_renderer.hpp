@@ -53,6 +53,12 @@ struct ButtonPresentation {
     // Image pointers set at run time can replace the authored button binding
     // entirely (player colors, alliance icons, and dynamic SIDEx).
     std::optional<SpriteOverride> sprite;
+    // The button record's quick key, whose first appearance in a centred
+    // caption is underlined (quick_key_offset); 0 underlines nothing.
+    char quick_key = 0;
+    // The record holds the panel's keyboard focus: the focus marker's
+    // outline (focus_rings) is lit round it, inside the panel's root.
+    bool focused = false;
 };
 
 // Runtime records bound to a type-2 gadget. List storage lives outside the
@@ -185,12 +191,24 @@ enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 
 /// Draws a screen: background, gadgets, list rows and captions.
 ///
+/// A button given a quick key in its presentation underlines it, as a
+/// centred caption does in 3.1c: the key's glyph is underlined on the row
+/// below the text (its top plus the font's text height, less one) in the GUI
+/// palette's entry 2, or entry 0 while the button is pressed, and not at all
+/// while it is grayed. Last, the focus marker's outline is lit round the
+/// record whose presentation holds the focus, through the light table,
+/// inside the panel's root (the layout's first record); a label, a list or a
+/// text box holding the focus shows none.
+///
 /// @param resources Resources from load_screen().
 /// @param presentation Runtime button states by gadget name; empty for the authored state.
 /// @param lists Runtime rows of type-2 gadgets by name.
 /// @return The RGB image at the background's size.
 /// @throws std::runtime_error when the background or a runtime image is
 ///         inconsistent, or a resolved GAF frame cannot be drawn.
+/// @quirk The focus outline is lit round the focused record even when the
+///        record is not shown: a panel whose handler hides its first button
+///        after the panel loaded rings the empty place, as 3.1c does.
 [[nodiscard]] Surface render_screen(
     const ScreenResources& resources,
     std::span<const ButtonPresentation> presentation = {},

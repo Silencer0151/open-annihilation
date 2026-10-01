@@ -6,7 +6,8 @@
 //
 // Handlers operate on a Panel, a model of the gadget-record fields they touch.
 // The runtime copies a loaded layout into a Panel, runs a handler, and copies
-// stages, grayed state, text and knob positions back to its widgets.
+// stages, grayed state, text, quick keys and knob positions back to its
+// widgets.
 #pragma once
 
 #include "oa/core/types.h"
@@ -65,6 +66,7 @@ struct Control {
     int16_t x = 0, y = 0, width = 0, height = 0;
     uint8_t active = 0;
     uint8_t stage = 0;       // button stage
+    int8_t stages = 0;       // a button's stage count, 0 for a plain button
     int16_t group_value = 0; // a button's status
     // Per-type grayed state: bit 0 of a button's flags word, a slider's lock
     // byte, bit 0 of a label's flags, bit 0 of a list's second attribute byte.
@@ -74,6 +76,9 @@ struct Control {
     SliderState slider{};
     SliderHandler on_change = nullptr;
     std::array<char, kControlTextBytes> text{};
+    // A button's quick key: the caption letter its underline marks and a key
+    // press matches, or 0 for none.
+    int8_t quick_key = 0;
 };
 
 // Record 0 is the root; loaded records are 1..count (the root's record count).
@@ -208,6 +213,14 @@ void panel_set_grayed(Panel& panel, std::string_view name, bool grayed) noexcept
 void panel_set_disabled(Panel& panel, std::string_view name, bool disabled) noexcept;
 
 /// Replaces a record's text and marks the panel dirty.
+///
+/// A button then takes the quick key its new caption gives it, as the
+/// gadget engine assigns one (ui::gui_input::caption_quick_key): none for a
+/// button with stages, the key it had with the no_quick_key attribute or an
+/// empty caption, else the first caption letter no other button's key
+/// takes (ui::gui_input::free_quick_key). The panel's labels hold no quick
+/// key: the gadget engine gives a label one only when a caption is set on a
+/// label with a link.
 ///
 /// @param[in,out] panel Panel searched.
 /// @param name Record name; a missing record changes nothing.

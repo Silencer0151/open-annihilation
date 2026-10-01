@@ -138,7 +138,7 @@ oa::ui::display_layout::Point Runtime::hud_source_point(float x, float y) const 
             point.y < rows.y + rows.height)
             return point;
     }
-    if (const auto area = beside_hud_panel_area()) {
+    if (const auto area = placed_panel_area()) {
         // Each canvas pixel maps to the source pixel the panel's draw shows
         // there, rounding down, so a point left of or above it stays off it.
         const auto& root = match_hud_->layout.gadgets.front().common;

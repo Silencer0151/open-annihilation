@@ -279,6 +279,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp
   src/app/runtime_events.cpp src/app/runtime_frontend_host.cpp src/app/runtime_gaf.cpp
   src/app/runtime_hotkeys.cpp src/app/runtime_hud.cpp src/app/runtime_loading.cpp
   src/app/runtime_match_hud.cpp src/app/runtime_match_menus.cpp src/app/runtime_load_game.cpp
+  src/app/panel_shade.cpp
   src/app/runtime_order_panel.cpp src/app/runtime_order_check.cpp
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp

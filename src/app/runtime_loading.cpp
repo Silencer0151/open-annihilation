@@ -256,6 +256,7 @@ void Runtime::leave_match() {
     if (match_ && extension_.match_event != nullptr)
         extension_.match_event(extension_.context, *this, MatchEvent::left);
     match_paused_ = false;
+    match_panels_keyboard_ = false;
     match_finished_ = false;
     outcome_over_menu_ = false;
     match_outcome_ = sim::scenario::Outcome::ongoing;

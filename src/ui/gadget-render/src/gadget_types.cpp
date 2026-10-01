@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 namespace oa::ui::gadget_render {
 
@@ -426,9 +427,11 @@ void draw_button(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {
         char copy[field::text_bytes + 1]{};
         char needle[2] = {key, '\0'};
         char* found = nullptr;
-        if (key != '\0' && !grayed) {
+        if (!grayed) {
             std::strncpy(copy, text, field::text_bytes);
-            found = std::strstr(copy, needle);
+            if (const auto offset = ui::frontend_renderer::quick_key_offset(copy, key);
+                offset != std::string_view::npos)
+                found = copy + offset;
         }
         if (found == nullptr) {
             draw_text(renderer, panel, face, text, x, y, span, 0);

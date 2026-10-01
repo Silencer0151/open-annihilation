@@ -455,6 +455,27 @@ void state_setters() {
     );
     input::set_gadget_text_by_name(f.panel, "Cancel", "Abort", 0);
     require(f.record("Cancel").bytes[field::button_quick_key] == 'b', "first unused letter");
+    const int8_t taken[] = {'Y', 0, 'n'};
+    require(input::free_quick_key("Yes", taken) == 'e', "a taken key is passed over");
+    require(input::free_quick_key(" No", taken) == 'o', "keys compare without regard to case");
+    require(input::free_quick_key(" y N", taken) == '\0', "no key when every letter is taken");
+    using input::CaptionQuickKey;
+    require(
+        input::caption_quick_key(0, 0, "Yes") == CaptionQuickKey::assign,
+        "a plain button takes a key from its caption"
+    );
+    require(
+        input::caption_quick_key(0, 0, "") == CaptionQuickKey::keep,
+        "an empty caption keeps the key"
+    );
+    require(
+        input::caption_quick_key(gui::attribute::no_quick_key, 2, "Yes") == CaptionQuickKey::keep,
+        "no_quick_key keeps the key"
+    );
+    require(
+        input::caption_quick_key(0, 2, "One") == CaptionQuickKey::none,
+        "a button with stages holds none"
+    );
     auto& cycle = f.record("CYCLE");
     cycle.bytes[field::button_stages] = 2;
     input::set_gadget_text(f.panel, f.index("CYCLE"), "One|Two", 0);

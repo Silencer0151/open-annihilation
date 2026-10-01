@@ -7,8 +7,10 @@
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/options.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/audio/unit_announcements.hpp"
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/data/persist/save_sections.hpp"
@@ -53,6 +55,8 @@ constexpr std::size_t kBackTileLast = 2;
 constexpr std::string_view kExitMenuLayout = "guis/EXITMENU.GUI";
 constexpr std::string_view kConfirmLayout = "guis/YESORNO.GUI";
 constexpr std::string_view kRestartLayout = "guis/RESTART.GUI";
+// PlayerSetupInfo.role bit of the player hosting the game.
+constexpr uint8_t kHostRole = 0x01;
 
 /// The BackTile frame and the pixel of it a panel's face shows.
 struct FacePixel {
@@ -171,6 +175,147 @@ Rect cursor_reach(float x, float y) {
     };
 }
 
+// The palette's 32-row shade and light tables, 256 entries a row.
+constexpr std::string_view kShadeTable = "palettes/palette.shd";
+constexpr std::string_view kLightTable = "palettes/palette.lht";
+constexpr std::size_t kTableRows = 32;
+constexpr std::size_t kTableRowEntries = 256;
+// The shade table row a panel opened with shade_below darkens the panel
+// under it through (level -0x18); a pixel of entry 0x80 or above reads the
+// row before.
+constexpr std::size_t kShadeBelowRow = 8;
+constexpr uint8_t kFirstRowBeforeEntry = 0x80;
+// The focus marker's outline: six rings round the focused record, the first
+// a pixel outside it, lit through these light table rows, innermost first;
+// a ring's corners are lit twice.
+constexpr std::array<std::size_t, 6> kFocusRingLevels{31, 28, 24, 19, 13, 6};
+// The GUI palette entry a caption's quick key is underlined in.
+constexpr std::size_t kUnderlineEntry = 2;
+
+/// Returns the lowest palette entry holding a colour.
+///
+/// @param palette palette searched, 4 bytes an entry
+/// @param rgb the colour
+/// @return the entry, or nothing when no entry holds it
+std::optional<std::size_t> palette_entry(const oa::PaletteBytes& palette, const uint8_t* rgb) {
+    for (std::size_t entry = 0; entry < oa::palette_color_count; ++entry)
+        if (std::equal(rgb, rgb + 3, &palette[entry * oa::palette_entry_bytes]))
+            return entry;
+    return std::nullopt;
+}
+
+/// Returns a colour darkened as the panel under a shade_below panel is.
+///
+/// @param palette the frame's palette
+/// @param shade the shade table
+/// @param rgb the colour
+/// @return the darkened colour, or nothing for a colour off the palette
+std::optional<std::array<uint8_t, 3>> darkened_colour(
+    const oa::PaletteBytes& palette, const std::vector<uint8_t>& shade, const uint8_t* rgb
+) {
+    const auto entry = palette_entry(palette, rgb);
+    if (!entry)
+        return std::nullopt;
+    const auto row = *entry >= kFirstRowBeforeEntry ? kShadeBelowRow - 1 : kShadeBelowRow;
+    const auto* colour = &palette[shade[row * kTableRowEntries + *entry] * oa::palette_entry_bytes];
+    return std::array<uint8_t, 3>{colour[0], colour[1], colour[2]};
+}
+
+/// Counts the pixels of a rectangle of `shown` that are not those of `before`,
+/// darkened as the panel under a shade_below panel is when `darkened` says so.
+///
+/// @param shown frame with the panel over it
+/// @param before frame before the panel opened
+/// @param rect rectangle compared
+/// @param darkened true when the rectangle is darkened
+/// @param palette the frames' palette
+/// @param shade the shade table
+/// @return the pixels that differ
+std::size_t differing_under(
+    renderer::Surface& shown,
+    renderer::Surface& before,
+    const Rect& rect,
+    bool darkened,
+    const oa::PaletteBytes& palette,
+    const std::vector<uint8_t>& shade
+) {
+    std::size_t count = 0;
+    for (int32_t y = rect.y; y < rect.y + rect.height; ++y)
+        for (int32_t x = rect.x; x < rect.x + rect.width; ++x) {
+            if (!darkened) {
+                count += same_pixel(shown, before, x, y) ? 0 : 1;
+                continue;
+            }
+            const auto expected = darkened_colour(palette, shade, pixel(before, x, y));
+            count += expected && std::equal(expected->begin(), expected->end(), pixel(shown, x, y))
+                         ? 0
+                         : 1;
+        }
+    return count;
+}
+
+/// Counts the pixels of an RGB image that do not show the focus marker's
+/// outline round a record over the image drawn without it.
+///
+/// Every ring pixel inside `root` is read as its palette entry (the nearest
+/// one for a colour off the palette) and lit through its ring's light table
+/// row, twice at a corner; every other pixel is the same in both images.
+///
+/// @param lit the image drawn with the focus
+/// @param unlit the image drawn without it
+/// @param record the focused record, in the images' pixels
+/// @param root the panel's root, which clips the rings
+/// @param palette the images' palette
+/// @param light the light table
+/// @param[out] ring_pixels the ring pixels inside the root
+/// @return the pixels that differ from the expected image
+std::size_t differing_focus(
+    renderer::Surface& lit,
+    renderer::Surface& unlit,
+    const Rect& record,
+    const Rect& root,
+    const oa::PaletteBytes& palette,
+    const std::vector<uint8_t>& light,
+    std::size_t& ring_pixels
+) {
+    ring_pixels = 0;
+    std::size_t count = 0;
+    for (int32_t y = 0; y < static_cast<int32_t>(lit.height); ++y)
+        for (int32_t x = 0; x < static_cast<int32_t>(lit.width); ++x) {
+            std::array<uint8_t, 3> expected{};
+            std::copy_n(pixel(unlit, x, y), 3, expected.begin());
+            for (std::size_t ring = 0; ring < kFocusRingLevels.size() && inside(root, x, y);
+                 ++ring) {
+                const auto out = static_cast<int32_t>(ring) + 1;
+                const int32_t left = record.x - out;
+                const int32_t top = record.y - out;
+                const int32_t right = record.x + record.width - 1 + out;
+                const int32_t bottom = record.y + record.height - 1 + out;
+                if (x < left || x > right || y < top || y > bottom)
+                    continue;
+                const int edges =
+                    (y == top || y == bottom ? 1 : 0) + (x == left || x == right ? 1 : 0);
+                if (edges == 0)
+                    continue;
+                ++ring_pixels;
+                auto entry = renderer::read_indices(unlit, palette, x, y, 1, 1).pixels.front();
+                for (int time = 0; time < edges; ++time)
+                    entry = light[kFocusRingLevels[ring] * kTableRowEntries + entry];
+                std::copy_n(&palette[entry * oa::palette_entry_bytes], 3, expected.begin());
+                break;
+            }
+            if (!std::equal(expected.begin(), expected.end(), pixel(lit, x, y)))
+                ++count;
+        }
+    return count;
+}
+
+// Windows the placed dialogs are checked on besides 640x480 and the default
+// one, where the side column's scale is a fraction (1.25 and 1.6).
+constexpr int kSmallWindowWidth = 800;
+constexpr int kSmallWindowHeight = 600;
+constexpr int kMediumWindowWidth = 1024;
+constexpr int kMediumWindowHeight = 768;
 constexpr const char* kLoadBitmap = "bitmaps/dloadgame2.pcx";
 constexpr const char* kSaveBitmap = "bitmaps/dsavegame2.pcx";
 constexpr const char* kCheckSaveName = "LSCHECK1";
@@ -547,7 +692,7 @@ void Runtime::check_match_dialogs() {
     std::cout << "match dialog check: HELP.GUI at " << panel.x << ',' << panel.y << " on the "
               << match_layout_.width << 'x' << match_layout_.height << " match canvas\n";
     check_in_game_briefing(report_directory);
-    check_surrender_prompt(report_directory);
+    check_placed_dialogs(report_directory);
 
     // Over a new skirmish: the window's close request, a held Escape, the
     // OPTIONS lightbar and a unit's speech with its order's caption.
@@ -1282,10 +1427,11 @@ void Runtime::check_in_game_briefing(const fs::path& report_directory) {
         throw std::runtime_error(std::string("SDL_SetWindowSize: ") + SDL_GetError());
 }
 
-void Runtime::check_surrender_prompt(const fs::path& report_directory) {
+void Runtime::check_placed_dialogs(const fs::path& report_directory) {
+    namespace panel_flag = oa::ui::gui_input::panel_flag;
     const auto require = [](bool ok, const std::string& failure) {
         if (!ok)
-            throw std::runtime_error("surrender prompt check: " + failure);
+            throw std::runtime_error("placed dialog check: " + failure);
     };
     oa::formats::gaf::Archive common;
     append_gaf_file(common, "anims/commongui.gaf");
@@ -1307,6 +1453,19 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
         );
     }
     const auto tile_size = static_cast<int32_t>(tiles.front().width);
+    const auto shade = assets_.read(kShadeTable).bytes;
+    const auto light = assets_.read(kLightTable).bytes;
+    require(
+        shade.size() == kTableRows * kTableRowEntries &&
+            light.size() == kTableRows * kTableRowEntries,
+        "the palette's shade and light tables are not 32 rows of 256"
+    );
+    const auto composed = [this] {
+        render();
+        renderer::Surface frame;
+        compose_match_layers(frame);
+        return frame;
+    };
     const auto point_at = [this](float x, float y) {
         update_pointer(x, y);
         return hovered_ ? std::string_view(match_hud_->layout.gadgets[*hovered_].common.name)
@@ -1340,10 +1499,95 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
                     return label->text;
         return std::string();
     };
+    const auto record_index = [this](std::string_view name) -> std::size_t {
+        for (std::size_t index = 1; index < match_hud_->layout.gadgets.size(); ++index)
+            if (match_hud_->layout.gadgets[index].common.name == name)
+                return index;
+        throw std::runtime_error("placed dialog check: no control " + std::string(name));
+    };
+    const auto control = [&](std::string_view name) {
+        return match_hud_->layout.gadgets[record_index(name)].common;
+    };
+    // Each button underlines its quick key's glyph in its centred caption,
+    // in the GUI palette's entry 2, on the HUD layer's row under the text:
+    // the caption's top, (height - text height) / 2 into the button, plus
+    // the text height (the 'I' glyph's and 2), less one.
+    const auto check_quick_keys =
+        [&](const std::string& what,
+            std::initializer_list<std::pair<std::string_view, char>> keys) {
+            render();
+            const auto& font = match_hud_->font;
+            const auto remap = oa::remap_palette(match_hud_->gui_palette, match_palette_);
+            const auto* colour = &match_palette_[remap[kUnderlineEntry] * oa::palette_entry_bytes];
+            for (const auto& [name, key] : keys) {
+                const auto& gadget = match_hud_->layout.gadgets[record_index(name)];
+                const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+                require(
+                    button != nullptr && button->quick_key == key,
+                    what + "'s " + std::string(name) + " does not have the quick key " + key
+                );
+                const std::string_view text = button->text;
+                const auto at = text.find(key);
+                require(at != std::string_view::npos, what + "'s caption lacks its quick key");
+                const auto text_width =
+                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text));
+                const auto text_height = static_cast<int32_t>(oa::formats::fnt::line_height(font));
+                const auto& record = gadget.common;
+                const int32_t left =
+                    record.x + (record.width - text_width) / 2 + 1 +
+                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(0, at)));
+                const int32_t right =
+                    left +
+                    static_cast<int32_t>(oa::formats::fnt::measure_text(font, text.substr(at, 1))) -
+                    1;
+                const int32_t row = record.y + (record.height - text_height) / 2 + text_height - 1;
+                std::size_t wrong = 0;
+                for (int32_t x = left; x <= right; ++x)
+                    if (!std::equal(colour, colour + 3, pixel(match_hud_cpu_, x, row)))
+                        ++wrong;
+                require(
+                    right >= left && wrong == 0,
+                    what + "'s " + std::string(name) + " does not underline its quick key " + key
+                );
+            }
+        };
+    // The focus marker's outline rings the focused record inside the panel's
+    // root, over the HUD layer drawn while the panels take no keyboard.
+    const auto check_focus = [&](const std::string& what, std::string_view name) {
+        require(
+            match_panels_keyboard_ && match_hud_focus_ == static_cast<int32_t>(record_index(name)),
+            what + " does not give " + std::string(name) + " the focus"
+        );
+        match_panels_keyboard_ = false;
+        render();
+        auto unlit = match_hud_cpu_;
+        match_panels_keyboard_ = true;
+        render();
+        const auto& record = control(name);
+        const auto& root = match_hud_->layout.gadgets.front().common;
+        std::size_t ring_pixels = 0;
+        const auto differing = differing_focus(
+            match_hud_cpu_,
+            unlit,
+            {record.x, record.y, record.width, record.height},
+            {root.x, root.y, root.width, root.height},
+            match_palette_,
+            light,
+            ring_pixels
+        );
+        require(
+            ring_pixels > 0 && differing == 0,
+            what + " rings " + std::string(name) + " wrongly at " + std::to_string(differing) +
+                " pixels"
+        );
+    };
     for (const auto& [width, height] :
          {std::pair{kCanvasWidth, kCanvasHeight},
+          std::pair{kSmallWindowWidth, kSmallWindowHeight},
+          std::pair{kMediumWindowWidth, kMediumWindowHeight},
           std::pair{kDefaultWindowWidth, kDefaultWindowHeight}}) {
         const auto size = std::to_string(width) + 'x' + std::to_string(height);
+        const auto on = " on the " + size + " window";
         if (match_)
             leave_match();
         if (!SDL_SetWindowSize(sdl_.window, width, height) || !SDL_SyncWindow(sdl_.window))
@@ -1364,15 +1608,7 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
                     game.resource_readout, game.players[viewer], game.tick
                 );
         }
-        const auto composed = [this] {
-            render();
-            renderer::Surface frame;
-            compose_match_layers(frame);
-            return frame;
-        };
-        // The paused battlefield with nothing over it but the paused title.
-        auto paused = composed();
-        const Rect battlefield{
+        const auto battlefield = Rect{
             match_layout_.left,
             match_layout_.top,
             match_layout_.battlefield_width(),
@@ -1383,37 +1619,72 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
                 std::lround(static_cast<double>(value) * match_layout_.scale)
             );
         };
-        // The canvas rectangle of the loaded panel, which must sit centred
-        // right of the 128-pixel strip of the 640x480 screen and show centred
-        // right of the drawn side column; nothing else over the battlefield
-        // may differ from the paused frame.
-        const auto placed = [&](renderer::Surface& frame, std::string_view layout) {
-            const auto name = std::string(layout) + " on the " + size + " window";
+        // The in-game menu underlines its buttons' quick keys and, as it
+        // gives the panels the keyboard, rings Resume, its default focus.
+        check_quick_keys(
+            "ARMOPT.GUI" + on,
+            {{"LOADGAME", 'L'}, {"SAVEGAME", 'S'}, {"PREFS", 'O'}, {"EXIT", 'E'}, {"OK", 'R'}}
+        );
+        check_focus("ARMOPT.GUI" + on, "OK");
+        // The paused battlefield with nothing over it but the paused title,
+        // and the in-game menu in the side column.
+        auto paused = composed();
+        const auto& menu_root = match_hud_->layout.gadgets.front().common;
+        const auto menu = oa::ui::display_layout::source_rect_to_canvas(
+            match_layout_, menu_root.x, menu_root.y, menu_root.width, menu_root.height
+        );
+        // The loaded dialog's canvas rectangle: its root placed on the 640x480
+        // screen as `placement` says, shown at the side column's scale placed
+        // the same way on the canvas; over the battlefield only it differs
+        // from `before`. With `face`, every pixel of it off its records and
+        // the focus marker's rings is the BackTile face in the match palette.
+        const auto placed = [&](renderer::Surface& before,
+                                renderer::Surface& frame,
+                                std::string_view layout,
+                                uint32_t placement,
+                                bool face) {
+            const auto name = std::string(layout) + on;
             require(
                 screen_ == Screen::match && match_paused_ && match_hud_ &&
                     match_hud_panel_ == layout,
                 name + " is not open"
             );
-            const auto& root = match_hud_->layout.gadgets.front().common;
-            const auto source_x =
-                (kCanvasWidth - kBattlefieldLeft - root.width) / 2 + kBattlefieldLeft;
-            const auto source_y = (kCanvasHeight - root.height) / 2;
+            const auto& gadgets = match_hud_->layout.gadgets;
+            const auto& root = gadgets.front().common;
+            int16_t source_x = 0;
+            int16_t source_y = 0;
+            oa::ui::gui_input::place_root(
+                source_x,
+                source_y,
+                root.width,
+                root.height,
+                placement | panel_flag::first_draw,
+                kCanvasWidth,
+                kCanvasHeight,
+                kBattlefieldLeft
+            );
             require(
                 root.x == source_x && root.y == source_y,
                 name + " is at " + std::to_string(root.x) + ',' + std::to_string(root.y) +
-                    ", not " + std::to_string(source_x) + ',' + std::to_string(source_y) +
-                    ", centred right of the HUD strip"
+                    ", not " + std::to_string(source_x) + ',' + std::to_string(source_y)
             );
-            const Rect panel{
-                (width - match_layout_.left - scaled(root.width)) / 2 + match_layout_.left,
-                (height - scaled(root.height)) / 2,
+            int16_t canvas_x = 0;
+            int16_t canvas_y = 0;
+            oa::ui::gui_input::place_root(
+                canvas_x,
+                canvas_y,
                 scaled(root.width),
-                scaled(root.height)
-            };
+                scaled(root.height),
+                placement | panel_flag::first_draw,
+                width,
+                height,
+                match_layout_.left
+            );
+            const Rect panel{canvas_x, canvas_y, scaled(root.width), scaled(root.height)};
             std::size_t outside = 0;
             for (int32_t y = battlefield.y; y < battlefield.y + battlefield.height; ++y)
                 for (int32_t x = battlefield.x; x < battlefield.x + battlefield.width; ++x)
-                    if (!inside(panel, x, y) && !same_pixel(paused, frame, x, y))
+                    if (!inside(panel, x, y) && !same_pixel(before, frame, x, y))
                         ++outside;
             require(
                 outside == 0,
@@ -1423,22 +1694,19 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
             const auto area =
                 static_cast<std::size_t>(panel.width) * static_cast<std::size_t>(panel.height);
             require(
-                differing_pixels(paused, frame, panel) > area / 2,
+                differing_pixels(before, frame, panel) > area / 2,
                 name + " does not show where it is placed"
             );
-            return panel;
-        };
-        // The loaded panel's canvas rectangle, whose every pixel outside the
-        // records shows the BackTile face in the match palette.
-        const auto faced = [&](renderer::Surface& frame, std::string_view layout) {
-            const auto panel = placed(frame, layout);
-            const auto name = std::string(layout) + " on the " + size + " window";
-            const auto& gadgets = match_hud_->layout.gadgets;
-            const auto& root = gadgets.front().common;
+            if (!face)
+                return panel;
             require(
                 root.width >= tile_size && root.height >= tile_size,
                 name + " is smaller than a BackTile frame"
             );
+            const auto* focused = match_panels_keyboard_ && match_hud_focus_ > 0
+                                      ? &gadgets[static_cast<std::size_t>(match_hud_focus_)].common
+                                      : nullptr;
+            const auto rings = static_cast<int32_t>(kFocusRingLevels.size());
             std::size_t compared = 0;
             std::size_t differing = 0;
             for (int32_t y = panel.y; y < panel.y + panel.height; ++y)
@@ -1446,21 +1714,26 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
                     // The source pixel the panel's draw shows here.
                     const auto face_x = (x - panel.x) * root.width / panel.width;
                     const auto face_y = (y - panel.y) * root.height / panel.height;
+                    const auto source = std::pair{root.x + face_x, root.y + face_y};
                     const auto on_record = [&](const auto& gadget) {
                         const auto& record = gadget.common;
                         return &gadget != &gadgets.front() && record.active != 0 &&
-                               root.x + face_x >= record.x &&
-                               root.x + face_x < record.x + record.width &&
-                               root.y + face_y >= record.y &&
-                               root.y + face_y < record.y + record.height;
+                               source.first >= record.x && source.first < record.x + record.width &&
+                               source.second >= record.y &&
+                               source.second < record.y + record.height;
                     };
                     if (std::any_of(gadgets.begin(), gadgets.end(), on_record))
                         continue;
-                    const auto face =
+                    if (focused != nullptr && source.first >= focused->x - rings &&
+                        source.first < focused->x + focused->width + rings &&
+                        source.second >= focused->y - rings &&
+                        source.second < focused->y + focused->height + rings)
+                        continue;
+                    const auto tile_pixel =
                         back_tile_pixel(face_x, face_y, root.width, root.height, tile_size);
-                    const auto& art = tiles[face.frame];
-                    const auto at = static_cast<std::size_t>(face.y) * art.width +
-                                    static_cast<std::size_t>(face.x);
+                    const auto& art = tiles[tile_pixel.frame];
+                    const auto at = static_cast<std::size_t>(tile_pixel.y) * art.width +
+                                    static_cast<std::size_t>(tile_pixel.x);
                     if (at >= art.coverage.size() || art.coverage[at] == 0)
                         continue;
                     const auto* colour =
@@ -1480,42 +1753,58 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
             );
             return panel;
         };
-        const auto control = [this](std::string_view name) {
-            for (const auto& gadget : match_hud_->layout.gadgets)
-                if (gadget.common.name == name)
-                    return gadget.common;
-            throw std::runtime_error("surrender prompt check: no control " + std::string(name));
-        };
+        // The side column still shows the in-game menu as the paused frame
+        // does, darkened when the dialog shades the panel below.
+        const auto menu_under =
+            [&](renderer::Surface& frame, std::string_view what, bool darkened) {
+                const auto differing =
+                    differing_under(frame, paused, menu, darkened, match_palette_, shade);
+                require(
+                    differing == 0,
+                    std::string(what) + on + " shows the in-game menu " +
+                        (darkened ? "darkened " : "") + "wrongly at " + std::to_string(differing) +
+                        " of " + std::to_string(menu.width * menu.height) + " pixels"
+                );
+            };
 
         activate_pause_gadget("EXIT");
         auto exit_menu = composed();
         write_ppm(report_directory / ("native-match-exit-menu-" + size + ".ppm"), exit_menu);
-        faced(exit_menu, kExitMenuLayout);
+        placed(paused, exit_menu, kExitMenuLayout, panel_flag::beside_hud, true);
+        menu_under(exit_menu, kExitMenuLayout, true);
+        // Restart takes its first letter as its caption is set; the focus
+        // goes to the first control, Exit to Menu.
+        check_quick_keys(std::string(kExitMenuLayout) + on, {{"RESTART", 'R'}});
+        check_focus(std::string(kExitMenuLayout) + on, "MAINMENU");
 
         activate_pause_gadget("EXITGAME");
         auto confirm = composed();
         write_ppm(report_directory / ("native-match-surrender-" + size + ".ppm"), confirm);
-        const auto panel = faced(confirm, kConfirmLayout);
+        const auto panel = placed(paused, confirm, kConfirmLayout, panel_flag::beside_hud, true);
+        menu_under(confirm, kConfirmLayout, false);
         require(
             hud_label("TITLE") == "Surrender this battle and exit to the system?",
             "EXITGAME's confirmation reads \"" + hud_label("TITLE") + '"'
         );
+        check_quick_keys(std::string(kConfirmLayout) + on, {{"CHOICE1", 'Y'}, {"CHOICE2", 'N'}});
+        check_focus(std::string(kConfirmLayout) + on, oa::ui::frontend::kExitConfirmDefault);
         // The pointer finds the choices where they show, and nothing beside them.
         const auto root = match_hud_->layout.gadgets.front().common;
-        const auto shown_at = [&](const oa::ui::gui_layout::CommonFields& record) {
+        const auto shown_at = [&](const Rect& shown,
+                                  const oa::ui::gui_layout::CommonFields& record) {
             return std::pair{
                 static_cast<float>(
-                    panel.x + (record.x - root.x) * panel.width / root.width +
-                    record.width * panel.width / root.width / 2
+                    shown.x + (record.x - root.x) * shown.width / root.width +
+                    record.width * shown.width / root.width / 2
                 ),
                 static_cast<float>(
-                    panel.y + (record.y - root.y) * panel.height / root.height +
-                    record.height * panel.height / root.height / 2
+                    shown.y + (record.y - root.y) * shown.height / root.height +
+                    record.height * shown.height / root.height / 2
                 )
             };
         };
-        const auto [yes_x, yes_y] = shown_at(control("CHOICE1"));
-        const auto [no_x, no_y] = shown_at(control("CHOICE2"));
+        const auto [yes_x, yes_y] = shown_at(panel, control("CHOICE1"));
+        const auto [no_x, no_y] = shown_at(panel, control("CHOICE2"));
         require(point_at(yes_x, yes_y) == "CHOICE1", "the pointer over Yes is not over it");
         require(
             point_at(static_cast<float>(panel.x - 1), yes_y).empty(),
@@ -1527,11 +1816,13 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
             !exit_requested_ && match_paused_ && match_hud_panel_ == kInGameMenuLayout,
             "a click on No where it shows did not return to the in-game menu"
         );
+        update_pointer(static_cast<float>(width - 1), static_cast<float>(height - 1));
 
         activate_pause_gadget("EXIT");
         activate_pause_gadget("MAINMENU");
         auto main_menu = composed();
-        faced(main_menu, kConfirmLayout);
+        placed(paused, main_menu, kConfirmLayout, panel_flag::beside_hud, true);
+        menu_under(main_menu, "MAINMENU's confirmation", false);
         require(
             hud_label("TITLE") == "Surrender this battle and return to main menu?",
             "MAINMENU's confirmation reads \"" + hud_label("TITLE") + '"'
@@ -1541,17 +1832,112 @@ void Runtime::check_surrender_prompt(const fs::path& report_directory) {
         activate_pause_gadget("EXIT");
         activate_pause_gadget("RESTART");
         auto restart = composed();
-        placed(restart, kRestartLayout);
+        placed(paused, restart, kRestartLayout, panel_flag::beside_hud, false);
+        menu_under(restart, kRestartLayout, false);
+        check_focus(std::string(kRestartLayout) + on, "Difficulty");
         activate_pause_gadget("CANCEL");
 
+        // Asked by closing the window over the running match, the
+        // confirmation opens over the side column as it was; the running
+        // match gives its panels no keyboard, so nothing is ringed.
         resume_match_pause();
+        auto running = composed();
         request_match_close();
+        require(!match_panels_keyboard_, "the close request gave the panels the keyboard");
         auto closing = composed();
-        faced(closing, kConfirmLayout);
+        placed(running, closing, kConfirmLayout, panel_flag::beside_hud, true);
+        const auto side = oa::ui::display_layout::source_rect_to_canvas(
+            match_layout_, 0, menu_root.y, kBattlefieldLeft, kCanvasHeight - menu_root.y
+        );
+        const auto side_differing =
+            differing_under(closing, running, side, false, match_palette_, shade);
+        require(
+            side_differing == 0,
+            "the close request's confirmation" + on + " changed " + std::to_string(side_differing) +
+                " pixels of the side column"
+        );
         activate_pause_gadget("CHOICE2");
         require(!match_paused_, "No to the close request did not return to the match");
-        std::cout << "surrender prompt check: EXITMENU.GUI and YESORNO.GUI at " << panel.x << ','
-                  << panel.y << " over their BackTile faces on the " << size << " window\n";
+
+        // The removal question CONTROL.GUI asks in a multiplayer match hosted
+        // here, over the tab menu: centred on the whole screen over its
+        // BackTile face, CONTROL.GUI left as it is under it.
+        const Extension saved_extension = extension_;
+        auto& world = match_->state();
+        auto* my_info =
+            oa::world_player_info(&world, &world.game.players[world.game.local_player_index]);
+        require(my_info != nullptr, "the local player has no setup block");
+        const auto saved_role = my_info->role;
+        const auto restore = [&] {
+            extension_ = saved_extension;
+            my_info->role = saved_role;
+        };
+        try {
+            extension_.state = [](void*, const Runtime&) -> uint32_t {
+                return extension_state::multiplayer | extension_state::shared_match;
+            };
+            my_info->role = static_cast<uint8_t>(my_info->role | kHostRole);
+            uint8_t other = OA_PLAYER_COUNT;
+            for (uint8_t index = 0; index < OA_PLAYER_COUNT; ++index)
+                if (index != world.game.local_player_index &&
+                    world.game.players[index].in_use != 0) {
+                    other = index;
+                    break;
+                }
+            require(other != OA_PLAYER_COUNT, "the skirmish has no other player");
+            toggle_team_menu();
+            click_team_panel("CONTROL");
+            require(
+                team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI",
+                "the tab menu's CONTROL did not open CONTROL.GUI" + on
+            );
+            check_focus("CONTROL.GUI" + on, "OK");
+            auto control_frame = composed();
+            open_removal_question(other);
+            auto question = composed();
+            write_ppm(report_directory / ("native-match-removal-" + size + ".ppm"), question);
+            const auto asked =
+                placed(control_frame, question, kConfirmLayout, panel_flag::centre, true);
+            check_quick_keys("the removal question" + on, {{"CHOICE1", 'Y'}, {"CHOICE2", 'N'}});
+            check_focus("the removal question" + on, "CHOICE1");
+            // Off the question, the side column is as CONTROL.GUI left it:
+            // on a 640x480 window the question lies over its right edge.
+            const Rect column{0, 0, match_layout_.left, height};
+            std::size_t column_differing = 0;
+            for (int32_t y = column.y; y < column.y + column.height; ++y)
+                for (int32_t x = column.x; x < column.x + column.width; ++x)
+                    if (!inside(asked, x, y) && !same_pixel(question, control_frame, x, y))
+                        ++column_differing;
+            require(
+                column_differing == 0,
+                "the removal question" + on + " changed " + std::to_string(column_differing) +
+                    " pixels of the side column off the question"
+            );
+            const auto question_root = match_hud_->layout.gadgets.front().common;
+            const auto no = control("CHOICE2");
+            const auto no_x = static_cast<float>(
+                asked.x + (no.x - question_root.x) * asked.width / question_root.width +
+                no.width * asked.width / question_root.width / 2
+            );
+            const auto no_y = static_cast<float>(
+                asked.y + (no.y - question_root.y) * asked.height / question_root.height +
+                no.height * asked.height / question_root.height / 2
+            );
+            require(
+                point_at(no_x, no_y) == "CHOICE2",
+                "the pointer over the question's No is not over it"
+            );
+            click_at(no_x, no_y);
+            require(!team_panel_open(), "No did not close the removal question" + on);
+            std::cout << "placed dialog check: the removal question at " << asked.x << ','
+                      << asked.y << " over its BackTile face and CONTROL.GUI" << on << '\n';
+        } catch (...) {
+            restore();
+            throw;
+        }
+        restore();
+        std::cout << "placed dialog check: EXITMENU.GUI and YESORNO.GUI at " << panel.x << ','
+                  << panel.y << " over their BackTile faces and the in-game menu" << on << '\n';
     }
     leave_match();
     if (!SDL_SetWindowSize(sdl_.window, kDefaultWindowWidth, kDefaultWindowHeight) ||

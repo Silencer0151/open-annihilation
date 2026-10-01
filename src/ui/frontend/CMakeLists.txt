@@ -7,7 +7,8 @@ add_library(oa-ui-frontend options.cpp ingame_menu.cpp savegame_dialogs.cpp main
 add_library(oa::ui::frontend ALIAS oa-ui-frontend)
 target_include_directories(oa-ui-frontend PUBLIC include)
 target_link_libraries(oa-ui-frontend PUBLIC oa-ui-frontend-state oa-ui-gui-layout oa-present
-  oa-present-world-renderer oa-ui-campaign oa-data-campaign PRIVATE oa-data-persist oa-options)
+  oa-present-world-renderer oa-ui-campaign oa-data-campaign PRIVATE oa-data-persist oa-options
+  oa-ui-gui-input)
 target_compile_features(oa-ui-frontend PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)

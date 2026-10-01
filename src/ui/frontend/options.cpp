@@ -4,6 +4,9 @@
 // Options tab panel, SOUNDS/VISUALS/SPEEDS sub-panels and slider callbacks.
 #include "oa/ui/frontend/options.hpp"
 
+#include "oa/ui/gui_input/gadget_panel.hpp"
+#include "oa/ui/gui_layout/gui_gadget.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -171,6 +174,8 @@ void panel_load_layout(Panel& panel, const ui::gui_layout::Layout& layout) noexc
         if (const auto* button = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields)) {
             control.group_value = button->status;
             control.grayed = button->grayed_out ? 1 : 0;
+            control.stages = button->stages;
+            control.quick_key = button->quick_key;
             set_control_text(control, button->text);
         } else if (
             const auto* slider = std::get_if<ui::gui_layout::ScrollBarFields>(&gadget.fields)
@@ -295,10 +300,32 @@ void panel_set_disabled(Panel& panel, std::string_view name, bool disabled) noex
 }
 
 void panel_set_text(Panel& panel, std::string_view name, std::string_view text) noexcept {
-    if (auto* control = panel_control(panel, name)) {
-        set_control_text(*control, text);
-        panel.dirty = true;
-    }
+    auto* control = panel_control(panel, name);
+    if (control == nullptr)
+        return;
+    set_control_text(*control, text);
+    panel.dirty = true;
+    if (control->type != ControlType::button)
+        return;
+    const auto caption = control_text(*control);
+    const auto rule =
+        ui::gui_input::caption_quick_key(control->attributes, control->stages, caption);
+    if (rule == ui::gui_input::CaptionQuickKey::keep)
+        return;
+    control->quick_key = 0;
+    if (rule == ui::gui_input::CaptionQuickKey::none)
+        return;
+    // The keys the panel's buttons hold are taken; its labels hold none, as
+    // a label takes one only when a caption is set on it with a link.
+    std::array<int8_t, kPanelControls> taken{};
+    const auto last = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max<int16_t>(panel.count, 0)), kPanelControls - 1
+    );
+    for (std::size_t index = 0; index <= last; ++index)
+        if (panel.controls[index].type == ControlType::button)
+            taken[index] = panel.controls[index].quick_key;
+    control->quick_key =
+        static_cast<int8_t>(ui::gui_input::free_quick_key(caption, {taken.data(), last + 1}));
 }
 
 // ---------------------------------------------------------------------------

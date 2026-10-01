@@ -11,8 +11,11 @@
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace oa::ui::frontend_renderer {
 
@@ -96,14 +99,47 @@ void fill_frame_sunken(
     uint8_t fill
 );
 
+/// Number of rectangles the focus marker's outline lights round a record.
+inline constexpr std::size_t focus_ring_count = 6;
+
+/// One rectangle of the focus marker's outline and the light level its
+/// edges are lit through.
+struct FocusRing {
+    oa::Rect32 rect{}; ///< inclusive; each ring one pixel wider on every side
+    int32_t level = 0; ///< light table row
+};
+
+/// Returns the rectangles the focus marker's outline lights round a record.
+///
+/// The first ring lies one pixel outside the record and each one after it a
+/// pixel further out; they are lit through light levels 31, 28, 24, 19, 13
+/// and 6, brightest nearest the record. Each ring's four edges are lit one
+/// after another (top, right, bottom, left), so its corners are lit twice.
+///
+/// @param rect Record rectangle, inclusive.
+/// @return The rings, innermost first.
+[[nodiscard]] std::array<FocusRing, focus_ring_count>
+focus_rings(const ui::gui_layout::GadgetRect& rect) noexcept;
+
 /// Draws the outline part of the focus marker around a record.
 ///
-/// Six rectangles, each one pixel wider, are lit through light levels 31,
-/// 28, 24, 19, 13 and 6. The state half is ui::gui_input::mark_text_box_focus().
+/// Lights the focus_rings() of the record. The state half is
+/// ui::gui_input::mark_text_box_focus().
 ///
 /// @param[in,out] target Surface to draw on; null draws on the locked display.
 /// @param rect Record rectangle, inclusive.
 void draw_focus_outline(oa::Surface* target, const ui::gui_layout::GadgetRect& rect);
+
+/// Returns where a centred caption underlines its quick key.
+///
+/// A caption drawn centred on its button, unless the button is grayed,
+/// underlines the first character that is the quick key itself, in the same
+/// case; a caption without one and a key of 0 underline nothing.
+///
+/// @param caption The caption as drawn.
+/// @param key The button's quick key.
+/// @return The offset of the underlined character, or std::string_view::npos.
+[[nodiscard]] std::size_t quick_key_offset(std::string_view caption, char key) noexcept;
 
 /// Draws one edge line of a value marker.
 ///

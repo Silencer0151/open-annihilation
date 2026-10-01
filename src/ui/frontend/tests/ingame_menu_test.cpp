@@ -116,6 +116,10 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     auto context = make_context(calls, SessionKind::skirmish);
     ingame_enter_exit_menu(panel, context);
     OA_CHECK(panel_control(panel, "RESTART")->active == 1);
+    // The file gives the exit menu's buttons no quick keys; Restart takes
+    // its first letter as its caption is set.
+    OA_CHECK(panel_control(panel, "RESTART")->quick_key == 'R');
+    OA_CHECK(panel_control(panel, "MAINMENU")->quick_key == 0);
     select(panel, "EXITGAME");
     OA_CHECK(ingame_on_exit_menu_click(panel, context) == IngameAction::open_exit_confirm);
     OA_CHECK(context.exit_kind == ExitKind::leave_game);
@@ -126,6 +130,8 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     ingame_enter_exit_confirm(confirm, context);
     OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and exit to the system?");
     OA_CHECK(text_of(confirm, "CHOICE1") == "Yes");
+    OA_CHECK(panel_control(confirm, "CHOICE1")->quick_key == 'Y');
+    OA_CHECK(panel_control(confirm, "CHOICE2")->quick_key == 'N');
     select(confirm, "CHOICE1");
     OA_CHECK(ingame_on_exit_confirm_click(confirm, context) == IngameAction::leave_game);
     OA_CHECK((context.quit_flags & quit_flag::leave_application) != 0);
@@ -156,6 +162,7 @@ OA_GAME_DATA_TEST(exit_menu_return_label_replaces_button) {
     ingame_enter_exit_menu(panel, context);
     OA_CHECK(panel_control(panel, "EXITGAME")->active == 0);
     OA_CHECK(text_of(panel, "MAINMENU") == "Harbour");
+    OA_CHECK(panel_control(panel, "MAINMENU")->quick_key == 'H');
 }
 
 OA_GAME_DATA_TEST(restart_dialog_disc_gate_and_difficulty) {

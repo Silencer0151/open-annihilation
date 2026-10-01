@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace oa::ui::gui_input {
 using namespace detail;
@@ -347,20 +348,21 @@ void assign_quick_key(GadgetPanel& panel, int32_t index) {
         return;
     auto& record = record_at(panel, index);
     const auto type = ui::gui_layout::gadget_type_of(record);
-    if (type == gadget_type::button && (attributes(record) & attribute::no_quick_key) != 0)
-        return;
     if (type == gadget_type::label && text_length(record, field::label_link) == 0)
         return;
     if (type != gadget_type::label && type != gadget_type::button)
         return;
     if (type == gadget_type::button) {
-        if (record.bytes[field::button_stages] != 0) {
-            record.bytes[field::button_quick_key] = 0;
-            return;
-        }
-        if (text_length(record, field::text) == 0)
+        const auto rule = caption_quick_key(
+            attributes(record),
+            record.bytes[field::button_stages],
+            ui::gui_layout::record_string(record, field::text)
+        );
+        if (rule == CaptionQuickKey::keep)
             return;
         record.bytes[field::button_quick_key] = 0;
+        if (rule == CaptionQuickKey::none)
+            return;
     } else {
         record.bytes[field::label_quick_key] = 0;
     }
@@ -368,32 +370,51 @@ void assign_quick_key(GadgetPanel& panel, int32_t index) {
     const auto last =
         static_cast<int32_t>(ui::gui_layout::gadget_last_index(panel.owner->records()));
     const auto limit = std::min(last, static_cast<int32_t>(panel.owner->table.records.size()) - 1);
+    // A table shorter than its record count assigns nothing.
+    if (limit < last)
+        return;
+    std::vector<int8_t> taken;
+    for (int32_t other = 0; other <= limit; ++other) {
+        const auto& candidate = record_at(panel, other);
+        const auto candidate_type = ui::gui_layout::gadget_type_of(candidate);
+        if (candidate_type == gadget_type::button)
+            taken.push_back(
+                static_cast<int8_t>(signed_byte(candidate.bytes[field::button_quick_key]))
+            );
+        else if (candidate_type == gadget_type::label)
+            taken.push_back(
+                static_cast<int8_t>(signed_byte(candidate.bytes[field::label_quick_key]))
+            );
+    }
+    const char key = free_quick_key(caption, taken);
+    if (key == '\0')
+        return;
+    if (type == gadget_type::button)
+        record.bytes[field::button_quick_key] = static_cast<uint8_t>(key);
+    else
+        record.bytes[field::label_quick_key] = static_cast<uint8_t>(key);
+}
+
+CaptionQuickKey
+caption_quick_key(uint32_t attributes, int32_t stages, std::string_view caption) noexcept {
+    if ((attributes & attribute::no_quick_key) != 0)
+        return CaptionQuickKey::keep;
+    if (stages != 0)
+        return CaptionQuickKey::none;
+    return caption.empty() ? CaptionQuickKey::keep : CaptionQuickKey::assign;
+}
+
+char free_quick_key(std::string_view caption, std::span<const int8_t> taken) noexcept {
     for (const char character : caption) {
         if (character == ' ')
             continue;
         const auto wanted = lower(static_cast<int8_t>(character));
-        int32_t other = 0;
-        for (; other <= limit; ++other) {
-            const auto& candidate = record_at(panel, other);
-            const auto candidate_type = ui::gui_layout::gadget_type_of(candidate);
-            int32_t key = -1;
-            if (candidate_type == gadget_type::button)
-                key = signed_byte(candidate.bytes[field::button_quick_key]);
-            else if (candidate_type == gadget_type::label)
-                key = signed_byte(candidate.bytes[field::label_quick_key]);
-            else
-                continue;
-            if (lower(key) == wanted)
-                break;
-        }
-        if (other > last) {
-            if (type == gadget_type::button)
-                record.bytes[field::button_quick_key] = static_cast<uint8_t>(character);
-            else
-                record.bytes[field::label_quick_key] = static_cast<uint8_t>(character);
-            return;
-        }
+        if (std::none_of(taken.begin(), taken.end(), [wanted](int8_t key) {
+                return lower(key) == wanted;
+            }))
+            return character;
     }
+    return '\0';
 }
 
 void set_text_assign_quick_key(GadgetPanel& panel, std::string_view name, std::string_view text) {

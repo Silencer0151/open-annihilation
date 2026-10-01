@@ -42,6 +42,16 @@ authored rectangle, and the selected row uses level `0x1E` from the game's
 `PALETTE.LHT` table. Type-5 labels keep the alignment bits, clipping, and the
 multiline threshold and spacing.
 
+A button's presentation may carry its quick key and the panel's keyboard
+focus, as the match's panels do. A centred caption then underlines the key's
+first appearance on the row under the text, in the GUI palette's entry 2
+(entry 0 while the button is pressed, none while it is grayed), and the
+focused record is ringed with the focus marker's six outlines, a pixel apart,
+lit through `PALETTE.LHT` levels 31, 28, 24, 19, 13 and 6 and clipped to the
+panel's root (`focus_rings`, shared with the gadget engine's own draw). Each
+ring pixel is lit as its palette entry, the nearest one for a colour off the
+palette. The frontend screens pass neither, and draw neither.
+
 Runtime image pointers are explicit presentation bindings. Dynamic `SIDEx`
 buttons and `ally icons` bind to the screen GAF, while player colors bind to
 `32xlogos` in the globally loaded `textures/LOGOS.GAF`; these are not inferred

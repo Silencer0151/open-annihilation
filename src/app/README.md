@@ -76,7 +76,16 @@ and `app-window-icon` that the embedded one decodes.
   ever added to `screens.inc`.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
   camera.
-- `runtime_match_menus.cpp`: the in-match menus.
+- `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
+  match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
+  Game Settings sheet, the removal question) is placed as 3.1c's panel
+  loader places it and keeps the panel it opened over drawn under it,
+  darkened where 3.1c darkens the panel below (`open_match_dialog`). A
+  dialog centred on the whole screen is drawn at the canvas's pixels over
+  the side column too (`match_dialog_side_`); while
+  the in-game menu or the tab menu is open the panels show their keyboard
+  focus. `panel_shade.hpp` and `panel_shade.cpp` hold the darkening of the
+  panel below, which the load and save dialogs share.
 - `runtime_scroll_bars.cpp`: the scroll bars of the frontend screen's panel
   and of the match HUD's panel (`renderer::LayoutScrolls`), bound as each
   panel's first draw binds them, drawn over it, driven by the pointer and

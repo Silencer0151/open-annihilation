@@ -12,6 +12,8 @@
 #include "oa/sim/messages.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/gui_input.hpp"
+#include "oa/ui/gui_input/gadget_panel.hpp"
+#include "oa/ui/gui_layout/gui_gadget.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/ingame_menu.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -148,6 +150,35 @@ oa::ui::gui_layout::ButtonFields* button_of(oa::ui::gui_layout::Gadget& gadget) 
     return std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
 }
 
+/// Gives a button of a loaded panel the quick key its caption gives it, as
+/// the gadget engine does when it sets a caption
+/// (ui::gui_input::caption_quick_key): none with stages, the old one with
+/// the no_quick_key attribute or an empty caption, else the first caption
+/// letter no other button's key takes (ui::gui_input::free_quick_key). A
+/// loaded layout's labels hold no quick key: the gadget engine gives a label
+/// one only when a caption is set on a label with a link.
+///
+/// @param[in,out] gadgets the panel's records, root first
+/// @param index the button's record
+void assign_button_quick_key(std::vector<oa::ui::gui_layout::Gadget>& gadgets, std::size_t index) {
+    auto* button = button_of(gadgets[index]);
+    if (button == nullptr)
+        return;
+    const auto rule = oa::ui::gui_input::caption_quick_key(
+        static_cast<uint32_t>(gadgets[index].common.attributes), button->stages, button->text
+    );
+    if (rule == oa::ui::gui_input::CaptionQuickKey::keep)
+        return;
+    button->quick_key = 0;
+    if (rule == oa::ui::gui_input::CaptionQuickKey::none)
+        return;
+    std::vector<int8_t> taken;
+    for (auto& other : gadgets)
+        if (const auto* fields = button_of(other))
+            taken.push_back(fields->quick_key);
+    button->quick_key = static_cast<int8_t>(oa::ui::gui_input::free_quick_key(button->text, taken));
+}
+
 } // namespace
 
 bool Runtime::multiplayer_session() const {
@@ -176,6 +207,8 @@ bool Runtime::load_team_panel(const char* file) {
     if (!match_ || !load_match_hud_layout(std::string("guis/") + file))
         return false;
     place_from_edges(match_hud_->layout);
+    // The loader gives the focus from where the panel is placed.
+    match_hud_focus_ = loaded_panel_focus();
     // The panel's first draw, where it is placed, binds its scroll bars.
     bind_hud_scrolls(1);
     match_paused_ = true;
@@ -212,12 +245,15 @@ oa::ui::hud::PanelControls Runtime::team_panel_controls() {
         const auto found = self.widget_text_stages_.find(name);
         return found != self.widget_text_stages_.end() ? static_cast<int32_t>(found->second) : 0;
     };
+    // A button takes the quick key its new caption gives it, as the gadget
+    // engine gives one when a caption is set.
     controls.set_text = [](void* user, int32_t index, const char* text) {
-        auto& gadget = static_cast<Runtime*>(user)
-                           ->match_hud_->layout.gadgets[static_cast<std::size_t>(index)];
-        if (auto* button = button_of(gadget))
+        auto& gadgets = static_cast<Runtime*>(user)->match_hud_->layout.gadgets;
+        auto& gadget = gadgets[static_cast<std::size_t>(index)];
+        if (auto* button = button_of(gadget)) {
             button->text = text;
-        else if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
+            assign_button_quick_key(gadgets, static_cast<std::size_t>(index));
+        } else if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields))
             label->text = text;
     };
     controls.set_active = [](void* user, int32_t index, bool shown) {
@@ -380,6 +416,9 @@ void Runtime::toggle_team_menu() {
         events
     );
     if (opened) {
+        // The tab menu gives the match's panels the keyboard until the match
+        // resumes.
+        match_panels_keyboard_ = true;
         status_ = "Team menu";
         render_match_surface();
     } else if (!team_panel_open()) {
@@ -488,9 +527,14 @@ void Runtime::open_control_team_panel() {
 void Runtime::open_removal_question(uint8_t player) {
     if (!match_ || match_finished_)
         return;
+    // 3.1c asks over CONTROL.GUI, left as it is, centring the question on the
+    // whole screen over the BackTile face as YESORNO.GUI names no picture.
+    auto under = panel_under_dialog();
     forget_team_panel();
     if (!load_team_panel("YESORNO.GUI"))
         return;
+    place_match_panel(oa::ui::gui_input::panel_flag::centre, true);
+    match_panel_under_ = std::move(under);
     auto& session = team_session();
     session.panel = TeamPanel::removal_question;
     session.removal_player = player;

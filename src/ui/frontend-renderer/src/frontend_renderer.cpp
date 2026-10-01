@@ -3,6 +3,8 @@
 
 #include "oa/ui/frontend_renderer.hpp"
 
+#include "oa/ui/frontend_renderer/gadget_draw.hpp"
+#include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 
 #include <algorithm>
@@ -36,6 +38,7 @@ constexpr std::string_view global_logo_sprites = "textures/logos.gaf";
 
 // Entries of the destination palette map the button drawing uses.
 constexpr uint8_t palette_black = 0;
+constexpr uint8_t palette_underline = 2; // a caption's quick-key underline
 constexpr uint8_t palette_bevel_shadow = 17;
 constexpr uint8_t palette_disabled_fill = 19;
 constexpr uint8_t palette_button_fill = 20;
@@ -336,13 +339,17 @@ void blit_stretched(
     }
 }
 
+// Draws a button's caption, and the underline under its quick key when the
+// caption is centred and the button is not grayed.
 void draw_button_text(
     Surface& surface,
     const ui::gui_layout::Gadget& gadget,
     ButtonCondition condition,
     const formats::fnt::Font& selected_font,
     const PaletteBytes& active_palette,
-    std::size_t selected_stage
+    std::size_t selected_stage,
+    char quick_key,
+    const std::array<uint8_t, 3>& underline
 ) {
     const auto* fields = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields);
     if (fields == nullptr || fields->text.empty())
@@ -384,6 +391,78 @@ void draw_button_text(
         const int pixel_y = static_cast<int>(index / surface.width);
         set_pixel(surface, pixel_x, pixel_y, palette_rgb(active_palette, indices[index]));
     }
+    const bool centred =
+        (attributes & (align_left | align_right)) == 0 && (attributes & align_center) != 0;
+    if (!centred || condition == ButtonCondition::disabled)
+        return;
+    const auto key = quick_key_offset(text, quick_key);
+    if (key == std::string_view::npos)
+        return;
+    const int left =
+        x + static_cast<int>(formats::fnt::measure_text(selected_font, text.substr(0, key)));
+    const int right =
+        left + static_cast<int>(formats::fnt::measure_text(selected_font, text.substr(key, 1))) - 1;
+    horizontal_line(surface, left, right, y + static_cast<int>(text_height) - 1, underline);
+}
+
+// Lights the focus marker's outline round a record, each ring's edges in
+// turn, through the light table; pixels outside `clip` are left. The lit
+// pixels are read back as palette entries (the nearest entry stands for a
+// colour off the palette) and lit as entries, so a corner lit twice goes
+// through the table twice.
+void light_focus_outline(
+    Surface& surface,
+    const ui::gui_layout::GadgetRect& record,
+    const Rectangle& clip,
+    const PaletteBytes& palette,
+    std::span<const uint8_t> light_table
+) {
+    constexpr int32_t light_levels = 32;
+    if (light_table.size() != static_cast<std::size_t>(light_levels) * palette_color_count)
+        return;
+    const auto rings = focus_rings(record);
+    // The outermost ring bounds the others.
+    const auto& outer = rings.back().rect;
+    const int32_t left = std::max(outer.x1, clip.left);
+    const int32_t top = std::max(outer.y1, clip.top);
+    const int32_t right = std::min(outer.x2, clip.right);
+    const int32_t bottom = std::min(outer.y2, clip.bottom);
+    if (left > right || top > bottom)
+        return;
+    auto area = read_indices(surface, palette, left, top, right - left + 1, bottom - top + 1);
+    std::vector<uint8_t> lit(area.pixels.size());
+    const auto light = [&](int32_t x, int32_t y, int32_t level) {
+        if (x < area.left || x >= area.left + area.width || y < area.top ||
+            y >= area.top + area.height || level < 0 || level >= light_levels)
+            return;
+        const auto at = static_cast<std::size_t>(y - area.top) * area.width +
+                        static_cast<std::size_t>(x - area.left);
+        area.pixels[at] =
+            light_table[static_cast<std::size_t>(level) * palette_color_count + area.pixels[at]];
+        lit[at] = 1;
+    };
+    for (const auto& ring : rings) {
+        const auto& r = ring.rect;
+        for (int32_t x = r.x1; x <= r.x2; ++x)
+            light(x, r.y1, ring.level);
+        for (int32_t y = r.y1; y <= r.y2; ++y)
+            light(r.x2, y, ring.level);
+        for (int32_t x = r.x1; x <= r.x2; ++x)
+            light(x, r.y2, ring.level);
+        for (int32_t y = r.y1; y <= r.y2; ++y)
+            light(r.x1, y, ring.level);
+    }
+    for (int32_t row = 0; row < area.height; ++row)
+        for (int32_t column = 0; column < area.width; ++column) {
+            const auto at = static_cast<std::size_t>(row) * area.width + column;
+            if (lit[at] != 0)
+                set_pixel(
+                    surface,
+                    area.left + column,
+                    area.top + row,
+                    palette_rgb(palette, area.pixels[at])
+                );
+        }
 }
 
 void draw_clipped_text(
@@ -975,6 +1054,10 @@ Surface render_screen(
             continue;
         const auto text_stage =
             state != nullptr && state->text_stage.has_value() ? *state->text_stage : 0;
+        const char quick_key = state != nullptr ? state->quick_key : '\0';
+        // A pressed button underlines its key in the bevel's dark colour.
+        const auto underline =
+            gui_color(condition == ButtonCondition::pressed ? palette_black : palette_underline);
         const auto binding = resolve_button_sprite(resources, gadget, state);
         const auto* sequence = binding.sequence;
         constexpr uint32_t invisible_hit_attribute = 0x400U;
@@ -1038,7 +1121,14 @@ Surface render_screen(
             resolved_gadget.common.width = static_cast<int16_t>(rendered.frame->width);
             resolved_gadget.common.height = static_cast<int16_t>(rendered.frame->height);
             draw_button_text(
-                result, resolved_gadget, condition, resources.font, active_palette, text_stage
+                result,
+                resolved_gadget,
+                condition,
+                resources.font,
+                active_palette,
+                text_stage,
+                quick_key,
+                underline
             );
             // A grayed-out button is darkened too, except one that cycles its
             // frames or plain CHECKBOX art.
@@ -1074,7 +1164,37 @@ Surface render_screen(
         const auto rectangle = gadget_rectangle(gadget);
         fill(result, rectangle, gui_color(fill_index));
         bevel(result, rectangle, top_left, bottom_right);
-        draw_button_text(result, gadget, condition, resources.font, active_palette, text_stage);
+        draw_button_text(
+            result,
+            gadget,
+            condition,
+            resources.font,
+            active_palette,
+            text_stage,
+            quick_key,
+            underline
+        );
+    }
+    // The focus marker goes on last, over the records, inside the root. A
+    // label, a list or a text box shows no outline.
+    if (!resources.layout.gadgets.empty()) {
+        const auto root = gadget_rectangle(resources.layout.gadgets.front());
+        for (const auto& gadget : resources.layout.gadgets) {
+            const auto* state = presentation_for(gadget.common.name, presentation);
+            const auto type = gadget.common.type;
+            if (state == nullptr || !state->focused || type == ui::gui_layout::GadgetType::label ||
+                type == ui::gui_layout::GadgetType::list_box ||
+                type == ui::gui_layout::GadgetType::text_box)
+                continue;
+            const auto rect = gadget_rectangle(gadget);
+            light_focus_outline(
+                result,
+                {rect.left, rect.top, rect.right, rect.bottom},
+                root,
+                active_palette,
+                resources.light_table
+            );
+        }
     }
     return result;
 }

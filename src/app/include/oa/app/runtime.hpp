@@ -587,7 +587,7 @@ class Runtime final : public menu::Host,
     /// presenter stays in use, the panel is centred right of the drawn side
     /// column, the options panel under it is darkened, every other pixel
     /// matches the paused frame, and OK at its presented position closes it;
-    /// then check_in_game_briefing() and check_surrender_prompt(). Over a new
+    /// then check_in_game_briefing() and check_placed_dialogs(). Over a new
     /// skirmish: the window's close request and a held Escape; the preferences
     /// the in-game menu opens, PREFS.GUI in the side column with the OPTIONS
     /// lightbar sweeping over it and the battlefield beside it, each tab's
@@ -615,23 +615,40 @@ class Runtime final : public menu::Host,
     /// @param report_directory directory the frames are written to
     void check_in_game_briefing(const fs::path& report_directory);
 
-    /// Checks the exit menu and the surrender confirmation over a paused skirmish.
+    /// Checks the dialogs placed over a paused skirmish and the panels under them.
     ///
-    /// On a 640x480 window and on the default window, each composed from the
-    /// match's layers and written to native-match-exit-menu-WxH.ppm and
-    /// native-match-surrender-WxH.ppm: EXITMENU.GUI, and YESORNO.GUI as
-    /// EXITGAME, MAINMENU and the window's close request ask it, each sit at
-    /// the centre of the 640x480 screen's area right of the 128-pixel strip
-    /// and show on the canvas at the side column's scale, centred right of the
-    /// drawn side column; every pixel of the panel outside its records is the
-    /// BackTile face in the match palette, and nothing else over the
-    /// battlefield changes. The pointer is over Yes and No where they show and
-    /// over nothing just left of the panel, and a click on No answers it.
-    /// RESTART.GUI shows centred right of the drawn side column as well.
-    /// Throws std::runtime_error on a failure.
+    /// On windows of 640x480, 800x600 and 1024x768, where the side column's
+    /// scale is whole or a fraction, and on the default window, each composed
+    /// from the match's layers; the exit menu, the surrender confirmation and the
+    /// removal question are written to native-match-exit-menu-WxH.ppm,
+    /// native-match-surrender-WxH.ppm and native-match-removal-WxH.ppm.
+    /// EXITMENU.GUI, and YESORNO.GUI as EXITGAME, MAINMENU and the window's
+    /// close request ask it, each sit at the centre of the 640x480 screen's
+    /// area right of the 128-pixel strip and show on the canvas at the side
+    /// column's scale, centred right of the drawn side column; every pixel of
+    /// the panel outside its records and its focus marker is the BackTile face
+    /// in the match palette, and nothing else over the battlefield changes.
+    /// The side column shows the in-game menu as the paused frame does:
+    /// darkened through the shade table's level -0x18 under the exit menu, as
+    /// drawn under the confirmation and RESTART.GUI, and the side column as the
+    /// running match showed it under the close request's confirmation. The
+    /// in-game menu, the exit menu and the confirmation underline their
+    /// buttons' quick keys (the menu's initials, Restart's R, Yes's Y and No's
+    /// N) in the GUI palette's entry 2 on the row under the text, and ring
+    /// their focus (Resume, Exit to Menu, No, RESTART.GUI's Difficulty) with
+    /// the focus marker's six rings lit through the light table; nothing is
+    /// ringed under the close request, where the panels have no keyboard. The
+    /// pointer is over Yes and No where they show and over nothing just left
+    /// of the panel, and a click on No answers it. Over a multiplayer match
+    /// hosted here, the tab menu's CONTROL, its OK ringed, and a player's
+    /// removal question: YESORNO.GUI centred on the whole screen over its
+    /// BackTile face, the part over the side column included, Y and N
+    /// underlined, Yes ringed, CONTROL.GUI and the side column unchanged off
+    /// the question, and No answered where it shows. Throws
+    /// std::runtime_error on a failure.
     ///
     /// @param report_directory directory the frames are written to
-    void check_surrender_prompt(const fs::path& report_directory);
+    void check_placed_dialogs(const fs::path& report_directory);
 
     /// Checks the kills board F4 pins in a skirmish.
     ///
@@ -1239,14 +1256,76 @@ class Runtime final : public menu::Host,
     /// cursor is drawn into the frame unless the match presents in layers.
     void tick_and_draw_cursor();
 
+    /// The panel a match dialog opened over, as 3.1c keeps it drawn under the
+    /// dialog.
+    struct MatchPanelUnder {
+        renderer::Surface pixels{}; ///< the part of its root on the HUD layer, as it showed
+        oa::ui::display_layout::Rect root{}; ///< where it lies in the HUD layer's 640x480 source
+        bool shaded = false;                 ///< darkened, as under a shade_below dialog
+        renderer::Surface darkened{};        ///< `pixels` darkened, made when first needed
+    };
+
     /// Loads an in-match panel layout as the match HUD with the viewed side's chrome.
     ///
-    /// The panel's buttons keep their states; the side's interface GAF, side tile
-    /// and commongui.gaf supply the art.
+    /// The panel's buttons keep their states and their GUI file's quick keys;
+    /// the side's interface GAF, side tile and commongui.gaf supply the art.
+    /// The panel takes the keyboard focus its loader gives it
+    /// (match_hud_focus_), and is placed at its own position with no panel
+    /// kept under it until open_match_dialog() says otherwise.
     ///
     /// @param layout GUI file of the panel
     /// @return false when the panel cannot be loaded, which is reported on stderr
     bool load_match_hud_layout(const std::string& layout);
+
+    /// Opens a match dialog as the match HUD over a panel, as 3.1c's panel
+    /// loader stacks a panel over the one below.
+    ///
+    /// The dialog is loaded and placed (place_match_panel), and `under`, the
+    /// panel it opened over (panel_under_dialog), stays drawn under it,
+    /// darkened as its `shaded` says.
+    ///
+    /// @param layout GUI file of the dialog
+    /// @param placement panel_flag::beside_hud or panel_flag::centre
+    /// @param back_tile_face true to draw the BackTile face; false for a
+    ///        dialog drawn over art of its own
+    /// @param under the panel kept under it, or nothing
+    /// @return false when the dialog cannot be loaded
+    bool open_match_dialog(
+        const std::string& layout,
+        uint32_t placement,
+        bool back_tile_face,
+        std::optional<MatchPanelUnder> under
+    );
+
+    /// Returns the panel on screen as a match dialog finds it when it opens
+    /// over it.
+    ///
+    /// The panel kept under the dialog on screen, when one is, as a dialog
+    /// that replaces another stays over the panel the first opened over; else
+    /// the match HUD's root rectangle of a frame drawn afresh, undarkened.
+    ///
+    /// @return the panel, or nothing without a match HUD to draw
+    [[nodiscard]] std::optional<MatchPanelUnder> panel_under_dialog();
+
+    /// Composes a placed match dialog with the panel kept under it in the HUD layer.
+    ///
+    /// The dialog's root rectangle as drawn is kept for the battlefield pass
+    /// (match_dialog_pixels_, draw_battlefield_panel). The kept panel's
+    /// pixels, darkened when the dialog shades it, go back over its root
+    /// rectangle, and the dialog stays over them right of the side column.
+    /// The side column shows what lies under the dialog; the battlefield
+    /// pass draws the part of the dialog over it at the canvas's pixels
+    /// (match_dialog_side_), where placed_panel_area() puts it.
+    ///
+    /// @param[in,out] hud the HUD layer, in 640x480 source space
+    void compose_match_dialog(renderer::Surface& hud);
+
+    /// Returns the record of the match HUD panel that holds the keyboard
+    /// focus, as the panel loader gives it: the record the root names as its
+    /// default focus, else the one nearest after the root's corner.
+    ///
+    /// @return the record, or -1 for none
+    [[nodiscard]] int32_t loaded_panel_focus() const;
 
     /// Shows the side's general order page for the one selected unit, or for none, from the
     /// selection summary.
@@ -1408,8 +1487,9 @@ class Runtime final : public menu::Host,
 
     /// Opens EXITMENU's RESTART: RESTART.GUI beside the HUD strip over its art.
     ///
-    /// The dialog is set up with the name the campaign object holds (a skirmish's
-    /// is its map's).
+    /// The in-game menu the exit menu opened over stays drawn under it, no
+    /// longer darkened, as 3.1c closes the exit menu first. The dialog is set
+    /// up with the name the campaign object holds (a skirmish's is its map's).
     void open_restart_dialog();
 
     /// Runs the game frame's restart branch over this session.
@@ -1422,7 +1502,8 @@ class Runtime final : public menu::Host,
     /// Opens the Game Settings sheet MISSION shows outside a campaign.
     ///
     /// GAMEOPTIONS.GUI beside the HUD strip over its art, with a label row and a
-    /// value row per rule of the running game.
+    /// value row per rule of the running game; the in-game menu stays drawn
+    /// under it, darkened.
     void open_game_settings_sheet();
 
     /// Checks the Game Settings sheet as the game builds and draws it.
@@ -1446,37 +1527,42 @@ class Runtime final : public menu::Host,
     /// EXITMENU, YESORNO, RESTART, GAMEOPTIONS, the team panels and the
     /// preferences' sub-panels lie over the battlefield; they render into the
     /// HUD source with the side panels, and the battlefield pass shows them:
-    /// a panel placed beside the HUD strip (EXITMENU, YESORNO, RESTART and
-    /// GAMEOPTIONS, place_match_panel_beside_hud) whole where
-    /// beside_hud_panel_area() puts it, the team panels whole over the side
+    /// a placed dialog (EXITMENU, YESORNO, RESTART and GAMEOPTIONS beside the
+    /// HUD strip, the removal question centred; place_match_panel) whole where
+    /// placed_panel_area() puts it, over the part of the panel kept under it
+    /// that lies over the battlefield; the team panels whole over the side
     /// panel's tile, PREFS.GUI's part beside the side column at the side
     /// column's scale, and any other panel control by control.
     void draw_battlefield_panel();
 
-    /// Places the loaded match HUD panel as 3.1c places a panel it centres
-    /// right of the HUD strip, and shows it there from then on.
+    /// Places the loaded match HUD panel as 3.1c's panel loader places a panel
+    /// on its first draw, and shows it there from then on.
     ///
-    /// The root moves, and its records with it, to the centre of the 640x480
-    /// screen's area right of the 128-pixel strip; over a match on a larger
-    /// window the panel shows where beside_hud_panel_area() puts it. With
-    /// `back_tile_face` the root gets the face 3.1c gives a panel whose GUI
-    /// file names no picture of its own: the common GUI art's BackTile frames
-    /// tiled over it, corner and edge frames round the middle ones.
+    /// The root moves, and its records with it, as ui::gui_input::place_root
+    /// places it on the 640x480 screen with the 128-pixel HUD strip: centred
+    /// on the whole screen for panel_flag::centre, on the area right of the
+    /// strip for panel_flag::beside_hud. Over a match on a larger window the
+    /// panel shows where placed_panel_area() puts it. With `back_tile_face`
+    /// the root gets the face 3.1c gives a panel whose GUI file names no
+    /// picture of its own: the common GUI art's BackTile frames tiled over
+    /// it, corner and edge frames round the middle ones. The panel then takes
+    /// the keyboard focus its loader gives it from where it is placed.
     ///
+    /// @param placement panel_flag::beside_hud or panel_flag::centre
     /// @param back_tile_face true to draw the BackTile face; false for a panel
     ///        drawn over art of its own
-    void place_match_panel_beside_hud(bool back_tile_face);
+    void place_match_panel(uint32_t placement, bool back_tile_face);
 
-    /// Returns where the paused match shows the panel placed beside the HUD strip.
+    /// Returns where the paused match shows the panel place_match_panel() placed.
     ///
-    /// The panel keeps the side column's scale and is centred right of the
-    /// drawn side column on the match canvas, as 3.1c centres it right of the
-    /// strip on its screen; on a 640x480 window that is the panel's own
-    /// position.
+    /// The panel keeps the side column's scale and is centred as it was
+    /// placed: on the whole match canvas, or right of the drawn side column,
+    /// as 3.1c centres it on its screen or right of the strip; on a 640x480
+    /// window that is the panel's own position.
     ///
     /// @return the panel's rectangle in canvas pixels, or nothing when no such
     ///         panel shows
-    [[nodiscard]] std::optional<oa::ui::display_layout::Rect> beside_hud_panel_area() const;
+    [[nodiscard]] std::optional<oa::ui::display_layout::Rect> placed_panel_area() const;
 
     // ---- Scroll bars (runtime_scroll_bars.cpp) ----
 
@@ -1522,9 +1608,9 @@ class Runtime final : public menu::Host,
     ///
     /// The preferences' sub-panel over the battlefield takes its own rows,
     /// down to its bottom, wherever the window puts the bottom bar
-    /// (preferences_panel_rows). While a panel placed beside the HUD strip
-    /// shows, the whole canvas maps through where it shows
-    /// (beside_hud_panel_area), so a point off the panel is off its records.
+    /// (preferences_panel_rows). While a placed dialog shows, the whole canvas
+    /// maps through where it shows (placed_panel_area), so a point off the
+    /// dialog is off its records.
     /// Elsewhere the chrome's mapping applies.
     ///
     /// @param x canvas column
@@ -1658,6 +1744,9 @@ class Runtime final : public menu::Host,
     void open_control_team_panel();
 
     /// Opens YESORNO.GUI to ask whether to remove a player (CONTROL.GUI's LIVEPLYRn).
+    ///
+    /// The question is centred on the whole screen over the BackTile face,
+    /// with CONTROL.GUI drawn under it as it was, as 3.1c opens it.
     ///
     /// @param player player index 0..9
     void open_removal_question(uint8_t player);
@@ -3604,6 +3693,9 @@ class Runtime final : public menu::Host,
 
     /// Composes the HUD strips and the world layer on the match canvas, black where the chrome
     /// stops short of the window, before the display gamma.
+    ///
+    /// A placed match dialog's part over the side column (match_dialog_side_)
+    /// goes over both.
     ///
     /// @param[out] frame canvas-sized RGB frame
     void compose_match_layers(renderer::Surface& frame);
@@ -7111,8 +7203,28 @@ class Runtime final : public menu::Host,
     oa::Image match_chrome_{};
     std::optional<renderer::ScreenResources> match_hud_;
     std::string match_hud_panel_; // GUI file of match_hud_, as its loader named it
-    // match_hud_ is a panel placed beside the HUD strip (place_match_panel_beside_hud).
-    bool match_hud_beside_hud_ = false;
+    // How place_match_panel placed match_hud_ (panel_flag::beside_hud or
+    // panel_flag::centre), or 0 for a panel at its own position.
+    uint32_t match_hud_placement_ = 0;
+    // The panel the match dialog in match_hud_ opened over (open_match_dialog).
+    std::optional<MatchPanelUnder> match_panel_under_;
+    // The HUD background under the placed match_hud_'s root left of the
+    // battlefield, as it was before the panel's face (place_match_panel).
+    renderer::Surface match_hud_side_backdrop_{};
+    // The placed match_hud_'s root rectangle as the frame drew it, which the
+    // battlefield pass shows (compose_match_dialog).
+    renderer::Surface match_dialog_pixels_{};
+    // The part of the placed match_hud_ left of the battlefield, at the
+    // canvas's pixels, and the canvas position of its corner; it goes over
+    // the HUD layer (draw_battlefield_panel, compose_match_layers). Empty
+    // while no placed dialog lies over the side column.
+    renderer::Surface match_dialog_side_{};
+    oa::ui::display_layout::Point match_dialog_side_at_{};
+    // The match_hud_ record holding the keyboard focus, -1 for none.
+    int32_t match_hud_focus_ = -1;
+    // The match's panels take the keyboard, and show their focus: 3.1c gives
+    // its GUI the keyboard while the in-game menu or the tab menu is open.
+    bool match_panels_keyboard_ = false;
     std::vector<MatchGadgetState> match_hud_states_; // one per match_hud_ gadget
     std::optional<oa::formats::fnt::Font> match_small_font_;
     // The fonts start-up loads for the whole run, COMIX and smlfont, kept here
@@ -7555,6 +7667,8 @@ class Runtime final : public menu::Host,
     SDL_Texture* match_cursor_tex_ = nullptr;
     int match_hud_tex_w_ = 0, match_hud_tex_h_ = 0;
     int match_world_tex_w_ = 0, match_world_tex_h_ = 0;
+    SDL_Texture* match_dialog_side_tex_ = nullptr; // match_dialog_side_
+    int match_dialog_side_tex_w_ = 0, match_dialog_side_tex_h_ = 0;
     int match_cursor_tex_w_ = 0, match_cursor_tex_h_ = 0;
 
     /// Accumulated wall time per frame phase, in nanoseconds, for --benchmark.

@@ -6,7 +6,10 @@
 #include "oa/present/blit.hpp"
 #include "oa/present/raster.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace oa::ui::frontend_renderer {
 namespace {
@@ -91,17 +94,29 @@ void fill_frame_sunken(
     frame(target, rect, top_left, bottom_right);
 }
 
-void draw_focus_outline(oa::Surface* target, const ui::gui_layout::GadgetRect& rect) {
+std::array<FocusRing, focus_ring_count>
+focus_rings(const ui::gui_layout::GadgetRect& rect) noexcept {
+    std::array<FocusRing, focus_ring_count> rings{};
     oa::Rect32 outline{rect.left, rect.top, rect.right, rect.bottom};
-    int32_t level = 0x1F;
-    for (int32_t ring = 0; ring < 6; ++ring) {
+    int32_t level = present::light_level_brightest;
+    for (std::size_t ring = 0; ring < focus_ring_count; ++ring) {
         --outline.x1;
         --outline.y1;
         ++outline.x2;
         ++outline.y2;
-        present::light_rect_edges(target, outline, level);
-        level += -3 - ring;
+        rings[ring] = {outline, level};
+        level += -3 - static_cast<int32_t>(ring);
     }
+    return rings;
+}
+
+void draw_focus_outline(oa::Surface* target, const ui::gui_layout::GadgetRect& rect) {
+    for (const auto& ring : focus_rings(rect))
+        present::light_rect_edges(target, ring.rect, ring.level);
+}
+
+std::size_t quick_key_offset(std::string_view caption, char key) noexcept {
+    return key == '\0' ? std::string_view::npos : caption.find(key);
 }
 
 void draw_value_marker(

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -556,6 +557,38 @@ void set_gadget_active_by_name(GadgetPanel& panel, std::string_view name, int32_
 /// @param[in,out] panel GUI context.
 /// @param index Record to assign, or -1.
 void assign_quick_key(GadgetPanel& panel, int32_t index);
+
+/// What setting a button's caption does to the button's quick key.
+enum class CaptionQuickKey : uint8_t {
+    keep,   ///< it keeps its key: it has no_quick_key, or the caption is empty
+    none,   ///< it holds none: it has stages
+    assign, ///< it takes free_quick_key() of the caption, or none when that is 0
+};
+
+/// Returns what setting a button's caption does to its quick key, as the
+/// gadget engine assigns one (assign_quick_key()).
+///
+/// Every panel model that sets button captions follows this rule; a key it
+/// assigns comes from free_quick_key(), with the button's own key cleared
+/// first.
+///
+/// @param attributes the button's attribute bits
+/// @param stages the button's stage count, 0 for a plain button
+/// @param caption the caption set
+/// @return what happens to the key
+[[nodiscard]] CaptionQuickKey
+caption_quick_key(uint32_t attributes, int32_t stages, std::string_view caption) noexcept;
+
+/// Returns the quick key a caption gives its button or linked label.
+///
+/// The key is the caption's first character, spaces skipped, that none of
+/// `taken` matches with A-Z compared without regard to case; the character
+/// keeps the case the caption has.
+///
+/// @param caption the record's caption
+/// @param taken the quick keys the panel's buttons and labels hold, 0 for none
+/// @return the character, or 0 when every character of the caption is taken
+[[nodiscard]] char free_quick_key(std::string_view caption, std::span<const int8_t> taken) noexcept;
 
 /// Stores a caption in the named record (strncpy) and assigns its quick key.
 ///

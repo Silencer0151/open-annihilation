@@ -575,6 +575,13 @@ void Runtime::render_match_surface() {
                  stage,
                  std::nullopt}
             );
+            // The button's quick key is underlined in its caption, and the
+            // record holding the keyboard focus is ringed while the match's
+            // panels take the keyboard.
+            if (const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
+                presentation.back().quick_key = static_cast<char>(button->quick_key);
+            presentation.back().focused =
+                match_panels_keyboard_ && static_cast<int32_t>(index) == match_hud_focus_;
         }
         // A team panel's logos, row icons and recipient list.
         std::vector<renderer::ListPresentation> lists;
@@ -594,6 +601,7 @@ void Runtime::render_match_surface() {
             );
         }
         place_preferences_rows(hud);
+        compose_match_dialog(hud);
         phase_times_.hud += std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now() - hud_start
         )
