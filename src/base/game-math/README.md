@@ -1,21 +1,49 @@
-# COB coordinate math
+# Game maths
 
 Integer and floating-point helpers whose results must match 3.1c bit for bit:
-unit-script coordinate queries, fixed-point vector scaling, 3D lengths and the
-float-keyed max-heap the computer player uses to rank metal spots by distance.
+the game's arctangent, sine, cosine, arccosine, vector length and square
+root, the unit-script coordinate queries built on them, fixed-point vector
+scaling, 3D lengths, the shared random generator and the float-keyed max-heap
+the computer player uses to rank metal spots by distance.
 
-`direction` converts both signed inputs to double, takes atan2, multiplies by
-the exact binary64 radians-to-heading constant 3.1c uses, rounds to the
-nearest even integer and keeps the low 16 bits. COB GET selectors 12 and 14
-use it.
+## Floating-point functions
 
-`distance` handles finite signed-int coordinates: the absolute coordinates are
-normalized by their maximum, squared and summed, square-rooted and rescaled,
-then truncated toward zero to 64 bits with the low 32 bits kept. COB GET
-selectors 13 and 15 use it. NaN, infinity, errno and floating-point exception
-behaviour are outside this integer API.
+3.1c keeps the results of its arctangent, sine and cosine, and some steps in
+between, with a 64-bit significand, while its other arithmetic rounds every
+result to a 53-bit significand. `oa/base/game_math/extended.hpp` gives that
+arithmetic: `Extended`, a finite number with a 64-bit significand and a wide
+exponent range, and its addition, subtraction, multiplication, division and
+square root, each rounded once to 53 or 64 bits, to nearest with ties to
+even. All of it is integer arithmetic, so it gives the same results with
+every compiler, processor and maths library.
 
-Every step is rounded to binary64 with no fused multiply-add. The tests pin
-endpoints and the cases where summation order or truncation changes the
-result; that the host libm's atan2 and sqrt give 3.1c's results on every input
-is assumed, not proven.
+- `arctangent(y, x)`, `sine`, `cosine` and `sine_cosine` return the exact
+  value rounded to a 64-bit significand. They evaluate a series with a
+  128-bit significand after an exact reduction of the argument, which leaves
+  far more precision than the rounding needs.
+- `direction(x, z)` is the game's heading of a vector: the arctangent times
+  the radians-to-heading constant, rounded to 53 bits, then to the nearest
+  integer. Unit steering, terrain slopes, weapon aiming and COB GET
+  selectors 12 and 14 use it.
+- `rotate_pair` rotates a coordinate pair by an angle word: each product of
+  a coordinate with the sine or cosine and each sum is rounded to 53 bits.
+- `hypotenuse(x, y)` is the game's vector length: the magnitudes divided by
+  the larger one, squared and summed, square-rooted and multiplied back, with
+  every step rounded to 64 bits and then again to 53. The second rounding
+  can differ from rounding once: the 52-165-173 triangle measures
+  173.00000000000003, where rounding each step once gives
+  172.99999999999997. `planar_length` and `distance` (COB GET selectors 13
+  and 15) use it.
+- `arccosine(x)` is the arctangent of sqrt((1 + x)(1 - x)) and x, those steps
+  rounded to doubles; it returns no value outside [-1, 1], where the game's
+  result is NaN.
+- `square_root` is the IEEE 754 square root, which every platform rounds
+  exactly.
+
+`truncated_length` sums its squares as z^2 + y^2 before x^2 and truncates the
+root toward zero to 64 bits, keeping the low 32 bits.
+
+The `game-math-extended` test checks the 53-bit operations against IEEE 754
+doubles, the sine and cosine of every angle word and the rotation of points
+by every angle word, and pins the results over fixed samples of headings,
+arctangents, lengths, arccosines and square roots by digest.

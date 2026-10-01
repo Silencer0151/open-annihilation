@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include "oa/base/game_math/extended.hpp"
+
 #include <cstdint>
+#include <optional>
 
 namespace oa::base::game_math {
 /// Draws a bounded number from the game's shared random generator.
@@ -24,11 +27,65 @@ uint32_t random_bounded(uint32_t& state, uint32_t bound) noexcept;
 void seed_random(uint32_t& state, uint32_t input) noexcept;
 /// Returns the heading of the planar vector (x, z).
 ///
+/// The angle arctangent(x, z), kept at a 64-bit significand, is multiplied by the
+/// game's radians-to-heading constant with the product rounded to a 53-bit
+/// significand, then rounded to the nearest integer, ties to even.
+///
 /// @param x east-west component
 /// @param z north-south component
-/// @return atan2(x, z) scaled to 65536 per turn and rounded to nearest even,
-///         low 16 bits (COB GET selectors 12 and 14 use it)
+/// @return the heading's low 16 bits, 65536 per turn (COB GET selectors 12
+///         and 14, unit steering, terrain slopes and weapon aiming use it)
 uint16_t direction(int32_t x, int32_t z) noexcept;
+
+/// Returns the length of the vector (x, y) as the game measures it.
+///
+/// The magnitudes are divided by the larger one, squared, summed and
+/// square-rooted, and the root is multiplied by the larger magnitude. Each of
+/// those steps is rounded first to a 64-bit and then to a 53-bit significand,
+/// nearest with ties to even at both widths; the second rounding can differ
+/// from rounding the exact value once.
+///
+/// @param x first component; finite
+/// @param y second component; finite
+/// @return the length; zero when both components are zero
+[[nodiscard]] double hypotenuse(double x, double y) noexcept;
+
+/// Returns the angle whose cosine is x, as the game computes it.
+///
+/// The angle is arctangent(sqrt((1 + x) * (1 - x)), x), with the sum, the
+/// difference, the product and the root each rounded to a double and the
+/// arctangent kept at a 64-bit significand. x == 1 gives zero and x == -1 gives
+/// pi at a 64-bit significand.
+///
+/// @param x cosine
+/// @return the angle in [0, pi], or no value when x is NaN or its magnitude
+///         exceeds 1
+[[nodiscard]] std::optional<Extended> arccosine(double x) noexcept;
+
+/// Returns the square root of a double, rounded to nearest with ties to even.
+///
+/// @param value radicand
+/// @return the correctly rounded root; NaN for a negative radicand
+[[nodiscard]] double square_root(double value) noexcept;
+
+/// A pair of coordinates rotated in their plane, before rounding to integers.
+struct RotatedPair {
+    double first{};
+    double second{};
+};
+
+/// Rotates the integer pair (first, second) by an angle word.
+///
+/// The angle is the word times the game's radians-per-word constant, rounded
+/// to a double. Its sine and cosine are kept at a 64-bit significand; each of
+/// the four products with a coordinate is rounded to a 53-bit significand, and
+/// so is each of the two sums.
+///
+/// @param first first coordinate
+/// @param second second coordinate
+/// @param angle angle word, 65536 per turn
+/// @return first * cos - second * sin and first * sin + second * cos
+[[nodiscard]] RotatedPair rotate_pair(int32_t first, int32_t second, int16_t angle) noexcept;
 /// Returns the length of the planar vector (x, z), truncated.
 ///
 /// @param x east-west component
@@ -38,8 +95,7 @@ uint16_t direction(int32_t x, int32_t z) noexcept;
 uint32_t distance(int32_t x, int32_t z) noexcept;
 /// Returns the length of the planar vector (x, z) as a double.
 ///
-/// The absolute components are normalized by their maximum, squared and
-/// summed, square-rooted and rescaled, each step rounded to binary64.
+/// The length is hypotenuse(x, z).
 ///
 /// @param x east-west component
 /// @param z north-south component
