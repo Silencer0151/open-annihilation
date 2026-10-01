@@ -55,6 +55,7 @@ These documents set out how the project is run and how changes are made:
 | Contributing guide | The developer guide: what the engine does today, building, testing and running it from source, the layout of the tree, the checks every change passes, and how a pull request is reviewed and merged | [View Document](CONTRIBUTING.md) |
 | Code conventions | The rules every change follows, each with its reason, examples and the directories it covers | [View Document](docs/conventions.md) |
 | Testing guide | Running the tests and checks, and writing a new test | [View Document](docs/testing.md) |
+| Variances from 3.1c | Where the engine deliberately differs from 3.1c, each a candidate setting for a future options screen | [View Document](VARIANCES.md) |
 | Documentation index | Every document in the repository, the module guides and file format notes among them | [View Document](docs/index.md) |
 | Code of Conduct | How everyone taking part is expected to behave, and how to report a problem | [View Document](CODE_OF_CONDUCT.md) |
 | Security policy | How to report a security problem privately | [View Document](SECURITY.md) |

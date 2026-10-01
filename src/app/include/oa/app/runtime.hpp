@@ -412,6 +412,9 @@ class Runtime final : public menu::Host,
 
     /// Tests whether a control key is held, from SDL's keyboard state.
     ///
+    /// Shift also counts as held while a check holds it (shift_held_by_check_),
+    /// since the keyboard state of SDL's dummy devices holds no key.
+    ///
     /// @param key control key
     /// @return true while it is down
     [[nodiscard]] bool control_key_down(oa::ui::gui_input::ControlKey key) const;
@@ -2735,6 +2738,15 @@ class Runtime final : public menu::Host,
     /// set last. The markers are cursor sequences, loaded first when a
     /// headless run has not.
     ///
+    /// The match frame draws the overlays over the smoke of effect layer 9
+    /// and over the fog, so that orders queued onto never-mapped ground or
+    /// ground out of sight show as they do on ground in sight: target markers,
+    /// path pips, order lines, labels, build footprints and range circles
+    /// alike, the circles following the terrain of never-mapped ground too.
+    /// In 3.1c the smoke covers them, and the fog blacks them out on
+    /// never-mapped ground and grays them on ground out of sight.
+    /// VARIANCES.md lists this difference.
+    ///
     /// @param[in,out] destination battlefield frame
     /// @param viewport battlefield viewport
     /// @return what the pass drew
@@ -2874,12 +2886,13 @@ class Runtime final : public menu::Host,
     ///
     /// The camera is clamped to the map, the radar surfaces and view bound, and
     /// the drag box followed. The terrain, features, units, projectiles, nano
-    /// streams, order overlays, shatter fragments, effects, debris and
-    /// explosions draw on the world layer, then the fog, the build ghost and the
-    /// selection band; the HUD layer takes the radar, the status strip, unit
-    /// labels and readouts, the resource readout, the build captions and the
-    /// extension's HUD. Each part is charged to its profile category. Throws
-    /// std::logic_error without a match.
+    /// streams, shatter fragments, effects, debris, explosions and smoke draw
+    /// on the world layer, then the fog, the order overlays while Shift is
+    /// held (over the smoke and the fog, which cover them in 3.1c), the build
+    /// ghost and the selection band; the HUD layer takes the radar, the
+    /// status strip, unit labels and readouts, the resource readout, the build
+    /// captions and the extension's HUD. Each part is charged to its profile
+    /// category. Throws std::logic_error without a match.
     void render_match_surface();
 
     /// Returns the 3DO renderer state of the current match, built on first use.
@@ -4949,6 +4962,20 @@ class Runtime final : public menu::Host,
     ///
     /// @param peewee local unit whose bar is read
     void check_unit_damage_bar(uint16_t peewee);
+
+    /// Checks that the order overlays show over the fog.
+    ///
+    /// A scout maps ground east of the local commander and is dismissed, so
+    /// that ground is left out of sight (gray) and the ground past it was
+    /// never mapped (black). With Shift held, the target markers of the
+    /// commander's queued moves onto the gray and the black ground must show
+    /// as they do in a frame drawn without fog, and the fog around them must
+    /// stay as it is without Shift; without Shift the moves draw nothing.
+    /// Throws std::runtime_error on a failure.
+    ///
+    /// @param commander local commander
+    /// @param scout local unit that maps the ground; the check dismisses it
+    void check_order_overlays_over_fog(uint16_t commander, uint16_t scout);
 
     /// Checks factory MOVE and PATROL orders and what the built unit does with them.
     ///
@@ -7746,6 +7773,8 @@ class Runtime final : public menu::Host,
     MatchCommand match_command_ = MatchCommand::none;
     // Names play_match_interface_sound was given while a check listens.
     std::vector<std::string>* heard_interface_sounds_ = nullptr;
+    // Shift held by a check for control_key_down: SDL's dummy devices hold no key.
+    bool shift_held_by_check_ = false;
     int match_build_page_ = 0;
     uint16_t pending_build_type_ = 0;
     // Cursor GAF frames the order overlays draw, rendered once each.

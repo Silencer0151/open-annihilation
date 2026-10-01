@@ -58,6 +58,8 @@ uint16_t sdl_async_key_state(void*, gui_input::VirtualKey key) {
 } // namespace
 
 bool Runtime::control_key_down(gui_input::ControlKey key) const {
+    if (key == gui_input::ControlKey::shift && shift_held_by_check_)
+        return true;
     return gui_input::control_key_down(static_cast<int32_t>(key), sdl_async_key_state, nullptr);
 }
 

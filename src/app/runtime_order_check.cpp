@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The order page's FIRE ORDERS, MOVE ORDERS, ON/OFF and CLOAK buttons in a
-// live match, clicked through the SDL presenter.
+// live match, clicked through the SDL presenter, and the order overlays over
+// the fog.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -19,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -43,6 +47,23 @@ constexpr int kTargetTicks = 240;
 // button covers: where the pointer rests off the buttons.
 constexpr int kAwaySourceX = 300;
 constexpr int kAwaySourceY = 8;
+// The order overlays over the fog: a scout this far east and north of the
+// commander, in map pixels, maps ground for this many ticks, and its sight
+// has lapsed this many ticks after it is dismissed.
+constexpr int32_t scout_east = 420;
+constexpr int32_t scout_north = 40;
+constexpr int scout_ticks = 40;
+constexpr int sight_lapse_ticks = 240;
+// The view's corner this far west and north of the commander, in map pixels:
+// the view runs east over the scouted ground into ground never mapped.
+constexpr int32_t fog_view_west = 120;
+constexpr int32_t fog_view_north = 200;
+// Battlefield pixels around a target marker's point that hold its sprite,
+// the fewest pixels the marker draws there, and the step of the search for
+// fogged ground to queue a move onto.
+constexpr int32_t marker_reach = 24;
+constexpr std::size_t marker_pixels = 64;
+constexpr int32_t fog_search_step = 16;
 
 uint32_t fire_order(const oa::Unit& unit) {
     return (unit.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK) >> OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
@@ -346,6 +367,9 @@ void Runtime::check_match_orders() {
 
     check_command_buttons(peewee, commander);
     check_unit_damage_bar(peewee);
+    check_order_overlays_over_fog(
+        commander, spawn("ARMPW", match_local_player_, scout_east, -scout_north)
+    );
     std::cout
         << "match order check: the commander starts with its FBI fire at will and hold "
            "position; FIRE ORDERS, MOVE ORDERS and ON/OFF frames and orders, grayed "
@@ -760,6 +784,213 @@ void Runtime::check_unit_damage_bar(uint16_t peewee) {
     );
     game.cursor_unit_id = 0;
     hovered_match_unit_ = 0;
+}
+
+void Runtime::check_order_overlays_over_fog(uint16_t commander, uint16_t scout) {
+    namespace visibility_flag = oa::ui::console::visibility_flag;
+    const fs::path report_directory = "local/reports";
+    require(
+        match_line_of_sight_on() && match_mapping_on(),
+        "the skirmish plays without line of sight or mapping"
+    );
+    const auto run_ticks = [&](int ticks) {
+        for (int tick = 0; tick < ticks; ++tick)
+            step_match_simulation();
+    };
+    run_ticks(scout_ticks);
+    match_->kill_unit(scout, static_cast<uint8_t>(oa::sim::match_runtime::DeathKind::dismissed));
+    run_ticks(sight_lapse_ticks);
+    match_->stop_orders(commander);
+    clear_local_selection();
+    adopt_selection(commander);
+    selected_match_unit_ = commander;
+    apply_match_hud_for_selection();
+    const auto& position = match_->world().slots[commander].unit->position;
+    match_camera_x_ = static_cast<int32_t>(position[0] >> 16) - fog_view_west;
+    match_camera_z_ = static_cast<int32_t>(position[2] >> 16) - fog_view_north;
+    // The render keeps the camera on the map.
+    render_match_surface();
+    const int32_t camera_x = match_camera_x_;
+    const int32_t camera_z = match_camera_z_;
+    const auto width = static_cast<int32_t>(match_world_cpu_.width);
+    const auto height = static_cast<int32_t>(match_world_cpu_.height);
+    const double zoom = match_zoom();
+
+    // The fog over a battlefield box, from the sight cells the corners of
+    // every fog tile over it sit on: clear, gray or black alike, or mixed.
+    enum class Fog { clear, gray, black, mixed };
+    const auto& sight = match_->sight();
+    const auto coverage = match_->player_coverage(match_view_player());
+    const auto viewer_bit = static_cast<uint16_t>(1U << sight.viewpoint_player);
+    const auto fog_over = [&](int32_t x, int32_t y) {
+        constexpr int32_t cell = oa::present::world_renderer::fog_cell_pixels;
+        const auto map_cell = [&](int32_t camera, int32_t screen) {
+            return (camera + static_cast<int32_t>(std::lround(screen / zoom))) / cell;
+        };
+        std::optional<Fog> found;
+        for (int32_t z = map_cell(camera_z, y - marker_reach) - 1;
+             z <= map_cell(camera_z, y + marker_reach) + 1;
+             ++z)
+            for (int32_t column = map_cell(camera_x, x - marker_reach) - 1;
+                 column <= map_cell(camera_x, x + marker_reach) + 1;
+                 ++column) {
+                if (column < 0 || z < 0 || column >= sight.width || z >= sight.height)
+                    return Fog::mixed;
+                const auto index =
+                    static_cast<std::size_t>(z) * static_cast<std::size_t>(sight.width) +
+                    static_cast<std::size_t>(column);
+                const bool seen = index < coverage.size() && coverage[index] != 0;
+                const bool mapped = index < sight.player_bits.size() &&
+                                    (sight.player_bits[index] & viewer_bit) != 0;
+                const auto here = !mapped ? Fog::black : seen ? Fog::clear : Fog::gray;
+                if (found.has_value() && *found != here)
+                    return Fog::mixed;
+                found = here;
+            }
+        return found.value_or(Fog::mixed);
+    };
+
+    // A move onto the first ground of that fog found in the view: where it
+    // goes, and the battlefield point its target marker is drawn at.
+    struct Target {
+        const char* ground{};
+        oa::sim::ground_orders::Point destination{};
+        int32_t x{};
+        int32_t y{};
+    };
+
+    std::vector<Target> targets;
+    for (const auto& [fog, ground] :
+         {std::pair{Fog::gray, "gray"}, std::pair{Fog::black, "black"}}) {
+        std::optional<Target> target;
+        for (int32_t y = marker_reach; !target && y < height - marker_reach; y += fog_search_step)
+            for (int32_t x = marker_reach; !target && x < width - marker_reach;
+                 x += fog_search_step) {
+                if (fog_over(x, y) != fog)
+                    continue;
+                // The marker is drawn half its point's height up the view
+                // from the point, so the point lies that far south of the
+                // ground found.
+                const auto map_x = camera_x + static_cast<int32_t>(std::lround(x / zoom));
+                const auto ground_z = camera_z + static_cast<int32_t>(std::lround(y / zoom));
+                const auto height_at = [&](int32_t z) {
+                    return match_->map_height(
+                        static_cast<uint32_t>(map_x) << 16, static_cast<uint32_t>(z) << 16
+                    );
+                };
+                const auto map_z = ground_z + height_at(ground_z) / 2;
+                const auto point_height = height_at(map_z);
+                const Target placed{
+                    ground,
+                    {map_x << 16, point_height << 16, map_z << 16},
+                    static_cast<int32_t>(std::lround((map_x - camera_x) * zoom)),
+                    static_cast<int32_t>(
+                        std::lround((map_z - (point_height >> 1) - camera_z) * zoom)
+                    )
+                };
+                if (fog_over(placed.x, placed.y) == fog)
+                    target = placed;
+            }
+        require(target.has_value(), std::string("the view shows no ") + ground + " ground");
+        targets.push_back(*target);
+    }
+
+    // Each frame with Shift held or not, and with the fog or without it.
+    auto& visibility = match_->state().game.visibility_flags;
+    const auto kept_visibility = visibility;
+    const auto frame = [&](bool shift, bool fog) {
+        // Shift is let go and the fog restored however the render ends.
+        struct Restore {
+            Runtime& runtime;
+            uint8_t& visibility;
+            uint8_t kept;
+
+            ~Restore() {
+                runtime.shift_held_by_check_ = false;
+                visibility = kept;
+            }
+        } restore{*this, visibility, kept_visibility};
+        shift_held_by_check_ = shift;
+        if (!fog)
+            visibility = static_cast<uint8_t>(
+                visibility & ~(visibility_flag::line_of_sight | visibility_flag::mapping)
+            );
+        render_match_surface();
+        return match_world_cpu_;
+    };
+    // The ground before the moves are queued, then the four frames with them.
+    const auto unordered_plain = frame(false, false);
+    for (const auto& target : targets)
+        match_->issue_ground_move(commander, target.destination, true);
+    const auto fogged = frame(true, true);
+    const auto clear = frame(true, false);
+    const auto fogged_plain = frame(false, true);
+    const auto clear_plain = frame(false, false);
+    const auto pixel = [](const renderer::Surface& surface, int32_t x, int32_t y) {
+        const auto* at =
+            surface.rgb.data() +
+            (static_cast<std::size_t>(y) * surface.width + static_cast<std::size_t>(x)) * 3U;
+        return std::array<uint8_t, 3>{at[0], at[1], at[2]};
+    };
+    // Without Shift the moves change no pixel. With it, a marker's pixels are
+    // those the overlays change in the frame without fog: over the fog each
+    // must show as it does there, and every other pixel keeps the fog it has
+    // without Shift.
+    std::string failures;
+    const auto fail = [&](const std::string& what) {
+        failures += (failures.empty() ? "" : "; ") + what;
+    };
+    for (const auto& target : targets) {
+        const std::string move = std::string("the move onto ") + target.ground + " ground";
+        std::size_t unshifted = 0;
+        std::size_t drawn = 0;
+        std::size_t shown = 0;
+        std::size_t fogged_ground = 0;
+        std::size_t fog_changed = 0;
+        for (int32_t y = std::max(0, target.y - marker_reach);
+             y <= std::min(height - 1, target.y + marker_reach);
+             ++y)
+            for (int32_t x = std::max(0, target.x - marker_reach);
+                 x <= std::min(width - 1, target.x + marker_reach);
+                 ++x) {
+                unshifted += pixel(clear_plain, x, y) != pixel(unordered_plain, x, y);
+                if (pixel(clear, x, y) == pixel(clear_plain, x, y)) {
+                    fogged_ground += pixel(fogged_plain, x, y) != pixel(clear_plain, x, y);
+                    fog_changed += pixel(fogged, x, y) != pixel(fogged_plain, x, y);
+                    continue;
+                }
+                ++drawn;
+                shown += pixel(fogged, x, y) == pixel(clear, x, y);
+            }
+        if (unshifted != 0)
+            fail(move + " changes " + std::to_string(unshifted) + " pixels without Shift held");
+        else if (drawn < marker_pixels)
+            fail(
+                move + " changes " + std::to_string(drawn) +
+                " pixels with Shift held, too few for its marker"
+            );
+        if (fogged_ground == 0)
+            fail("the fog leaves the ground around " + move + " clear");
+        if (shown != drawn)
+            fail(
+                "the marker of " + move + " shows " + std::to_string(shown) + " of its " +
+                std::to_string(drawn) + " pixels over the fog"
+            );
+        if (fog_changed != 0)
+            fail(
+                "around the marker of " + move + ", " + std::to_string(fog_changed) +
+                " pixels of fog change while Shift is held"
+            );
+    }
+    match_->stop_orders(commander);
+    clear_local_selection();
+    if (!failures.empty()) {
+        write_ppm(report_directory / "native-match-orders-order-fog.ppm", fogged);
+        require(false, failures);
+    }
+    std::cout << "order overlay fog check: with Shift held, the target markers of moves queued "
+                 "onto gray and black ground show over the fog as they do without it, and the "
+                 "fog around them stays; without Shift the moves draw nothing\n";
 }
 
 } // namespace oa::app

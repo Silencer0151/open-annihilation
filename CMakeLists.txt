@@ -502,7 +502,9 @@ if(OA_BUILD_PLATFORM)
       # once the extensions are known (cmake/OaExtensions.cmake).
       # The skirmish commander starts with its FBI standing orders; the order
       # page's standing order and toggle buttons clicked through SDL show the
-      # selection's orders and the units carry them out.
+      # selection's orders and the units carry them out. With Shift held, the
+      # target markers of moves queued onto gray and black ground show over
+      # the fog, which stays around them; without Shift they are not drawn.
       set(oa_orders_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-orders")
       file(MAKE_DIRECTORY "${oa_orders_check_dir}")
       add_test(NAME native-match-orders COMMAND oa-game --game-dir "${OA_GAME_DIR}"

@@ -1176,8 +1176,9 @@ void Runtime::render_match_surface() {
     // The battlefield draws far to near: effect layers 0 to 2 (wakes among
     // them), the lying features, layers 3 and 4, then row by row the ground
     // units and the standing features, layers 5 and 6, the projectiles,
-    // debris and explosions, layer 7, the units off the ground, layer 8, the
-    // order overlays and layer 9 (smoke) over everything.
+    // debris and explosions, layer 7, the units off the ground, then layers 8
+    // and 9 (smoke); the fog goes over them all, and the order overlays over
+    // the fog.
     draw_effect_layers(0, 2);
     for (const auto index : draw_plan.lying_features)
         draw_feature(index);
@@ -1296,10 +1297,6 @@ void Runtime::render_match_surface() {
     for (const auto index : draw_plan.raised_units)
         draw_unit(units_to_draw[index]);
     draw_effect_layers(8, 8);
-    // The overlay pass draws the local player's order overlays while Shift is
-    // held (asked of the keyboard, not the pointer word).
-    if (!bare && control_key_down(oa::ui::gui_input::ControlKey::shift))
-        (void)draw_order_overlays(world_surface, viewport);
     draw_effect_layers(9, 9);
     oa::present::bind_display(bound_display);
     mark_profile(OA_PROFILE_RENDER_STUFF);
@@ -1312,8 +1309,15 @@ void Runtime::render_match_surface() {
         bf_w,
         bf_h
     );
-    // The HUD overlay outlines the build site or the drag box after the fog tiles.
+    // Over the fog tiles: the local player's order overlays while Shift is
+    // held (asked of the keyboard, not the pointer word), so that orders
+    // queued onto never-mapped or unseen ground stay in view (in 3.1c the
+    // smoke and the fog cover them), then the HUD overlay's outline of the
+    // build site or the drag box. The fog's profile category takes the time
+    // of both.
     if (!bare) {
+        if (control_key_down(oa::ui::gui_input::ControlKey::shift))
+            (void)draw_order_overlays(world_surface, viewport);
         draw_build_ghost(world_surface, viewport);
         draw_selection_band(world_surface, viewport);
     }
