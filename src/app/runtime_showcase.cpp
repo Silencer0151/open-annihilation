@@ -57,6 +57,10 @@ constexpr std::string_view kArmCampaign = "Arm Campaign";
 // stand, and the units each side brings without --combat.
 constexpr double kBattleSeconds = 60.0;
 constexpr std::size_t kBattleUnitsPerSide = 50;
+// A battle frame longer than five ticks at normal speed, the most a frame
+// catches up, costs the match ticks; the showcase lists the first few.
+constexpr double kSlowFrameSeconds = 5.0 / 30.0;
+constexpr std::size_t kSlowFramesShown = 12;
 // The skirmish's commander death rule in the game's preferences, and its
 // value for a game that continues after a commander's death.
 constexpr std::string_view kCommanderDeathKey = "SkirmishCommanderDeath";
@@ -116,11 +120,17 @@ void Runtime::run_battle_showcase() {
     preferences_dirty_ = true;
     flush_preferences();
     const auto units = options_.combat_units != 0 ? options_.combat_units : kBattleUnitsPerSide;
+    // The busy combat's units, away from the armies, keep the player in the
+    // game when the army beside the commander falls.
+    options_.busy_combat = true;
     spawn_combat_armies(units);
+    const uint32_t drawing_threads = draw_pool_ ? draw_pool_->threads() : 1U;
     report(
         "the battle started at " + std::to_string(match_layout_.width) + "x" +
-        std::to_string(match_layout_.height) + " with " + std::to_string(units) + " units a side" +
-        (options_.busy_combat ? " and the busy combat's" : "")
+        std::to_string(match_layout_.height) + " with " + std::to_string(units) +
+        " units a side and the busy combat's, at most " +
+        std::to_string(options_.max_frames_per_second) + " frames a second, on " +
+        std::to_string(drawing_threads) + " drawing thread" + (drawing_threads > 1 ? "s" : "")
     );
     phase_times_ = {};
     work = 0.0;
@@ -133,25 +143,56 @@ void Runtime::run_battle_showcase() {
     uint32_t longest_ticks = 0;
     PhaseTimes longest_phases{};
     std::size_t frames = 0;
+    // Frames too long for the clock to catch up within the most ticks a
+    // frame runs, which the match loses.
+    std::size_t slow_frames = 0;
     while (previous - start < kBattleSeconds) {
         const auto phases = phase_times_;
         const uint32_t tick = match_timing_.tick;
         frame();
         const double finished = now();
+        const PhaseTimes spent{
+            phase_times_.simulation - phases.simulation,
+            phase_times_.compose - phases.compose,
+            0,
+            0,
+            phase_times_.upload - phases.upload,
+            phase_times_.present - phases.present,
+        };
+        if (finished - previous > kSlowFrameSeconds) {
+            ++slow_frames;
+            if (slow_frames <= kSlowFramesShown) {
+                char slow[160];
+                std::snprintf(
+                    slow,
+                    sizeof slow,
+                    "slow frame at tick %u: %.1f ms (%u ticks in %.1f ms, draw %.1f ms, "
+                    "present %.1f ms)",
+                    tick,
+                    (finished - previous) * 1000.0,
+                    match_timing_.tick - tick,
+                    static_cast<double>(spent.simulation) / 1.0e6,
+                    static_cast<double>(spent.compose) / 1.0e6,
+                    static_cast<double>(spent.upload + spent.present) / 1.0e6
+                );
+                report(slow);
+            }
+        }
         if (finished - previous > longest) {
             longest = finished - previous;
             longest_ticks = match_timing_.tick - tick;
-            longest_phases = {
-                phase_times_.simulation - phases.simulation,
-                phase_times_.compose - phases.compose,
-                0,
-                0,
-                phase_times_.upload - phases.upload,
-                phase_times_.present - phases.present,
-            };
+            longest_phases = spent;
         }
         previous = finished;
         ++frames;
+        if (screen_ != Screen::match) {
+            char ended[64];
+            std::snprintf(
+                ended, sizeof ended, "the match ended %.1f s into the battle", previous - start
+            );
+            report(ended);
+            break;
+        }
     }
     const double seconds = previous - start;
     const uint32_t ticks = match_timing_.tick - first_tick;
@@ -167,8 +208,8 @@ void Runtime::run_battle_showcase() {
         sizeof line,
         "battle %.1f s: %u ticks (%.1f a second), %zu frames (%.1f a second), game speed %d "
         "of %d; frame %.1f ms mean, %.1f longest (%u ticks in %.1f ms, draw %.1f ms, present "
-        "%.1f ms); work %.1f ms a frame; tick %.2f ms mean; draw %.1f ms and present %.1f ms a "
-        "frame",
+        "%.1f ms); %zu frames slower than %.0f ms; work %.1f ms a frame; tick %.2f ms mean; "
+        "draw %.1f ms and present %.1f ms a frame",
         seconds,
         ticks,
         seconds > 0.0 ? ticks / seconds : 0.0,
@@ -182,6 +223,8 @@ void Runtime::run_battle_showcase() {
         ns_to_seconds(longest_phases.simulation) * 1000.0,
         ns_to_seconds(longest_phases.compose) * 1000.0,
         ns_to_seconds(longest_phases.upload + longest_phases.present) * 1000.0,
+        slow_frames,
+        kSlowFrameSeconds * 1000.0,
         per_frame_ms(work),
         ticks == 0 ? 0.0 : ns_to_seconds(phase_times_.simulation) * 1000.0 / ticks,
         per_frame_ms(ns_to_seconds(phase_times_.compose)),

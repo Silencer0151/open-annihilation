@@ -114,14 +114,17 @@ the machine it runs on. After three seconds of the main menu it starts the
 two-player skirmish `--benchmark` starts, its game continuing after a
 commander's death (the player's own Commander Death choice is put back once
 it has started), with `--combat`'s two armies (50 units a side without it)
-and `--busy-combat`'s additions. The battle then plays for a minute on the
-game's own loop, clock, sound and window, and the run ends with one line:
+and `--busy-combat`'s additions, always, and says the frame size, the frame
+rate cap and the drawing threads it plays with. The battle then plays for a
+minute on the game's own loop, clock, sound and window (a match that ends
+sooner ends it, and says so), the first frames that took longer than five
+ticks are listed, and the run ends with one line:
 
 ```text
-showcase: battle 60.0 s: 1774 ticks (29.6 a second), 2674 frames (44.6 a second),
-game speed 10 of 10; frame 22.4 ms mean, 919.9 longest (3 ticks in 438.1 ms,
-draw 475.3 ms, present 5.8 ms); work 22.4 ms a frame; tick 1.31 ms mean;
-draw 16.3 ms and present 4.9 ms a frame
+showcase: battle 60.0 s: 1792 ticks (29.9 a second), 2683 frames (44.7 a second),
+game speed 10 of 10; frame 22.4 ms mean, 529.1 longest (3 ticks in 425.8 ms,
+draw 97.3 ms, present 5.2 ms); 2 frames slower than 167 ms; work 22.4 ms a frame;
+tick 1.32 ms mean; draw 16.3 ms and present 4.9 ms a frame
 ```
 
 (one line in the output), then the memory report, with the largest working

@@ -202,9 +202,20 @@ void OfflineEffects::refresh_transform(sim::unit_spawn::Slot& slot) {
     if (!i)
         throw std::logic_error("effect unit has no model instance");
     const oa_angle heading = slot.record.heading;
-    i->model().rebuild_transforms(
-        {slot.record.bank, std::bit_cast<int16_t>(heading), slot.record.pitch}
-    );
+    const sim::model_runtime::RotationWords rotation{
+        slot.record.bank, std::bit_cast<int16_t>(heading), slot.record.pitch
+    };
+    auto& model = i->model();
+    const uint32_t tick = match_->state().game.tick;
+    if (&model == refreshed_instance_ && tick == refreshed_tick_ && !model.transforms_dirty() &&
+        rotation.xy == refreshed_rotation_.xy && rotation.xz == refreshed_rotation_.xz &&
+        rotation.yz == refreshed_rotation_.yz)
+        return;
+    refreshed_instance_ = nullptr;
+    model.rebuild_transforms(rotation);
+    refreshed_instance_ = &model;
+    refreshed_tick_ = tick;
+    refreshed_rotation_ = rotation;
 }
 
 Position OfflineEffects::piece_start(const sim::unit_spawn::Slot& slot, uint32_t p) {

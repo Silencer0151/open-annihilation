@@ -83,6 +83,13 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     std::unique_ptr<Runtime> runtime_;
     std::vector<sim::effect_particles::PiecePrimitive> primitives_; // the shattering piece's object
     std::vector<FixedVec3> points_;                                 // and its transformed vertices
+    // The model instance refresh_transform last rebuilt, the tick it did and
+    // the root rotation it used. Each piece a dying unit's script blows off
+    // asks for the unit's transforms again; an instance none of whose pieces
+    // has moved or turned since already holds them.
+    const sim::model_runtime::Instance* refreshed_instance_{};
+    uint32_t refreshed_tick_{};
+    sim::model_runtime::RotationWords refreshed_rotation_{};
     /// Tests the viewpoint player's view of a unit through Match::unit_visible.
     ///
     /// @param slot unit to test
@@ -94,7 +101,10 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     ///
     /// @param slot unit whose model is refreshed
     /// @quirk Every transform is rebuilt; 3.1c keeps a piece's transform while its angles
-    ///        change by less than a small threshold, which is not modelled.
+    ///        change by less than a small threshold, which is not modelled. A second
+    ///        refresh in the same tick of a model no piece of which has moved or turned,
+    ///        at the same bank, heading and pitch, keeps the transforms the first built,
+    ///        which a rebuild would build again.
     void refresh_transform(sim::unit_spawn::Slot& slot) override;
     /// Returns a piece's first transformed vertex.
     ///

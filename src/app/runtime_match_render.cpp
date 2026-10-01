@@ -909,39 +909,15 @@ void Runtime::render_match_surface() {
                y < viewport.destination_y + bf_h + cull_margin;
     };
     sync_dead_feature_draws();
-    // Model name of each weapon registry slot (TDF `model`), read once.
+    // The model of a weapon registry slot's shots, loaded on first use.
     const auto weapon_model = [&](
                                   MatchModels& models, uint8_t index
                               ) -> const std::shared_ptr<const oa::formats::objects3d::Model>& {
-        if (!models.weapon_names_loaded) {
-            models.weapon_names_loaded = true;
-            for (const auto& path : assets_.list_effective("weapons", ".tdf")) {
-                const auto bytes = read(path);
-                if (!bytes)
-                    continue;
-                const std::string_view text(
-                    reinterpret_cast<const char*>(bytes->data()), bytes->size()
-                );
-                const auto document = oa::data::unit_definitions::parse_tdf(text);
-                if (!document)
-                    continue;
-                for (const auto& section : document.value.sections) {
-                    const auto* id = section.find("id");
-                    const auto* name = section.find("model");
-                    if (id == nullptr || name == nullptr || name->empty())
-                        continue;
-                    const auto slot = std::strtoul(std::string(*id).c_str(), nullptr, 10);
-                    if (slot <= 0xff)
-                        models.weapon_model_names.emplace(static_cast<uint8_t>(slot), *name);
-                }
-            }
-        }
         if (const auto found = models.weapon_models.find(index);
             found != models.weapon_models.end())
             return found->second;
         std::shared_ptr<const oa::formats::objects3d::Model> model;
-        if (const auto name = models.weapon_model_names.find(index);
-            name != models.weapon_model_names.end()) {
+        if (const auto name = weapon_model_names_.find(index); name != weapon_model_names_.end()) {
             try {
                 const auto bytes = assets_.read("objects3d/" + name->second + ".3do").bytes;
                 const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());

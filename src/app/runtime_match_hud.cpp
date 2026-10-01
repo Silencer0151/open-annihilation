@@ -625,16 +625,15 @@ void Runtime::place_catalog_feature_draw(int32_t cell_x, int32_t cell_z, uint16_
                                                             : static_cast<std::size_t>(-1);
         if (interned == match_gaf_anim_index_.end()) {
             // Only the sequence shown is decoded with its pixels.
-            const auto path = "anims/" + terrain.filename + ".gaf";
-            const auto file = assets_.read(path).bytes;
-            const auto parsed = oa::formats::gaf::parse(file, oa::formats::gaf::PixelData::checked);
-            if (!parsed.ok())
+            std::string parse_error;
+            const auto gaf = feature_gaf_file(terrain.filename, parse_error);
+            if (gaf.archive == nullptr)
                 return;
-            const auto* sequence = gaf_sequence(*parsed.archive, terrain.seqname);
+            const auto* sequence = gaf_sequence(*gaf.archive, terrain.seqname);
             if (sequence == nullptr || sequence->frames.empty())
                 return;
             const auto decoded = oa::formats::gaf::parse_sequence(
-                file, static_cast<std::size_t>(sequence - parsed.archive->sequences.data())
+                gaf.file, static_cast<std::size_t>(sequence - gaf.archive->sequences.data())
             );
             if (!decoded.ok())
                 return;

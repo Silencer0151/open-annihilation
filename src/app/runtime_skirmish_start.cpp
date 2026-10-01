@@ -185,6 +185,18 @@ struct LosTables {
     }
 };
 
+/// Returns a name with its ASCII letters lowered.
+///
+/// @param name the name
+/// @return the lowered name
+std::string lowered_name(std::string_view name) {
+    std::string lowered(name);
+    for (auto& character : lowered)
+        if (character >= 'A' && character <= 'Z')
+            character = static_cast<char>(character - 'A' + 'a');
+    return lowered;
+}
+
 } // namespace
 
 void Runtime::keep_available_units(
@@ -235,6 +247,7 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
                 std::make_unique<oa::formats::gaf::Archive>(std::move(*parsed.archive))
             );
             self.feature_assets_.archive_files.push_back(std::move(file));
+            self.feature_assets_.archive_names.push_back(lowered_name(gaf_name));
         } catch (const std::exception&) {
             return 0;
         }
@@ -300,6 +313,29 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
         *duration = out.duration;
     };
     return host;
+}
+
+Runtime::FeatureGafView Runtime::feature_gaf_file(const std::string& filename, std::string& error) {
+    error.clear();
+    const auto key = lowered_name(filename);
+    const auto& names = feature_assets_.archive_names;
+    if (const auto loaded = std::find(names.begin(), names.end(), key); loaded != names.end()) {
+        const auto index = static_cast<std::size_t>(loaded - names.begin());
+        return {feature_assets_.archive_files[index], feature_assets_.archives[index].get()};
+    }
+    auto found = feature_gaf_files_.find(key);
+    if (found == feature_gaf_files_.end()) {
+        FeatureGafFile read;
+        read.file = assets_.read("anims/" + filename + ".gaf").bytes;
+        auto parsed = oa::formats::gaf::parse(read.file, oa::formats::gaf::PixelData::checked);
+        if (parsed.ok())
+            read.archive = std::move(*parsed.archive);
+        else
+            read.error = parsed.error->message;
+        found = feature_gaf_files_.emplace(key, std::move(read)).first;
+    }
+    error = found->second.error;
+    return {found->second.file, error.empty() ? &found->second.archive : nullptr};
 }
 
 std::optional<oa::formats::gaf::Sequence>
@@ -409,6 +445,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         throw std::runtime_error("cannot load moveinfo.tdf: " + movement.error.message);
 
     weapon_registry_ = oa::sim::combat_state::WeaponRegistry{};
+    weapon_model_names_.clear();
     std::size_t installed_weapons = 0;
     const auto weapon_documents = assets_.list_effective("weapons", ".tdf");
     for (const auto& path : weapon_documents) {
@@ -424,6 +461,15 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             );
         installed_weapons +=
             oa::sim::combat_state::install_weapon_tdf(weapon_registry_, document.value);
+        for (const auto& section : document.value.sections) {
+            const auto* id = section.find("id");
+            const auto* model = section.find("model");
+            if (id == nullptr || model == nullptr || model->empty())
+                continue;
+            const auto slot = std::strtoul(std::string(*id).c_str(), nullptr, 10);
+            if (slot <= 0xff)
+                weapon_model_names_.emplace(static_cast<uint8_t>(slot), *model);
+        }
     }
     if (installed_weapons == 0)
         throw std::runtime_error("no base weapon definitions were installed");
@@ -448,6 +494,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // the plot feature words index it directly. The table references the
     // GAF sequences, 3DO models and burn weapons through feature_assets_.
     feature_assets_ = {};
+    feature_gaf_files_.clear();
     const auto feature_host = feature_def_host();
     if (const auto error = oa::sim::map_runtime::init_feature_table(
             feature_table_, *selected_tnt_, feature_documents.value, &feature_host
@@ -643,15 +690,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         feature_catalog_ = std::move(*catalog.value);
     }
 
-    // Each GAF file the map's sprite features name, with its sequences
-    // without pixels; a sequence's pixels are decoded from the file once, for
-    // the animation the first feature showing it adds.
-    struct FeatureGaf {
-        std::vector<uint8_t> file;
-        oa::formats::gaf::Archive archive;
-    };
-
-    std::unordered_map<std::string, FeatureGaf> feature_gafs;
+    // A sprite feature's sequence's pixels are decoded from its GAF file
+    // (feature_gaf_file) once, for the animation the first feature showing it
+    // adds.
     // Each 3DO model the map's object features name, loaded once and shared.
     std::unordered_map<std::string, std::shared_ptr<const oa::formats::objects3d::Model>>
         feature_models;
@@ -698,20 +739,14 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (placed.filename.empty() || placed.seqname.empty())
             continue;
         try {
-            auto& gaf = feature_gafs[placed.filename];
-            if (gaf.archive.sequences.empty()) {
-                const auto path = "anims/" + placed.filename + ".gaf";
-                gaf.file = assets_.read(path).bytes;
-                auto parsed =
-                    oa::formats::gaf::parse(gaf.file, oa::formats::gaf::PixelData::checked);
-                if (!parsed.ok()) {
-                    std::cerr << "feature GAF '" << path
-                              << "' parse failed: " << parsed.error->message << '\n';
-                    continue;
-                }
-                gaf.archive = std::move(*parsed.archive);
+            std::string parse_error;
+            const auto gaf = feature_gaf_file(placed.filename, parse_error);
+            if (gaf.archive == nullptr) {
+                std::cerr << "feature GAF 'anims/" << placed.filename
+                          << ".gaf' parse failed: " << parse_error << '\n';
+                continue;
             }
-            const auto* sequence = gaf_sequence(gaf.archive, placed.seqname);
+            const auto* sequence = gaf_sequence(*gaf.archive, placed.seqname);
             if (sequence == nullptr || sequence->frames.empty())
                 continue;
             auto anim = static_cast<std::size_t>(-1);
@@ -721,7 +756,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
                 anim = found->second;
             else {
                 auto decoded = oa::formats::gaf::parse_sequence(
-                    gaf.file, static_cast<std::size_t>(sequence - gaf.archive.sequences.data())
+                    gaf.file, static_cast<std::size_t>(sequence - gaf.archive->sequences.data())
                 );
                 if (!decoded.ok())
                     continue;
@@ -863,6 +898,15 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // the map's features, so a geothermal vent smokes from the first tick.
     if (match_fx_.sequences.empty())
         append_gaf_file(match_fx_, "anims/FX.GAF");
+    // The explosion archives the weapons name are read before the match
+    // starts, so that the first of each explosion does not wait for its file.
+    for (std::size_t index = 0; index < oa::sim::combat_state::weapon_registry_capacity; ++index) {
+        const auto& weapon = weapon_registry_.definition(static_cast<uint8_t>(index));
+        for (const auto* name :
+             {&weapon.explosion_gaf, &weapon.water_explosion_gaf, &weapon.lava_explosion_gaf})
+            if (!name->empty())
+                (void)explosion_gaf_archive(*name);
+    }
     try {
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
         std::vector<oa::sim::spatial_state::Plot>().swap(collision_plots);

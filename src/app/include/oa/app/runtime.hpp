@@ -3695,7 +3695,8 @@ class Runtime final : public menu::Host,
     /// Plays --showcase skirmish-battle: the main menu for a while, then the
     /// two-player skirmish the benchmark starts, its game continuing after a
     /// commander's death, with --combat's armies (50 a
-    /// side without it) and --busy-combat's additions, played on the
+    /// side without it) and --busy-combat's additions, reported with the
+    /// frame size, the frame rate cap and the drawing threads, played on the
     /// application loop's frames and clock for a minute. Prints a
     /// "showcase:" line with the ticks and frames a second it played at, the
     /// game speed it ended at, the mean frame, the longest frame with its
@@ -7782,6 +7783,7 @@ class Runtime final : public menu::Host,
     struct FeatureAssets {
         std::vector<std::unique_ptr<oa::formats::gaf::Archive>> archives;
         std::vector<std::vector<uint8_t>> archive_files; // each archive's GAF file
+        std::vector<std::string> archive_names; // each archive's file name, letters lowered
         std::vector<oa::formats::gaf::Sequence*> sequences;
         std::vector<FeatureSequencePlace> sequence_places; // each of `sequences`
         std::vector<std::vector<oa::formats::gaf::RenderedFrame>> rendered;
@@ -7789,6 +7791,37 @@ class Runtime final : public menu::Host,
     };
 
     FeatureAssets feature_assets_;
+
+    // A feature animation file the match's features name that the feature
+    // table did not load: its bytes and sequences without pixels, or why it
+    // does not parse.
+    struct FeatureGafFile {
+        std::vector<uint8_t> file;
+        oa::formats::gaf::Archive archive;
+        std::string error; ///< empty when the file parsed
+    };
+
+    // The feature animation files read for the match beside the feature
+    // table's, by name with letters lowered.
+    std::map<std::string, FeatureGafFile> feature_gaf_files_;
+
+    // A feature animation file: its bytes, and its sequences without pixels.
+    struct FeatureGafView {
+        std::span<const uint8_t> file;
+        const oa::formats::gaf::Archive* archive{}; ///< null when the file does not parse
+    };
+
+    /// Returns a feature animation file the match's features name: the
+    /// feature table's copy, or the file read and parsed without its pixels
+    /// on first use and kept for the match.
+    ///
+    /// Throws what reading the file throws; a file that cannot be read is
+    /// tried again on the next call.
+    ///
+    /// @param filename the file's name under anims/, without .gaf
+    /// @param[out] error why the file does not parse; cleared when it does
+    /// @return the file, with a null archive when it does not parse
+    FeatureGafView feature_gaf_file(const std::string& filename, std::string& error);
 
     /// Decodes a feature sequence reference (feature_assets_) with its frames' pixels.
     ///
@@ -7866,6 +7899,9 @@ class Runtime final : public menu::Host,
 
     UnitTable unit_table_;
     oa::sim::combat_state::WeaponRegistry weapon_registry_;
+    // The 3DO model each weapon registry slot draws its shots with (TDF
+    // `model`), read with the weapon definitions as the match starts.
+    std::map<uint8_t, std::string> weapon_model_names_;
     oa::data::unit_definitions::ResolvedCategoryRegistry category_registry_;
     map_modal::ModalState map_modal_{};
     std::vector<std::string> bound_map_names_;

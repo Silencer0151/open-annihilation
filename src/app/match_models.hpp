@@ -98,8 +98,6 @@ struct MatchModels {
     oa::Unit feature_unit{};
     uint32_t animation_tick{};
     bool animation_started{};
-    bool weapon_names_loaded{};
-    std::unordered_map<uint8_t, std::string> weapon_model_names; // by registry index
     std::unordered_map<uint8_t, std::shared_ptr<const oa::formats::objects3d::Model>> weapon_models;
     std::vector<uint8_t> shadow_pixels;
     oa::Sprite projectile_shadow{}; // FX.GAF "shadow" frame 0
