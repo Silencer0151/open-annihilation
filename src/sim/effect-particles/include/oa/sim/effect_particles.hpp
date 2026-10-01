@@ -815,41 +815,40 @@ bool settle_debris(
     DebrisPiece& piece, EffectWorld& world, const oa::Game& game, const EffectHost& host
 );
 
-/// Starts the particles a debris piece gives off each time it is drawn.
+/// Starts the particles a debris piece gives off once a tick.
 ///
 /// A smoking piece starts a light puff and a burning one a spark.
 ///
 /// @param[in,out] world emitter layers
 /// @param game current tick
 /// @param host random stream
-/// @param piece debris piece being drawn
-void debris_drawn(
+/// @param piece debris piece
+void start_debris_piece_particles(
     EffectWorld& world, const oa::Game& game, const EffectHost& host, const DebrisPiece& piece
 );
+
+/// Starts every held debris piece's puff and spark, in slot order, wherever it is.
+///
+/// The match does this once at the end of each tick, whether or not the tick
+/// is drawn, so that what is drawn never changes the particles or the random
+/// stream.
+///
+/// @param[in,out] world debris table and emitter layers
+/// @param game current tick
+/// @param host random stream
+void start_debris_particles(EffectWorld& world, const oa::Game& game, const EffectHost& host);
 
 using DebrisVisitor = void (*)(void* context, const DebrisPiece&);
 
 /// Draws every held debris piece in slot order.
 ///
-/// Each piece's puff and spark start first, wherever it is, then the piece itself goes
-/// to the visitor. Drawing never frees a slot.
+/// Drawing changes nothing: the pieces' particles start in the tick
+/// (start_debris_particles).
 ///
-/// @param[in,out] world debris table and emitter layers
-/// @param game current tick
-/// @param host random stream
-/// @param start_particles false draws the pieces alone, so a host that draws a tick more
-///        than once can start the particles once per tick
+/// @param world debris table
 /// @param context passed through to `visit`
 /// @param visit called once per held piece; null draws nothing
-/// @quirk The game starts the particles on every draw.
-void draw_debris(
-    EffectWorld& world,
-    const oa::Game& game,
-    const EffectHost& host,
-    bool start_particles,
-    void* context,
-    DebrisVisitor visit
-);
+void draw_debris(const EffectWorld& world, void* context, DebrisVisitor visit);
 
 /// Logs the explosion sprites of a COB explode's bitmap flags.
 ///

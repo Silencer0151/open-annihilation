@@ -249,13 +249,12 @@ sound device. There is no music.
 A script and its render are the same on every platform and every run:
 
 - the replay runs on the fixed clock and seed; `--seed` cannot be used;
-- the camera never changes the game: drawing a frame rebuilds the model
-  transforms of the units it draws, which the game reads, so a director's
-  draw puts them back as it found them, and the debris of explosions starts
-  its particles once a tick whether or not the tick is drawn. What the game
-  does does not depend on which frames were drawn, from where, or whether
-  any was: the generator's undrawn replay and every render reach the same
-  world;
+- the camera never changes the game: drawing changes nothing the game
+  reads. The game places the pieces it aims at from the units themselves,
+  never from the transforms a draw rebuilt, and the debris of explosions
+  starts its particles in the game's own tick. What the game does does not
+  depend on which frames were drawn, from where, or whether any was: the
+  generator's undrawn replay and every render reach the same world;
 - the script's numbers, the frame clock, the chunks, the transitions, the
   mix and the planner use exact integer arithmetic; the camera uses IEEE
   doubles with addition, subtraction, multiplication, division, square root

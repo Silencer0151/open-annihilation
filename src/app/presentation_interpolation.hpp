@@ -376,15 +376,34 @@ void observe_debris(
     uint32_t fraction
 ) noexcept;
 
-/// The random numbers the debug grid drew in the first draw of a tick, which
-/// every later draw of the tick draws again in turn, so that a tick drawn
-/// more than once takes from the match's random stream what one draw takes.
+/// The debug grid's random numbers. They come from the grid's own generator,
+/// never from the match's streams, so that drawing the grid never changes
+/// the game. The numbers the first draw of a tick drew are drawn again in
+/// turn by every later draw of the tick, so that a tick drawn more than once
+/// shows one grid.
 struct DebugGridRandom {
+    /// The generator: each step multiplies by `multiplier` and adds
+    /// `increment`; a number is the state's bits from `shift` up, under `mask`.
+    static constexpr uint32_t multiplier = 214013;
+    static constexpr uint32_t increment = 2531011;
+    static constexpr uint32_t shift = 16;
+    static constexpr uint32_t mask = 0x7fff;
+    static constexpr uint32_t first_state = 1;
+
     uint32_t tick{};
     bool drawn{}; ///< `values` holds the numbers of `tick`
-    bool first{}; ///< the draw under way is the tick's first, which takes from the stream
+    bool first{}; ///< the draw under way is the tick's first, which takes new numbers
     std::vector<int32_t> values;
-    std::size_t next{}; ///< the value a later draw of the tick takes next
+    std::size_t next{};          ///< the value a later draw of the tick takes next
+    uint32_t state{first_state}; ///< the generator's state
+
+    /// Steps the grid's own generator.
+    ///
+    /// @return 0 to 32767
+    [[nodiscard]] int32_t generate() noexcept {
+        state = state * multiplier + increment;
+        return static_cast<int32_t>((state >> shift) & mask);
+    }
 };
 
 /// Starts a draw of the debug grid at a tick: the tick's first draw forgets
@@ -396,12 +415,12 @@ void start_debug_grid_draw(DebugGridRandom& kept, uint32_t tick) noexcept;
 
 /// Returns the debug grid's next random number in the draw under way.
 ///
-/// The tick's first draw takes it from the stream and keeps it; a later draw
+/// The tick's first draw takes it from `stream` and keeps it; a later draw
 /// takes the kept numbers in turn, from the first again once they run out,
 /// and 0 when none were kept.
 ///
 /// @param[in,out] kept the numbers kept, the draw started (start_debug_grid_draw)
-/// @param stream takes the next number from the match's random stream
+/// @param stream gives a new number (DebugGridRandom::generate)
 /// @return the number
 template <typename Stream>
 [[nodiscard]] int32_t next_debug_grid_number(DebugGridRandom& kept, Stream&& stream) {

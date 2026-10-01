@@ -543,7 +543,7 @@ void debris_slots_and_draw_particles() {
     check(added == debris_capacity, "the zero block holds a hundred pieces");
     auto burning = falling_piece(20 << 16, 0, debris_smoke | debris_fire);
     const auto before = f.stream.calls;
-    debris_drawn(*f.world, f.game, f.host(), burning);
+    start_debris_piece_particles(*f.world, f.game, f.host(), burning);
     check(
         f.world->layers[layer_smoke].count == 2, "a smoking, burning piece adds a puff and a spark"
     );
@@ -555,9 +555,9 @@ void debris_slots_and_draw_particles() {
     check(live == 0, "pieces under sea level without the explode bit are dropped");
 }
 
-// draw_debris walks the debris table in slot order: each held piece gets its
-// puff or spark before the piece itself is drawn, and drawing
-// keeps every slot.
+// start_debris_particles gives each held piece its puff or spark, in slot
+// order; draw_debris walks the held pieces in slot order and changes
+// nothing.
 void debris_draw_walk() {
     Fixture f;
     (void)add_debris(*f.world, falling_piece(1 << 16, 0, debris_smoke));
@@ -566,39 +566,29 @@ void debris_draw_walk() {
     f.world->debris[1].live = false;
 
     struct Seen {
-        const EffectWorld* world{};
         int32_t count{};
         int32_t height[4]{};
-        int32_t smoke[4]{};
-    } seen{f.world.get()};
+    } seen{};
 
-    draw_debris(
-        *f.world, f.game, f.host(), true, &seen, [](void* context, const DebrisPiece& piece) {
-            auto& s = *static_cast<Seen*>(context);
-            s.height[s.count] = piece.position.y;
-            s.smoke[s.count] = s.world->layers[layer_smoke].count;
-            ++s.count;
-        }
-    );
+    const auto before = f.stream.calls;
+    draw_debris(*f.world, &seen, [](void* context, const DebrisPiece& piece) {
+        auto& s = *static_cast<Seen*>(context);
+        s.height[s.count] = piece.position.y;
+        ++s.count;
+    });
     check(
         seen.count == 2 && seen.height[0] == 1 << 16 && seen.height[1] == 3 << 16,
         "the held pieces are drawn in slot order"
     );
     check(
-        seen.smoke[0] == 1 && seen.smoke[1] == 2,
-        "each piece's particle is started before it is drawn"
+        f.world->layers[layer_smoke].count == 0 && f.stream.calls == before,
+        "drawing starts no particle and draws no random number"
     );
     check(f.world->debris[0].live && f.world->debris[2].live, "drawing keeps the slots");
-    draw_debris(*f.world, f.game, f.host(), true, nullptr, nullptr);
-    check(f.world->layers[layer_smoke].count == 4, "every draw starts the particles again");
-    seen.count = 0;
-    draw_debris(*f.world, f.game, f.host(), false, &seen, [](void* context, const DebrisPiece&) {
-        ++static_cast<Seen*>(context)->count;
-    });
-    check(
-        seen.count == 2 && f.world->layers[layer_smoke].count == 4,
-        "without particles the pieces are drawn alone"
-    );
+    start_debris_particles(*f.world, f.game, f.host());
+    check(f.world->layers[layer_smoke].count == 2, "each held piece starts its particle");
+    start_debris_particles(*f.world, f.game, f.host());
+    check(f.world->layers[layer_smoke].count == 4, "every start adds them again");
 }
 
 // The zero-block scan hands out the lowest free slot; the per-tick walk

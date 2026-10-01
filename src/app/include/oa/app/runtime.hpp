@@ -792,9 +792,8 @@ class Runtime final : public menu::Host,
     /// unless it shows the interface), stops the player's camera paths
     /// (zoom easing, tracking, edge and key scrolling, message recentring),
     /// routes the match's point sounds and, when every player speaks, every
-    /// player's unit announcements to `sounds`, and starts debris particles
-    /// only through start_director_debris_particles. Throws
-    /// std::logic_error without a match.
+    /// player's unit announcements to `sounds`. Throws std::logic_error
+    /// without a match.
     ///
     /// @param presentation the output size and what is drawn and heard
     /// @param sounds where the match's sounds go; its context must outlive
@@ -823,11 +822,6 @@ class Runtime final : public menu::Host,
     /// size, so that the output resolution never changes them. Called before
     /// each tick with the camera sounds are placed by.
     void bind_director_view();
-
-    /// Starts the particles of the debris pieces the match holds, once for
-    /// the tick the match has just run, whether or not the tick is drawn.
-    /// Draws in director mode never start them. Called once after each tick.
-    void start_director_debris_particles();
 
     /// Presents the unit announcements every player's units queued in the
     /// tick just run: each speaking player's queue presents at most one,

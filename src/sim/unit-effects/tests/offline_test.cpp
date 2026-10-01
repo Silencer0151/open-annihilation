@@ -265,11 +265,14 @@ int main() {
         world.explosions[0].sprite.frame_index == 0 &&
         world.explosions[0].sprite.remaining_ticks == 1
     );
-    CHECK(smoke_layer.count == smoke_before + 4);
+    // At the tick's end the debris piece, smoking and burning, starts its
+    // puff and then its spark.
+    CHECK(smoke_layer.count == smoke_before + 6);
+    CHECK(smoke_at(5).interval == 7 && smoke_at(5).deadline == 2 + 15);
+    CHECK(smoke_at(4).interval == 1 && smoke_at(4).deadline == 2);
     CHECK(smoke_at(3).interval == 7 && smoke_at(3).deadline == 2 + 15);
-    CHECK(smoke_at(2).interval == 1 && smoke_at(2).deadline == 2);
-    CHECK(smoke_at(1).interval == 7 && smoke_at(1).deadline == 2 + 15);
-    CHECK(smoke_at(0).interval == 15 && smoke_at(0).deadline == 2 + 900);
+    CHECK(smoke_at(2).interval == 15 && smoke_at(2).deadline == 2 + 900);
+    CHECK(smoke_at(1).interval == 1 && smoke_at(1).deadline == 2);
     const sim::effect_particles::DebrisPiece* debris = nullptr;
     for (const auto& piece : world.debris)
         if (piece.live)

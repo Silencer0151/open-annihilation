@@ -16,10 +16,13 @@ piece count as 3.1c does. `ModelHost` implements the model portion of the
 script VM Host; gameplay callbacks remain abstract for match-runtime.
 
 `attachment_position` accumulates piece offsets through the three pair
-rotations. `rebuild_transforms` supplies the reset/transform behavior. Angle
-words are 16-bit turns (`65536` per revolution), coordinates remain signed
-16.16 values, and conversion uses the X/Z-negated model-runtime convention of
-the 3DO loader. The radians multiplier is the game's stored double rather
+rotations. `rebuild_transforms` supplies the reset/transform behavior, and
+the renderer keeps the transforms it rebuilds for itself. `piece_box` gives
+the box around one piece's vertices as that rebuild would place them,
+without changing the instance: the simulation places what it reads of a
+piece so, never from a draw's transforms. Angle words are 16-bit turns
+(`65536` per revolution), coordinates remain signed 16.16 values, and
+conversion uses the X/Z-negated model-runtime convention of the 3DO loader. The radians multiplier is the game's stored double rather
 than a recomputed approximation.
 
 `rebuild_transforms` deliberately performs an unconditional bounded reset and

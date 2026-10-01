@@ -42,49 +42,6 @@ namespace {
 namespace model_render = oa::present::model;
 namespace unit_playout = oa::present::unit_playout;
 
-/// Copies the pieces of every unit's model: their transforms, which a draw
-/// rebuilds and the match reads.
-///
-/// @param[in,out] match the match
-/// @param[in,out] kept the copies, by unit slot; entries past `count` keep
-///        their memory for the next copy
-/// @param[out] count the entries that hold a copy
-void keep_unit_transforms(
-    oa::sim::match_runtime::Match& match,
-    std::vector<std::pair<uint16_t, oa::sim::model_runtime::Instance>>& kept,
-    size_t& count
-) {
-    count = 0;
-    const uint32_t slots = match.state().unit_slot_count;
-    for (uint32_t slot = 1; slot < slots; ++slot) {
-        auto* instance = match.instance(static_cast<uint16_t>(slot));
-        if (instance == nullptr)
-            continue;
-        if (count < kept.size()) {
-            kept[count].first = static_cast<uint16_t>(slot);
-            kept[count].second = instance->model();
-        } else {
-            kept.emplace_back(static_cast<uint16_t>(slot), instance->model());
-        }
-        ++count;
-    }
-}
-
-/// Puts back the pieces keep_unit_transforms copied.
-///
-/// @param[in,out] match the match
-/// @param kept the copies
-/// @param count the entries that hold a copy
-void restore_unit_transforms(
-    oa::sim::match_runtime::Match& match,
-    const std::vector<std::pair<uint16_t, oa::sim::model_runtime::Instance>>& kept,
-    size_t count
-) {
-    for (size_t index = 0; index < count && index < kept.size(); ++index)
-        if (auto* instance = match.instance(kept[index].first))
-            instance->model() = kept[index].second;
-}
-
 // Margin around the estimated screen extent of a model draw.
 constexpr int32_t kModelRegionMargin = 16;
 // Reach of a projectile model around its screen point.
@@ -1066,26 +1023,6 @@ void Runtime::render_match_surface() {
         }
     };
 
-    // The match reads its units' piece transforms, which drawing a unit
-    // rebuilds from the draw's own root rotation. A director's draw puts them
-    // back as it found them, so that what the match does never hangs on
-    // which frames were drawn or from where, and rebuilds for itself the
-    // transforms it draws with.
-    struct KeptTransforms {
-        oa::sim::match_runtime::Match* match{};
-        DirectorState* director{};
-
-        ~KeptTransforms() {
-            if (director != nullptr)
-                restore_unit_transforms(*match, director->kept_transforms, director->kept_count);
-        }
-    } kept_transforms{match_.get(), directed ? director_.get() : nullptr};
-
-    if (directed) {
-        keep_unit_transforms(*match_, director_->kept_transforms, director_->kept_count);
-        for (auto& unit : models.units)
-            unit.state.transforms_dirty = true;
-    }
     auto& world_record = match_->world().record;
     auto& renderer = models.renderer;
     renderer.world = &world_record;
@@ -1640,20 +1577,9 @@ void Runtime::render_match_surface() {
         model_render::bridge_end(models.bridge);
         oa::present::bind_display(outer_display);
     };
-    // As with the texture animations, a tick drawn more than once starts the
-    // debris particles on its first draw only. In director mode no draw
-    // starts them: start_director_debris_particles does, once a tick.
-    const bool start_debris_particles =
-        !directed && (!models.debris_drawn || models.debris_tick != renderer.tick);
-    if (!directed) {
-        models.debris_drawn = true;
-        models.debris_tick = renderer.tick;
-    }
+    // The pieces' particles start in the match's tick, never here.
     oa::sim::effect_particles::draw_debris(
         match_->effects(),
-        world_record.game,
-        match_->effect_host(),
-        start_debris_particles,
         &draw_debris_piece,
         [](void* context, const oa::sim::effect_particles::DebrisPiece& piece) {
             (*static_cast<decltype(draw_debris_piece)*>(context))(piece);
@@ -1781,28 +1707,6 @@ void Runtime::render_match_surface() {
     // Director mode composes its own frame (draw_director_frame).
     if (!match_use_layers_ && !directed)
         compose_match_frame(surface_);
-}
-
-void Runtime::start_director_debris_particles() {
-    if (director_ == nullptr || !match_)
-        throw std::logic_error("debris particles start through the director in director mode only");
-    auto& models = match_models();
-    const uint32_t tick = match_->simulation().tick;
-    if (models.debris_drawn && models.debris_tick == tick)
-        throw std::logic_error(
-            "the debris particles of tick " + std::to_string(tick) + " have started already"
-        );
-    oa::sim::effect_particles::draw_debris(
-        match_->effects(),
-        match_->world().record.game,
-        match_->effect_host(),
-        true,
-        nullptr,
-        nullptr
-    );
-    // A draw of the same tick after director mode ends starts none again.
-    models.debris_drawn = true;
-    models.debris_tick = tick;
 }
 
 } // namespace oa::app

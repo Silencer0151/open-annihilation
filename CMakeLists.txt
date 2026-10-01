@@ -525,7 +525,7 @@ if(OA_BUILD_PLATFORM)
       # way between two ticks, and is drawn so.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
       set(oa_director_render_hashes
-        "director render: frames 120ddb6c955601391f182b27d0796b3d4e252463f4a22f35c0a3897156ba2094 sound 8df12a92caf572a178ccc9d354c361761a6abdb3bc3d9a6e05b4f2821b8c9c9d")
+        "director render: frames a31c23b78459f727fba16dc60377daa4556d7bd539f94150941eaa2dc33304a2 sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render
@@ -712,6 +712,16 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-frame-rate PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The seeded skirmish's fight of 120 units writes one trace stream and
+        # reaches one world digest whatever is drawn: from any camera, at any
+        # frame rate (10 leaves most ticks undrawn), drawn after every tick,
+        # at any zoom and with enhanced anti-aliasing.
+        add_test(NAME native-sim-independent-of-drawing COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_sim_independent_of_drawing.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-sim-independent-of-drawing PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # Arm mission 9 (AC09) at medium, its commander left idle, is lost to
         # the two Pyros its script sends: defeat follows the commander's death
         # after the outcome countdown, with no failed tick.

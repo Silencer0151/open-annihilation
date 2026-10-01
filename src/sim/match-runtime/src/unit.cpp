@@ -171,19 +171,16 @@ std::array<uint32_t, 3> UnitInstance::piece_box_center(uint32_t piece) const {
     const std::array<uint32_t, 3> position = slot_.unit->position;
     if (piece >= model_.pieces().size())
         return position;
-    int32_t low_x = 0, high_x = 0, low_y = 0, high_y = 0, low_z = 0, high_z = 0;
-    for (const auto& vertex : model_.pieces()[piece].transformed_vertices) {
-        low_x = std::min(low_x, vertex.x);
-        high_x = std::max(high_x, vertex.x);
-        low_y = std::min(low_y, vertex.y);
-        high_y = std::max(high_y, vertex.y);
-        low_z = std::min(low_z, vertex.z);
-        high_z = std::max(high_z, vertex.z);
-    }
+    // The piece is placed from the unit's own pieces and attitude, never from
+    // the transforms a draw last left in the model instance. The box grows
+    // from (0,0,0).
+    const auto box = model_.piece_box(
+        piece, {slot_.record.bank, std::bit_cast<int16_t>(slot_.yaw), slot_.record.pitch}, {}
+    );
     return {
-        position[0] + std::bit_cast<uint32_t>((high_x + low_x) / 2),
-        position[1] + std::bit_cast<uint32_t>((high_y + low_y) / 2),
-        position[2] + std::bit_cast<uint32_t>((high_z + low_z) / 2)
+        position[0] + std::bit_cast<uint32_t>((box.high.x + box.low.x) / 2),
+        position[1] + std::bit_cast<uint32_t>((box.high.y + box.low.y) / 2),
+        position[2] + std::bit_cast<uint32_t>((box.high.z + box.low.z) / 2)
     };
 }
 

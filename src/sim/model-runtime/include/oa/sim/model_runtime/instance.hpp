@@ -55,6 +55,12 @@ struct PieceState {
     uint32_t parent{kNoPiece};
 };
 
+/// A box in a model's space, inclusive at both corners.
+struct PieceBox {
+    oa::formats::objects3d::FixedVector3 low{};
+    oa::formats::objects3d::FixedVector3 high{};
+};
+
 class Instance {
   public:
 
@@ -115,6 +121,22 @@ class Instance {
     [[nodiscard]] oa::formats::objects3d::FixedVector3
     attachment_position(uint32_t piece_index, RotationWords root_rotation = {}) const;
 
+    /// Returns a box grown to hold one piece's vertices, transformed as
+    /// rebuild_transforms transforms them, from the pieces' translations and
+    /// rotations alone, without changing the instance.
+    ///
+    /// Throws std::overflow_error on 32-bit overflow.
+    ///
+    /// @param piece_index piece whose vertices the box takes in; one past the
+    ///        pieces leaves the box as it is
+    /// @param root_rotation angle words added to the root piece's rotation
+    /// @param box the box to grow
+    /// @return the grown box
+    /// @quirk A root-level sibling of the root piece adds its untransformed
+    ///        vertices, as rebuild_transforms leaves them.
+    [[nodiscard]] PieceBox
+    piece_box(uint32_t piece_index, RotationWords root_rotation, PieceBox box) const;
+
     /// Rebuilds every piece's transformed vertices for the renderer.
     ///
     /// Resets every piece's vertices to the model's (X and Z negated) and transforms
@@ -128,6 +150,14 @@ class Instance {
     void rebuild_transforms(RotationWords root_rotation = {});
 
   private:
+
+    /// Returns the words a piece turns its points by: its rotation, plus
+    /// root_rotation at the top of the hierarchy.
+    [[nodiscard]] RotationWords
+    turning_words(uint32_t piece_index, RotationWords root_rotation) const;
+    /// Tells whether a piece hangs under the instance root, which the
+    /// transforms walk; a root-level sibling does not.
+    [[nodiscard]] bool under_root(uint32_t piece_index) const;
 
     friend class ModelHost;
     friend Instance make_instance(

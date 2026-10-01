@@ -15,14 +15,11 @@
 #include "oa/media/director.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/sim/match_runtime.hpp"
-#include "oa/sim/model_runtime/instance.hpp"
 #include "oa/ui/display_layout.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <utility>
-#include <vector>
 
 namespace oa::app {
 
@@ -69,12 +66,6 @@ struct Runtime::DirectorState {
     std::array<uint8_t, 256> gamma_table{};
     bool gamma_identity{true}; ///< gamma_table leaves every value as it is
     Tally tally{};
-    /// Every unit's model pieces as the match held them before a draw, by
-    /// unit slot, which the draw puts back (render_match_surface): the match
-    /// reads the transforms a draw rebuilds. The first kept_count hold them;
-    /// the rest keep their memory for the next draw.
-    std::vector<std::pair<uint16_t, oa::sim::model_runtime::Instance>> kept_transforms{};
-    size_t kept_count{};
 
     /// Draws the next number of the director's random stream.
     ///

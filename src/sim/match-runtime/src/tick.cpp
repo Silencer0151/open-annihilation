@@ -50,6 +50,10 @@ void Match::tick() {
         remembered_sight_, simulation_.tick, true, context
     );
     mark_profile(OA_PROFILE_MISC);
+    // Last, each held debris piece starts its puff or spark, once a tick
+    // whether the tick is drawn or not, from the debris table the tick leaves.
+    sim::effect_particles::start_debris_particles(*effects_, state().game, effect_host());
+    mark_profile(OA_PROFILE_SFX);
 }
 
 void Match::update_player_slots() {

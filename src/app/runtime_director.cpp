@@ -516,7 +516,6 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
             // The units of players this machine does not simulate are played
             // out after every tick, as the main loop's clock does.
             observe_unit_playout();
-            start_director_debris_particles();
             // The presentation notes every tick, drawn or not, so that a
             // drawn frame always has the tick before at hand.
             observe_match_tick(match_models(), *match_);
@@ -722,7 +721,6 @@ int Runtime::run_render_script() {
                 // The units of players this machine does not simulate are played
                 // out after every tick, as the main loop's clock does.
                 observe_unit_playout();
-                start_director_debris_particles();
             }
             recording_end = match_->state().game.tick + 1;
             replay.close(replay.context);
@@ -945,7 +943,6 @@ int Runtime::run_generate_script() {
             // The units of players this machine does not simulate are played
             // out after every tick, as the main loop's clock does.
             observe_unit_playout();
-            start_director_debris_particles();
             recorder.after_tick(match_->state(), visibility_hooks);
             status = replay_status(replay);
             if (status.errors > errors_seen && first_error_tick == 0)
@@ -1370,7 +1367,6 @@ void Runtime::check_director_render() {
         } catch (const std::exception& error) {
             report_match_tick_error(error.what());
         }
-        start_director_debris_particles();
     }
     leave_director_mode();
     require(

@@ -551,22 +551,12 @@ void Runtime::check_director_view() {
         set_director_view(view_at(tick));
         bind_director_view();
         step_tick();
-        start_director_debris_particles();
         present_director_announcements();
         draw_director_frame(frame);
         oa::base::sha256::update(frames, frame);
     }
     const auto director_digest = world_digest();
     const auto tally = director_->tally;
-
-    // A second start of the tick's particles is refused.
-    bool refused = false;
-    try {
-        start_director_debris_particles();
-    } catch (const std::logic_error&) {
-        refused = true;
-    }
-    require(refused, "the debris particles of a tick started twice");
 
     // No chrome: a view at a whole map pixel is the world layer's corner, at
     // the default gamma, and the layer is the battlefield alone.
@@ -730,7 +720,6 @@ void Runtime::check_director_view() {
         set_director_view(view_at(tick));
         bind_director_view();
         step_tick();
-        start_director_debris_particles();
     }
     const auto undrawn_digest = world_digest();
     leave_director_mode();

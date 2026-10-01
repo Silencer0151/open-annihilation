@@ -275,10 +275,10 @@ and `app-window-icon` that the embedded one decodes.
   skirmish. `runtime_director_view.cpp` and `director_state.hpp` are director
   mode (`director_presentation.hpp`): the frame drawn from the director's
   camera at the output size, the battlefield alone, the match's sounds and
-  every player's unit announcements sent to the director's sound hooks,
-  debris particles started once a tick, and each draw's rebuilt model
-  transforms put back so that the match never depends on what was drawn;
-  `--check-director-view` checks it. `director_output.hpp` and
+  every player's unit announcements sent to the director's sound hooks;
+  as everywhere, nothing drawn changes the match, and
+  `--check-director-view` checks that a drawn and an undrawn replay reach
+  one world. `director_output.hpp` and
   `director_output.cpp` (`oa-app-director-output`) write a render's files
   (each chunk's frame manifest and sound, the run manifest), run `ffmpeg` on
   the chunks and join them, and read and write the `.oamovie` bundle;
@@ -296,12 +296,11 @@ and `app-window-icon` that the embedded one decodes.
   state of their own, while the match's own pieces are rebuilt as a whole
   tick's draw rebuilds them; projectiles, debris, fragments, particles,
   health bars, order lines and a tracking camera follow. The director
-  draws its frames between ticks so. The debug grid takes the match's
-  random numbers on a tick's first draw alone and draws the same numbers
-  again on the tick's later draws (`DebugGridRandom`), so that, shown, it
-  takes from the match's random stream what one draw a tick takes at any
-  frame rate; before, each draw took more, and a match with the grid shown
-  ended otherwise at another frame rate. `app-presentation-interpolation`
+  draws its frames between ticks so. The debug grid draws its random
+  numbers from its own generator, never from the match's streams, and
+  draws the numbers a tick's first draw took again on the tick's later
+  draws (`DebugGridRandom`), so that showing it never changes the game and
+  a tick drawn more than once shows one grid. `app-presentation-interpolation`
   tests the blends and the grid's numbers, and `--check-interpolation`
   (`runtime_interpolation_check.cpp`) the frames.
 - Units of other machines' players: `advance_match_clock` has the unit

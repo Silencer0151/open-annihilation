@@ -83,8 +83,6 @@ struct MatchModels {
     oa::Unit feature_unit{};
     uint32_t animation_tick{};
     bool animation_started{};
-    uint32_t debris_tick{}; // the tick whose first draw started the debris particles
-    bool debris_drawn{};
     bool weapon_names_loaded{};
     std::unordered_map<uint8_t, std::string> weapon_model_names; // by registry index
     std::unordered_map<uint8_t, std::shared_ptr<const oa::formats::objects3d::Model>> weapon_models;

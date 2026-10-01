@@ -178,22 +178,15 @@ void Runtime::draw_match_debug_grid(
         const auto cell = search.cell(static_cast<uint32_t>(x), static_cast<uint32_t>(z));
         return wr::DebugSearchCell{cell.flags, cell.predecessor};
     };
-    // However often a tick is drawn, the grid takes from the match's random
-    // stream what one draw takes (DebugGridRandom).
+    // The grid's random numbers are its own (DebugGridRandom): drawing it
+    // never takes from the match's streams, and every draw of a tick shows
+    // the numbers its first draw took.
     auto& kept = match_models().debug_random;
     start_debug_grid_draw(kept, match_->simulation().tick);
-
-    struct GridNumbers {
-        DebugGridRandom* kept{};
-        oa::sim::match_runtime::Match* match{};
-    } numbers{&kept, match_.get()};
-
-    sources.random.user = &numbers;
+    sources.random.user = &kept;
     sources.random.next = [](void* user) {
-        auto& grid = *static_cast<GridNumbers*>(user);
-        return next_debug_grid_number(*grid.kept, [&] {
-            return static_cast<int32_t>(grid.match->lcg_rand());
-        });
+        auto& grid = *static_cast<DebugGridRandom*>(user);
+        return next_debug_grid_number(grid, [&] { return grid.generate(); });
     };
     oa::present::model::bridge_begin(bridge, frame, area, scale, display.palette);
     oa::present::model::bridge_open(

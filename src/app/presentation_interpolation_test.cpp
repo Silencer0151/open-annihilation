@@ -347,6 +347,13 @@ void test_debug_grid_numbers() {
     CHECK((draw(6, 1) == std::vector<int32_t>{4}) && stream == 5);
     // A tick whose first draw took none gives 0 to later draws.
     CHECK((draw(7, 0).empty()) && (draw(7, 2) == std::vector<int32_t>{0, 0}) && stream == 5);
+    // The grid's own generator starts alike in every match and gives 0 to 32767.
+    oa::app::DebugGridRandom first{};
+    oa::app::DebugGridRandom second{};
+    for (int32_t step = 0; step < 64; ++step) {
+        const int32_t value = first.generate();
+        CHECK(value == second.generate() && value >= 0 && value <= 0x7fff);
+    }
 }
 
 int main() {

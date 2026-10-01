@@ -574,7 +574,7 @@ void draw_explosions(
     }
 }
 
-void debris_drawn(
+void start_debris_piece_particles(
     EffectWorld& world, const oa::Game& game, const EffectHost& host, const DebrisPiece& piece
 ) {
     if ((piece.flags & debris_smoke) != 0)
@@ -583,21 +583,17 @@ void debris_drawn(
         spawn_spark(world, game, host, piece.position, layer_smoke);
 }
 
-void draw_debris(
-    EffectWorld& world,
-    const oa::Game& game,
-    const EffectHost& host,
-    bool start_particles,
-    void* context,
-    DebrisVisitor visit
-) {
-    for (const auto& piece : world.debris) {
-        if (!piece.live)
-            continue;
-        if (start_particles)
-            debris_drawn(world, game, host, piece);
-        if (visit != nullptr)
+void start_debris_particles(EffectWorld& world, const oa::Game& game, const EffectHost& host) {
+    for (const auto& piece : world.debris)
+        if (piece.live)
+            start_debris_piece_particles(world, game, host, piece);
+}
+
+void draw_debris(const EffectWorld& world, void* context, DebrisVisitor visit) {
+    if (visit == nullptr)
+        return;
+    for (const auto& piece : world.debris)
+        if (piece.live)
             visit(context, piece);
-    }
 }
 } // namespace oa::sim::effect_particles

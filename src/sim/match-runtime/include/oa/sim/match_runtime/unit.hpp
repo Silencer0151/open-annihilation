@@ -230,7 +230,9 @@ class UnitInstance {
     /// @return Signed 16.16 x, y, z bit patterns.
     std::array<uint32_t, 3> piece_world(uint32_t piece) const;
     /// Returns the unit position plus the centre of the box around the
-    /// piece's transformed vertices.
+    /// piece's vertices, transformed from the unit's pieces and its bank,
+    /// heading and pitch as they are now; what a draw last left in the model
+    /// instance plays no part.
     ///
     /// @param piece COB piece index; one outside the model gives the unit
     ///     position.

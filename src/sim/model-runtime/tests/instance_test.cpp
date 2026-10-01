@@ -4,11 +4,14 @@
 #include "oa/sim/model_runtime/instance.hpp"
 #include "oa/sim/model_runtime/model_host.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace {
 void require(bool value, const char* message) {
@@ -136,6 +139,58 @@ int main() {
             "runtime vertex sign/offset transform differs"
         );
         require(!instance.transforms_dirty(), "transform rebuild did not clear dirty state");
+
+        // piece_box takes in the vertices rebuild_transforms gives under the
+        // same root rotation, whatever the instance last rebuilt, and changes
+        // nothing.
+        auto boxed_model = std::make_shared<oa::formats::objects3d::Model>(*model);
+        boxed_model->objects[1].vertices = {
+            {3 * 65536, -2 * 65536, 5 * 65536}, {-7 * 65536, 4 * 65536, 65536}
+        };
+        auto boxed = oa::sim::model_runtime::make_instance(boxed_model, 0, names);
+        Host boxed_host(boxed);
+        boxed_host.set_piece_angle(1, 2, 0x1234);
+        boxed_host.set_piece_angle(2, 0, 0x0800);
+        boxed_host.set_piece_position(1, 1, 3 * 65536);
+        const oa::sim::model_runtime::RotationWords turned{0x0300, 0x2000, -0x0400};
+        boxed.rebuild_transforms(turned);
+        std::vector<oa::sim::model_runtime::PieceBox> expected(boxed.pieces().size());
+        for (std::size_t piece = 0; piece < expected.size(); ++piece)
+            for (const auto& vertex : boxed.pieces()[piece].transformed_vertices) {
+                auto& box = expected[piece];
+                box.low = {
+                    std::min(box.low.x, vertex.x),
+                    std::min(box.low.y, vertex.y),
+                    std::min(box.low.z, vertex.z)
+                };
+                box.high = {
+                    std::max(box.high.x, vertex.x),
+                    std::max(box.high.y, vertex.y),
+                    std::max(box.high.z, vertex.z)
+                };
+            }
+        boxed.rebuild_transforms();
+        const auto unturned = boxed.pieces()[1].transformed_vertices;
+        for (uint32_t piece = 0; piece < expected.size(); ++piece) {
+            const auto box = boxed.piece_box(piece, turned, {});
+            const auto& want = expected[piece];
+            require(
+                box.low.x == want.low.x && box.low.y == want.low.y && box.low.z == want.low.z &&
+                    box.high.x == want.high.x && box.high.y == want.high.y &&
+                    box.high.z == want.high.z,
+                "piece box differs from the rebuilt transforms' box"
+            );
+        }
+        require(
+            boxed.pieces()[1].transformed_vertices.size() == unturned.size() &&
+                boxed.pieces()[1].transformed_vertices[0].x == unturned[0].x &&
+                boxed.pieces()[1].transformed_vertices[1].z == unturned[1].z,
+            "piece box changed the instance's transforms"
+        );
+        const auto outside = boxed.piece_box(9, turned, {{1, 2, 3}, {4, 5, 6}});
+        require(
+            outside.low.x == 1 && outside.high.z == 6, "a piece past the pieces changed the box"
+        );
 
         constexpr std::string_view excess[] = {"base", "turret", "flare", "extra"};
         (void)oa::sim::model_runtime::make_instance(model, 0, excess);
