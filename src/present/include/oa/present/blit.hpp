@@ -22,6 +22,18 @@ namespace oa::present {
 /// @param clip inclusive clip rectangle
 void trim_to_clip(Rect32& src, Rect32& dst, const Rect32& clip) noexcept;
 
+/// Shrinks a source/destination rectangle pair so the destination fits a surface's clip and band.
+///
+/// trim_to_clip with the surface's clip rectangle, then the destination's
+/// rows outside the surface's band (surface_band) go as well, with the
+/// matching source rows: each row of a sprite draws alone, so the rows left
+/// draw as they would without the band.
+///
+/// @param[in,out] src source rectangle
+/// @param[in,out] dst destination rectangle, same size as `src`
+/// @param surface surface whose clip and band the destination must fit
+void trim_to_surface(Rect32& src, Rect32& dst, const Surface& surface) noexcept;
+
 /// Copies all of a surface to a position of another, clipped to the destination extent.
 ///
 /// The destination clip rectangle and both origins are ignored.

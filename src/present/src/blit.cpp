@@ -7,6 +7,7 @@
 #include "oa/present/rle.hpp"
 #include "oa/present/surface.hpp"
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -36,6 +37,7 @@ void with_target(Surface* target, Draw draw) noexcept {
 // Clip-origin copy shared by copy_surface_clipped and copy_surface_keyed.
 template <typename Put>
 void copy_clipped(Surface& dst, const Surface& src, int32_t x, int32_t y, Put put) noexcept {
+    assert(!surface_banded(dst) && "surface copies do not honour a surface's band");
     int32_t dst_width = dst.width;
     int32_t dst_height = dst.height;
     if (x >= dst_width || y >= dst_height) {
@@ -112,7 +114,7 @@ bool place_sprite(
     dst.y1 = y - sprite.origin_y;
     dst.x2 = sprite.width - 1 + dst.x1;
     dst.y2 = sprite.height - 1 + dst.y1;
-    trim_to_clip(src, dst, target.clip);
+    trim_to_surface(src, dst, target);
     return dst.x1 <= dst.x2 && dst.y1 <= dst.y2 && src.x1 <= src.x2 && src.y1 <= src.y2;
 }
 
@@ -175,6 +177,19 @@ void trim_to_clip(Rect32& src, Rect32& dst, const Rect32& clip) noexcept {
     }
 }
 
+void trim_to_surface(Rect32& src, Rect32& dst, const Surface& surface) noexcept {
+    trim_to_clip(src, dst, surface.clip);
+    const SurfaceRows band = surface_band(surface);
+    if (dst.y1 < band.first) {
+        src.y1 += band.first - dst.y1;
+        dst.y1 = band.first;
+    }
+    if (dst.y2 >= band.end) {
+        src.y2 -= dst.y2 - (band.end - 1);
+        dst.y2 = band.end - 1;
+    }
+}
+
 void copy_surface_clipped(Surface& dst, const Surface& src, int32_t x, int32_t y) noexcept {
     copy_clipped(dst, src, x, y, put_byte);
 }
@@ -206,6 +221,7 @@ void copy_rect_keyed(
 }
 
 void copy_tile(Surface& dst, int32_t x, int32_t y, const uint8_t* tile) noexcept {
+    assert(!surface_banded(dst) && "tile copies do not honour a surface's band");
     uint8_t* out = pixel_at(dst, x, y);
     for (int32_t row = 0; row < tile_size; ++row, out += dst.pitch, tile += tile_size) {
         for (int32_t i = 0; i < tile_size; ++i) {

@@ -201,6 +201,62 @@ void test_span_clip() {
     CHECK(at(target, 7, 1) == 0xee);
 }
 
+// A seeded run of textured quads (convex and twisted, past the clip and the
+// surface, textures of every sampled width) drawn on a whole surface and
+// again band by band, each band drawing the whole run with its rows alone
+// (surface_band), leaves the same pixels for every number of bands.
+void test_surface_quad_bands() {
+    constexpr int size = 72;
+    uint32_t state = 0x9E3779B9u;
+    const auto next = [&state](int bound) {
+        state = state * 1664525U + 1013904223U;
+        return static_cast<int>((state >> 8) % static_cast<uint32_t>(bound));
+    };
+    const Texture textures[] = {
+        make_texture(16, 16),
+        make_texture(32, 8),
+        make_texture(64, 64),
+        make_texture(128, 4),
+        make_texture(24, 24)
+    };
+
+    struct Quad {
+        alignas(4) oa::Rect32 clip{}; ///< packed, so aligned here
+        PolygonVertex corners[4]{};
+        int texture{};
+    };
+
+    std::vector<Quad> quads(300);
+    for (Quad& quad : quads) {
+        const int x1 = next(size);
+        const int y1 = next(size);
+        quad.clip = {x1, y1, x1 + next(size - x1), y1 + next(size - y1)};
+        if (next(3) == 0)
+            quad.clip = {0, 0, size - 1, size - 1};
+        for (PolygonVertex& corner : quad.corners)
+            corner = {next(size + 40) - 20, next(size + 40) - 20};
+        quad.texture = next(5);
+    }
+    const auto draw = [&](Surface& surface) {
+        for (const Quad& quad : quads) {
+            oa::present::set_surface_clip(surface, quad.clip);
+            texture_quad(&surface, &textures[quad.texture].sprite, quad.corners, nullptr);
+        }
+    };
+    auto whole = oa::present::create_surface(size, size);
+    draw(whole.surface);
+    for (const int count : {2, 3, 5, 7}) {
+        auto banded = oa::present::create_surface(size, size);
+        for (int band = 0; band < count; ++band) {
+            oa::present::set_surface_band(
+                banded.surface, band * size / count, (band + 1) * size / count
+            );
+            draw(banded.surface);
+        }
+        CHECK(banded.pixels == whole.pixels);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -211,6 +267,7 @@ int main() {
     test_shaded_quad();
     test_surface_quad();
     test_span_clip();
+    test_surface_quad_bands();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return EXIT_FAILURE;

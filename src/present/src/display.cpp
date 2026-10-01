@@ -14,7 +14,9 @@ namespace oa::present {
 
 namespace {
 
-DisplayContext* g_display = nullptr;
+// Each thread binds its own display, so that a thread drawing a band of a
+// frame never sees another thread's binding change.
+thread_local DisplayContext* g_display = nullptr;
 
 constexpr int32_t display_bits = 8;
 constexpr int32_t pitch_alignment_mask = ~3;

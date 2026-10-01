@@ -450,12 +450,17 @@ void texture_quad(
             left_x = x;
     }
     const Rect32 clip = present::surface_clip(*target);
+    // The rows the clip gives are worked out whole; a band (surface_band)
+    // only leaves the rows outside it unsampled.
+    const present::SurfaceRows band = present::surface_band(*target);
     if (clip.x1 <= right_x && left_x <= clip.x2 && clip.y1 <= bottom && top <= clip.y2) {
         if (top < clip.y1)
             top = clip.y1;
         if (clip.y2 < bottom)
             bottom = clip.y2;
-        if (bottom != top) {
+        const int32_t first = std::max(top, band.first);
+        const int32_t end = std::min(bottom, band.end);
+        if (bottom != top && first < end) {
             auto& table = span_table(bottom - top);
             const auto edges = [&](bool left_side) {
                 std::size_t cursor = 0;
@@ -507,8 +512,8 @@ void texture_quad(
             };
             edges(true);
             edges(false);
-            std::size_t cursor = 0;
-            for (int32_t y = top; y < bottom; ++y, ++cursor) {
+            auto cursor = static_cast<std::size_t>(first - top);
+            for (int32_t y = first; y < end; ++y, ++cursor) {
                 MeshSpanRow& r = table[cursor];
                 if (r.right != r.left && wrap_sub(r.right, r.left) > -1)
                     sample_texture_span(y, r, *target, *texture);

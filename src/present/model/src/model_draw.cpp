@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 namespace oa::present::model {
 namespace {
@@ -411,20 +412,50 @@ void outline_at(Sprite& image, const ModelRef& model, uint8_t color, uint32_t sa
     }
 }
 
+// The part of a unit's draw from its image a pass does: everything as one
+// draw (draw_unit_model), only what it builds (plan_model_draw), or only
+// what it draws (draw_planned_model).
+enum class Pass : uint8_t { whole, plan, draw };
+
+// A carried unit's entry in a plan, or null.
+const CarriedDraw* carried_in(const ModelDrawPlan& plan, const Unit& unit) noexcept {
+    for (const CarriedDraw& carried : plan.carried)
+        if (carried.unit == &unit)
+            return &carried;
+    return nullptr;
+}
+
+// The model a draw takes for a unit its model carries: the renderer's
+// model_of, or a plan's note of it when the draw is drawn from a plan; a
+// null instance when there is none.
+ModelRef
+carried_model(const ModelRenderer& renderer, const ModelDrawPlan* planned, const Unit& unit) {
+    if (planned != nullptr) {
+        const CarriedDraw* carried = carried_in(*planned, unit);
+        return carried != nullptr ? carried->model : ModelRef{};
+    }
+    if (renderer.model_of == nullptr)
+        return {};
+    return renderer.model_of(renderer.user, unit);
+}
+
 // A model as the composer callbacks see it.
 struct ComposeContext {
     ModelRenderer* renderer{};
     const ModelRef* model{};
     const Sprite* source{};
+    /// The plan the draw is drawn from, which names the carried units'
+    /// models; null to ask the renderer's model_of.
+    const ModelDrawPlan* planned{};
 };
 
 bool compose_bounds(void* user, const Unit& unit, ui::hud::SpriteBounds& out) {
     auto* context = static_cast<ComposeContext*>(user);
     ModelRef model = *context->model;
     if (&unit != context->model->unit) {
-        if (context->renderer->model_of == nullptr)
+        if (context->planned == nullptr && context->renderer->model_of == nullptr)
             return false;
-        model = context->renderer->model_of(context->renderer->user, unit);
+        model = carried_model(*context->renderer, context->planned, unit);
     }
     if (model.instance == nullptr)
         return false;
@@ -511,7 +542,7 @@ void draw_silhouette_blended(Surface& target, const Sprite& image, int32_t x, in
         x - image.origin_x + image.width - 1,
         y - image.origin_y + image.height - 1
     };
-    present::trim_to_clip(source, placed, target.clip);
+    present::trim_to_surface(source, placed, target);
     if (placed.x1 > placed.x2 || placed.y1 > placed.y2 || source.x1 > source.x2 ||
         source.y1 > source.y2)
         return;
@@ -602,6 +633,20 @@ bool init_composite_buffer(ModelRenderer& renderer) {
     // Every image copied into the composite uses key 1.
     renderer.composite.sprite.key = image_key;
     return renderer.composite.sprite.data != nullptr;
+}
+
+void copy_renderer_settings(ModelRenderer& from, ModelRenderer& to) {
+    // Both composites are set aside, so that the assignment copies every
+    // other field, whatever fields the renderer gains, and no pixels.
+    present::SpriteBuffer kept;
+    present::SpriteBuffer lent;
+    std::swap(kept, to.composite);
+    std::swap(lent, from.composite);
+    to = from;
+    std::swap(from.composite, lent);
+    std::swap(to.composite, kept);
+    if (to.composite.sprite.data == nullptr)
+        init_composite_buffer(to);
 }
 
 void set_model_light(ModelRenderer& renderer, int32_t x, int32_t y, int32_t z) noexcept {
@@ -698,25 +743,61 @@ void allocate_depth_image(present::SpriteBuffer& image, int32_t width, int32_t h
     allocate_planes(image, width, height, true);
 }
 
+namespace {
+
+// Measures a model and builds its image into `image`, as prepare_model_image
+// builds the draw state's; false when the image cannot be allocated.
+bool build_image_into(
+    ModelRenderer& renderer,
+    const ModelRef& model,
+    bool attached,
+    int32_t pass,
+    present::SpriteBuffer& image
+) {
+    const Unit& unit = *model.unit;
+    const ImageFrame frame = measure_bounds_at(*model.instance, nullptr, renderer.samples);
+    if (!attached && (unit.flags2 & OA_UNIT_FLAG2_Z_BUFFER) == 0 && unit.build_remaining == 0.0F)
+        allocate_image(image, frame.width, frame.height);
+    else
+        allocate_depth_image(image, frame.width, frame.height);
+    if (image.sprite.data == nullptr)
+        return false;
+    image.sprite.origin_x = static_cast<int16_t>(frame.origin_x);
+    image.sprite.origin_y = static_cast<int16_t>(frame.origin_y);
+    if (!is_building(unit) || (renderer.graphics_flags & graphics_shading) == 0)
+        build_model_image(renderer, image.sprite, model, unit.owner_index, pass);
+    else
+        build_shaded_model_image(renderer, image.sprite, model, unit.owner_index, pass);
+    return true;
+}
+
+// Tells whether a model's image build goes through the renderer's composite
+// (begin_image_pass): a building's image drawn double size with
+// anti-aliasing on, at the game's pixels.
+bool builds_in_composite(const ModelRenderer& renderer, const ModelRef& model, int32_t pass) {
+    return renderer.samples == 1 && (renderer.graphics_flags & graphics_anti_alias) != 0 &&
+           is_building(*model.unit) && pass != 0;
+}
+
+// Copies an image and its pixels.
+void copy_image(const present::SpriteBuffer& from, present::SpriteBuffer& to) {
+    to.pixels = from.pixels;
+    to.sprite = from.sprite;
+    to.sprite.data = to.pixels.data();
+    if (from.sprite.aux != nullptr)
+        to.sprite.aux =
+            to.pixels.data() + (static_cast<const uint8_t*>(from.sprite.aux) - from.pixels.data());
+}
+
+} // namespace
+
 bool prepare_model_image(
     ModelRenderer& renderer, const ModelRef& model, bool attached, int32_t pass
 ) {
-    const Unit& unit = *model.unit;
     ModelState& state = *model.state;
-    const ImageFrame frame = measure_bounds_at(*model.instance, nullptr, renderer.samples);
-    if (!attached && (unit.flags2 & OA_UNIT_FLAG2_Z_BUFFER) == 0 && unit.build_remaining == 0.0F)
-        allocate_image(state.image, frame.width, frame.height);
-    else
-        allocate_depth_image(state.image, frame.width, frame.height);
-    if (!has_image(state))
+    if (!build_image_into(renderer, model, attached, pass, state.image))
         return false;
-    state.image_unfinished = unit.build_remaining != 0.0F;
-    state.image.sprite.origin_x = static_cast<int16_t>(frame.origin_x);
-    state.image.sprite.origin_y = static_cast<int16_t>(frame.origin_y);
-    if (!is_building(unit) || (renderer.graphics_flags & graphics_shading) == 0)
-        build_model_image(renderer, state.image.sprite, model, unit.owner_index, pass);
-    else
-        build_shaded_model_image(renderer, state.image.sprite, model, unit.owner_index, pass);
+    state.image_unfinished = model.unit->build_remaining != 0.0F;
     ++state.image_builds;
     return true;
 }
@@ -819,24 +900,40 @@ void outline_model(Sprite& image, const ModelRef& model, uint8_t color) {
     outline_at(image, model, color, 1);
 }
 
-void draw_unit_model(
+namespace {
+
+// A unit's draw from its cached image, or the part of it `pass` names: with
+// Pass::plan it builds what the draw builds and notes what the draw needs in
+// `noted`, drawing nothing; with Pass::draw it draws from `planned`,
+// building nothing; with Pass::whole it does both in the draw's order, as
+// draw_unit_model.
+void unit_model_pass(
     ModelRenderer& renderer,
     Surface* target,
     const ModelRef& model,
     int32_t camera_x,
     int32_t camera_z,
-    bool first_frame
+    bool first_frame,
+    Pass pass,
+    ModelDrawPlan* noted,
+    const ModelDrawPlan* planned
 ) {
     ModelState& state = *model.state;
     if (!has_image(state))
         return;
+    const bool builds = pass != Pass::draw;
+    const bool draws = pass != Pass::plan;
     const Unit& unit = *model.unit;
     const Game& game = renderer.world->game;
     const int32_t dx = wrap_sub(unit.position.x, camera_x);
     const int32_t dz = wrap_sub(unit.position.z, camera_z);
-    const int32_t ground = renderer.ground_height != nullptr
-                               ? renderer.ground_height(renderer.user, unit.position)
-                               : 0;
+    int32_t ground = 0;
+    if (planned != nullptr)
+        ground = planned->ground;
+    else if (renderer.ground_height != nullptr)
+        ground = renderer.ground_height(renderer.user, unit.position);
+    if (noted != nullptr)
+        noted->ground = ground;
     // Places are counted in samples; heights and depths stay in game pixels.
     const uint32_t samples = renderer.samples;
     const auto scale = static_cast<int32_t>(samples);
@@ -860,55 +957,72 @@ void draw_unit_model(
     const auto draw_building_shadow = [&]() {
         if (submerged_standin)
             return;
-        if (state.shadow.sprite.data == nullptr)
+        if (builds && state.shadow.sprite.data == nullptr)
             build_shadow_image(renderer, model, state.image.sprite);
-        if (state.shadow.sprite.data != nullptr)
+        if (draws && state.shadow.sprite.data != nullptr)
             present::draw_sprite_blended(target, &state.shadow.sprite, shadow_x, shadow_y);
+    };
+    // The units it carries, in the order the draw walks them; a plan notes
+    // each with the model the renderer hands back.
+    const auto walk_carried = [&](auto&& visit) {
+        for (const Unit* child = world_unit(renderer.world, unit.attach_first_child);
+             child != nullptr;
+             child = world_unit(renderer.world, child->attach_next)) {
+            if ((child->flags & unit_flag_attached_without_piece) != 0 ||
+                (planned == nullptr && renderer.model_of == nullptr))
+                continue;
+            const ModelRef carried = carried_model(renderer, planned, *child);
+            if (noted != nullptr) {
+                noted->carried.emplace_back();
+                noted->carried.back().unit = child;
+                noted->carried.back().model = carried;
+            }
+            if (carried.instance == nullptr)
+                continue;
+            visit(*child, carried);
+        }
     };
     if (state.image.sprite.aux == nullptr) {
         if (shadows) {
             if (is_building(unit) && (flags & OA_UNIT_DEF_FLAG_DIGGER) == 0)
                 draw_building_shadow();
-            else if (vehicle_shadow && samples != 1 && target != nullptr)
+            else if (draws && vehicle_shadow && samples != 1 && target != nullptr)
                 draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
-            else if (vehicle_shadow)
+            else if (draws && vehicle_shadow)
                 present::draw_sprite_blended(
                     target, &copy_silhouette(renderer, state.image.sprite), shadow_x, shadow_y
                 );
         }
-        if (!has_image(state) && !prepare_model_image(renderer, model, false, pass_cached_pieces))
+        if (!has_image(state) &&
+            (!builds || !prepare_model_image(renderer, model, false, pass_cached_pieces)))
             return;
-        if (!translucent)
-            present::draw_sprite(target, &state.image.sprite, image_x, unit_y);
-        else
-            present::draw_sprite_blended(target, &state.image.sprite, image_x, unit_y);
-        const formats::objects3d::Model& source = model.instance->model();
-        const auto pieces = model.instance->pieces();
-        for (std::size_t n = pieces.size(); n != 0; --n) {
-            const PieceState& piece = pieces[n - 1];
-            if ((piece.flags & piece_visible) != 0 && (piece.flags & piece_cached) == 0)
-                draw_piece_flat(
-                    renderer,
-                    target,
-                    unit,
-                    camera_x,
-                    camera_z,
-                    source.objects[piece.object_index],
-                    model.prepared->objects[piece.object_index],
-                    piece,
-                    unit.owner_index,
-                    first_frame
-                );
+        if (draws) {
+            if (!translucent)
+                present::draw_sprite(target, &state.image.sprite, image_x, unit_y);
+            else
+                present::draw_sprite_blended(target, &state.image.sprite, image_x, unit_y);
+            const formats::objects3d::Model& source = model.instance->model();
+            const auto pieces = model.instance->pieces();
+            for (std::size_t n = pieces.size(); n != 0; --n) {
+                const PieceState& piece = pieces[n - 1];
+                if ((piece.flags & piece_visible) != 0 && (piece.flags & piece_cached) == 0)
+                    draw_piece_flat(
+                        renderer,
+                        target,
+                        unit,
+                        camera_x,
+                        camera_z,
+                        source.objects[piece.object_index],
+                        model.prepared->objects[piece.object_index],
+                        piece,
+                        unit.owner_index,
+                        first_frame
+                    );
+            }
         }
-        for (const Unit* child = world_unit(renderer.world, unit.attach_first_child);
-             child != nullptr;
-             child = world_unit(renderer.world, child->attach_next)) {
-            if ((child->flags & unit_flag_attached_without_piece) != 0 ||
-                renderer.model_of == nullptr)
-                continue;
-            const ModelRef carried = renderer.model_of(renderer.user, *child);
-            if (carried.instance == nullptr)
-                continue;
+        walk_carried([&](const Unit&, const ModelRef& carried) {
+            if (!draws)
+                return;
             const formats::objects3d::Model& child_source = carried.instance->model();
             const auto child_pieces = carried.instance->pieces();
             for (std::size_t n = child_pieces.size(); n != 0; --n) {
@@ -927,75 +1041,108 @@ void draw_unit_model(
                         first_frame
                     );
             }
-        }
+        });
         return;
     }
     if (shadows) {
         if ((flags & OA_UNIT_DEF_FLAG_DIGGER) != 0) {
-            Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
-            present::clear_sprite_below_depth(
-                silhouette, static_cast<uint8_t>(vertex_depth_base(model))
-            );
-            present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+            if (draws) {
+                Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
+                present::clear_sprite_below_depth(
+                    silhouette, static_cast<uint8_t>(vertex_depth_base(model))
+                );
+                present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+            }
         } else if (is_building(unit)) {
             draw_building_shadow();
         } else if (
             vehicle_shadow && static_cast<int32_t>(game.sea_level) - unit_height <= 0 &&
             samples != 1 && target != nullptr
         ) {
-            draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
+            if (draws)
+                draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
         } else if (vehicle_shadow) {
-            Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
-            const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
-            if (lift > 0)
-                present::clear_sprite_below_depth(
-                    silhouette, static_cast<uint8_t>(vertex_depth_base(model) + lift)
-                );
-            present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+            if (draws) {
+                Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
+                const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
+                if (lift > 0)
+                    present::clear_sprite_below_depth(
+                        silhouette, static_cast<uint8_t>(vertex_depth_base(model) + lift)
+                    );
+                present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+            }
         }
     }
-    if (!has_image(state) && !prepare_model_image(renderer, model, false, pass_cached_pieces))
+    if (!has_image(state) &&
+        (!builds || !prepare_model_image(renderer, model, false, pass_cached_pieces)))
         return;
     const Sprite& image = state.image.sprite;
-    ComposeContext context{&renderer, &model, &image};
-    ui::hud::SpriteComposer composer{};
-    composer.user = &context;
-    composer.model_bounds = compose_bounds;
-    composer.copy = compose_copy;
-    composer.redraw = compose_redraw;
-    composer.finish = compose_finish;
-    const ui::hud::SpriteFrame source_frame{
-        image.width, image.height, image.origin_x, image.origin_y
-    };
-    if (samples == 1)
-        ui::hud::compose_unit_sprite(*renderer.world, unit, source_frame, composer);
-    else
-        compose_finer_sprite(context, unit, source_frame);
     Sprite& composite = renderer.composite.sprite;
-    if (!is_building(unit) || unit.build_remaining == 0.0F)
-        build_model_image(renderer, composite, model, unit.owner_index, pass_moving_pieces);
-    for (const Unit* child = world_unit(renderer.world, unit.attach_first_child); child != nullptr;
-         child = world_unit(renderer.world, child->attach_next)) {
-        if ((child->flags & unit_flag_attached_without_piece) != 0 || renderer.model_of == nullptr)
-            continue;
-        const ModelRef carried = renderer.model_of(renderer.user, *child);
-        if (carried.instance == nullptr)
-            continue;
-        prepare_model_image(renderer, carried, true, pass_all_pieces);
-        if (!has_image(*carried.state))
-            continue;
-        apply_build_effect(renderer, carried.state->image.sprite, carried);
+    if (draws) {
+        ComposeContext context{&renderer, &model, &image, planned};
+        ui::hud::SpriteComposer composer{};
+        composer.user = &context;
+        composer.model_bounds = compose_bounds;
+        composer.copy = compose_copy;
+        composer.redraw = compose_redraw;
+        composer.finish = compose_finish;
+        const ui::hud::SpriteFrame source_frame{
+            image.width, image.height, image.origin_x, image.origin_y
+        };
+        if (samples == 1)
+            ui::hud::compose_unit_sprite(*renderer.world, unit, source_frame, composer);
+        else
+            compose_finer_sprite(context, unit, source_frame);
+        if (!is_building(unit) || unit.build_remaining == 0.0F)
+            build_model_image(renderer, composite, model, unit.owner_index, pass_moving_pieces);
+    }
+    // Each carried unit's image, built as carried with every piece and the
+    // build effect, goes into the composite at its place.
+    thread_local present::SpriteBuffer rebuilt;
+    walk_carried([&](const Unit& child, const ModelRef& carried) {
+        const Sprite* carried_image = nullptr;
+        if (planned != nullptr) {
+            const CarriedDraw* entry = carried_in(*planned, child);
+            if (entry->built_in_composite) {
+                // Built again, as the draw built it, for what it leaves in
+                // the composite.
+                if (!build_image_into(renderer, carried, true, pass_all_pieces, rebuilt))
+                    return;
+                apply_build_effect(renderer, rebuilt.sprite, carried);
+                carried_image = &rebuilt.sprite;
+            } else {
+                if (entry->image.sprite.data == nullptr)
+                    return;
+                carried_image = &entry->image.sprite;
+            }
+        } else {
+            // A plan notes the child last, just before this visit.
+            CarriedDraw* entry = noted != nullptr ? &noted->carried.back() : nullptr;
+            if (entry != nullptr)
+                entry->built_in_composite = builds_in_composite(renderer, carried, pass_all_pieces);
+            prepare_model_image(renderer, carried, true, pass_all_pieces);
+            if (!has_image(*carried.state))
+                return;
+            apply_build_effect(renderer, carried.state->image.sprite, carried);
+            if (entry != nullptr)
+                copy_image(carried.state->image, entry->image);
+            carried_image = &carried.state->image.sprite;
+        }
+        if (!draws)
+            return;
         const int32_t cx = wrap_sub(carried.unit->position.x, unit.position.x);
         const int32_t cy = wrap_sub(carried.unit->position.y, unit.position.y);
         const int32_t cz = wrap_sub(carried.unit->position.z, unit.position.z);
         present::composite_depth_sprite(
-            carried.state->image.sprite,
+            *carried_image,
             composite,
             hi_at(cx, samples),
             hi_at(cz, samples) - (hi_at(cy, samples) >> 1),
             hi(cy)
         );
-    }
+    });
+    if (!draws)
+        return;
     const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
     if (lift > 0) {
         const auto threshold = static_cast<uint8_t>(lift + vertex_depth_base(model));
@@ -1011,6 +1158,76 @@ void draw_unit_model(
         present::draw_sprite(target, &composite, image_x, unit_y);
     else
         present::draw_sprite_blended(target, &composite, image_x, unit_y);
+}
+
+// Draws a model's visible pieces flat (draw_model without a cached image).
+void draw_model_pieces(
+    const ModelRenderer& renderer,
+    Surface* target,
+    const ModelRef& model,
+    int32_t camera_x,
+    int32_t camera_z,
+    bool first_frame
+) {
+    const formats::objects3d::Model& source = model.instance->model();
+    const auto pieces = model.instance->pieces();
+    for (std::size_t n = pieces.size(); n != 0; --n) {
+        const PieceState& piece = pieces[n - 1];
+        if ((piece.flags & piece_visible) != 0)
+            draw_piece_flat(
+                renderer,
+                target,
+                *model.unit,
+                camera_x,
+                camera_z,
+                source.objects[piece.object_index],
+                model.prepared->objects[piece.object_index],
+                piece,
+                model.unit->owner_index,
+                first_frame
+            );
+    }
+}
+
+} // namespace
+
+void draw_unit_model(
+    ModelRenderer& renderer,
+    Surface* target,
+    const ModelRef& model,
+    int32_t camera_x,
+    int32_t camera_z,
+    bool first_frame
+) {
+    unit_model_pass(
+        renderer, target, model, camera_x, camera_z, first_frame, Pass::whole, nullptr, nullptr
+    );
+}
+
+void plan_model_draw(ModelRenderer& renderer, const ModelRef& model, ModelDrawPlan& plan) {
+    plan.from_image = has_image(*model.state);
+    plan.ground = 0;
+    plan.carried.clear();
+    if (plan.from_image)
+        unit_model_pass(renderer, nullptr, model, 0, 0, false, Pass::plan, &plan, nullptr);
+}
+
+void draw_planned_model(
+    ModelRenderer& renderer,
+    Surface* target,
+    const ModelRef& model,
+    int32_t camera_x,
+    int32_t camera_z,
+    bool first_frame,
+    const ModelDrawPlan& plan
+) {
+    if (!plan.from_image) {
+        draw_model_pieces(renderer, target, model, camera_x, camera_z, first_frame);
+        return;
+    }
+    unit_model_pass(
+        renderer, target, model, camera_x, camera_z, first_frame, Pass::draw, nullptr, &plan
+    );
 }
 
 void build_model_image(

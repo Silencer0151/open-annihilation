@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace oa::present {
 
@@ -18,7 +19,8 @@ void init_surface(
     surface.height = height;
     surface.origin_x = 0;
     surface.origin_y = 0;
-    surface.flags = (surface.flags & ~OA_SURFACE_FLAG_CLEARED_ON_INIT) | OA_SURFACE_FLAG_MEMORY;
+    surface.flags = (surface.flags & ~(OA_SURFACE_FLAG_CLEARED_ON_INIT | OA_SURFACE_FLAG_BANDED)) |
+                    OA_SURFACE_FLAG_MEMORY;
     surface.reserved_after_pixels = OA_SURFACE_RESERVED_AFTER_PIXELS_INIT;
     reset_clip(surface);
 }
@@ -38,6 +40,22 @@ void set_surface_clip(Surface& surface, const Rect32& clip) noexcept {
     surface.clip = clip;
 }
 
+SurfaceRows surface_band(const Surface& surface) noexcept {
+    if ((surface.flags & OA_SURFACE_FLAG_BANDED) == 0)
+        return {std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()};
+    return {surface.band_first_row, surface.band_end_row};
+}
+
+void set_surface_band(Surface& surface, int32_t first_row, int32_t end_row) noexcept {
+    surface.band_first_row = first_row;
+    surface.band_end_row = end_row;
+    surface.flags |= OA_SURFACE_FLAG_BANDED;
+}
+
+void clear_surface_band(Surface& surface) noexcept {
+    surface.flags &= ~OA_SURFACE_FLAG_BANDED;
+}
+
 void surface_from_sprite(Surface& surface, const Sprite& sprite) noexcept {
     surface.width = sprite.width;
     surface.height = sprite.height;
@@ -47,7 +65,8 @@ void surface_from_sprite(Surface& surface, const Sprite& sprite) noexcept {
     surface.reserved_after_pixels = OA_SURFACE_RESERVED_AFTER_PIXELS_INIT;
     surface.origin_x = sprite.origin_x;
     surface.origin_y = sprite.origin_y;
-    surface.flags = (surface.flags & ~OA_SURFACE_FLAG_CLEARED_ON_INIT) | OA_SURFACE_FLAG_MEMORY;
+    surface.flags = (surface.flags & ~(OA_SURFACE_FLAG_CLEARED_ON_INIT | OA_SURFACE_FLAG_BANDED)) |
+                    OA_SURFACE_FLAG_MEMORY;
     reset_clip(surface);
 }
 

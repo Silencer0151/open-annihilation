@@ -75,7 +75,7 @@ struct DisplayModeList {
     DisplayMode modes[display_mode_capacity]{};
 };
 
-// The process-wide display record: the back buffer and draw target, the
+// The display record a thread binds (bind_display): the back buffer and draw target, the
 // lookup tables, the cursor overlay, the text state and the palettes.
 struct DisplayContext {
     RenderSink sink{};                // platform target every frame is shown on
@@ -115,15 +115,18 @@ struct DisplayContext {
     int32_t lock_depth = 0;
 };
 
-/// Installs the process-wide display context.
+/// Installs the calling thread's display context.
 ///
-/// @param context context every display call uses from now on; not owned;
-///     null detaches the display
+/// Each thread has a binding of its own: a thread that draws binds the
+/// display it draws with, and another thread's binding is left as it is.
+///
+/// @param context context every display call of this thread uses from now
+///     on; not owned; null detaches the display
 void bind_display(DisplayContext* context) noexcept;
 
-/// Returns the process-wide display context.
+/// Returns the calling thread's display context.
 ///
-/// @return the bound context, or null
+/// @return the context this thread bound, or null
 [[nodiscard]] DisplayContext* display_context() noexcept;
 
 /// Returns the display width.

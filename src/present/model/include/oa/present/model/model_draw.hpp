@@ -190,6 +190,19 @@ struct LinkedDraw {
 /// @return false when the buffer cannot be allocated
 bool init_composite_buffer(ModelRenderer& renderer);
 
+/// Gives a renderer another's settings, keeping its own composite buffer.
+///
+/// Every field but the composite is copied, by assigning the renderer with
+/// both composites set aside, so that no pixels are copied and a field
+/// added later is copied too; a renderer without a composite gets one
+/// (init_composite_buffer). A renderer of its own lets another thread draw
+/// the same frame's models, since a draw writes its renderer's composite.
+///
+/// @param[in,out] from the renderer whose settings are copied; its
+///     composite is set aside during the copy and put back
+/// @param[in,out] to the renderer that takes them
+void copy_renderer_settings(ModelRenderer& from, ModelRenderer& to);
+
 /// Sets the light direction of the shaded builder from percentages.
 ///
 /// @param[in,out] renderer drawing context
@@ -251,6 +264,72 @@ void draw_model(
     int32_t camera_x,
     int32_t camera_z,
     bool first_frame
+);
+
+/// A unit carried by a model being drawn, as a planned draw of its carrier
+/// (plan_model_draw) finds it.
+struct CarriedDraw {
+    /// The carried unit's record, as the carrier's draw walks to it.
+    const Unit* unit{};
+    /// What the renderer's model_of handed back for it.
+    ModelRef model{};
+    /// Its image as the carrier's draw built it, with the build effect, when
+    /// the carrier composes a depth image; empty when it has none.
+    present::SpriteBuffer image{};
+    /// Its image was built in the renderer's composite, so that the
+    /// carrier's composite holds that build's leftovers when the image is
+    /// composed into it: a draw builds it again, into scratch of its own.
+    bool built_in_composite{};
+};
+
+/// What a draw of a model builds on the way and what it decides, worked out
+/// once by plan_model_draw, so that draw_planned_model can draw the model
+/// as draw_model does without building or changing anything but the
+/// renderer's composite and its target. A frame can then be drawn band by
+/// band from one plan per model.
+struct ModelDrawPlan {
+    bool from_image{}; ///< drawn from its cached image (draw_unit_model), else its pieces flat
+    int32_t ground{};  ///< the terrain height under the unit, pixels
+    /// The units it carries, in the order its draw walks them; their
+    /// images when it composes a depth image.
+    std::vector<CarriedDraw> carried;
+};
+
+/// Builds what draw_model builds of a model on the way, in the same order,
+/// and notes what the draw decides, without drawing.
+///
+/// From a cached image the draw builds a building's silhouette when it has
+/// none, and the images of the units it carries when it composes a depth
+/// image; those builds change the draw states as draw_model changes them.
+/// The renderer's model_of and ground_height are called as the draw calls
+/// them.
+///
+/// @param[in,out] renderer drawing context; its composite is used as scratch
+/// @param model model to plan the draw of
+/// @param[out] plan what draw_planned_model needs; its buffers are reused
+void plan_model_draw(ModelRenderer& renderer, const ModelRef& model, ModelDrawPlan& plan);
+
+/// Draws a model as draw_model does, from what plan_model_draw built and noted.
+///
+/// Builds nothing, changes no draw state and calls none of the renderer's
+/// hooks: only the target and the renderer's composite change, so a model
+/// can be drawn from one plan many times, onto bands of one frame.
+///
+/// @param[in,out] renderer drawing context; its composite is used as scratch
+/// @param target surface to draw on; null for the locked display surface
+/// @param model the model plan_model_draw planned
+/// @param camera_x camera x in 16.16 map pixels
+/// @param camera_z camera z in 16.16 map pixels
+/// @param first_frame true to show frame 0 of animated textures
+/// @param plan the model's plan
+void draw_planned_model(
+    ModelRenderer& renderer,
+    Surface* target,
+    const ModelRef& model,
+    int32_t camera_x,
+    int32_t camera_z,
+    bool first_frame,
+    const ModelDrawPlan& plan
 );
 
 /// Draws one piece straight onto a surface without depth, positioned by its owner unit.

@@ -67,6 +67,81 @@ struct SupersampleScratch {
 [[nodiscard]] UnitSupersampling
 fitting_supersampling(const Rect32& region, UnitSupersampling level) noexcept;
 
+/// What a unit's draw at a level of enhanced anti-aliasing builds and
+/// decides (draw_unit_supersampled), worked out by plan_unit_supersampled,
+/// so that draw_planned_unit can draw the unit, whole or in bands, without
+/// building or changing anything but the bridge, the frame, the renderer's
+/// composite and the scratch.
+struct SupersampledUnitPlan {
+    // Rect32 is packed (1-byte aligned): the rectangles come first, at
+    // 4-byte-aligned places, since the drawing takes their fields by
+    // reference.
+    /// The region the bridge captures for the unit at UnitSupersampling::off,
+    /// in its 8-bit pixels.
+    alignas(4) Rect32 region{};
+    /// The region the samples cover at the other levels.
+    alignas(4) Rect32 covered{};
+    /// The level it draws at (fitting_supersampling); off draws into the bridge.
+    UnitSupersampling level{UnitSupersampling::off};
+    /// What the draw's readying gave (prepare_linked_draw): a carried unit
+    /// is not drawn.
+    LinkedDraw linked{};
+    /// The model the samples are drawn from: the unit's, with its finer draw state.
+    ModelRef finer{};
+    /// The model's draw (plan_model_draw), at the level's samples.
+    ModelDrawPlan model{};
+};
+
+/// Readies a unit and builds what its draw at a level builds, as
+/// draw_unit_supersampled does, without drawing.
+///
+/// The draw states change as draw_unit_supersampled changes them, the finer
+/// image built again when the game's was.
+///
+/// @param[in,out] renderer drawing context
+/// @param bridge the frame's model bridge, set up by bridge_begin; nothing
+///     is captured
+/// @param model the unit to draw
+/// @param region the inclusive rectangle, in the bridge's 8-bit pixels, the
+///     unit may draw in
+/// @param movement_idle the movement object's idle flag, for mobile units
+/// @param level the level
+/// @param[out] plan what draw_planned_unit needs; its buffers are reused
+void plan_unit_supersampled(
+    ModelRenderer& renderer,
+    const RgbBridge& bridge,
+    const ModelRef& model,
+    const Rect32& region,
+    bool movement_idle,
+    UnitSupersampling level,
+    SupersampledUnitPlan& plan
+);
+
+/// Draws a unit planned by plan_unit_supersampled, as draw_unit_supersampled
+/// draws it, through the whole bridge or one band of it.
+///
+/// Builds nothing and changes no draw state: a unit is planned once and
+/// drawn by every band of a frame.
+///
+/// @param[in,out] renderer drawing context; its composite is used as scratch
+/// @param[in,out] bridge the frame's model bridge
+/// @param[in,out] band the band of the bridge to draw (bridge_split); null
+///     for the whole bridge
+/// @param[in,out] scratch the draw's buffers
+/// @param model the unit plan_unit_supersampled planned
+/// @param plan its plan
+/// @param[in,out] bridge_holds_draws as draw_unit_supersampled takes it, for
+///     the bridge or the band
+void draw_planned_unit(
+    ModelRenderer& renderer,
+    RgbBridge& bridge,
+    BridgeBand* band,
+    SupersampleScratch& scratch,
+    const ModelRef& model,
+    const SupersampledUnitPlan& plan,
+    bool& bridge_holds_draws
+);
+
 /// Draws a unit at a level of enhanced anti-aliasing.
 ///
 /// At UnitSupersampling::off the unit draws into the bridge as it always
@@ -79,7 +154,8 @@ fitting_supersampling(const Rect32& region, UnitSupersampling level) noexcept;
 /// over the part of the region the draw covers (bridge_open_sampled), from
 /// its finer image (ModelState::finer), which is built again whenever the
 /// game's image is, and reduced straight into the bridge's frame
-/// (bridge_end_sampled).
+/// (bridge_end_sampled). It plans the unit (plan_unit_supersampled) and
+/// draws the plan (draw_planned_unit) through the whole bridge.
 ///
 /// @param[in,out] renderer drawing context
 /// @param[in,out] bridge the frame's model bridge

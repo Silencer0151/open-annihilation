@@ -61,13 +61,13 @@ ModelRef finer_model_of(void* user, const Unit& unit) {
 class FinerRenderer {
   public:
 
-    FinerRenderer(ModelRenderer& renderer, const SampledRegion& sampled)
+    FinerRenderer(ModelRenderer& renderer, uint32_t factor, const Rect32& region)
         : renderer_(renderer), links_{renderer.user, renderer.ground_height, renderer.model_of},
           samples_(renderer.samples), origin_x_(renderer.origin_x), origin_y_(renderer.origin_y) {
-        const auto factor = static_cast<int32_t>(sampled.factor);
-        renderer.samples = sampled.factor;
-        renderer.origin_x = (origin_x_ - sampled.region.x1) * factor;
-        renderer.origin_y = (origin_y_ - sampled.region.y1) * factor;
+        const auto samples = static_cast<int32_t>(factor);
+        renderer.samples = factor;
+        renderer.origin_x = (origin_x_ - region.x1) * samples;
+        renderer.origin_y = (origin_y_ - region.y1) * samples;
         renderer.user = &links_;
         renderer.ground_height = links_.ground_height != nullptr ? finer_ground_height : nullptr;
         renderer.model_of = links_.model_of != nullptr ? finer_model_of : nullptr;
@@ -203,19 +203,47 @@ Rect32 drawn_region(const ModelRenderer& renderer, const ModelRef& model) {
     };
 }
 
-// Draws a unit as draw_linked_model draws it at UnitSupersampling::off.
-void draw_unit_plain(
-    ModelRenderer& renderer,
-    RgbBridge& bridge,
-    const ModelRef& model,
-    const Rect32& region,
-    bool movement_idle,
-    bool& bridge_holds_draws
-) {
-    model.state->finer.reset();
-    bridge_open(bridge, region);
-    draw_linked_model(renderer, &bridge.surface, model, movement_idle);
-    bridge_holds_draws = true;
+// A region clipped to a surface. Rect32 is packed, so its fields are read
+// into locals before std::max and std::min take them by reference.
+Rect32 clip_to_surface(const Rect32& region, const Surface& surface) noexcept {
+    const int32_t left = region.x1;
+    const int32_t top = region.y1;
+    const int32_t right = region.x2;
+    const int32_t bottom = region.y2;
+    return {
+        std::max(left, 0),
+        std::max(top, 0),
+        std::min(right, surface.width - 1),
+        std::min(bottom, surface.height - 1)
+    };
+}
+
+// The overlap of two regions, read field by field as clip_to_surface reads them.
+Rect32 overlap(const Rect32& a, const Rect32& b) noexcept {
+    const int32_t a_left = a.x1;
+    const int32_t a_top = a.y1;
+    const int32_t a_right = a.x2;
+    const int32_t a_bottom = a.y2;
+    const int32_t b_left = b.x1;
+    const int32_t b_top = b.y1;
+    const int32_t b_right = b.x2;
+    const int32_t b_bottom = b.y2;
+    return {
+        std::max(a_left, b_left),
+        std::max(a_top, b_top),
+        std::min(a_right, b_right),
+        std::min(a_bottom, b_bottom)
+    };
+}
+
+// The region of the bridge's surface a sampled region covers, as
+// bridge_open_sampled lays it out: the region clipped to the surface, or an
+// empty one.
+Rect32 sampled_region(const RgbBridge& bridge, const Rect32& region) noexcept {
+    const Rect32 clip = clip_to_surface(region, bridge.surface);
+    if (clip.x1 > clip.x2 || clip.y1 > clip.y2)
+        return {0, 0, -1, -1};
+    return clip;
 }
 
 } // namespace
@@ -253,6 +281,129 @@ UnitSupersampling fitting_supersampling(const Rect32& region, UnitSupersampling 
     return UnitSupersampling::off;
 }
 
+void plan_unit_supersampled(
+    ModelRenderer& renderer,
+    const RgbBridge& bridge,
+    const ModelRef& model,
+    const Rect32& region,
+    bool movement_idle,
+    UnitSupersampling level,
+    SupersampledUnitPlan& plan
+) {
+    const Rect32 clipped = clip_to_surface(region, bridge.surface);
+    const UnitSupersampling fitting =
+        level == UnitSupersampling::off ? level : fitting_supersampling(clipped, level);
+    plan.level = fitting;
+    plan.region = region;
+    plan.covered = {0, 0, -1, -1};
+    plan.finer = {};
+    plan.model.from_image = false;
+    plan.model.carried.clear();
+    if (fitting == UnitSupersampling::off) {
+        // As draw_linked_model readies and builds, once the region is
+        // captured; any finer image the unit kept is let go.
+        model.state->finer.reset();
+        plan.linked = prepare_linked_draw(renderer, model, movement_idle);
+        if (plan.linked.drawn)
+            plan_model_draw(renderer, model, plan.model);
+        return;
+    }
+    plan.linked = prepare_linked_draw(renderer, model, movement_idle);
+    if (!plan.linked.drawn)
+        return;
+    // The unit's transforms are now those it draws with, so its draw covers
+    // no more than drawn_region, which is far smaller than the region the
+    // caller allows from the last transforms.
+    plan.covered = overlap(clipped, drawn_region(renderer, model));
+    ModelState& state = *model.state;
+    FinerModel& finer = finer_model(state);
+    ModelRef finer_ref = model;
+    finer_ref.state = &finer.state;
+    const uint32_t factor = supersampling_factor(fitting);
+    {
+        const FinerRenderer finer_renderer(renderer, factor, sampled_region(bridge, plan.covered));
+        if (state.image.sprite.data == nullptr) {
+            finer.state.image = {};
+            finer.state.shadow = {};
+        } else if (
+            finer.samples != factor || finer.image_builds != state.image_builds ||
+            finer.state.image.sprite.data == nullptr
+        ) {
+            finer.state.shadow = {};
+            prepare_model_image(renderer, finer_ref, false, pass_cached_pieces);
+            finer.samples = factor;
+            finer.image_builds = state.image_builds;
+        }
+        plan_model_draw(renderer, finer_ref, plan.model);
+    }
+    plan.finer = finer_ref;
+}
+
+void draw_planned_unit(
+    ModelRenderer& renderer,
+    RgbBridge& bridge,
+    BridgeBand* band,
+    SupersampleScratch& scratch,
+    const ModelRef& model,
+    const SupersampledUnitPlan& plan,
+    bool& bridge_holds_draws
+) {
+    const auto camera_x = static_cast<int32_t>(static_cast<uint32_t>(renderer.camera_x) << 16);
+    const auto camera_z = static_cast<int32_t>(static_cast<uint32_t>(renderer.camera_y) << 16);
+    if (plan.level == UnitSupersampling::off) {
+        // Into the bridge as it always was, to be written back with its
+        // other draws.
+        if (band != nullptr)
+            bridge_open(bridge, *band, plan.region);
+        else
+            bridge_open(bridge, plan.region);
+        if (plan.linked.drawn)
+            draw_planned_model(
+                renderer,
+                band != nullptr ? &band->surface : &bridge.surface,
+                model,
+                camera_x,
+                camera_z,
+                plan.linked.unlit,
+                plan.model
+            );
+        bridge_holds_draws = true;
+        return;
+    }
+    if (!plan.linked.drawn)
+        return;
+    // Everything the bridge holds goes to the frame first, so that the unit
+    // draws over it: the draws it notes, and lines drawn into the bridge
+    // without being noted, such as the unit's own selection box.
+    if (band != nullptr)
+        bridge_end(bridge, *band);
+    else
+        bridge_end(bridge);
+    bridge_holds_draws = false;
+    SampledRegion& sampled = scratch.region;
+    const uint32_t factor = supersampling_factor(plan.level);
+    if (band != nullptr)
+        bridge_open_sampled(bridge, *band, sampled, plan.covered, factor);
+    else
+        bridge_open_sampled(bridge, sampled, plan.covered, factor);
+    {
+        const FinerRenderer finer_renderer(renderer, sampled.factor, sampled.region);
+        draw_planned_model(
+            renderer,
+            &sampled.surface,
+            plan.finer,
+            camera_x,
+            camera_z,
+            plan.linked.unlit,
+            plan.model
+        );
+    }
+    if (band != nullptr)
+        bridge_end_sampled(bridge, *band, sampled);
+    else
+        bridge_end_sampled(bridge, sampled);
+}
+
 void draw_unit_supersampled(
     ModelRenderer& renderer,
     RgbBridge& bridge,
@@ -263,66 +414,9 @@ void draw_unit_supersampled(
     UnitSupersampling level,
     bool& bridge_holds_draws
 ) {
-    const Rect32 clipped{
-        std::max(region.x1, 0),
-        std::max(region.y1, 0),
-        std::min(region.x2, bridge.surface.width - 1),
-        std::min(region.y2, bridge.surface.height - 1)
-    };
-    const UnitSupersampling fitting =
-        level == UnitSupersampling::off ? level : fitting_supersampling(clipped, level);
-    if (fitting == UnitSupersampling::off) {
-        draw_unit_plain(renderer, bridge, model, region, movement_idle, bridge_holds_draws);
-        return;
-    }
-    const LinkedDraw draw = prepare_linked_draw(renderer, model, movement_idle);
-    if (!draw.drawn)
-        return;
-    // Everything the bridge holds goes to the frame first, so that the unit
-    // draws over it: the draws it notes, and lines drawn into the bridge
-    // without being noted, such as the unit's own selection box.
-    bridge_end(bridge);
-    bridge_holds_draws = false;
-    // The unit's transforms are now those it draws with, so its draw covers
-    // no more than drawn_region, which is far smaller than the region the
-    // caller allows from the last transforms.
-    const Rect32 drawn = drawn_region(renderer, model);
-    const Rect32 covered{
-        std::max(clipped.x1, drawn.x1),
-        std::max(clipped.y1, drawn.y1),
-        std::min(clipped.x2, drawn.x2),
-        std::min(clipped.y2, drawn.y2)
-    };
-    SampledRegion& sampled = scratch.region;
-    bridge_open_sampled(bridge, sampled, covered, supersampling_factor(fitting));
-    ModelState& state = *model.state;
-    FinerModel& finer = finer_model(state);
-    ModelRef finer_ref = model;
-    finer_ref.state = &finer.state;
-    {
-        const FinerRenderer finer_renderer(renderer, sampled);
-        if (state.image.sprite.data == nullptr) {
-            finer.state.image = {};
-            finer.state.shadow = {};
-        } else if (
-            finer.samples != sampled.factor || finer.image_builds != state.image_builds ||
-            finer.state.image.sprite.data == nullptr
-        ) {
-            finer.state.shadow = {};
-            prepare_model_image(renderer, finer_ref, false, pass_cached_pieces);
-            finer.samples = sampled.factor;
-            finer.image_builds = state.image_builds;
-        }
-        draw_model(
-            renderer,
-            &sampled.surface,
-            finer_ref,
-            static_cast<int32_t>(static_cast<uint32_t>(renderer.camera_x) << 16),
-            static_cast<int32_t>(static_cast<uint32_t>(renderer.camera_y) << 16),
-            draw.unlit
-        );
-    }
-    bridge_end_sampled(bridge, sampled);
+    SupersampledUnitPlan plan;
+    plan_unit_supersampled(renderer, bridge, model, region, movement_idle, level, plan);
+    draw_planned_unit(renderer, bridge, nullptr, scratch, model, plan, bridge_holds_draws);
 }
 
 } // namespace oa::present::model

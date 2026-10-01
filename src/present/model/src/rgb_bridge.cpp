@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace oa::present::model {
 namespace {
@@ -29,6 +30,99 @@ std::size_t slot_of(uint32_t rgb) noexcept {
 // The slot a colour outside the palette is remembered in.
 std::size_t nearest_slot_of(uint32_t rgb) noexcept {
     return static_cast<std::size_t>((rgb * 2654435761U) >> 16) & (bridge_nearest_slots - 1);
+}
+
+// What a capture or write-back may touch: the whole bridge, or one band of
+// it (BridgeBand).
+struct Scope {
+    Surface* surface{};                    ///< the 8-bit view whose clip a capture sets
+    std::vector<uint32_t>* open_tiles{};   ///< the tiles captured and not written back
+    int32_t first_tile_row{};              ///< tile rows the scope captures
+    int32_t end_tile_row{};                ///< the tile row after the last
+    int32_t first_row{};                   ///< 8-bit rows the scope captures
+    int32_t end_row{};                     ///< the 8-bit row after the last
+    int32_t frame_first_row{};             ///< frame rows the scope writes
+    int32_t frame_end_row{};               ///< the frame row after the last
+    std::vector<uint32_t>* nearest_keys{}; ///< the colour memory it uses
+    std::vector<uint8_t>* nearest_values{};
+    uint64_t* mapped_pixels{}; ///< the count its captures add to
+    bool banded{};             ///< a band of the bridge, not the whole
+};
+
+// The whole bridge as one scope.
+Scope whole_scope(RgbBridge& bridge) noexcept {
+    return {
+        &bridge.surface,
+        &bridge.open_tiles,
+        0,
+        bridge.tiles_y,
+        0,
+        bridge.surface.height,
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max(),
+        &bridge.nearest_keys,
+        &bridge.nearest_values,
+        &bridge.copy.mapped_pixels,
+        false
+    };
+}
+
+// One band of a bridge as a scope.
+Scope band_scope(RgbBridge& bridge, BridgeBand& band) noexcept {
+    const bool own_colours = !band.nearest_keys.empty();
+    return {
+        &band.surface,
+        &band.open_tiles,
+        band.first_row / bridge_tile_side,
+        (band.end_row + bridge_tile_side - 1) / bridge_tile_side,
+        band.first_row,
+        band.end_row,
+        band.frame_first_row,
+        band.frame_end_row,
+        own_colours ? &band.nearest_keys : &bridge.nearest_keys,
+        own_colours ? &band.nearest_values : &bridge.nearest_values,
+        &band.mapped_pixels,
+        true
+    };
+}
+
+// The palette index of a colour, remembering the nearest entry of a colour
+// outside the palette in the given memory.
+uint8_t lookup_index(
+    const RgbBridge& bridge,
+    std::vector<uint32_t>& nearest_keys,
+    std::vector<uint8_t>& nearest_values,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b
+) {
+    const uint32_t rgb = pack(r, g, b);
+    for (std::size_t slot = slot_of(rgb);; slot = (slot + 1) & (exact_slots - 1)) {
+        const uint32_t key = bridge.exact_keys[slot];
+        if (key == (rgb | slot_used))
+            return bridge.exact_values[slot];
+        if (key == 0)
+            break;
+    }
+    const std::size_t remembered = nearest_slot_of(rgb);
+    if (nearest_keys[remembered] == (rgb | slot_used))
+        return nearest_values[remembered];
+    uint8_t best = 0;
+    int32_t best_distance = INT32_MAX;
+    for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
+        const PaletteEntry& entry = bridge.palette.entries[index];
+        const int32_t dr = entry.r - r;
+        const int32_t dg = entry.g - g;
+        const int32_t db = entry.b - b;
+        const int32_t distance = dr * dr + dg * dg + db * db;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = static_cast<uint8_t>(index);
+        }
+    }
+    nearest_keys[remembered] = rgb | slot_used;
+    nearest_values[remembered] = best;
+    return best;
 }
 
 int32_t rgb_x(const RgbBridge& bridge, int32_t x) noexcept {
@@ -173,14 +267,21 @@ bool colour_differs(const uint8_t* a, const uint8_t* b) noexcept {
 // Sets the copy's pixel `at` of a row to the frame pixel `source`, with its
 // palette index.
 void map_pixel(
-    RgbBridge& bridge, uint8_t* colours, uint8_t* indices, int32_t at, const uint8_t* source
+    const RgbBridge& bridge,
+    const Scope& scope,
+    uint8_t* colours,
+    uint8_t* indices,
+    int32_t at,
+    const uint8_t* source
 ) {
     uint8_t* colour = colours + static_cast<std::ptrdiff_t>(at) * pixel_bytes;
     colour[0] = source[0];
     colour[1] = source[1];
     colour[2] = source[2];
-    indices[at] = bridge_index(bridge, source[0], source[1], source[2]);
-    ++bridge.copy.mapped_pixels;
+    indices[at] = lookup_index(
+        bridge, *scope.nearest_keys, *scope.nearest_values, source[0], source[1], source[2]
+    );
+    ++*scope.mapped_pixels;
 }
 
 // Lays out the capture copy for the bridge's surface, area and frame, once
@@ -234,7 +335,9 @@ void lay_out_copy(RgbBridge& bridge) {
 // those whose colour differs from the copy's are mapped again, and every one
 // of them when the tile was never mapped. With `start_pixels` the tile's
 // 8-bit pixels and baseline then start as the copy's indices.
-void map_tile(RgbBridge& bridge, int32_t tx, int32_t ty, bool mapped, bool start_pixels) {
+void map_tile(
+    RgbBridge& bridge, const Scope& scope, int32_t tx, int32_t ty, bool mapped, bool start_pixels
+) {
     CaptureCopy& copy = bridge.copy;
     const int32_t x0 = tx * bridge_tile_side;
     const int32_t y0 = ty * bridge_tile_side;
@@ -259,7 +362,9 @@ void map_tile(RgbBridge& bridge, int32_t tx, int32_t ty, bool mapped, bool start
             if (!mapped || !same_bytes(kept, source, static_cast<std::size_t>(count) * pixel_bytes))
                 for (int32_t i = 0; i < count; ++i)
                     if (!mapped || colour_differs(kept + i * pixel_bytes, source + i * pixel_bytes))
-                        map_pixel(bridge, colours, indices, first + i, source + i * pixel_bytes);
+                        map_pixel(
+                            bridge, scope, colours, indices, first + i, source + i * pixel_bytes
+                        );
             if (start_pixels) {
                 copy_tile_row(baseline + x0, indices + first, count);
                 copy_tile_row(pixels + x0, indices + first, count);
@@ -272,7 +377,7 @@ void map_tile(RgbBridge& bridge, int32_t tx, int32_t ty, bool mapped, bool start
                 frame_row + copy.frame_columns[static_cast<std::size_t>(column)];
             if (!mapped ||
                 colour_differs(colours + static_cast<std::ptrdiff_t>(column) * pixel_bytes, source))
-                map_pixel(bridge, colours, indices, column, source);
+                map_pixel(bridge, scope, colours, indices, column, source);
             if (start_pixels) {
                 baseline[x] = indices[column];
                 pixels[x] = indices[column];
@@ -283,14 +388,19 @@ void map_tile(RgbBridge& bridge, int32_t tx, int32_t ty, bool mapped, bool start
 
 // Writes the pixels of a captured tile that draws changed back to the frame
 // through the palette.
-void commit_tile(RgbBridge& bridge, int32_t tx, int32_t ty) {
+void commit_tile(RgbBridge& bridge, const Scope& scope, int32_t tx, int32_t ty) {
     const int32_t x0 = tx * bridge_tile_side;
     const int32_t y0 = ty * bridge_tile_side;
     const int32_t x1 = std::min(x0 + bridge_tile_side, bridge.surface.width);
     const int32_t y1 = std::min(y0 + bridge_tile_side, bridge.surface.height);
-    const int32_t top = std::max({rgb_start(bridge.area.y1, y0, bridge.scale), bridge.area.y1, 0});
+    const int32_t top = std::max(
+        {rgb_start(bridge.area.y1, y0, bridge.scale), bridge.area.y1, 0, scope.frame_first_row}
+    );
     const int32_t bottom = std::min(
-        {rgb_start(bridge.area.y1, y1, bridge.scale) - 1, bridge.area.y2, bridge.frame.height - 1}
+        {rgb_start(bridge.area.y1, y1, bridge.scale) - 1,
+         bridge.area.y2,
+         bridge.frame.height - 1,
+         scope.frame_end_row - 1}
     );
     const int32_t left = std::max({rgb_start(bridge.area.x1, x0, bridge.scale), bridge.area.x1, 0});
     const int32_t right = std::min(
@@ -354,105 +464,9 @@ void commit_tile(RgbBridge& bridge, int32_t tx, int32_t ty) {
     }
 }
 
-} // namespace
-
-uint8_t bridge_index(RgbBridge& bridge, uint8_t r, uint8_t g, uint8_t b) {
-    const uint32_t rgb = pack(r, g, b);
-    for (std::size_t slot = slot_of(rgb);; slot = (slot + 1) & (exact_slots - 1)) {
-        const uint32_t key = bridge.exact_keys[slot];
-        if (key == (rgb | slot_used))
-            return bridge.exact_values[slot];
-        if (key == 0)
-            break;
-    }
-    const std::size_t remembered = nearest_slot_of(rgb);
-    if (bridge.nearest_keys[remembered] == (rgb | slot_used))
-        return bridge.nearest_values[remembered];
-    uint8_t best = 0;
-    int32_t best_distance = INT32_MAX;
-    for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
-        const PaletteEntry& entry = bridge.palette.entries[index];
-        const int32_t dr = entry.r - r;
-        const int32_t dg = entry.g - g;
-        const int32_t db = entry.b - b;
-        const int32_t distance = dr * dr + dg * dg + db * db;
-        if (distance < best_distance) {
-            best_distance = distance;
-            best = static_cast<uint8_t>(index);
-        }
-    }
-    bridge.nearest_keys[remembered] = rgb | slot_used;
-    bridge.nearest_values[remembered] = best;
-    return best;
-}
-
-void bridge_begin(
-    RgbBridge& bridge,
-    const RgbFrame& frame,
-    const Rect32& area,
-    float scale,
-    const Palette& palette
-) {
-    const float kept_scale = scale > 0.0F ? scale : 1.0F;
-    const bool palette_changed = std::memcmp(&bridge.palette, &palette, sizeof(Palette)) != 0;
-    // The copy maps frame pixels by place and colours by palette; a frame
-    // laid out as before keeps it, whatever the frame now holds.
-    const bool layout_kept =
-        !palette_changed && !bridge.exact_keys.empty() && frame.width == bridge.frame.width &&
-        frame.height == bridge.frame.height && frame.stride == bridge.frame.stride &&
-        area.x1 == bridge.area.x1 && area.y1 == bridge.area.y1 && area.x2 == bridge.area.x2 &&
-        area.y2 == bridge.area.y2 && kept_scale == bridge.scale;
-    bridge.frame = frame;
-    bridge.area = area;
-    bridge.scale = kept_scale;
-    if (palette_changed || bridge.exact_keys.empty()) {
-        bridge.palette = palette;
-        bridge.exact_keys.assign(exact_slots, 0);
-        bridge.exact_values.assign(exact_slots, 0);
-        bridge.nearest_keys.assign(bridge_nearest_slots, 0);
-        bridge.nearest_values.assign(bridge_nearest_slots, 0);
-        for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
-            const PaletteEntry& entry = palette.entries[index];
-            const uint32_t rgb = pack(entry.r, entry.g, entry.b);
-            std::size_t slot = slot_of(rgb);
-            while (bridge.exact_keys[slot] != 0 && bridge.exact_keys[slot] != (rgb | slot_used))
-                slot = (slot + 1) & (exact_slots - 1);
-            if (bridge.exact_keys[slot] == 0) {
-                bridge.exact_keys[slot] = rgb | slot_used;
-                bridge.exact_values[slot] = static_cast<uint8_t>(index);
-            }
-        }
-        for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
-            const PaletteEntry& entry = palette.entries[index];
-            bridge.copy.entry_indices[static_cast<std::size_t>(index)] =
-                bridge_index(bridge, entry.r, entry.g, entry.b);
-        }
-    }
-    const int32_t width =
-        std::max(0, static_cast<int32_t>(std::ceil((area.x2 - area.x1 + 1) / bridge.scale)));
-    const int32_t height =
-        std::max(0, static_cast<int32_t>(std::ceil((area.y2 - area.y1 + 1) / bridge.scale)));
-    const auto size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    if (bridge.pixels.size() < size + 1) {
-        bridge.pixels.resize(size + 1);
-        bridge.baseline.resize(size + 1);
-    }
-    present::init_surface(bridge.surface, width, height, width, bridge.pixels.data());
-    bridge.tiles_x = (width + bridge_tile_side - 1) / bridge_tile_side;
-    bridge.tiles_y = (height + bridge_tile_side - 1) / bridge_tile_side;
-    const auto tiles = static_cast<std::size_t>(bridge.tiles_x) * bridge.tiles_y;
-    bridge.open_tiles.clear();
-    if (layout_kept && bridge.tiles.size() == tiles) {
-        for (uint8_t& state : bridge.tiles)
-            state = static_cast<uint8_t>(state & ~bridge_tile_open);
-        return;
-    }
-    bridge.tiles.assign(tiles, 0);
-    bridge.open_tiles.reserve(tiles);
-    bridge.copy.laid_out = false;
-}
-
-void bridge_open(RgbBridge& bridge, const Rect32& region) {
+// Captures the tiles of a scope overlapping a region and clips the scope's
+// surface to the region (bridge_open).
+void open_region(RgbBridge& bridge, const Scope& scope, const Rect32& region) {
     const int32_t left = region.x1;
     const int32_t top = region.y1;
     const int32_t right = region.x2;
@@ -465,45 +479,61 @@ void bridge_open(RgbBridge& bridge, const Rect32& region) {
     };
     if (clip.x1 > clip.x2 || clip.y1 > clip.y2) {
         // An empty clip: the draw routines reject everything.
-        present::set_surface_clip(bridge.surface, {0, 0, -1, -1});
+        present::set_surface_clip(*scope.surface, {0, 0, -1, -1});
         return;
     }
     lay_out_copy(bridge);
-    for (int32_t ty = clip.y1 / bridge_tile_side; ty <= clip.y2 / bridge_tile_side; ++ty) {
+    const int32_t first_tile_row = std::max(clip.y1 / bridge_tile_side, scope.first_tile_row);
+    const int32_t last_tile_row = std::min(clip.y2 / bridge_tile_side, scope.end_tile_row - 1);
+    for (int32_t ty = first_tile_row; ty <= last_tile_row; ++ty) {
         for (int32_t tx = clip.x1 / bridge_tile_side; tx <= clip.x2 / bridge_tile_side; ++tx) {
             const auto tile = static_cast<uint32_t>(ty * bridge.tiles_x + tx);
             uint8_t& state = bridge.tiles[tile];
             if ((state & bridge_tile_open) != 0)
                 continue;
-            map_tile(bridge, tx, ty, (state & bridge_tile_mapped) != 0, true);
+            map_tile(bridge, scope, tx, ty, (state & bridge_tile_mapped) != 0, true);
             state = bridge_tile_mapped | bridge_tile_open;
-            bridge.open_tiles.push_back(tile);
+            scope.open_tiles->push_back(tile);
         }
     }
-    present::set_surface_clip(bridge.surface, clip);
+    present::set_surface_clip(*scope.surface, clip);
 }
 
-void bridge_end(RgbBridge& bridge) {
-    for (const uint32_t tile : bridge.open_tiles) {
+// Writes a scope's captured tiles back to the frame (bridge_end).
+void end_scope(RgbBridge& bridge, const Scope& scope) {
+    for (const uint32_t tile : *scope.open_tiles) {
         commit_tile(
             bridge,
+            scope,
             static_cast<int32_t>(tile % static_cast<uint32_t>(bridge.tiles_x)),
             static_cast<int32_t>(tile / static_cast<uint32_t>(bridge.tiles_x))
         );
         bridge.tiles[tile] = bridge_tile_mapped;
     }
-    bridge.open_tiles.clear();
+    scope.open_tiles->clear();
 }
 
-void bridge_open_sampled(
-    RgbBridge& bridge, SampledRegion& sampled, const Rect32& region, uint32_t factor
+// Covers a region with samples, capturing the scope's rows of it
+// (bridge_open_sampled).
+void open_sampled_region(
+    RgbBridge& bridge,
+    const Scope& scope,
+    SampledRegion& sampled,
+    const Rect32& region,
+    uint32_t factor
 ) {
     sampled.factor = factor == 0 ? 1 : factor;
+    // Rect32 is packed: its fields are read into locals before std::max and
+    // std::min take them by reference.
+    const int32_t left = region.x1;
+    const int32_t top = region.y1;
+    const int32_t right = region.x2;
+    const int32_t bottom = region.y2;
     const Rect32 clip{
-        std::max(region.x1, 0),
-        std::max(region.y1, 0),
-        std::min(region.x2, bridge.surface.width - 1),
-        std::min(region.y2, bridge.surface.height - 1)
+        std::max(left, 0),
+        std::max(top, 0),
+        std::min(right, bridge.surface.width - 1),
+        std::min(bottom, bridge.surface.height - 1)
     };
     if (clip.x1 > clip.x2 || clip.y1 > clip.y2) {
         sampled.region = {0, 0, -1, -1};
@@ -523,18 +553,35 @@ void bridge_open_sampled(
     sampled.baseline.resize(static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows));
     sampled.captured_rows.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(rows));
     present::init_surface(sampled.surface, width, height, width, sampled.samples.data());
+    // The bridge rows captured: the scope's rows of the region. A band's
+    // samples change only the sample rows over them.
+    const int32_t clip_top = clip.y1;
+    const int32_t clip_bottom = clip.y2;
+    const int32_t first_row = std::max(clip_top, scope.first_row);
+    const int32_t last_row = std::min(clip_bottom, scope.end_row - 1);
+    if (scope.banded) {
+        if (first_row > last_row) {
+            present::set_surface_band(sampled.surface, 0, 0);
+            return;
+        }
+        present::set_surface_band(
+            sampled.surface,
+            (first_row - clip.y1) * factor_rows,
+            (last_row + 1 - clip.y1) * factor_rows
+        );
+    }
     // The copy gives the indices under tiles not captured; a captured tile
     // may hold draws, so the frame under it is mapped as it is.
     lay_out_copy(bridge);
     bool any_open = false;
-    for (int32_t ty = clip.y1 / bridge_tile_side; ty <= clip.y2 / bridge_tile_side; ++ty) {
+    for (int32_t ty = first_row / bridge_tile_side; ty <= last_row / bridge_tile_side; ++ty) {
         for (int32_t tx = clip.x1 / bridge_tile_side; tx <= clip.x2 / bridge_tile_side; ++tx) {
             uint8_t& state = bridge.tiles[static_cast<std::size_t>(ty * bridge.tiles_x + tx)];
             if ((state & bridge_tile_open) != 0) {
                 any_open = true;
                 continue;
             }
-            map_tile(bridge, tx, ty, (state & bridge_tile_mapped) != 0, true);
+            map_tile(bridge, scope, tx, ty, (state & bridge_tile_mapped) != 0, true);
             state = bridge_tile_mapped;
         }
     }
@@ -549,9 +596,11 @@ void bridge_open_sampled(
             return copy.indices[static_cast<std::size_t>(row) * copy.width + column];
         const uint8_t* pixel = bridge.frame.rgb + copy.frame_rows[static_cast<std::size_t>(row)] +
                                copy.frame_columns[static_cast<std::size_t>(column)];
-        return bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+        return lookup_index(
+            bridge, *scope.nearest_keys, *scope.nearest_values, pixel[0], pixel[1], pixel[2]
+        );
     };
-    for (int32_t row = 0; row < rows; ++row) {
+    for (int32_t row = first_row - clip.y1; row <= last_row - clip.y1; ++row) {
         uint8_t* first =
             sampled.samples.data() + static_cast<std::ptrdiff_t>(row) * factor_rows * width;
         uint8_t* baseline = sampled.baseline.data() + static_cast<std::ptrdiff_t>(row) * columns;
@@ -576,17 +625,26 @@ void bridge_open_sampled(
     }
 }
 
-void bridge_end_sampled(const RgbBridge& bridge, const SampledRegion& sampled) {
+// Writes a sampled region back to the frame rows between `frame_first_row`
+// and `frame_end_row` (bridge_end_sampled).
+void end_sampled_region(
+    const RgbBridge& bridge,
+    const SampledRegion& sampled,
+    int32_t frame_first_row,
+    int32_t frame_end_row
+) {
     const Rect32& region = sampled.region;
     if (region.x1 > region.x2 || region.y1 > region.y2)
         return;
     const uint32_t all = sampled.factor * sampled.factor;
-    const int32_t top =
-        std::max({rgb_start(bridge.area.y1, region.y1, bridge.scale), bridge.area.y1, 0});
+    const int32_t top = std::max(
+        {rgb_start(bridge.area.y1, region.y1, bridge.scale), bridge.area.y1, 0, frame_first_row}
+    );
     const int32_t bottom = std::min(
         {rgb_start(bridge.area.y1, region.y2 + 1, bridge.scale) - 1,
          bridge.area.y2,
-         bridge.frame.height - 1}
+         bridge.frame.height - 1,
+         frame_end_row - 1}
     );
     const int32_t left =
         std::max({rgb_start(bridge.area.x1, region.x1, bridge.scale), bridge.area.x1, 0});
@@ -629,6 +687,210 @@ void bridge_end_sampled(const RgbBridge& bridge, const SampledRegion& sampled) {
                     static_cast<uint8_t>((sum[channel] + under * pixel[channel] + all / 2) / all);
         }
     }
+}
+
+// Tells whether the bands of a bridge can meet at an 8-bit row: the rows
+// above it capture from and are written back to frame rows above the first
+// one the rows from it on are written back to, and those rows capture from
+// and are written to that frame row or below. `row` is a whole number of
+// tiles down, inside the surface.
+bool splits_at(const RgbBridge& bridge, int32_t row) noexcept {
+    const int32_t frame_row = rgb_start(bridge.area.y1, row, bridge.scale);
+    if (frame_row <= std::max(bridge.area.y1, 0) ||
+        frame_row > std::min(bridge.area.y2, bridge.frame.height - 1))
+        return false;
+    // The rows each side capture from (captured_row), and the rows the frame
+    // rows each side are written from, as commit_tile and written_from work
+    // them out.
+    const auto written = [&](int32_t y) {
+        return static_cast<int32_t>((y - bridge.area.y1) / bridge.scale);
+    };
+    return captured_row(bridge, row - 1) < frame_row && captured_row(bridge, row) >= frame_row &&
+           written(frame_row) >= row && written(frame_row - 1) < row;
+}
+
+} // namespace
+
+uint8_t bridge_index(RgbBridge& bridge, uint8_t r, uint8_t g, uint8_t b) {
+    return lookup_index(bridge, bridge.nearest_keys, bridge.nearest_values, r, g, b);
+}
+
+void bridge_begin(
+    RgbBridge& bridge,
+    const RgbFrame& frame,
+    const Rect32& area,
+    float scale,
+    const Palette& palette
+) {
+    const float kept_scale = scale > 0.0F ? scale : 1.0F;
+    const bool palette_changed = std::memcmp(&bridge.palette, &palette, sizeof(Palette)) != 0;
+    // The copy maps frame pixels by place and colours by palette; a frame
+    // laid out as before keeps it, whatever the frame now holds.
+    const bool layout_kept =
+        !palette_changed && !bridge.exact_keys.empty() && frame.width == bridge.frame.width &&
+        frame.height == bridge.frame.height && frame.stride == bridge.frame.stride &&
+        area.x1 == bridge.area.x1 && area.y1 == bridge.area.y1 && area.x2 == bridge.area.x2 &&
+        area.y2 == bridge.area.y2 && kept_scale == bridge.scale;
+    bridge.frame = frame;
+    bridge.area = area;
+    bridge.scale = kept_scale;
+    if (palette_changed || bridge.exact_keys.empty()) {
+        bridge.palette = palette;
+        bridge.exact_keys.assign(exact_slots, 0);
+        bridge.exact_values.assign(exact_slots, 0);
+        bridge.nearest_keys.assign(bridge_nearest_slots, 0);
+        bridge.nearest_values.assign(bridge_nearest_slots, 0);
+        for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
+            const PaletteEntry& entry = palette.entries[index];
+            const uint32_t rgb = pack(entry.r, entry.g, entry.b);
+            std::size_t slot = slot_of(rgb);
+            while (bridge.exact_keys[slot] != 0 && bridge.exact_keys[slot] != (rgb | slot_used))
+                slot = (slot + 1) & (exact_slots - 1);
+            if (bridge.exact_keys[slot] == 0) {
+                bridge.exact_keys[slot] = rgb | slot_used;
+                bridge.exact_values[slot] = static_cast<uint8_t>(index);
+            }
+        }
+        ++bridge.lookup_builds;
+        for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
+            const PaletteEntry& entry = palette.entries[index];
+            bridge.copy.entry_indices[static_cast<std::size_t>(index)] =
+                bridge_index(bridge, entry.r, entry.g, entry.b);
+        }
+    }
+    const int32_t width =
+        std::max(0, static_cast<int32_t>(std::ceil((area.x2 - area.x1 + 1) / bridge.scale)));
+    const int32_t height =
+        std::max(0, static_cast<int32_t>(std::ceil((area.y2 - area.y1 + 1) / bridge.scale)));
+    const auto size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (bridge.pixels.size() < size + 1) {
+        bridge.pixels.resize(size + 1);
+        bridge.baseline.resize(size + 1);
+    }
+    present::init_surface(bridge.surface, width, height, width, bridge.pixels.data());
+    bridge.tiles_x = (width + bridge_tile_side - 1) / bridge_tile_side;
+    bridge.tiles_y = (height + bridge_tile_side - 1) / bridge_tile_side;
+    const auto tiles = static_cast<std::size_t>(bridge.tiles_x) * bridge.tiles_y;
+    bridge.open_tiles.clear();
+    if (layout_kept && bridge.tiles.size() == tiles) {
+        for (uint8_t& state : bridge.tiles)
+            state = static_cast<uint8_t>(state & ~bridge_tile_open);
+        return;
+    }
+    bridge.tiles.assign(tiles, 0);
+    bridge.open_tiles.reserve(tiles);
+    bridge.copy.laid_out = false;
+}
+
+void bridge_open(RgbBridge& bridge, const Rect32& region) {
+    open_region(bridge, whole_scope(bridge), region);
+}
+
+void bridge_end(RgbBridge& bridge) {
+    end_scope(bridge, whole_scope(bridge));
+}
+
+void bridge_open_sampled(
+    RgbBridge& bridge, SampledRegion& sampled, const Rect32& region, uint32_t factor
+) {
+    open_sampled_region(bridge, whole_scope(bridge), sampled, region, factor);
+}
+
+void bridge_end_sampled(const RgbBridge& bridge, const SampledRegion& sampled) {
+    end_sampled_region(
+        bridge, sampled, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()
+    );
+}
+
+int32_t bridge_split(RgbBridge& bridge, int32_t count, std::vector<BridgeBand>& bands) {
+    // The copy is laid out once, here, before any band captures.
+    lay_out_copy(bridge);
+    const int32_t tile_rows = std::max(bridge.tiles_y, 1);
+    count = std::clamp(count, 1, tile_rows);
+    // The 8-bit rows the bands start at: the first at the top, then the
+    // tile row nearest an even share of them where the frame splits, or the
+    // next one down that splits.
+    std::vector<int32_t> starts{0};
+    for (int32_t band = 1; band < count; ++band) {
+        const int32_t even = (band * tile_rows + count / 2) / count;
+        const int32_t after = starts.back() / bridge_tile_side + 1;
+        for (int32_t tile_row = std::max(even, after); tile_row < tile_rows; ++tile_row) {
+            const int32_t row = tile_row * bridge_tile_side;
+            if (row < bridge.surface.height && splits_at(bridge, row)) {
+                starts.push_back(row);
+                break;
+            }
+        }
+    }
+    const auto made = static_cast<int32_t>(starts.size());
+    bands.resize(static_cast<std::size_t>(made));
+    for (int32_t index = 0; index < made; ++index) {
+        BridgeBand& band = bands[static_cast<std::size_t>(index)];
+        band.first_row = starts[static_cast<std::size_t>(index)];
+        band.end_row =
+            index + 1 < made ? starts[static_cast<std::size_t>(index) + 1] : bridge.surface.height;
+        band.frame_first_row =
+            index == 0 ? 0 : rgb_start(bridge.area.y1, band.first_row, bridge.scale);
+        band.frame_end_row = index + 1 < made
+                                 ? rgb_start(bridge.area.y1, band.end_row, bridge.scale)
+                                 : bridge.frame.height;
+        band.surface = bridge.surface;
+        present::set_surface_band(band.surface, band.first_row, band.end_row);
+        band.open_tiles.clear();
+        band.open_tiles.reserve(bridge.open_tiles.capacity());
+        band.mapped_pixels = 0;
+        // Nearest entries remembered for another palette are forgotten.
+        if (!band.nearest_keys.empty() && band.lookup_builds != bridge.lookup_builds) {
+            std::fill(band.nearest_keys.begin(), band.nearest_keys.end(), 0);
+            std::fill(band.nearest_values.begin(), band.nearest_values.end(), 0);
+        }
+        band.lookup_builds = bridge.lookup_builds;
+    }
+    return made;
+}
+
+void bridge_band_colours(const RgbBridge& bridge, BridgeBand& band) {
+    if (band.nearest_keys.size() == bridge_nearest_slots &&
+        band.lookup_builds == bridge.lookup_builds)
+        return;
+    band.nearest_keys.assign(bridge_nearest_slots, 0);
+    band.nearest_values.assign(bridge_nearest_slots, 0);
+    band.lookup_builds = bridge.lookup_builds;
+}
+
+void bridge_open(RgbBridge& bridge, BridgeBand& band, const Rect32& region) {
+    open_region(bridge, band_scope(bridge, band), region);
+}
+
+void bridge_end(RgbBridge& bridge, BridgeBand& band) {
+    end_scope(bridge, band_scope(bridge, band));
+}
+
+void bridge_open_sampled(
+    RgbBridge& bridge,
+    BridgeBand& band,
+    SampledRegion& sampled,
+    const Rect32& region,
+    uint32_t factor
+) {
+    open_sampled_region(bridge, band_scope(bridge, band), sampled, region, factor);
+}
+
+void bridge_end_sampled(
+    const RgbBridge& bridge, const BridgeBand& band, const SampledRegion& sampled
+) {
+    end_sampled_region(bridge, sampled, band.frame_first_row, band.frame_end_row);
+}
+
+uint8_t bridge_index(RgbBridge& bridge, BridgeBand& band, uint8_t r, uint8_t g, uint8_t b) {
+    if (band.nearest_keys.empty())
+        return lookup_index(bridge, bridge.nearest_keys, bridge.nearest_values, r, g, b);
+    return lookup_index(bridge, band.nearest_keys, band.nearest_values, r, g, b);
+}
+
+void bridge_join_band(RgbBridge& bridge, BridgeBand& band) noexcept {
+    bridge.copy.mapped_pixels += band.mapped_pixels;
+    band.mapped_pixels = 0;
 }
 
 } // namespace oa::present::model

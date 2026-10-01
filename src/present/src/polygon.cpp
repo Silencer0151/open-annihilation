@@ -295,6 +295,9 @@ int32_t fill_polygon(
     }
     Bounds b = polygon_bounds(vertices, count);
     const Rect32 clip = surface_clip(*target);
+    // The rows the clip gives are worked out whole; a band (surface_band)
+    // only leaves the rows outside it unwritten.
+    const SurfaceRows band = surface_band(*target);
     int32_t drawn = 0;
     if (b.max_x >= clip.x1 && b.min_x <= clip.x2 && b.max_y >= clip.y1 && b.min_y <= clip.y2) {
         if (b.min_y < clip.y1)
@@ -302,9 +305,18 @@ int32_t fill_polygon(
         if (b.max_y > clip.y2)
             b.max_y = clip.y2;
         if (b.max_y != b.min_y) {
+            const int32_t first_row = b.min_y < band.first ? band.first : b.min_y;
+            const int32_t end_row = b.max_y > band.end ? band.end : b.max_y;
+            if (first_row >= end_row) {
+                if (uses_display)
+                    unlock_display_surface();
+                return 1;
+            }
             PolygonSpanRow* rows = cleared_span_table();
             scan_polygon(rows, vertices, count, b, clip.y1, clip.y2);
-            for (int32_t y = b.min_y, r = 0; y < b.max_y && r < polygon_span_rows; ++y, ++r) {
+            for (int32_t y = first_row, r = first_row - b.min_y;
+                 y < end_row && r < polygon_span_rows;
+                 ++y, ++r) {
                 PolygonSpanRow& row = rows[r];
                 if (row.right > clip.x2)
                     row.right = clip.x2;

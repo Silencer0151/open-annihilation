@@ -454,7 +454,7 @@ void test_input() {
 // Records every drawing call as text so tests can assert the exact sequence.
 struct DrawLog {
     std::vector<std::string> calls;
-    oa::Surface screen{640, 480, 640, nullptr, 0, 0, 0, 0, {0, 0, 639, 479}, 0};
+    oa::Surface screen{640, 480, 640, nullptr, 0, 0, 0, 0, {0, 0, 639, 479}, 0, 0, 0};
     oa::Surface surfaces[3]{};
     int created = 0;
     int freed = 0;
@@ -636,7 +636,7 @@ int32_t fake_measure(void*, const void*, const char* text) {
 
 bool fake_label_lock(void* context, oa::Surface* out) {
     static_cast<LabelLog*>(context)->locked = true;
-    *out = oa::Surface{320, 200, 320, nullptr, 0, 0, 0, 0, {0, 0, 319, 199}, 0};
+    *out = oa::Surface{320, 200, 320, nullptr, 0, 0, 0, 0, {0, 0, 319, 199}, 0, 0, 0};
     return true;
 }
 
@@ -675,7 +675,7 @@ void test_label() {
     );
     check(text.background == 4, "outline leaves the background transparent");
     log.calls.clear();
-    oa::Surface target{101, 20, 101, nullptr, 0, 0, 0, 0, {0, 0, 100, 19}, 0};
+    oa::Surface target{101, 20, 101, nullptr, 0, 0, 0, 0, {0, 0, 100, 19}, 0, 0, 0};
     sv::label_draw_outlined(
         &text, &draw, &target, "ab", sv::text_color_keep, sv::text_color_keep, 5
     );

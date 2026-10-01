@@ -19,6 +19,27 @@
 /* No known use: init_surface and surface_from_sprite clear it, and nothing
    sets or tests it. */
 #define OA_SURFACE_FLAG_CLEARED_ON_INIT 0x2u
+/* The surface's draws are limited to the rows from Surface.band_first_row
+   up to but not including Surface.band_end_row, so that a frame drawn band
+   by band is the frame drawn whole. These draws honour the band: they work
+   out what they draw from the clip alone and leave every other row as it
+   is:
+   - fill_polygon (and the range rings), fill_line and what draws through it
+     (draw_clipped_line, draw_point, draw_rect_outline, outline_rect);
+   - the sprite draws that place a sprite by the clip (draw_sprite,
+     draw_sprite_blended, draw_sprite_lit, draw_sprite_shadow,
+     draw_sprite_opaque, draw_sprite_gray, erase_sprite_dithered);
+   - texture_quad (the model module's mesh_raster.hpp).
+   The rectangle copies (copy_rect, copy_rect_keyed, blit_rect,
+   blit_rect_keyed, remap_under_mask and the row decoders of rle.hpp) write
+   exactly the rectangle they are given, which a caller drawing on a banded
+   surface trims with trim_to_surface first. No other draw honours a band,
+   and none other may be given a banded surface: the line remaps
+   (remap_line, light_clipped_line, light_rect_edges), fill_rect and
+   fill_clipped_rect, shade_rect_level, gray_rect, clear_dithered_rect,
+   draw_text and the whole-surface and tile copies check this in debug
+   builds. init_surface and surface_from_sprite clear it. */
+#define OA_SURFACE_FLAG_BANDED 0x4u
 
 /* Values init_surface and surface_from_sprite store in the two reserved
    words. */
@@ -63,6 +84,11 @@ typedef struct Surface {
     int16_t origin_y;
     Rect32 clip;    /* inclusive */
     uint32_t flags; /* OA_SURFACE_FLAG_* */
+    /* The first row draws may change, with OA_SURFACE_FLAG_BANDED. */
+    int32_t band_first_row;
+    /* The row after the last one draws may change, with
+       OA_SURFACE_FLAG_BANDED. */
+    int32_t band_end_row;
 } Surface;
 
 /* In-memory sprite header (GAF frame layout). A sprite with a non-zero

@@ -5,10 +5,13 @@
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/present/blit.hpp"
 #include "oa/present/polygon.hpp"
+#include "oa/present/raster.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -416,6 +419,248 @@ void test_copy_scaled_write_back() {
     bridge_end(bridge);
 }
 
+// One step of a frame drawn through a bridge, worked out once so that it can
+// be drawn whole and band by band.
+struct BridgeStep {
+    enum class Kind : uint8_t { open, polygon, line, blended, commit, scribble, sampled };
+
+    // Rect32 is packed: aligned here, since the bridge takes its fields by reference.
+    alignas(4) oa::Rect32 region{};
+    Kind kind{};
+    std::vector<oa::present::PolygonVertex> corners;
+    uint8_t color{};
+    int32_t x0{};
+    int32_t y0{};
+    int32_t x1{};
+    int32_t y1{};
+    uint32_t factor{1};
+    /// Frame pixels written straight into the frame: offset and colour.
+    std::vector<std::pair<std::size_t, oa::PaletteEntry>> pixels;
+};
+
+// Works out the steps of one frame: captures, polygons, lines and blended
+// sprites in the bridge, write-backs, writes straight into the frame and
+// sampled regions.
+std::vector<BridgeStep>
+frame_steps(Sequence& sequence, int32_t width, int32_t height, const Frame& frame) {
+    std::vector<BridgeStep> steps;
+    for (int i = 0; i < 24; ++i) {
+        BridgeStep step;
+        step.kind = static_cast<BridgeStep::Kind>(sequence.next(7));
+        const auto x = static_cast<int32_t>(sequence.next(static_cast<uint32_t>(width + 40))) - 20;
+        const auto y = static_cast<int32_t>(sequence.next(static_cast<uint32_t>(height + 40))) - 20;
+        step.region = {
+            x,
+            y,
+            x + static_cast<int32_t>(sequence.next(50)),
+            y + static_cast<int32_t>(sequence.next(50))
+        };
+        step.color = static_cast<uint8_t>(sequence.next(OA_PALETTE_COLORS));
+        step.factor = 1 + sequence.next(4);
+        // Corners in any order, around the region and past it.
+        const int corners = 3 + static_cast<int>(sequence.next(3));
+        for (int corner = 0; corner < corners; ++corner)
+            step.corners.push_back(
+                {x - 10 + static_cast<int32_t>(sequence.next(70)),
+                 y - 10 + static_cast<int32_t>(sequence.next(70))}
+            );
+        step.x0 = x;
+        step.y0 = y;
+        step.x1 = x + static_cast<int32_t>(sequence.next(60)) - 30;
+        step.y1 = y + static_cast<int32_t>(sequence.next(60)) - 30;
+        for (int pixel = 0; step.kind == BridgeStep::Kind::scribble && pixel < 40; ++pixel)
+            step.pixels.push_back(
+                {sequence.next(static_cast<uint32_t>(frame.width * frame.height)),
+                 {static_cast<uint8_t>(sequence.next(256)),
+                  static_cast<uint8_t>(sequence.next(256)),
+                  static_cast<uint8_t>(sequence.next(256)),
+                  0}}
+            );
+        steps.push_back(std::move(step));
+    }
+    return steps;
+}
+
+// Draws a frame's steps through the whole bridge (no band) or one band.
+void draw_steps(
+    RgbBridge& bridge,
+    BridgeBand* band,
+    SampledRegion& sampled,
+    Frame& frame,
+    const std::vector<BridgeStep>& steps
+) {
+    oa::Surface& surface = band != nullptr ? band->surface : bridge.surface;
+    std::vector<uint8_t> shadow(36, 0);
+    oa::Sprite sprite{};
+    sprite.width = 6;
+    sprite.height = 6;
+    sprite.origin_x = 3;
+    sprite.origin_y = 3;
+    sprite.key = 1;
+    sprite.data = shadow.data();
+    for (const BridgeStep& step : steps) {
+        switch (step.kind) {
+        case BridgeStep::Kind::open:
+            band != nullptr ? bridge_open(bridge, *band, step.region)
+                            : bridge_open(bridge, step.region);
+            break;
+        case BridgeStep::Kind::polygon:
+            oa::present::fill_polygon(
+                &surface, step.corners.data(), static_cast<int32_t>(step.corners.size()), step.color
+            );
+            break;
+        case BridgeStep::Kind::line:
+            oa::present::draw_clipped_line(
+                &surface, step.x0, step.y0, step.x1, step.y1, step.color
+            );
+            break;
+        case BridgeStep::Kind::blended:
+            oa::present::draw_sprite_blended(&surface, &sprite, step.x0, step.y0);
+            break;
+        case BridgeStep::Kind::commit:
+            band != nullptr ? bridge_end(bridge, *band) : bridge_end(bridge);
+            break;
+        case BridgeStep::Kind::scribble:
+            for (const auto& [offset, colour] : step.pixels) {
+                const auto row =
+                    static_cast<int32_t>(offset / static_cast<std::size_t>(frame.width));
+                if (band != nullptr && (row < band->frame_first_row || row >= band->frame_end_row))
+                    continue;
+                uint8_t* pixel = frame.rgb.data() + offset * 3;
+                pixel[0] = colour.r;
+                pixel[1] = colour.g;
+                pixel[2] = colour.b;
+            }
+            break;
+        case BridgeStep::Kind::sampled: {
+            band != nullptr ? bridge_end(bridge, *band) : bridge_end(bridge);
+            if (band != nullptr)
+                bridge_open_sampled(bridge, *band, sampled, step.region, step.factor);
+            else
+                bridge_open_sampled(bridge, sampled, step.region, step.factor);
+            std::vector<oa::present::PolygonVertex> finer = step.corners;
+            for (auto& corner : finer) {
+                corner.x = (corner.x - sampled.region.x1) * static_cast<int32_t>(sampled.factor);
+                corner.y = (corner.y - sampled.region.y1) * static_cast<int32_t>(sampled.factor);
+            }
+            oa::present::fill_polygon(
+                &sampled.surface, finer.data(), static_cast<int32_t>(finer.size()), step.color
+            );
+            if (band != nullptr)
+                bridge_end_sampled(bridge, *band, sampled);
+            else
+                bridge_end_sampled(bridge, sampled);
+            break;
+        }
+        }
+    }
+}
+
+// A frame drawn band by band through the bridge, each band drawing every
+// step with its rows alone, comes out as the frame drawn whole, frame after
+// frame with the capture copy kept, at every scale, whatever the number of
+// bands; and the bands split the surface and the frame between them.
+void test_bands_draw_the_whole() {
+    struct Layout {
+        int32_t width;
+        int32_t height;
+        oa::Rect32 area;
+        float scale;
+    };
+
+    const Layout layouts[] = {
+        {140, 230, {0, 0, 139, 229}, 1.0F},
+        {150, 200, {0, 0, 149, 199}, 2.0F},
+        {120, 150, {0, 0, 119, 149}, 0.5F},
+        {130, 210, {0, 0, 129, 209}, 0.75F},
+        {120, 260, {0, 0, 119, 259}, 1.1F},
+        {120, 250, {0, 0, 119, 249}, 1.5F},
+        {100, 140, {0, 0, 99, 139}, 0.3F},
+        {110, 200, {4, 6, 105, 190}, 1.0F},
+    };
+    const oa::Palette palette = repeating_palette();
+    ModelDisplay display;
+    build_model_display(display, palette);
+    oa::present::DisplayContext* previous = oa::present::display_context();
+    oa::present::bind_display(&display.context);
+    for (const Layout& layout : layouts) {
+        for (const int32_t count : {2, 3, 4, 7}) {
+            Sequence sequence{static_cast<uint32_t>(layout.width * 31 + count)};
+            Frame whole(layout.width, layout.height, palette.entries[20]);
+            scribble(whole, sequence, palette);
+            Frame banded = whole;
+            RgbBridge whole_bridge;
+            RgbBridge banded_bridge;
+            SampledRegion sampled;
+            std::vector<BridgeBand> bands;
+            bool all_equal = true;
+            int32_t most_bands = 0;
+            for (int frame = 0; frame < 6; ++frame) {
+                bridge_begin(whole_bridge, whole.view(), layout.area, layout.scale, palette);
+                bridge_begin(banded_bridge, banded.view(), layout.area, layout.scale, palette);
+                const auto steps = frame_steps(
+                    sequence, whole_bridge.surface.width, whole_bridge.surface.height, whole
+                );
+                draw_steps(whole_bridge, nullptr, sampled, whole, steps);
+                const int32_t made = bridge_split(banded_bridge, count, bands);
+                most_bands = std::max(most_bands, made);
+                CHECK(made >= 1 && made <= count);
+                CHECK(bands.front().first_row == 0 && bands.front().frame_first_row == 0);
+                CHECK(bands.back().end_row == banded_bridge.surface.height);
+                CHECK(bands.back().frame_end_row == layout.height);
+                for (std::size_t index = 0; index + 1 < bands.size(); ++index) {
+                    CHECK(bands[index].end_row == bands[index + 1].first_row);
+                    CHECK(bands[index].end_row % bridge_tile_side == 0);
+                    CHECK(bands[index].frame_end_row == bands[index + 1].frame_first_row);
+                    CHECK(bands[index].frame_first_row < bands[index].frame_end_row);
+                }
+                for (BridgeBand& band : bands) {
+                    draw_steps(banded_bridge, &band, sampled, banded, steps);
+                    bridge_join_band(banded_bridge, band);
+                }
+                all_equal = all_equal && whole.rgb == banded.rgb;
+            }
+            CHECK(all_equal);
+            if (!all_equal)
+                std::fprintf(
+                    stderr,
+                    "scale %g, %d bands: banded frames differ\n",
+                    static_cast<double>(layout.scale),
+                    count
+                );
+            // At a scale of 1 every tile row can start a band.
+            if (layout.scale == 1.0F)
+                CHECK(most_bands == std::min(count, banded_bridge.tiles_y));
+        }
+    }
+    oa::present::bind_display(previous);
+}
+
+// A band with colour memory of its own forgets the nearest entries it
+// remembered once the bridge's colour lookup is built afresh for another
+// palette, and looks colours up as the bridge does.
+void test_band_colours_follow_the_palette() {
+    const oa::Palette first = ramp_palette();
+    oa::Palette second = ramp_palette();
+    for (int i = 0; i < OA_PALETTE_COLORS; ++i)
+        second.entries[i] = first.entries[OA_PALETTE_COLORS - 1 - i];
+    Frame frame(64, 96, first.entries[3]);
+    RgbBridge bridge;
+    std::vector<BridgeBand> bands;
+    bridge_begin(bridge, frame.view(), {0, 0, 63, 95}, 1.0F, first);
+    CHECK(bridge_split(bridge, 3, bands) == 3);
+    bridge_band_colours(bridge, bands[1]);
+    // A colour outside both palettes, remembered by the band under the first.
+    const uint8_t remembered = bridge_index(bridge, bands[1], 41, 214, 21);
+    CHECK(remembered == bridge_index(bridge, 41, 214, 21));
+    bridge_begin(bridge, frame.view(), {0, 0, 63, 95}, 1.0F, second);
+    CHECK(bridge_split(bridge, 3, bands) == 3);
+    bridge_band_colours(bridge, bands[1]);
+    const uint8_t under_second = bridge_index(bridge, 41, 214, 21);
+    CHECK(under_second != remembered);
+    CHECK(bridge_index(bridge, bands[1], 41, 214, 21) == under_second);
+}
+
 } // namespace
 
 int main() {
@@ -430,6 +675,8 @@ int main() {
     test_copy_matches_fresh_capture();
     test_copy_maps_only_changes();
     test_copy_scaled_write_back();
+    test_bands_draw_the_whole();
+    test_band_colours_follow_the_palette();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return EXIT_FAILURE;

@@ -4,8 +4,10 @@
 #include "oa/present/raster.hpp"
 
 #include "oa/present/display.hpp"
+#include "oa/present/surface.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -142,6 +144,10 @@ void fill_line(
     if (clip_line_to_extent(surface.width, surface.height, x0, y0, x1, y1) == 0) {
         return;
     }
+    // A band (surface_band) leaves the line's pixels outside it unwritten;
+    // the steps between them are the same.
+    const SurfaceRows band = surface_band(surface);
+    const auto in_band = [&band](int32_t y) { return y >= band.first && y < band.end; };
     const int32_t pitch = surface.pitch;
     int32_t dx = x1 - x0;
     if (dx == 0) {
@@ -151,8 +157,13 @@ void fill_line(
             count = -count;
             top = y1;
         }
-        uint8_t* p = pixel_at(surface.pixels, pitch, x0, top);
-        for (int32_t i = 0; i <= count; ++i, p += pitch) {
+        const int32_t first = std::max(top, band.first);
+        const int32_t last = std::min(top + count, band.end - 1);
+        if (first > last) {
+            return;
+        }
+        uint8_t* p = pixel_at(surface.pixels, pitch, x0, first);
+        for (int32_t y = first; y <= last; ++y, p += pitch) {
             *p = color;
         }
         return;
@@ -164,6 +175,9 @@ void fill_line(
     }
     int32_t dy = y1 - y0;
     if (dy == 0) {
+        if (!in_band(y0)) {
+            return;
+        }
         uint8_t* p = pixel_at(surface.pixels, pitch, x0, y0);
         for (int32_t i = 0; i <= dx; ++i) {
             p[i] = color;
@@ -171,17 +185,23 @@ void fill_line(
         return;
     }
     int32_t step = pitch;
+    int32_t row_step = 1;
     if (dy < 0) {
         dy = -dy;
         step = -pitch;
+        row_step = -1;
     }
     const LineSteps s = line_steps(dx, dy);
     int32_t error = s.error;
     uint8_t* p = pixel_at(surface.pixels, pitch, x0, y0);
+    int32_t y = y0;
     for (int32_t i = 0; i <= s.major; ++i) {
-        *p = color;
+        if (in_band(y)) {
+            *p = color;
+        }
         if (s.y_major) {
             p += step;
+            y += row_step;
             if (error >= 0) {
                 error += s.diagonal_add;
                 ++p;
@@ -193,6 +213,7 @@ void fill_line(
             if (error >= 0) {
                 error += s.diagonal_add;
                 p += step;
+                y += row_step;
             } else {
                 error += s.minor_add;
             }
@@ -209,6 +230,7 @@ void remap_line(
     int32_t row,
     const uint8_t* table
 ) noexcept {
+    assert(!surface_banded(surface) && "remap_line does not honour a surface's band");
     const uint8_t* lut = table + static_cast<std::ptrdiff_t>(row) * 0x100;
     int32_t pitch = surface.pitch;
     int32_t dx = x1 - x0;
@@ -412,6 +434,7 @@ void xor_rect_outline(
 }
 
 void fill_rect(Surface& surface, const Rect32& r, uint8_t color) noexcept {
+    assert(!surface_banded(surface) && "fill_rect does not honour a surface's band");
     const int32_t width = r.x2 - r.x1 + 1;
     if (width <= 0) {
         return;
@@ -658,6 +681,7 @@ int32_t shade_rect_level(Surface* target, Rect32* rect, int32_t level) noexcept 
         }
         surface = &locked;
     }
+    assert(!surface_banded(*surface) && "shade_rect_level does not honour a surface's band");
     Rect32 whole{0, 0, display->width, display->height};
     if (rect == nullptr) {
         rect = &whole;
@@ -726,6 +750,7 @@ int32_t gray_rect(Surface* target, const Rect32& rect) noexcept {
         }
         surface = &locked;
     }
+    assert(!surface_banded(*surface) && "gray_rect does not honour a surface's band");
     if (clip_rect(*surface, clipped)) {
         remap_rows(
             pixel_at(surface->pixels, surface->pitch, clipped.x1, clipped.y1),
@@ -750,6 +775,7 @@ int32_t clear_dithered_rect(Surface* target, const Rect32& rect, int32_t phase) 
         }
         surface = &locked;
     }
+    assert(!surface_banded(*surface) && "clear_dithered_rect does not honour a surface's band");
     Rect32 r = rect;
     if (clip_rect(*surface, r)) {
         const int32_t first_aligned = (r.x1 + 3) & ~3;
@@ -874,6 +900,7 @@ void draw_text(
         }
         surface = &locked;
     }
+    assert(!surface_banded(*surface) && "draw_text does not honour a surface's band");
     if (rect_inside(box, surface->clip)) {
         draw_font_text(
             surface->pixels,
