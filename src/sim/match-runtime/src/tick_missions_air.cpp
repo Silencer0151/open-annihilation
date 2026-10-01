@@ -253,7 +253,26 @@ class TickHost::AirAttackMissions {
     }
 
     void point_goal(const AttackPoint& point, int32_t arrival) {
+        host.install_air_goal(s, order, nullptr);
         adapter.circle_goal(point, arrival);
+    }
+
+    /// Flies the air driver to a fixed point while the unit keeps facing the
+    /// target, as gunships hover and strafe.
+    ///
+    /// @param point Signed 16.16 point as bit patterns; its altitude follows
+    ///     the terrain at cruise height.
+    /// @param arrival Arrival radius in world units.
+    void facing_goal(const AttackPoint& point, int16_t arrival) {
+        adapter.clear_goal();
+        auto goal = sim::air::air_goal_facing_unit(
+            &order.raised_events,
+            &unit,
+            &target_record(),
+            {signed_bits(point[0]), signed_bits(point[1]), signed_bits(point[2])}
+        );
+        sim::air::air_goal_set_arrival_radius(&goal, arrival);
+        host.install_air_goal(s, order, &goal);
     }
 
     // Goals that track a unit or slide along a step are held at their start
@@ -687,7 +706,7 @@ uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
     case 2:
         adapter.release_weapon_targets(0);
         adapter.assign_target(*attack.target, 0);
-        point_goal(target, static_cast<int16_t>(range));
+        facing_goal(target, static_cast<int16_t>(range));
         side = 0;
         unreachable = 0;
         order.wait_events = wait_attack;
@@ -716,7 +735,7 @@ uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {
         side = 1;
     }
     const auto strafe = signed_bits(static_cast<uint32_t>(range * 2 / 3) << 16);
-    follow_goal(backward(target, angle, strafe), hover_arrival);
+    facing_goal(backward(target, angle, strafe), hover_arrival);
     order.wait_events = wait_attack;
     if (health_low() && seek_repair_pad())
         return result_restart;

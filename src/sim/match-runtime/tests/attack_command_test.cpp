@@ -9,6 +9,7 @@
 // range.
 #include "combat_fixture.hpp"
 #include "installed_units.hpp"
+#include "oa/base/game_math.hpp"
 #include "oa/sim/ai.hpp"
 
 #include <algorithm>
@@ -412,6 +413,55 @@ void installed_attack_command_closes_to_range(test::InstalledUnits& units, std::
         );
 }
 
+// Ticks a gunship has, once it first has its target within range, to destroy
+// it.
+constexpr uint32_t hover_watch_ticks = 600;
+// Angle units either side of the bearing to the target a hovering gunship
+// counts as facing it: a sixteenth of a turn.
+constexpr int32_t hover_facing_tolerance = 0x1000;
+// Share of the watched ticks a gunship faces its target at the least.
+constexpr double hover_facing_share = 0.9;
+
+// Commanded at a ground unit, an installed gunship flies to weapon range and
+// hovers there facing the unit, strafing from side to side and firing until
+// the unit is destroyed, rather than flying from point to point facing where it
+// goes.
+void installed_gunship_hovers_facing_its_target(
+    test::InstalledUnits& units, std::string_view name
+) {
+    Land land(units);
+    auto& target = land.target();
+    auto& gunship = land.spawn(0, name, target_cell_x * 16 + 8 - distant_start);
+    const auto range = weapon_range(land, gunship);
+    land.run(2);
+    CHECK(land.match->issue_attack_command(gunship.unit_index, target.unit_index, false, nullptr));
+    land.run(approach_ticks, [&] { return distance(gunship, target) <= range; });
+    CHECK(distance(gunship, target) <= range);
+    uint32_t watched = 0;
+    uint32_t facing = 0;
+    land.run(hover_watch_ticks, [&] {
+        if (target.record.health == 0)
+            return true;
+        const auto bearing = base::game_math::direction(
+            gunship.record.position.x - target.record.position.x,
+            gunship.record.position.z - target.record.position.z
+        );
+        const auto error =
+            static_cast<int16_t>(static_cast<uint16_t>(bearing - gunship.record.heading));
+        ++watched;
+        if (std::abs(static_cast<int32_t>(error)) <= hover_facing_tolerance)
+            ++facing;
+        return false;
+    });
+    const auto share = static_cast<double>(facing) / watched;
+    if (target.record.health != 0 || share < hover_facing_share)
+        throw std::runtime_error(
+            std::string(name) + " faced its target " + std::to_string(facing) + " of " +
+            std::to_string(watched) + " ticks and left it with " +
+            std::to_string(target.record.health) + " health"
+        );
+}
+
 void installed_attack_commands(const AssetStore& store) {
     test::InstalledUnits units(
         store,
@@ -426,7 +476,9 @@ void installed_attack_commands(const AssetStore& store) {
          "ARMFLASH",
          "CORGATOR",
          "ARMSTUMP",
-         "CORRAID"}
+         "CORRAID",
+         "ARMBRAWL",
+         "CORAPE"}
     );
     // Kbots with lasers, lightning, flame, plasma cannon and rockets, and a
     // vehicle: all brake within the stretch the command finds them at.
@@ -446,6 +498,9 @@ void installed_attack_commands(const AssetStore& store) {
           "ARMSTUMP",
           "CORRAID"})
         installed_attack_command_closes_to_range(units, name);
+    // Gunships, which hover to attack.
+    for (const auto* name : {"ARMBRAWL", "CORAPE"})
+        installed_gunship_hovers_facing_its_target(units, name);
 }
 
 } // namespace
