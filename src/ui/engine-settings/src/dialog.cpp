@@ -228,7 +228,7 @@ std::size_t level_at(const SourceRect& strip, int32_t column) noexcept {
 }
 
 std::size_t level_index(AntiAliasing level) noexcept {
-    const auto* found = std::find(anti_aliasing_levels.begin(), anti_aliasing_levels.end(), level);
+    const auto found = std::find(anti_aliasing_levels.begin(), anti_aliasing_levels.end(), level);
     if (found == anti_aliasing_levels.end())
         return 0;
     return static_cast<std::size_t>(found - anti_aliasing_levels.begin());
@@ -767,7 +767,7 @@ DialogAction dialog_key(Dialog& dialog, DialogKey key) {
     }
     // Left and Right move along the footer's buttons.
     constexpr std::array<int32_t, 3> footer{restore_control, cancel_control, ok_control};
-    const auto* found = std::find(footer.begin(), footer.end(), dialog.focused);
+    const auto found = std::find(footer.begin(), footer.end(), dialog.focused);
     if (found == footer.end())
         return DialogAction::none;
     const auto at = static_cast<std::size_t>(found - footer.begin());
