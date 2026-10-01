@@ -4,6 +4,7 @@
 #include "oa/present/world_renderer.hpp"
 #include "oa/present/world_renderer/unit_renderer.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <limits>

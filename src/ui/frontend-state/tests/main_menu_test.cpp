@@ -3,6 +3,7 @@
 
 #include "oa/ui/frontend_state/main_menu.hpp"
 #include <array>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
