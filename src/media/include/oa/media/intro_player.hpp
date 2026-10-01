@@ -10,7 +10,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
 struct SDL_Window;
 struct SDL_Renderer;
@@ -86,8 +85,10 @@ class IntroPlayer {
 
     /// Opens a movie file and its decoders.
     ///
-    /// Without FFmpeg (oa-media-intro-player-null) only the SMK2 header and tables
-    /// are checked, and info() carries the header's size, frame count and rate.
+    /// The SMK2 header, tables and Huffman trees are read; frames are read
+    /// from the file one at a time as they play. The player built without
+    /// SDL3 (oa-media-intro-player-null) checks only the header and tables,
+    /// and its info() carries the header's size, frame count and rate.
     ///
     /// @param path Movie file path; must not be empty.
     /// @param limits Bounds on decoded frames, reads, audio bytes and video size.
@@ -101,8 +102,9 @@ class IntroPlayer {
     /// Plays the movie, or decodes it without a window for a headless check.
     ///
     /// Escape, a quit event or closing the window skips the rest. Full
-    /// playback waits for the queued audio to drain. Without FFmpeg nothing
-    /// is decoded: one line is logged and the movie is reported skipped.
+    /// playback waits for the queued audio to drain. The player built
+    /// without SDL3 decodes nothing: one line is logged and the movie is
+    /// reported skipped.
     ///
     /// @param options Frame limit, headless mode, audio, snapshot path and an
     ///        optional window and renderer to play into.
@@ -124,23 +126,6 @@ struct OpenPlayerResult {
     /// Reports whether the player opened.
     explicit operator bool() const noexcept { return player.has_value(); }
 };
-
-// PCM S16LE used for looping frontend CD/music tracks (music/*.mp3).
-struct DecodedPcm {
-    std::vector<uint8_t> samples;
-    int sample_rate = 0;
-    int channels = 0;
-};
-
-/// Decodes a whole audio file to interleaved signed 16-bit PCM at its own rate and channel count.
-///
-/// Without FFmpeg it always fails.
-///
-/// @param path Audio file path.
-/// @param[out] error Reason for a failure; cleared on success.
-/// @return The samples, or nothing when the file cannot be decoded or is empty.
-[[nodiscard]] std::optional<DecodedPcm>
-decode_audio_file(const std::filesystem::path& path, std::string& error);
 
 // Uniform 4:3 (or movie canvas) letterbox that fills the output. Scale is
 // min(output/canvas) on both axes so 1920x1080 shows 1440x1080 with side bars,

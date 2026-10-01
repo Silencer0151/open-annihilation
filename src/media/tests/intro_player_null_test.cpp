@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The intro player without FFmpeg: it checks each movie, then skips it.
+// The intro player without SDL3: it checks each movie, then skips it.
 
 #include "oa/media/intro_player.hpp"
 #include "oa/formats/smacker.hpp"
@@ -151,15 +151,6 @@ void test_skips_a_valid_movie(const fs::path& scratch) {
     fs::remove(path);
 }
 
-/// Checks that audio files are not decoded.
-///
-/// @param scratch Directory for the test's files.
-void test_audio_files_need_ffmpeg(const fs::path& scratch) {
-    std::string error;
-    const auto pcm = oa::media::decode_audio_file(scratch / "track.mp3", error);
-    check(!pcm && error == "decoding audio files needs FFmpeg", "audio files are not decoded");
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -168,9 +159,8 @@ int main(int argc, char** argv) {
     fs::create_directories(scratch, created);
     test_refuses_what_it_cannot_check(scratch);
     test_skips_a_valid_movie(scratch);
-    test_audio_files_need_ffmpeg(scratch);
     if (failures != 0)
         return 1;
-    std::printf("intro player without FFmpeg checks and skips movies\n");
+    std::printf("intro player without SDL3 checks and skips movies\n");
     return 0;
 }

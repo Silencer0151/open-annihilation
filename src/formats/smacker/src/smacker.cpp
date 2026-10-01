@@ -120,11 +120,13 @@ OpenResult SmackerReader::open(const std::filesystem::path& path, const Limits& 
         return failure("Smacker frame-type table is truncated");
     file.seekg(static_cast<std::streamoff>(tree_offset), std::ios::beg);
     uint64_t compressed_bytes = 0;
-    for (const auto& entry : result.frame_sizes_) {
-        const auto size = entry.payload_bytes();
+    result.frame_offsets_.resize(result.table_frame_count_);
+    for (uint32_t index = 0; index < result.table_frame_count_; ++index) {
+        const auto size = result.frame_sizes_[index].payload_bytes();
         if (size > limits.max_frame_bytes ||
             compressed_bytes > std::numeric_limits<uint64_t>::max() - size)
             return failure("Smacker frame payload exceeds bounds");
+        result.frame_offsets_[index] = data_offset + compressed_bytes;
         compressed_bytes += size;
     }
     if (data_offset + compressed_bytes > file_size)
@@ -137,10 +139,9 @@ OpenResult SmackerReader::open(const std::filesystem::path& path, const Limits& 
 std::optional<Frame> SmackerReader::frame(uint32_t index) const noexcept {
     if (index >= header_.frame_count)
         return std::nullopt;
-    uint64_t offset = frame_data_offset_;
-    for (uint32_t i = 0; i < index; ++i)
-        offset += frame_sizes_[i].payload_bytes();
-    return Frame{index, offset, frame_sizes_[index].payload_bytes(), frame_types_[index]};
+    return Frame{
+        index, frame_offsets_[index], frame_sizes_[index].payload_bytes(), frame_types_[index]
+    };
 }
 
 bool SmackerReader::read_frame(

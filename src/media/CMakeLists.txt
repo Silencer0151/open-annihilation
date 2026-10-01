@@ -4,39 +4,29 @@
 cmake_minimum_required(VERSION 3.24)
 project(oa_media LANGUAGES CXX)
 
-option(OA_BUILD_INTRO_PLAYER "Build the FFmpeg/SDL3 intro player" ON)
+option(OA_BUILD_INTRO_PLAYER "Build the SDL3 intro player" ON)
 if(OA_BUILD_INTRO_PLAYER)
   find_package(SDL3 3.2 CONFIG QUIET)
-  find_path(OA_FFMPEG_INCLUDE_DIR libavformat/avformat.h
-            HINTS /opt/homebrew/opt/ffmpeg/include)
-  find_library(OA_AVFORMAT_LIBRARY NAMES avformat
-               HINTS /opt/homebrew/opt/ffmpeg/lib)
-  find_library(OA_AVCODEC_LIBRARY NAMES avcodec
-               HINTS /opt/homebrew/opt/ffmpeg/lib)
-  find_library(OA_AVUTIL_LIBRARY NAMES avutil
-               HINTS /opt/homebrew/opt/ffmpeg/lib)
-  find_library(OA_SWSCALE_LIBRARY NAMES swscale
-               HINTS /opt/homebrew/opt/ffmpeg/lib)
-  find_library(OA_SWRESAMPLE_LIBRARY NAMES swresample
-               HINTS /opt/homebrew/opt/ffmpeg/lib)
-  if(TARGET SDL3::SDL3 AND OA_FFMPEG_INCLUDE_DIR AND
-     OA_AVFORMAT_LIBRARY AND OA_AVCODEC_LIBRARY AND OA_AVUTIL_LIBRARY AND
-     OA_SWSCALE_LIBRARY AND OA_SWRESAMPLE_LIBRARY)
+  if(TARGET SDL3::SDL3)
+    # The movies are decoded by the engine's Smacker decoder
+    # (oa-formats-smacker) and shown and heard through SDL3.
     add_library(oa-media-intro-player src/intro_player.cpp)
     add_library(oa::media::intro_player ALIAS oa-media-intro-player)
-    target_include_directories(oa-media-intro-player PUBLIC include
-                               ${OA_FFMPEG_INCLUDE_DIR})
+    target_include_directories(oa-media-intro-player PUBLIC include)
     target_link_libraries(oa-media-intro-player PUBLIC oa-formats-smacker SDL3::SDL3
-                          ${OA_AVFORMAT_LIBRARY} ${OA_AVCODEC_LIBRARY}
-                          ${OA_AVUTIL_LIBRARY} ${OA_SWSCALE_LIBRARY}
-                          ${OA_SWRESAMPLE_LIBRARY} PRIVATE oa-options)
+                          PRIVATE oa-options)
     target_compile_features(oa-media-intro-player PUBLIC cxx_std_20)
-    if(EXISTS "/opt/homebrew/opt/ffmpeg/lib")
-      set_property(TARGET oa-media-intro-player APPEND PROPERTY
-                   BUILD_RPATH "/opt/homebrew/opt/ffmpeg/lib")
+    if(BUILD_TESTING)
+      add_executable(oa-intro-player-test tests/intro_player_test.cpp)
+      target_link_libraries(oa-intro-player-test PRIVATE oa-media-intro-player
+        oa-formats-smacker-test-movie oa-options)
+      add_test(NAME intro-player COMMAND oa-intro-player-test
+        ${CMAKE_CURRENT_BINARY_DIR}/intro-player)
+      set_tests_properties(intro-player PROPERTIES
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
     endif()
   else()
-    set(oa_intro_player_note "oa-media-intro-player disabled: SDL3 and FFmpeg development libraries were not found")
+    set(oa_intro_player_note "oa-media-intro-player disabled: SDL3 was not found")
     if(OA_BUILD_PLATFORM)
       string(APPEND oa_intro_player_note "; oa-game skips the intro movies")
     endif()
@@ -44,7 +34,7 @@ if(OA_BUILD_INTRO_PLAYER)
   endif()
 endif()
 
-# The intro player without FFmpeg: it checks each movie's SMK2 header and
+# The intro player without SDL3: it checks each movie's SMK2 header and
 # tables, then skips it with one logged line. oa-game links it when
 # oa-media-intro-player is not built, so the game always links.
 add_library(oa-media-intro-player-null src/intro_player_null.cpp)

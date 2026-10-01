@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The intro player for builds without FFmpeg: it runs the FFmpeg player's
-// SMK2 check on each movie, then skips it with one logged line, so the game
-// carries on to the next screen as after a finished movie.
+// The intro player for builds without SDL3: it runs the player's SMK2 check
+// on each movie, then skips it with one logged line, so the game carries on
+// to the next screen as after a finished movie.
 
 #include "oa/media/intro_player.hpp"
 #include "oa/formats/smacker.hpp"
@@ -54,16 +54,11 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions&) {
     }
     std::fprintf(
         stderr,
-        "intro movies need FFmpeg; skipping %s\n",
+        "this build plays no movies; skipping %s\n",
         implementation_->path.filename().string().c_str()
     );
     playback.skipped = true;
     return playback;
-}
-
-std::optional<DecodedPcm> decode_audio_file(const std::filesystem::path&, std::string& error) {
-    error = "decoding audio files needs FFmpeg";
-    return std::nullopt;
 }
 
 } // namespace oa::media

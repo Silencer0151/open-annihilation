@@ -238,6 +238,7 @@ class SmackerReader {
     std::filesystem::path path_;
     std::vector<on_disk::FrameSize> frame_sizes_;
     std::vector<uint8_t> frame_types_;
+    std::vector<uint64_t> frame_offsets_; ///< file offset of each frame's payload
     uint64_t frame_data_offset_ = 0;
     uint64_t frame_data_bytes_ = 0;
     uint32_t table_frame_count_ = 0;

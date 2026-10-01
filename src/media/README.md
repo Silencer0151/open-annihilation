@@ -1,11 +1,45 @@
 # Media
 
 The media group holds what the engine plays or makes as video: the intro
-player (`oa-media-intro-player`, and `oa-media-intro-player-null` where FFmpeg
+player (`oa-media-intro-player`, and `oa-media-intro-player-null` where SDL3
 is missing), the movie surface the game presents a playing movie on
 (`oa-media-movie-surface`), and the director, which turns a director script
 (`.oascript`) into the camera of every frame of a video of a recorded game.
 The media libraries read simulation state and never write it.
+
+## Intro player
+
+Target `oa-media-intro-player`, header `oa/media/intro_player.hpp`. It plays
+the game's Smacker movies (`Data/1.zrb` to `Data/5.zrb`) for the frontend and
+the campaign: `IntroPlayer::open` reads a movie's header, tables and Huffman
+trees through `oa-formats-smacker`, and `play` reads one frame at a time
+from the file, decodes it with the engine's Smacker decoder, turns the palette
+indices into RGB and shows it through SDL3, with the first audio track's
+samples queued on an SDL audio stream. It needs SDL3 and nothing else; where
+SDL3 is missing, `oa-media-intro-player-null` checks each movie and skips it
+with one logged line.
+
+- **Timing.** Frame n is shown n frame periods after the first frame, the
+  period being the header's frame-rate field (a negative value counts
+  1/100000 s, a positive one milliseconds), in whole nanoseconds. Full
+  playback then waits for the queued samples to drain.
+- **Scaling.** Frames are centred on the 640x480 canvas and the canvas is
+  letterboxed to fill the window (`letterbox_dest`). Height modes 2 and 4
+  double the shown height; in mode 2 the odd rows repeat the decoded row on
+  screen and take palette colour 0 in a snapshot.
+- **Skipping.** Escape, a quit event or closing the window ends the movie
+  as skipped; other window events go to `PlaybackHooks`.
+- **Memory.** One movie keeps its frame tables, its four Huffman tables,
+  one frame of palette indices, one RGB frame (and a doubled one in height
+  mode 2), the largest frame payload and one audio chunk's samples: at most
+  about 2.5 MB for the game's movies. Nothing holds a whole movie.
+
+`intro-player` plays the small movie of
+`src/formats/smacker/tests/support/smacker_test_movie.hpp` headless (the
+information it reports, three frames, six samples, a snapshot checked pixel
+by pixel, a frame limit, the audio and pixel bounds, a damaged frame) and
+through SDL with the dummy drivers. `intro-player-null` checks the player
+without SDL3.
 
 ## Director
 
