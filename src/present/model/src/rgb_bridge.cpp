@@ -15,6 +15,8 @@ namespace {
 
 constexpr std::size_t exact_slots = 1024; // power of two, > 2 * palette size
 constexpr uint32_t slot_used = 0x1000000U;
+/// Bytes of a frame pixel: red, green and blue.
+constexpr std::ptrdiff_t pixel_bytes = 3;
 
 uint32_t pack(uint8_t r, uint8_t g, uint8_t b) noexcept {
     return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | b;
@@ -44,7 +46,7 @@ int32_t rgb_start(int32_t origin, int32_t index, float scale) noexcept {
     return origin + static_cast<int32_t>(std::ceil(static_cast<double>(index) * scale));
 }
 
-// The frame row an 8-bit row captures, as capture_tile picks it.
+// The frame row an 8-bit row captures from.
 int32_t captured_row(const RgbBridge& bridge, int32_t y) noexcept {
     return std::clamp(
         rgb_y(bridge, y),
@@ -53,7 +55,7 @@ int32_t captured_row(const RgbBridge& bridge, int32_t y) noexcept {
     );
 }
 
-// The frame column an 8-bit column captures, as capture_tile picks it.
+// The frame column an 8-bit column captures from.
 int32_t captured_column(const RgbBridge& bridge, int32_t x) noexcept {
     return std::clamp(
         rgb_x(bridge, x),
@@ -138,37 +140,149 @@ bool sum_drawn_samples(
     return drawn;
 }
 
-void capture_tile(RgbBridge& bridge, int32_t tx, int32_t ty) {
+// Whether `count` bytes at `a` equal those at `b`.
+bool same_bytes(const uint8_t* a, const uint8_t* b, std::size_t count) noexcept {
+    std::size_t i = 0;
+    uint64_t differ = 0;
+    for (; i + sizeof(uint64_t) <= count; i += sizeof(uint64_t)) {
+        uint64_t left = 0;
+        uint64_t right = 0;
+        std::memcpy(&left, a + i, sizeof(left));
+        std::memcpy(&right, b + i, sizeof(right));
+        differ |= left ^ right;
+    }
+    for (; i < count; ++i)
+        differ |= static_cast<uint64_t>(a[i] ^ b[i]);
+    return differ == 0;
+}
+
+// Copies the `count` indices of a row of a tile, a whole tile's row at once
+// when it has bridge_tile_side of them.
+void copy_tile_row(uint8_t* to, const uint8_t* from, int32_t count) noexcept {
+    if (count == bridge_tile_side)
+        std::memcpy(to, from, bridge_tile_side);
+    else
+        std::memcpy(to, from, static_cast<std::size_t>(count));
+}
+
+// Whether two frame pixels differ in colour.
+bool colour_differs(const uint8_t* a, const uint8_t* b) noexcept {
+    return a[0] != b[0] || a[1] != b[1] || a[2] != b[2];
+}
+
+// Sets the copy's pixel `at` of a row to the frame pixel `source`, with its
+// palette index.
+void map_pixel(
+    RgbBridge& bridge, uint8_t* colours, uint8_t* indices, int32_t at, const uint8_t* source
+) {
+    uint8_t* colour = colours + static_cast<std::ptrdiff_t>(at) * pixel_bytes;
+    colour[0] = source[0];
+    colour[1] = source[1];
+    colour[2] = source[2];
+    indices[at] = bridge_index(bridge, source[0], source[1], source[2]);
+    ++bridge.copy.mapped_pixels;
+}
+
+// Lays out the capture copy for the bridge's surface, area and frame, once
+// after each change of them: the frame row and column each 8-bit row and
+// column captures from, one row (or column) of the copy for each distinct
+// frame row (or column).
+void lay_out_copy(RgbBridge& bridge) {
+    CaptureCopy& copy = bridge.copy;
+    if (copy.laid_out)
+        return;
+    copy.laid_out = true;
+    const int32_t width = bridge.surface.width;
+    const int32_t height = bridge.surface.height;
+    copy.column_of.resize(static_cast<std::size_t>(width));
+    copy.frame_columns.clear();
+    for (int32_t x = 0; x < width; ++x) {
+        const std::ptrdiff_t offset =
+            static_cast<std::ptrdiff_t>(captured_column(bridge, x)) * pixel_bytes;
+        if (copy.frame_columns.empty() || copy.frame_columns.back() != offset)
+            copy.frame_columns.push_back(offset);
+        copy.column_of[static_cast<std::size_t>(x)] =
+            static_cast<int32_t>(copy.frame_columns.size()) - 1;
+    }
+    copy.row_of.resize(static_cast<std::size_t>(height));
+    copy.frame_rows.clear();
+    for (int32_t y = 0; y < height; ++y) {
+        const std::ptrdiff_t offset =
+            static_cast<std::ptrdiff_t>(captured_row(bridge, y)) * bridge.frame.stride;
+        if (copy.frame_rows.empty() || copy.frame_rows.back() != offset)
+            copy.frame_rows.push_back(offset);
+        copy.row_of[static_cast<std::size_t>(y)] = static_cast<int32_t>(copy.frame_rows.size()) - 1;
+    }
+    copy.width = static_cast<int32_t>(copy.frame_columns.size());
+    copy.height = static_cast<int32_t>(copy.frame_rows.size());
+    copy.written_in_place = bridge.scale == 1.0F && bridge.area.x1 >= 0 && bridge.area.y1 >= 0 &&
+                            bridge.area.x2 < bridge.frame.width &&
+                            bridge.area.y2 < bridge.frame.height;
+    copy.columns_side_by_side = copy.width == width;
+    for (int32_t x = 1; copy.columns_side_by_side && x < width; ++x)
+        copy.columns_side_by_side =
+            copy.frame_columns[static_cast<std::size_t>(x)] ==
+            copy.frame_columns[static_cast<std::size_t>(x - 1)] + pixel_bytes;
+    const auto size = static_cast<std::size_t>(copy.width) * static_cast<std::size_t>(copy.height);
+    if (copy.indices.size() < size) {
+        copy.colours.resize(size * pixel_bytes);
+        copy.indices.resize(size);
+    }
+}
+
+// Brings the copy up to date with the frame pixels a tile captures from:
+// those whose colour differs from the copy's are mapped again, and every one
+// of them when the tile was never mapped. With `start_pixels` the tile's
+// 8-bit pixels and baseline then start as the copy's indices.
+void map_tile(RgbBridge& bridge, int32_t tx, int32_t ty, bool mapped, bool start_pixels) {
+    CaptureCopy& copy = bridge.copy;
     const int32_t x0 = tx * bridge_tile_side;
     const int32_t y0 = ty * bridge_tile_side;
     const int32_t x1 = std::min(x0 + bridge_tile_side, bridge.surface.width);
     const int32_t y1 = std::min(y0 + bridge_tile_side, bridge.surface.height);
+    const int32_t first = copy.column_of[static_cast<std::size_t>(x0)];
+    const int32_t count = x1 - x0;
     for (int32_t y = y0; y < y1; ++y) {
-        const int32_t sy = std::clamp(
-            rgb_y(bridge, y),
-            std::max(bridge.area.y1, 0),
-            std::min(bridge.area.y2, bridge.frame.height - 1)
-        );
-        const uint8_t* row =
-            bridge.frame.rgb + static_cast<std::ptrdiff_t>(sy) * bridge.frame.stride;
-        uint8_t* out = bridge.pixels.data() + static_cast<std::ptrdiff_t>(y) * bridge.surface.pitch;
-        for (int32_t x = x0; x < x1; ++x) {
-            const int32_t sx = std::clamp(
-                rgb_x(bridge, x),
-                std::max(bridge.area.x1, 0),
-                std::min(bridge.area.x2, bridge.frame.width - 1)
-            );
-            const uint8_t* pixel = row + static_cast<std::ptrdiff_t>(sx) * 3;
-            out[x] = bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+        const int32_t row = copy.row_of[static_cast<std::size_t>(y)];
+        const uint8_t* frame_row =
+            bridge.frame.rgb + copy.frame_rows[static_cast<std::size_t>(row)];
+        uint8_t* colours =
+            copy.colours.data() + static_cast<std::ptrdiff_t>(row) * copy.width * pixel_bytes;
+        uint8_t* indices = copy.indices.data() + static_cast<std::ptrdiff_t>(row) * copy.width;
+        uint8_t* pixels =
+            bridge.pixels.data() + static_cast<std::ptrdiff_t>(y) * bridge.surface.pitch;
+        uint8_t* baseline =
+            bridge.baseline.data() + static_cast<std::ptrdiff_t>(y) * bridge.surface.pitch;
+        if (copy.columns_side_by_side) {
+            const uint8_t* source = frame_row + copy.frame_columns[static_cast<std::size_t>(first)];
+            const uint8_t* kept = colours + static_cast<std::ptrdiff_t>(first) * pixel_bytes;
+            if (!mapped || !same_bytes(kept, source, static_cast<std::size_t>(count) * pixel_bytes))
+                for (int32_t i = 0; i < count; ++i)
+                    if (!mapped || colour_differs(kept + i * pixel_bytes, source + i * pixel_bytes))
+                        map_pixel(bridge, colours, indices, first + i, source + i * pixel_bytes);
+            if (start_pixels) {
+                copy_tile_row(baseline + x0, indices + first, count);
+                copy_tile_row(pixels + x0, indices + first, count);
+            }
+            continue;
         }
-        std::memcpy(
-            bridge.baseline.data() + static_cast<std::ptrdiff_t>(y) * bridge.surface.pitch + x0,
-            out + x0,
-            static_cast<std::size_t>(x1 - x0)
-        );
+        for (int32_t x = x0; x < x1; ++x) {
+            const int32_t column = copy.column_of[static_cast<std::size_t>(x)];
+            const uint8_t* source =
+                frame_row + copy.frame_columns[static_cast<std::size_t>(column)];
+            if (!mapped ||
+                colour_differs(colours + static_cast<std::ptrdiff_t>(column) * pixel_bytes, source))
+                map_pixel(bridge, colours, indices, column, source);
+            if (start_pixels) {
+                baseline[x] = indices[column];
+                pixels[x] = indices[column];
+            }
+        }
     }
 }
 
+// Writes the pixels of a captured tile that draws changed back to the frame
+// through the palette.
 void commit_tile(RgbBridge& bridge, int32_t tx, int32_t ty) {
     const int32_t x0 = tx * bridge_tile_side;
     const int32_t y0 = ty * bridge_tile_side;
@@ -182,22 +296,60 @@ void commit_tile(RgbBridge& bridge, int32_t tx, int32_t ty) {
     const int32_t right = std::min(
         {rgb_start(bridge.area.x1, x1, bridge.scale) - 1, bridge.area.x2, bridge.frame.width - 1}
     );
+    if (left > right)
+        return;
+    // The 8-bit column each frame column of the tile takes its pixel from.
+    thread_local std::vector<int32_t> columns;
+    columns.resize(static_cast<std::size_t>(right - left + 1));
+    for (int32_t x = left; x <= right; ++x)
+        columns[static_cast<std::size_t>(x - left)] =
+            std::min(static_cast<int32_t>((x - bridge.area.x1) / bridge.scale), x1 - 1);
+    // The 8-bit row last read, and whether any of its pixels in the tile
+    // differ from the baseline.
+    int32_t compared = -1;
+    bool changed = false;
     for (int32_t y = top; y <= bottom; ++y) {
         const int32_t sy =
             std::min(static_cast<int32_t>((y - bridge.area.y1) / bridge.scale), y1 - 1);
         const auto offset = static_cast<std::ptrdiff_t>(sy) * bridge.surface.pitch;
+        if (sy != compared) {
+            compared = sy;
+            changed = !same_bytes(
+                bridge.pixels.data() + offset + x0,
+                bridge.baseline.data() + offset + x0,
+                static_cast<std::size_t>(x1 - x0)
+            );
+        }
+        if (!changed)
+            continue;
+        const uint8_t* drawn = bridge.pixels.data() + offset;
+        const uint8_t* captured = bridge.baseline.data() + offset;
         uint8_t* row = bridge.frame.rgb + static_cast<std::ptrdiff_t>(y) * bridge.frame.stride;
+        // Each pixel written is the one its 8-bit pixel captures from: the
+        // copy takes its new colour and index.
+        CaptureCopy& copy = bridge.copy;
+        const std::ptrdiff_t kept = static_cast<std::ptrdiff_t>(sy) * copy.width;
+        uint8_t* kept_colours =
+            copy.written_in_place ? copy.colours.data() + kept * pixel_bytes : nullptr;
+        uint8_t* kept_indices = copy.written_in_place ? copy.indices.data() + kept : nullptr;
         for (int32_t x = left; x <= right; ++x) {
-            const int32_t sx =
-                std::min(static_cast<int32_t>((x - bridge.area.x1) / bridge.scale), x1 - 1);
-            const uint8_t value = bridge.pixels[static_cast<std::size_t>(offset + sx)];
-            if (value == bridge.baseline[static_cast<std::size_t>(offset + sx)])
+            const int32_t sx = columns[static_cast<std::size_t>(x - left)];
+            const uint8_t value = drawn[sx];
+            if (value == captured[sx])
                 continue;
             const PaletteEntry& entry = bridge.palette.entries[value];
             uint8_t* pixel = row + static_cast<std::ptrdiff_t>(x) * 3;
             pixel[0] = entry.r;
             pixel[1] = entry.g;
             pixel[2] = entry.b;
+            if (kept_colours != nullptr) {
+                std::memcpy(
+                    kept_colours + static_cast<std::ptrdiff_t>(sx) * pixel_bytes,
+                    pixel,
+                    static_cast<std::size_t>(pixel_bytes)
+                );
+                kept_indices[sx] = copy.entry_indices[value];
+            }
         }
     }
 }
@@ -241,10 +393,18 @@ void bridge_begin(
     float scale,
     const Palette& palette
 ) {
+    const float kept_scale = scale > 0.0F ? scale : 1.0F;
+    const bool palette_changed = std::memcmp(&bridge.palette, &palette, sizeof(Palette)) != 0;
+    // The copy maps frame pixels by place and colours by palette; a frame
+    // laid out as before keeps it, whatever the frame now holds.
+    const bool layout_kept =
+        !palette_changed && !bridge.exact_keys.empty() && frame.width == bridge.frame.width &&
+        frame.height == bridge.frame.height && frame.stride == bridge.frame.stride &&
+        area.x1 == bridge.area.x1 && area.y1 == bridge.area.y1 && area.x2 == bridge.area.x2 &&
+        area.y2 == bridge.area.y2 && kept_scale == bridge.scale;
     bridge.frame = frame;
     bridge.area = area;
-    bridge.scale = scale > 0.0F ? scale : 1.0F;
-    const bool palette_changed = std::memcmp(&bridge.palette, &palette, sizeof(Palette)) != 0;
+    bridge.scale = kept_scale;
     if (palette_changed || bridge.exact_keys.empty()) {
         bridge.palette = palette;
         bridge.exact_keys.assign(exact_slots, 0);
@@ -262,6 +422,11 @@ void bridge_begin(
                 bridge.exact_values[slot] = static_cast<uint8_t>(index);
             }
         }
+        for (int32_t index = 0; index < OA_PALETTE_COLORS; ++index) {
+            const PaletteEntry& entry = palette.entries[index];
+            bridge.copy.entry_indices[static_cast<std::size_t>(index)] =
+                bridge_index(bridge, entry.r, entry.g, entry.b);
+        }
     }
     const int32_t width =
         std::max(0, static_cast<int32_t>(std::ceil((area.x2 - area.x1 + 1) / bridge.scale)));
@@ -275,7 +440,16 @@ void bridge_begin(
     present::init_surface(bridge.surface, width, height, width, bridge.pixels.data());
     bridge.tiles_x = (width + bridge_tile_side - 1) / bridge_tile_side;
     bridge.tiles_y = (height + bridge_tile_side - 1) / bridge_tile_side;
-    bridge.captured.assign(static_cast<std::size_t>(bridge.tiles_x) * bridge.tiles_y, 0);
+    const auto tiles = static_cast<std::size_t>(bridge.tiles_x) * bridge.tiles_y;
+    bridge.open_tiles.clear();
+    if (layout_kept && bridge.tiles.size() == tiles) {
+        for (uint8_t& state : bridge.tiles)
+            state = static_cast<uint8_t>(state & ~bridge_tile_open);
+        return;
+    }
+    bridge.tiles.assign(tiles, 0);
+    bridge.open_tiles.reserve(tiles);
+    bridge.copy.laid_out = false;
 }
 
 void bridge_open(RgbBridge& bridge, const Rect32& region) {
@@ -294,24 +468,31 @@ void bridge_open(RgbBridge& bridge, const Rect32& region) {
         present::set_surface_clip(bridge.surface, {0, 0, -1, -1});
         return;
     }
+    lay_out_copy(bridge);
     for (int32_t ty = clip.y1 / bridge_tile_side; ty <= clip.y2 / bridge_tile_side; ++ty) {
         for (int32_t tx = clip.x1 / bridge_tile_side; tx <= clip.x2 / bridge_tile_side; ++tx) {
-            auto& state = bridge.captured[static_cast<std::size_t>(ty) * bridge.tiles_x + tx];
-            if (state == 0) {
-                capture_tile(bridge, tx, ty);
-                state = 1;
-            }
+            const auto tile = static_cast<uint32_t>(ty * bridge.tiles_x + tx);
+            uint8_t& state = bridge.tiles[tile];
+            if ((state & bridge_tile_open) != 0)
+                continue;
+            map_tile(bridge, tx, ty, (state & bridge_tile_mapped) != 0, true);
+            state = bridge_tile_mapped | bridge_tile_open;
+            bridge.open_tiles.push_back(tile);
         }
     }
     present::set_surface_clip(bridge.surface, clip);
 }
 
 void bridge_end(RgbBridge& bridge) {
-    for (int32_t ty = 0; ty < bridge.tiles_y; ++ty)
-        for (int32_t tx = 0; tx < bridge.tiles_x; ++tx)
-            if (bridge.captured[static_cast<std::size_t>(ty) * bridge.tiles_x + tx] != 0)
-                commit_tile(bridge, tx, ty);
-    std::fill(bridge.captured.begin(), bridge.captured.end(), 0);
+    for (const uint32_t tile : bridge.open_tiles) {
+        commit_tile(
+            bridge,
+            static_cast<int32_t>(tile % static_cast<uint32_t>(bridge.tiles_x)),
+            static_cast<int32_t>(tile / static_cast<uint32_t>(bridge.tiles_x))
+        );
+        bridge.tiles[tile] = bridge_tile_mapped;
+    }
+    bridge.open_tiles.clear();
 }
 
 void bridge_open_sampled(
@@ -342,21 +523,40 @@ void bridge_open_sampled(
     sampled.baseline.resize(static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows));
     sampled.captured_rows.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(rows));
     present::init_surface(sampled.surface, width, height, width, sampled.samples.data());
-    thread_local std::vector<std::ptrdiff_t> offsets;
-    offsets.resize(static_cast<std::size_t>(columns));
-    for (int32_t column = 0; column < columns; ++column)
-        offsets[static_cast<std::size_t>(column)] =
-            static_cast<std::ptrdiff_t>(captured_column(bridge, clip.x1 + column)) * 3;
+    // The copy gives the indices under tiles not captured; a captured tile
+    // may hold draws, so the frame under it is mapped as it is.
+    lay_out_copy(bridge);
+    bool any_open = false;
+    for (int32_t ty = clip.y1 / bridge_tile_side; ty <= clip.y2 / bridge_tile_side; ++ty) {
+        for (int32_t tx = clip.x1 / bridge_tile_side; tx <= clip.x2 / bridge_tile_side; ++tx) {
+            uint8_t& state = bridge.tiles[static_cast<std::size_t>(ty * bridge.tiles_x + tx)];
+            if ((state & bridge_tile_open) != 0) {
+                any_open = true;
+                continue;
+            }
+            map_tile(bridge, tx, ty, (state & bridge_tile_mapped) != 0, true);
+            state = bridge_tile_mapped;
+        }
+    }
+    const CaptureCopy& copy = bridge.copy;
+    const auto index_under = [&](int32_t x, int32_t y) -> uint8_t {
+        const int32_t row = copy.row_of[static_cast<std::size_t>(y)];
+        const int32_t column = copy.column_of[static_cast<std::size_t>(x)];
+        if (!any_open || (bridge.tiles[static_cast<std::size_t>(
+                              (y / bridge_tile_side) * bridge.tiles_x + x / bridge_tile_side
+                          )] &
+                          bridge_tile_open) == 0)
+            return copy.indices[static_cast<std::size_t>(row) * copy.width + column];
+        const uint8_t* pixel = bridge.frame.rgb + copy.frame_rows[static_cast<std::size_t>(row)] +
+                               copy.frame_columns[static_cast<std::size_t>(column)];
+        return bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+    };
     for (int32_t row = 0; row < rows; ++row) {
         uint8_t* first =
             sampled.samples.data() + static_cast<std::ptrdiff_t>(row) * factor_rows * width;
         uint8_t* baseline = sampled.baseline.data() + static_cast<std::ptrdiff_t>(row) * columns;
-        const uint8_t* frame_row =
-            bridge.frame.rgb +
-            static_cast<std::ptrdiff_t>(captured_row(bridge, clip.y1 + row)) * bridge.frame.stride;
         for (int32_t column = 0; column < columns; ++column) {
-            const uint8_t* pixel = frame_row + offsets[static_cast<std::size_t>(column)];
-            const uint8_t index = bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+            const uint8_t index = index_under(clip.x1 + column, clip.y1 + row);
             baseline[column] = index;
             std::memset(
                 first + static_cast<std::ptrdiff_t>(column) * factor_rows, index, sampled.factor

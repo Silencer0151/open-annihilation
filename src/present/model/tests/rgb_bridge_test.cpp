@@ -6,6 +6,7 @@
 #include "oa/present/blit.hpp"
 #include "oa/present/polygon.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -234,6 +235,187 @@ void test_sampled_scaled() {
     CHECK(is_entry(frame.at(7, 8), ground));
 }
 
+// A small linear congruential sequence, so that the bookkeeping tests draw
+// the same frames on every platform.
+struct Sequence {
+    uint32_t state{};
+
+    uint32_t next(uint32_t bound) {
+        state = state * 1664525U + 1013904223U;
+        return (state >> 8) % bound;
+    }
+};
+
+// Writes a few frame pixels as a sprite drawn straight into the frame
+// would: palette colours, and colours outside the palette.
+void scribble(Frame& frame, Sequence& sequence, const oa::Palette& palette) {
+    for (int i = 0; i < 40; ++i) {
+        uint8_t* pixel =
+            frame.rgb.data() + static_cast<std::ptrdiff_t>(
+                                   sequence.next(static_cast<uint32_t>(frame.width * frame.height))
+                               ) * 3;
+        if (sequence.next(2) == 0) {
+            const oa::PaletteEntry& entry = palette.entries[sequence.next(OA_PALETTE_COLORS)];
+            pixel[0] = entry.r;
+            pixel[1] = entry.g;
+            pixel[2] = entry.b;
+        } else {
+            pixel[0] = static_cast<uint8_t>(sequence.next(256));
+            pixel[1] = static_cast<uint8_t>(sequence.next(256));
+            pixel[2] = static_cast<uint8_t>(sequence.next(256));
+        }
+    }
+}
+
+// The palette of ramp_palette with its upper half repeating its lower half,
+// so that colours have more than one entry.
+oa::Palette repeating_palette() {
+    oa::Palette palette = ramp_palette();
+    for (int i = OA_PALETTE_COLORS / 2; i < OA_PALETTE_COLORS; ++i)
+        palette.entries[i] = palette.entries[i - OA_PALETTE_COLORS / 2];
+    return palette;
+}
+
+// A bridge kept from one capture to the next captures the same indices,
+// and writes back the same frame, as a bridge that maps every pixel afresh,
+// whatever was drawn into the frame between captures, at every scale and
+// with the rectangle inside the frame or past its edges.
+void test_copy_matches_fresh_capture() {
+    struct Layout {
+        oa::Rect32 area;
+        float scale;
+    };
+
+    const Layout layouts[] = {
+        {{0, 0, 69, 49}, 1.0F},
+        {{6, 4, 61, 45}, 1.0F},
+        {{-5, -3, 74, 52}, 1.0F},
+        {{0, 0, 69, 49}, 2.0F},
+        {{0, 0, 69, 49}, 0.5F},
+        {{3, 2, 66, 47}, 1.5F},
+        {{0, 0, 69, 49}, 0.75F},
+    };
+    const oa::Palette palette = repeating_palette();
+    for (const Layout& layout : layouts) {
+        Sequence sequence{static_cast<uint32_t>(layout.area.x1 * 7 + layout.scale * 100)};
+        Frame kept_frame(70, 50, palette.entries[20]);
+        scribble(kept_frame, sequence, palette);
+        Frame fresh_frame = kept_frame;
+        RgbBridge kept;
+        bool all_equal = true;
+        for (int step = 0; step < 60; ++step) {
+            // Every few steps a new frame starts, as each drawn frame does.
+            if (step % 7 == 0)
+                bridge_begin(kept, kept_frame.view(), layout.area, layout.scale, palette);
+            RgbBridge fresh;
+            bridge_begin(fresh, fresh_frame.view(), layout.area, layout.scale, palette);
+            const int32_t width = kept.surface.width;
+            const int32_t height = kept.surface.height;
+            const auto x = static_cast<int32_t>(sequence.next(static_cast<uint32_t>(width)));
+            const auto y = static_cast<int32_t>(sequence.next(static_cast<uint32_t>(height)));
+            const oa::Rect32 region{
+                x - 20, y - 15, x + static_cast<int32_t>(sequence.next(40)), y + 12
+            };
+            bridge_open(kept, region);
+            bridge_open(fresh, region);
+            const oa::Rect32& clip = kept.surface.clip;
+            for (int32_t row = clip.y1; row <= clip.y2; ++row)
+                for (int32_t column = clip.x1; column <= clip.x2; ++column)
+                    all_equal =
+                        all_equal && kept.surface.pixels[row * kept.surface.pitch + column] ==
+                                         fresh.surface.pixels[row * fresh.surface.pitch + column];
+            // Draws: some pixels of the clip take new indices, some the
+            // index they hold.
+            for (int i = 0; i < 300 && clip.x1 <= clip.x2 && clip.y1 <= clip.y2; ++i) {
+                const auto column =
+                    clip.x1 + static_cast<int32_t>(
+                                  sequence.next(static_cast<uint32_t>(clip.x2 - clip.x1 + 1))
+                              );
+                const auto row =
+                    clip.y1 + static_cast<int32_t>(
+                                  sequence.next(static_cast<uint32_t>(clip.y2 - clip.y1 + 1))
+                              );
+                const auto value = static_cast<uint8_t>(sequence.next(OA_PALETTE_COLORS));
+                kept.surface.pixels[row * kept.surface.pitch + column] = value;
+                fresh.surface.pixels[row * fresh.surface.pitch + column] = value;
+            }
+            bridge_end(kept);
+            bridge_end(fresh);
+            all_equal = all_equal && kept_frame.rgb == fresh_frame.rgb;
+            Sequence copy = sequence;
+            scribble(kept_frame, sequence, palette);
+            scribble(fresh_frame, copy, palette);
+        }
+        CHECK(all_equal);
+    }
+}
+
+// A capture maps again only the frame pixels whose colour changed; pixels
+// written back at a scale of 1 are already up to date, and a new frame of
+// the same layout keeps the copy.
+void test_copy_maps_only_changes() {
+    const oa::Palette palette = ramp_palette();
+    Frame frame(64, 64, palette.entries[9]);
+    RgbBridge bridge;
+    bridge_begin(bridge, frame.view(), {0, 0, 63, 63}, 1.0F, palette);
+    const uint64_t at_start = bridge.copy.mapped_pixels;
+    bridge_open(bridge, {0, 0, 63, 63});
+    CHECK(bridge.copy.mapped_pixels - at_start == 64 * 64);
+    bridge_end(bridge);
+    bridge_open(bridge, {0, 0, 63, 63});
+    CHECK(bridge.copy.mapped_pixels - at_start == 64 * 64);
+    // Five pixels drawn and written back.
+    for (int i = 0; i < 5; ++i)
+        bridge.surface.pixels[i * 70] = 77;
+    bridge_end(bridge);
+    bridge_open(bridge, {0, 0, 63, 63});
+    CHECK(bridge.copy.mapped_pixels - at_start == 64 * 64);
+    CHECK(bridge.surface.pixels[70] == 77);
+    bridge_end(bridge);
+    // Three pixels drawn straight into the frame, one outside the palette.
+    frame.rgb[0] = 1;
+    frame.rgb[static_cast<std::size_t>((10 * 64 + 10) * 3)] = 200;
+    frame.rgb[static_cast<std::size_t>((63 * 64 + 63) * 3 + 2)] = 3;
+    bridge_begin(bridge, frame.view(), {0, 0, 63, 63}, 1.0F, palette);
+    bridge_open(bridge, {0, 0, 63, 63});
+    CHECK(bridge.copy.mapped_pixels - at_start == 64 * 64 + 3);
+    CHECK(bridge.surface.pixels[10 * 64 + 10] == bridge_index(bridge, 200, 255 - 9, 9 / 2));
+    bridge_end(bridge);
+    // A region captured as samples maps nothing that has not changed.
+    SampledRegion sampled;
+    bridge_open_sampled(bridge, sampled, {0, 0, 63, 63}, 2);
+    CHECK(bridge.copy.mapped_pixels - at_start == 64 * 64 + 3);
+    CHECK(
+        sampled.surface.pixels[0] ==
+        bridge_index(bridge, frame.at(0, 0)[0], frame.at(0, 0)[1], frame.at(0, 0)[2])
+    );
+    // Another palette maps every pixel again.
+    oa::Palette other = palette;
+    other.entries[0] = {1, 2, 3, 0};
+    bridge_begin(bridge, frame.view(), {0, 0, 63, 63}, 1.0F, other);
+    bridge_open(bridge, {0, 0, 63, 63});
+    CHECK(bridge.copy.mapped_pixels - at_start == 2 * 64 * 64 + 3);
+    bridge_end(bridge);
+}
+
+// At a scale of 2 a pixel written back is mapped again at the next capture,
+// from the frame pixel it captures from.
+void test_copy_scaled_write_back() {
+    const oa::Palette palette = ramp_palette();
+    Frame frame(40, 40, palette.entries[3]);
+    RgbBridge bridge;
+    bridge_begin(bridge, frame.view(), {0, 0, 39, 39}, 2.0F, palette);
+    bridge_open(bridge, {0, 0, 19, 19});
+    const uint64_t captured = bridge.copy.mapped_pixels;
+    CHECK(captured == 20 * 20);
+    bridge.surface.pixels[5 * bridge.surface.pitch + 5] = 50;
+    bridge_end(bridge);
+    bridge_open(bridge, {0, 0, 19, 19});
+    CHECK(bridge.copy.mapped_pixels == captured + 1);
+    CHECK(bridge.surface.pixels[5 * bridge.surface.pitch + 5] == 50);
+    bridge_end(bridge);
+}
+
 } // namespace
 
 int main() {
@@ -245,6 +427,9 @@ int main() {
     test_sampled_untouched();
     test_sampled_coverage();
     test_sampled_scaled();
+    test_copy_matches_fresh_capture();
+    test_copy_maps_only_changes();
+    test_copy_scaled_write_back();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return EXIT_FAILURE;

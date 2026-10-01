@@ -12,18 +12,35 @@
 // changed is written back through the palette. Unchanged pixels keep their
 // RGB values, so colours outside the palette survive untouched.
 //
+// The bridge keeps the indices it maps from one capture to the next, with
+// the colours they were mapped from, so that a capture maps again only the
+// frame pixels whose colour has changed since, whoever changed it: the
+// bridge's own write-backs, or sprites and particles drawn straight into the
+// frame. A capture gives the same indices as mapping every pixel afresh.
+//
 // This is presentation support for the RGB match frame; it changes no 3.1c
 // behaviour.
 
 #include "oa/present/surface.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace oa::present::model {
 
+/// Side of the square tiles, in 8-bit pixels, a bridge captures and writes
+/// back.
 inline constexpr int32_t bridge_tile_side = 32;
+
+/// A tile state bit: the bridge's capture copy holds the colour and index of
+/// every frame pixel the tile captures from, as last mapped.
+inline constexpr uint8_t bridge_tile_mapped = 1;
+
+/// A tile state bit: the tile was captured since the bridge was last written
+/// back, so its 8-bit pixels may hold draws.
+inline constexpr uint8_t bridge_tile_open = 2;
 
 // A packed 24-bit RGB frame.
 struct RgbFrame {
@@ -33,13 +50,56 @@ struct RgbFrame {
     int32_t stride{}; // bytes per row
 };
 
+/// The frame pixels a bridge captures from, each with its colour when it
+/// was last mapped to a palette index and that index, kept from one capture
+/// to the next. Each 8-bit pixel captures from one frame pixel; pixels that
+/// capture from the same frame row (or column) share a row (or column) of
+/// the copy, so the copy never holds more pixels than the frame.
+struct CaptureCopy {
+    std::vector<uint8_t> colours; ///< red, green and blue of each pixel, row by row
+    std::vector<uint8_t> indices; ///< the palette index of each pixel's colour, row by row
+    int32_t width{};              ///< pixels in a row of the copy
+    int32_t height{};             ///< rows of the copy
+    /// The copy's column each 8-bit column captures from.
+    std::vector<int32_t> column_of;
+    /// The copy's row each 8-bit row captures from.
+    std::vector<int32_t> row_of;
+    /// Byte offset, within a frame row, of each column of the copy.
+    std::vector<std::ptrdiff_t> frame_columns;
+    /// Byte offset, within the frame, of the start of each row of the copy.
+    std::vector<std::ptrdiff_t> frame_rows;
+    /// True when every 8-bit column has a column of the copy of its own and
+    /// they lie side by side in the frame, as at a scale of 1, so that a
+    /// row of a tile compares and copies as one run.
+    bool columns_side_by_side{};
+    /// True when each 8-bit pixel captures from the one frame pixel it is
+    /// written back to, as at a scale of 1 over a rectangle inside the
+    /// frame, so that bridge_end brings the copy up to date with the pixels
+    /// it writes.
+    bool written_in_place{};
+    /// The palette index of each palette entry's colour: the entry itself,
+    /// or the first entry of the same colour.
+    std::array<uint8_t, OA_PALETTE_COLORS> entry_indices{};
+    /// True once the rows and columns above are laid out for the bridge's
+    /// surface, area and frame; bridge_begin clears it when they change.
+    bool laid_out{};
+    /// Frame pixels mapped to a palette index by captures since the bridge
+    /// was made: the measure of the work the copy saves.
+    uint64_t mapped_pixels{};
+};
+
 struct RgbBridge {
     Surface surface{}; // the 8-bit view the routines draw into
     std::vector<uint8_t> pixels;
     std::vector<uint8_t> baseline; // indices as captured
-    std::vector<uint8_t> captured; // per tile
+    /// Each tile's state, row by row: bridge_tile_mapped and bridge_tile_open.
+    std::vector<uint8_t> tiles;
+    /// The tiles captured since the bridge was last written back, by their
+    /// place in `tiles`.
+    std::vector<uint32_t> open_tiles;
     int32_t tiles_x{};
     int32_t tiles_y{};
+    CaptureCopy copy{};
     RgbFrame frame{};
     Rect32 area{};     // RGB rectangle covered, inclusive
     float scale{1.0F}; // RGB pixels per 8-bit pixel
@@ -55,7 +115,11 @@ struct RgbBridge {
 
 /// Covers a rectangle of an RGB frame with an 8-bit surface of the rectangle's size divided by the scale.
 ///
-/// Nothing is captured yet. The colour lookup is rebuilt when the palette changes.
+/// Nothing is captured yet. The colour lookup is rebuilt when the palette
+/// changes. The capture copy is kept when the frame's size and row length,
+/// the rectangle, the scale and the palette are those of the last call, so
+/// that captures map again only the colours that changed, whatever the frame
+/// holds now; otherwise it is forgotten.
 ///
 /// @param[in,out] bridge bridge to set up; its buffers are reused
 /// @param frame RGB frame; must outlive the bridge's use
@@ -72,8 +136,12 @@ void bridge_begin(
 
 /// Captures the tiles overlapping a region and clips the surface to it.
 ///
-/// Draws can then only change captured pixels; a region outside the surface
-/// leaves an empty clip that rejects every draw.
+/// Each tile not yet captured since the last bridge_end starts its 8-bit
+/// pixels as the palette indices of the frame pixels they capture from,
+/// which the capture copy gives, mapping again only the frame pixels whose
+/// colour changed since the copy last mapped them. Draws can then only
+/// change captured pixels; a region outside the surface leaves an empty
+/// clip that rejects every draw.
 ///
 /// @param[in,out] bridge bridge set up by bridge_begin
 /// @param region inclusive rectangle in 8-bit pixels
@@ -81,7 +149,9 @@ void bridge_open(RgbBridge& bridge, const Rect32& region);
 
 /// Writes every changed pixel of the captured tiles back to the frame through the palette.
 ///
-/// Every tile counts as uncaptured afterwards.
+/// Every tile counts as uncaptured afterwards. The capture copy keeps what it
+/// holds: the next capture finds the pixels written back by their changed
+/// colours.
 ///
 /// @param[in,out] bridge bridge whose captured tiles are committed
 void bridge_end(RgbBridge& bridge);
@@ -110,11 +180,12 @@ struct SampledRegion {
 /// The region is clipped to the bridge's surface. Each bridge pixel is
 /// captured as bridge_open captures it, and every sample of it starts as
 /// that index, so that blended draws blend with what lies under them. The
-/// surface's clip is the whole region. The bridge's own tiles are left as
-/// they are.
+/// surface's clip is the whole region. The bridge's tiles are not captured;
+/// the capture copy of those not captured already is brought up to date
+/// with the frame over them, and their 8-bit pixels start again from it.
 ///
 /// @param bridge bridge set up by bridge_begin; its colour lookup learns
-///     the colours captured
+///     the colours captured, and its capture copy the frame under the region
 /// @param[out] sampled region to set up; its buffers are reused
 /// @param region inclusive rectangle in the bridge's 8-bit pixels
 /// @param factor samples along each axis of a bridge pixel; 0 counts as 1
