@@ -510,7 +510,13 @@ std::size_t Runtime::intern_feature_shadow_anim(
     const auto& sequence = *feature_assets_.sequences[ref - 1];
     if (sequence.frames.empty())
         return none;
-    return intern_gaf_feature_anim(filename, sequence.name, sequence, animating);
+    const auto key = filename + "/" + sequence.name;
+    if (const auto found = match_gaf_anim_index_.find(key); found != match_gaf_anim_index_.end())
+        return found->second;
+    const auto decoded = decode_feature_sequence(ref);
+    if (!decoded)
+        return none;
+    return intern_gaf_feature_anim(filename, sequence.name, *decoded, animating);
 }
 
 void Runtime::advance_gaf_feature_anims(uint32_t tick) {
@@ -618,15 +624,22 @@ void Runtime::place_catalog_feature_draw(int32_t cell_x, int32_t cell_z, uint16_
         auto anim = interned != match_gaf_anim_index_.end() ? interned->second
                                                             : static_cast<std::size_t>(-1);
         if (interned == match_gaf_anim_index_.end()) {
+            // Only the sequence shown is decoded with its pixels.
             const auto path = "anims/" + terrain.filename + ".gaf";
-            const auto parsed = oa::formats::gaf::parse(assets_.read(path).bytes);
+            const auto file = assets_.read(path).bytes;
+            const auto parsed = oa::formats::gaf::parse(file, oa::formats::gaf::PixelData::checked);
             if (!parsed.ok())
                 return;
             const auto* sequence = gaf_sequence(*parsed.archive, terrain.seqname);
             if (sequence == nullptr || sequence->frames.empty())
                 return;
+            const auto decoded = oa::formats::gaf::parse_sequence(
+                file, static_cast<std::size_t>(sequence - parsed.archive->sequences.data())
+            );
+            if (!decoded.ok())
+                return;
             anim = intern_gaf_feature_anim(
-                terrain.filename, terrain.seqname, *sequence, terrain.animating
+                terrain.filename, terrain.seqname, *decoded.sequence, terrain.animating
             );
         }
         if (anim == static_cast<std::size_t>(-1))

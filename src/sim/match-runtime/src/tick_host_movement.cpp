@@ -272,7 +272,7 @@ bool TickHost::can_occupy(
     const sim::unit_movement::Unit& u, std::array<int16_t, 2> cell, uint8_t mode
 ) {
     auto& s = movement_slot(u);
-    if (!match.fields(s).runtime_metadata || match.input_.collision_plots.empty())
+    if (!match.fields(s).runtime_metadata || !match.collision_terrain_)
         throw std::logic_error("moving collision requires resolved type and terrain metadata");
     match.prepare_spatial_state();
     auto& projected = match.project_spatial(s);

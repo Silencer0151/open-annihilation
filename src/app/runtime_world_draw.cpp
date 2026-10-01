@@ -151,9 +151,12 @@ oa::present::world_renderer::ScreenPoint Runtime::project_match_point(
         shifted, {static_cast<uint32_t>(map_x) + lift_x, static_cast<uint32_t>(map_z) + lift_z}
     );
     const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
-    screen.y -= static_cast<int32_t>(
-        std::lround(static_cast<double>(height) * 0.5 * static_cast<double>(scale))
-    );
+    // At the whole scale the lift is half the height rounded half away from
+    // zero, worked out in whole numbers.
+    screen.y -= scale == 1.0F ? (height >= 0 ? (height + 1) / 2 : -((1 - height) / 2))
+                              : static_cast<int32_t>(std::lround(
+                                    static_cast<double>(height) * 0.5 * static_cast<double>(scale)
+                                ));
     return screen;
 }
 

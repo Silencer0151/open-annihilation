@@ -610,15 +610,16 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
                 match_->simulation().tick = match_timing_.tick;
                 match_->tick();
             }
-            if (match_timing_.tick != tick_before)
+            if (match_timing_.tick != tick_before) {
+                const auto tick_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now() - step_start
+                )
+                                         .count();
                 frame_pacing::note_frame_measure(
-                    frame_stats_,
-                    frame_pacing::FrameMeasure::tick,
-                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                              std::chrono::steady_clock::now() - step_start
-                    )
-                                              .count())
+                    frame_stats_, frame_pacing::FrameMeasure::tick, static_cast<uint64_t>(tick_ns)
                 );
+                phase_times_.simulation += tick_ns;
+            }
             // The step's records are applied: the playout of the units of
             // players this machine does not simulate reads where they are.
             // It throws nothing, so it costs the match no step.
@@ -892,7 +893,7 @@ void Runtime::rebuild_surface() {
     }
     if (screen_ == Screen::load_game)
         present_load_game_panel(lists);
-    surface_ = renderer::render_screen(resources_, presentation, lists);
+    renderer::render_screen_into(surface_, resources_, presentation, lists);
     if (auto* scrolls = frontend_scrolls()) {
         renderer::refresh_layout_scrolls(*scrolls, resources_.layout);
         renderer::draw_layout_scrolls(

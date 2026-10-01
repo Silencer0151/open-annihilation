@@ -481,6 +481,7 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
     std::fflush(stdout);
     if (!options_.snapshot.empty())
         write_ppm(options_.snapshot, surface_);
+    print_memory_status();
 }
 
 void Runtime::run_headless_match(std::size_t ticks) {

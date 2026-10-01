@@ -352,7 +352,10 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     spatial_.plots.resize(cells);
     spatial_.units = spatial_units_;
     spatial_.sea_level = state().game.sea_level;
-    if (!input.collision_plots.empty()) {
+    collision_terrain_ = !input.collision_plots.empty();
+    // The plots are copied here; input_ keeps no reference to them.
+    input_.collision_plots = {};
+    if (collision_terrain_) {
         if (input.collision_plots.size() != cells)
             throw std::invalid_argument("collision terrain does not match map");
         for (std::size_t i = 0; i < cells; ++i) {

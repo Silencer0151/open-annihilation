@@ -106,7 +106,11 @@ parse_frame_rate(std::string_view text, uint32_t least, bool zero_allowed, const
 [[nodiscard]] Showcase parse_showcase(std::string_view text) {
     if (text == "arm-first-mission")
         return Showcase::arm_first_mission;
-    throw std::runtime_error("--showcase knows one showcase: arm-first-mission");
+    if (text == "skirmish-battle")
+        return Showcase::skirmish_battle;
+    throw std::runtime_error(
+        "--showcase knows two showcases: arm-first-mission and skirmish-battle"
+    );
 }
 
 /// Returns the chunks a --chunks value names: A-B, both included, or A alone.
@@ -396,56 +400,57 @@ void check_director_options(Options& options) {
         // A bare -h stays the help flag, so the game's "-h NAME" (name as
         // the next argument) must be written -hNAME here.
         else if (argument == "--help" || argument == "-h") {
-            std::cout << "usage: open-annihilation [--game-dir PATH | --choose-game-dir] "
-                         "[--archive PATH]... "
-                         "[--skip-intro] [--frames N] [--headless-check] "
-                         "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
-                         "[--mute] "
-                         "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
-                         "[--check-match-orders] [--check-factory-orders] "
-                         "[--check-download-builds] [--check-kill-board] "
-                         "[--check-patrol-reclaim] [--check-reclaim-cursor] "
-                         "[--check-pointer-interfaces] "
-                         "[--check-multiplayer-menu] "
-                         "[--check-load-save] [--check-frontend-controls] "
-                         "[--check-scroll-bars] [--check-engine-settings] "
-                         "[--check-briefing-narration] [--check-director-view] "
-                         "[--check-director-render] [--check-interpolation] "
-                         "[--check-unit-playout] "
-                         "[--trace-input] "
-                      << extension_text(extension, ExtensionText::usage_checks, "")
-                      << "[--debug-order-lines] "
-                         "[--max-fps N] "
-                         "[--benchmark FRAMES] [--match-ticks N "
-                         "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
-                         "[--follow]]] "
-                         "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
-                         "[--resolution WxH] "
-                         "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--reclaim-check] "
-                         "[--camera X,Z] "
-                      << extension_text(extension, ExtensionText::usage_runs, "")
-                      << "[--save-after TICK] "
-                         "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
-                         "[--trace-digest FILE] [--trace-units FILE] [--draw-threads N] "
-                         "[--capture-video PATH.mp4] [--showcase arm-first-mission] "
-                         "[--generate-script RECORDING [--output PATH.oascript|PATH.oamovie] "
-                         "[--resolution WxH]] "
-                         "[--render-script PATH.oascript|PATH.oamovie [--output DIR] "
-                         "[--chunks A-B]] "
-                         "[game switches such as "
-                      << extension_text(extension, ExtensionText::usage_switches, "")
-                      << "-d -s] "
-                         "[LANGUAGE]\n"
-                         "--generate-script plans a director script from a recording an "
-                         "extension of this build replays;\n"
-                         "--render-script renders a director script, or a bundle of one and "
-                         "its recording, to video (docs/director.md).\n"
-                      << extension_text(
-                             extension,
-                             ExtensionText::usage_note,
-                             "This release has no multiplayer; --check-multiplayer-menu checks "
-                             "the message box MULTI opens instead.\n"
-                         );
+            std::cout
+                << "usage: open-annihilation [--game-dir PATH | --choose-game-dir] "
+                   "[--archive PATH]... "
+                   "[--skip-intro] [--frames N] [--headless-check] "
+                   "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
+                   "[--mute] "
+                   "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
+                   "[--check-match-orders] [--check-factory-orders] "
+                   "[--check-download-builds] [--check-kill-board] "
+                   "[--check-patrol-reclaim] [--check-reclaim-cursor] "
+                   "[--check-pointer-interfaces] "
+                   "[--check-multiplayer-menu] "
+                   "[--check-load-save] [--check-frontend-controls] "
+                   "[--check-scroll-bars] [--check-engine-settings] "
+                   "[--check-briefing-narration] [--check-director-view] "
+                   "[--check-director-render] [--check-interpolation] "
+                   "[--check-unit-playout] "
+                   "[--trace-input] "
+                << extension_text(extension, ExtensionText::usage_checks, "")
+                << "[--debug-order-lines] "
+                   "[--max-fps N] "
+                   "[--benchmark FRAMES] [--match-ticks N "
+                   "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
+                   "[--follow]]] "
+                   "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
+                   "[--resolution WxH] "
+                   "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--reclaim-check] "
+                   "[--camera X,Z] "
+                << extension_text(extension, ExtensionText::usage_runs, "")
+                << "[--save-after TICK] "
+                   "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
+                   "[--trace-digest FILE] [--trace-units FILE] [--draw-threads N] "
+                   "[--capture-video PATH.mp4] [--showcase arm-first-mission|skirmish-battle] "
+                   "[--generate-script RECORDING [--output PATH.oascript|PATH.oamovie] "
+                   "[--resolution WxH]] "
+                   "[--render-script PATH.oascript|PATH.oamovie [--output DIR] "
+                   "[--chunks A-B]] "
+                   "[game switches such as "
+                << extension_text(extension, ExtensionText::usage_switches, "")
+                << "-d -s] "
+                   "[LANGUAGE]\n"
+                   "--generate-script plans a director script from a recording an "
+                   "extension of this build replays;\n"
+                   "--render-script renders a director script, or a bundle of one and "
+                   "its recording, to video (docs/director.md).\n"
+                << extension_text(
+                       extension,
+                       ExtensionText::usage_note,
+                       "This release has no multiplayer; --check-multiplayer-menu checks "
+                       "the message box MULTI opens instead.\n"
+                   );
             std::exit(0);
         } else if (argument.starts_with("--")) {
             ArgumentCursor cursor{argc, argv, &index, argument};

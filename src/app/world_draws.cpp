@@ -125,26 +125,61 @@ void blit_world_frame(
         std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.width) * scale)));
     const auto dest_h =
         std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
-    // Each row of the blit draws alone: the rows outside the band go.
-    const auto first_row =
-        static_cast<int>(std::max<int64_t>(0, int64_t{target.first_row} - destination_y));
-    const auto end_row =
-        static_cast<int>(std::min<int64_t>(dest_h, int64_t{target.end_row} - destination_y));
-    for (int row = first_row; row < end_row; ++row) {
+    // The rows and columns of the drawn rectangle that land in the band, the
+    // visible world rectangle and the frame; each one's source row or column
+    // is its index times the frame's size over the drawn size, rounded down.
+    const auto lowest = [](int64_t a, int64_t b, int64_t c) { return std::max({a, b, c}); };
+    const auto highest = [](int64_t a, int64_t b, int64_t c) { return std::min({a, b, c}); };
+    const int64_t first_row =
+        std::max<int64_t>(0, lowest(target.first_row, target.clip_y, 0) - int64_t{destination_y});
+    const int64_t end_row = std::min<int64_t>(
+        dest_h,
+        highest(target.end_row, int64_t{target.clip_y} + target.clip_height, target.height) -
+            int64_t{destination_y}
+    );
+    const int64_t first_column =
+        std::max<int64_t>(0, lowest(target.clip_x, 0, 0) - int64_t{destination_x});
+    const int64_t end_column = std::min<int64_t>(
+        dest_w,
+        highest(int64_t{target.clip_x} + target.clip_width, target.width, target.width) -
+            int64_t{destination_x}
+    );
+    if (first_row >= end_row || first_column >= end_column)
+        return;
+    const auto source_width = static_cast<std::size_t>(frame.width);
+    const auto source_pixels = source_width * frame.height;
+    const uint8_t* const coverage = frame.coverage.data();
+    const uint8_t* const pixels = frame.pixels.data();
+    // A frame whose pixels or coverage are short is read only where they reach.
+    const std::size_t readable =
+        std::min({frame.coverage.size(), frame.pixels.size(), source_pixels});
+    const auto columns = static_cast<std::size_t>(dest_w);
+    for (int64_t row = first_row; row < end_row; ++row) {
         const auto source_row =
             static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        for (int column = 0; column < dest_w; ++column) {
-            const auto source_column =
-                static_cast<std::size_t>(column) * frame.width / static_cast<std::size_t>(dest_w);
-            const auto offset = source_row * frame.width + source_column;
-            if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
+        const std::size_t row_offset = source_row * source_width;
+        uint8_t* out = target.rgb + ((static_cast<std::size_t>(destination_y + row) *
+                                          static_cast<std::size_t>(target.width) +
+                                      static_cast<std::size_t>(destination_x + first_column)) *
+                                     3U);
+        // The source column of first_column, kept as a whole part and a
+        // remainder over the drawn width while the column steps.
+        const std::size_t start = static_cast<std::size_t>(first_column) * source_width;
+        std::size_t source_column = start / columns;
+        std::size_t remainder = start % columns;
+        for (int64_t column = first_column; column < end_column; ++column, out += 3) {
+            const std::size_t offset = row_offset + source_column;
+            remainder += source_width;
+            while (remainder >= columns) {
+                remainder -= columns;
+                ++source_column;
+            }
+            if (offset >= readable || coverage[offset] == 0)
                 continue;
-            const int x = destination_x + column;
-            const int y = destination_y + row;
-            const auto pal = static_cast<std::size_t>(frame.pixels[offset]) * 4U;
-            if (pal + 2 >= palette.size())
-                continue;
-            put_world_pixel(target, x, y, {palette[pal], palette[pal + 1], palette[pal + 2]});
+            const auto pal = static_cast<std::size_t>(pixels[offset]) * 4U;
+            out[0] = palette[pal];
+            out[1] = palette[pal + 1];
+            out[2] = palette[pal + 2];
         }
     }
 }
@@ -192,21 +227,36 @@ void blit_world_blended_hotspot(
     const auto dest_h =
         std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
     const auto& palette = display.palette;
-    for (int row = 0; row < dest_h; ++row) {
+    // The columns of the drawn rectangle that land in the visible world
+    // rectangle and the frame; each one's source column is its index times
+    // the frame's width over the drawn width, rounded down, kept as a whole
+    // part and a remainder while the column steps.
+    const int64_t first_column =
+        std::max<int64_t>(0, std::max<int64_t>(target.clip_x, 0) - int64_t{left});
+    const int64_t end_column = std::min<int64_t>(
+        dest_w,
+        std::min<int64_t>(int64_t{target.clip_x} + target.clip_width, target.width) - int64_t{left}
+    );
+    const auto source_width = static_cast<std::size_t>(frame.width);
+    const auto columns = static_cast<std::size_t>(dest_w);
+    for (int row = 0; row < dest_h && first_column < end_column; ++row) {
         const int y = top + row;
         if (y < target.clip_y || y >= target.clip_y + target.clip_height || y < 0 ||
             y >= target.height || y < target.first_row || y >= target.end_row)
             continue;
         const auto source_row =
             static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        for (int column = 0; column < dest_w; ++column) {
-            const int x = left + column;
-            if (x < target.clip_x || x >= target.clip_x + target.clip_width || x < 0 ||
-                x >= target.width)
-                continue;
-            const auto source_column =
-                static_cast<std::size_t>(column) * frame.width / static_cast<std::size_t>(dest_w);
-            const auto offset = source_row * frame.width + source_column;
+        const std::size_t start = static_cast<std::size_t>(first_column) * source_width;
+        std::size_t source_column = start / columns;
+        std::size_t remainder = start % columns;
+        for (int64_t column = first_column; column < end_column; ++column) {
+            const auto x = static_cast<int>(left + column);
+            const auto offset = source_row * source_width + source_column;
+            remainder += source_width;
+            while (remainder >= columns) {
+                remainder -= columns;
+                ++source_column;
+            }
             if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
                 continue;
             auto* pixel =

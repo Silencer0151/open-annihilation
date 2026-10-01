@@ -3,20 +3,27 @@
 
 #include "oa/platform/memory_status.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
 #elif defined(__APPLE__)
+#include <libproc.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
+#include <sys/resource.h>
+#include <unistd.h>
 #elif defined(__linux__)
 #include <unistd.h>
 #endif
 
 namespace oa::platform {
 namespace {
+
+// Bytes of the kB the Linux status file counts in.
+[[maybe_unused]] constexpr uint64_t kibibyte = 1024;
 
 // Widest grouped 64-bit value: 20 digits and 6 commas.
 constexpr size_t grouped_capacity = 27;
@@ -70,10 +77,9 @@ size_t format_memory_status(
         report.refresh_countdown = memory_status_calls_per_sample;
     }
     const MemorySample& sample = report.sample;
-    if (report.peak_working_set < sample.working_set)
-        report.peak_working_set = sample.working_set;
-    if (report.peak_mapped < sample.mapped)
-        report.peak_mapped = sample.mapped;
+    report.peak_working_set =
+        std::max({report.peak_working_set, sample.working_set, sample.peak_working_set});
+    report.peak_mapped = std::max({report.peak_mapped, sample.mapped, sample.peak_mapped});
     if (out == nullptr || capacity == 0)
         return 0;
     out[0] = '\0';
@@ -141,6 +147,8 @@ bool sample_process_memory(void*, MemorySample* out) noexcept {
         return false;
     out->mapped = counters.PrivateUsage;
     out->working_set = counters.WorkingSetSize;
+    out->peak_mapped = counters.PeakPagefileUsage;
+    out->peak_working_set = counters.PeakWorkingSetSize;
     return true;
 #elif defined(__APPLE__)
     task_vm_info_data_t info{};
@@ -152,6 +160,10 @@ bool sample_process_memory(void*, MemorySample* out) noexcept {
     out->working_set = info.resident_size;
     out->private_resident = info.internal;
     out->shared_resident = info.external;
+    out->peak_working_set = info.resident_size_peak;
+    rusage_info_v4 usage{};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&usage)) == 0)
+        out->peak_mapped = usage.ri_lifetime_max_phys_footprint;
     return true;
 #elif defined(__linux__)
     // /proc/self/statm: total, resident, shared and text sizes in pages.
@@ -170,6 +182,17 @@ bool sample_process_memory(void*, MemorySample* out) noexcept {
     out->working_set = resident * page_bytes;
     out->shared_resident = shared * page_bytes;
     out->private_resident = resident > shared ? (resident - shared) * page_bytes : 0;
+    // /proc/self/status: the largest resident set, "VmHWM:" in kB.
+    if (std::FILE* status = std::fopen("/proc/self/status", "r")) {
+        char line[128];
+        unsigned long long peak_kib = 0;
+        while (std::fgets(line, sizeof line, status) != nullptr)
+            if (std::sscanf(line, "VmHWM: %llu", &peak_kib) == 1) {
+                out->peak_working_set = peak_kib * kibibyte;
+                break;
+            }
+        std::fclose(status);
+    }
     return true;
 #else
     return false;

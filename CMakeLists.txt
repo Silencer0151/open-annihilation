@@ -297,7 +297,8 @@ if(BUILD_TESTING)
   # pools of 2, 3, 4 and 8 threads as on the calling thread alone.
   add_executable(oa-app-xrgb-conversion-test src/app/xrgb_conversion_test.cpp
     src/app/xrgb_conversion.cpp)
-  target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool oa-options)
+  target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool SDL3::SDL3
+    oa-options)
   add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
   # Alt+Enter: the key, the mode it asks for while the window is still
   # switching, and a window of SDL's dummy video driver switched and back.

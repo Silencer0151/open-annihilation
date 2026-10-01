@@ -146,6 +146,22 @@ bool followed(const oa::Player& player) noexcept {
     return player.in_use != 0 && !simulated_here(player);
 }
 
+/// Tells whether any slot of a player's range of unit slots holds a unit.
+///
+/// @param world the match
+/// @param player the player
+/// @return true when a slot from Player.first_unit to Player.last_unit holds a unit
+bool holds_units(const oa::World& world, const oa::Player& player) noexcept {
+    const oa::Unit* first = oa::world_unit(&world, player.first_unit);
+    const oa::Unit* last = oa::world_unit(&world, player.last_unit);
+    if (first == nullptr || last == nullptr)
+        return false;
+    for (const oa::Unit* unit = first; unit <= last; ++unit)
+        if (unit->type_index != 0)
+            return true;
+    return false;
+}
+
 /// A whole 16.16 coordinate or speed, as a double.
 constexpr double pixel = 65536.0;
 
@@ -277,7 +293,9 @@ void Playout::observe(const oa::World& world, const Hooks& hooks) noexcept {
                 forget_player(index);
             continue;
         }
-        if (tracks_.size() != world.unit_slot_count) {
+        // The places are held from the first observation that finds a unit
+        // of a followed player: until then every track would stay empty.
+        if (tracks_.size() != world.unit_slot_count && holds_units(world, player)) {
             // Without the memory for the places no unit is played out; the
             // next observation tries again.
             try {

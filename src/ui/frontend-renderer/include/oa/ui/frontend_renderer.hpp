@@ -215,6 +215,22 @@ enum class MainMenuLayout : uint8_t { with_overlay, base_game };
     std::span<const ListPresentation> lists = {}
 );
 
+/// Draws a screen as render_screen draws it, into a surface whose memory is
+/// kept: a surface drawn into again takes no new memory while the
+/// background's size stays the same.
+///
+/// @param[out] target the surface; whatever it showed is replaced
+/// @param resources Resources from load_screen().
+/// @param presentation Runtime button states by gadget name; empty for the authored state.
+/// @param lists Runtime rows of type-2 gadgets by name.
+/// @throws std::runtime_error as render_screen throws
+void render_screen_into(
+    Surface& target,
+    const ScreenResources& resources,
+    std::span<const ButtonPresentation> presentation = {},
+    std::span<const ListPresentation> lists = {}
+);
+
 // 100 sparks. They walk 8-bit FrontendX pixels whose low nibble is >= 0xD
 // and stamp index 0xAA.
 inline constexpr std::size_t menu_spark_count = 100;

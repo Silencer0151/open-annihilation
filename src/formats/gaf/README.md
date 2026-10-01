@@ -21,6 +21,14 @@ clipping relationship.
   commands.
 - Source and destination rectangles are clipped together.
 
+`parse` keeps every simple frame's decoded pixels and coverage by default.
+With `PixelData::checked` it decodes and checks them all the same, so a file
+parses or fails exactly as it would, and keeps none: the archive holds each
+frame's size, origin, duration and layers. `parse_sequence` then decodes one
+sequence of the file, by its place in the sequence table, with its pixels,
+for a reader that draws a few of a large file's sequences, as the map's
+features do.
+
 `render_normal` models normal drawing. Special rendering and its blend table
 are not implemented, so a special child is reported as
 `unsupported_special_render` before drawing it. A root frame's own special

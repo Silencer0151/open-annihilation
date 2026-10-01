@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The conversion of the game's RGB frames into the 32-bit pixels the window
-// shows (SDL_PIXELFORMAT_XRGB8888, 0xXXRRGGBB), through the display gamma's
-// table when the gamma is not 1, in bands of rows on the drawing threads.
+// shows (SDL_PIXELFORMAT_XRGB8888, 0xXXRRGGBB), or into the 16-bit pixels of a
+// 16-bit window (SDL_PIXELFORMAT_RGB565), through the display gamma's table
+// when the gamma is not 1, in bands of rows on the drawing threads.
 #pragma once
 
 #include "oa/platform/job_pool.hpp"
@@ -45,6 +46,41 @@ void gamma_xrgb_row(uint32_t* row, int width, const std::array<uint8_t, 256>& ta
 /// @param gamma the display gamma's table; null when the gamma is 1
 /// @param pool threads to convert the bands on; null converts them on the calling thread
 void convert_rgb24_xrgb(
+    const uint8_t* rgb,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept;
+
+/// Packs one RGB24 row into RGB565 words: red's top 5 bits, green's top 6 and
+/// blue's top 5, from the top bit down, each channel through the gamma table
+/// first when there is one; the 16-bit pixels a window of that format shows
+/// for the frame's XRGB8888 ones.
+///
+/// @param[out] out `width` words
+/// @param rgb 3 bytes per pixel
+/// @param width pixels in the row
+/// @param gamma the display gamma's table; null when the gamma is 1
+void pack_rgb24_rgb565_row(
+    uint16_t* out, const uint8_t* rgb, int width, const std::array<uint8_t, 256>* gamma
+) noexcept;
+
+/// Converts an RGB24 frame into RGB565 rows (pack_rgb24_rgb565_row), in bands
+/// of xrgb_band_rows rows.
+///
+/// Every row is the same whichever thread converts it.
+///
+/// @param rgb the frame, `width` * 3 bytes a row, rows one after another
+/// @param width pixels in a row
+/// @param height rows
+/// @param[out] pixels the converted rows, each at least `width` * 2 bytes, 2-byte aligned
+/// @param pitch bytes from one row of `pixels` to the next
+/// @param gamma the display gamma's table; null when the gamma is 1
+/// @param pool threads to convert the bands on; null converts them on the calling thread
+void convert_rgb24_rgb565(
     const uint8_t* rgb,
     uint32_t width,
     uint32_t height,

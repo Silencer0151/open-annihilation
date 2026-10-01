@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -52,6 +53,14 @@ constexpr int kMoveOrderSettings = 3;
 constexpr int32_t kFixedShift = 16;
 // The campaign the first Arm mission belongs to.
 constexpr std::string_view kArmCampaign = "Arm Campaign";
+// --showcase skirmish-battle: the seconds the battle plays once its armies
+// stand, and the units each side brings without --combat.
+constexpr double kBattleSeconds = 60.0;
+constexpr std::size_t kBattleUnitsPerSide = 50;
+// The skirmish's commander death rule in the game's preferences, and its
+// value for a game that continues after a commander's death.
+constexpr std::string_view kCommanderDeathKey = "SkirmishCommanderDeath";
+constexpr const char* kGameContinues = "0";
 
 // Throws the showcase's error.
 [[noreturn]] void fail(const std::string& what) {
@@ -71,9 +80,124 @@ uint32_t move_order(const oa::Unit& unit) {
 
 } // namespace
 
+void Runtime::run_battle_showcase() {
+    bool running = true;
+    const auto now = [] { return static_cast<double>(SDL_GetTicksNS()) / kNanosecondsPerSecond; };
+    // One pass of the application loop, paced as run() paces it; the time it
+    // worked, without the wait, is added to `work`.
+    double work = 0.0;
+    const auto frame = [&] {
+        const double start = now();
+        run_frame(running);
+        work += now() - start;
+        if (!running || exit_requested_)
+            fail("the game was closed");
+        pace_next_frame(running);
+    };
+    const double menu_end = now() + kMenuSeconds;
+    while (now() < menu_end)
+        frame();
+    // The battle plays on when a commander falls: the skirmish screen reads
+    // the game continuing after a commander's death, and the player's own
+    // choice is put back once the skirmish has started.
+    const auto commander_key =
+        preference_key(oa::ui::frontend_state::initialization::general_section, kCommanderDeathKey);
+    const auto kept_value = preference_values_.find(commander_key);
+    const std::optional<std::string> kept =
+        kept_value != preference_values_.end() ? std::optional{kept_value->second} : std::nullopt;
+    const auto kept_rule = preferences_.skirmish.commander_death;
+    preference_values_[commander_key] = kGameContinues;
+    start_benchmark_skirmish();
+    if (kept)
+        preference_values_[commander_key] = *kept;
+    else
+        preference_values_.erase(commander_key);
+    preferences_.skirmish.commander_death = kept_rule;
+    preferences_dirty_ = true;
+    flush_preferences();
+    const auto units = options_.combat_units != 0 ? options_.combat_units : kBattleUnitsPerSide;
+    spawn_combat_armies(units);
+    report(
+        "the battle started at " + std::to_string(match_layout_.width) + "x" +
+        std::to_string(match_layout_.height) + " with " + std::to_string(units) + " units a side" +
+        (options_.busy_combat ? " and the busy combat's" : "")
+    );
+    phase_times_ = {};
+    work = 0.0;
+    const uint32_t first_tick = match_timing_.tick;
+    const double start = now();
+    double previous = start;
+    double longest = 0.0;
+    // The longest frame's ticks and the time they, its drawing and its
+    // presenting took.
+    uint32_t longest_ticks = 0;
+    PhaseTimes longest_phases{};
+    std::size_t frames = 0;
+    while (previous - start < kBattleSeconds) {
+        const auto phases = phase_times_;
+        const uint32_t tick = match_timing_.tick;
+        frame();
+        const double finished = now();
+        if (finished - previous > longest) {
+            longest = finished - previous;
+            longest_ticks = match_timing_.tick - tick;
+            longest_phases = {
+                phase_times_.simulation - phases.simulation,
+                phase_times_.compose - phases.compose,
+                0,
+                0,
+                phase_times_.upload - phases.upload,
+                phase_times_.present - phases.present,
+            };
+        }
+        previous = finished;
+        ++frames;
+    }
+    const double seconds = previous - start;
+    const uint32_t ticks = match_timing_.tick - first_tick;
+    const auto per_frame_ms = [&](double total_seconds) {
+        return frames == 0 ? 0.0 : total_seconds * 1000.0 / static_cast<double>(frames);
+    };
+    const auto ns_to_seconds = [](int64_t ns) {
+        return static_cast<double>(ns) / kNanosecondsPerSecond;
+    };
+    char line[640];
+    std::snprintf(
+        line,
+        sizeof line,
+        "battle %.1f s: %u ticks (%.1f a second), %zu frames (%.1f a second), game speed %d "
+        "of %d; frame %.1f ms mean, %.1f longest (%u ticks in %.1f ms, draw %.1f ms, present "
+        "%.1f ms); work %.1f ms a frame; tick %.2f ms mean; draw %.1f ms and present %.1f ms a "
+        "frame",
+        seconds,
+        ticks,
+        seconds > 0.0 ? ticks / seconds : 0.0,
+        frames,
+        seconds > 0.0 ? static_cast<double>(frames) / seconds : 0.0,
+        static_cast<int>(match_timing_.actual_rate),
+        static_cast<int>(match_timing_.requested_rate),
+        per_frame_ms(seconds),
+        longest * 1000.0,
+        longest_ticks,
+        ns_to_seconds(longest_phases.simulation) * 1000.0,
+        ns_to_seconds(longest_phases.compose) * 1000.0,
+        ns_to_seconds(longest_phases.upload + longest_phases.present) * 1000.0,
+        per_frame_ms(work),
+        ticks == 0 ? 0.0 : ns_to_seconds(phase_times_.simulation) * 1000.0 / ticks,
+        per_frame_ms(ns_to_seconds(phase_times_.compose)),
+        per_frame_ms(ns_to_seconds(phase_times_.upload + phase_times_.present))
+    );
+    report(line);
+    print_memory_status();
+}
+
 void Runtime::run_showcase() {
     if (sdl_.window == nullptr || sdl_.renderer == nullptr)
         fail("needs the game's window");
+    if (options_.showcase == Showcase::skirmish_battle) {
+        run_battle_showcase();
+        return;
+    }
     bool running = true;
     const auto now = [] { return static_cast<double>(SDL_GetTicksNS()) / kNanosecondsPerSecond; };
     // One pass of the application loop, paced as run() paces it.

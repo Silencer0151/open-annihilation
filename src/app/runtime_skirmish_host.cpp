@@ -356,7 +356,7 @@ void Runtime::release_picture(map_modal::PictureHandle) {
 
 map_modal::LoadedPicture Runtime::load_picture(std::string_view terrain_path) {
     const auto bytes = assets_.read(terrain_path).bytes;
-    const auto parsed = oa::formats::tnt::parse(bytes);
+    auto parsed = oa::formats::tnt::parse(bytes);
     if (!parsed.ok())
         throw std::runtime_error("cannot parse map terrain: " + parsed.error->message);
     selected_tnt_ = std::move(*parsed.map);
@@ -445,7 +445,7 @@ int32_t Runtime::select_map(std::string_view name) {
         selected_start_markers_.clear();
         return 0;
     }
-    const auto terrain = oa::formats::tnt::parse(*tnt_data);
+    auto terrain = oa::formats::tnt::parse(*tnt_data);
     if (!terrain.ok())
         throw std::runtime_error("cannot parse selected map terrain: " + terrain.error->message);
     selected_map_metadata_ = std::move(*parsed.metadata);

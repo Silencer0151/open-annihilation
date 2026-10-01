@@ -162,16 +162,21 @@ void Runtime::take_full_screen_switch(const FullScreenSwitch& full_screen) noexc
     full_screen_switch_ = full_screen;
 }
 
-SDL_Texture* Runtime::ensure_xrgb_texture(
-    SDL_Texture* existing, int width, int height, int& stored_w, int& stored_h
+SDL_Texture* Runtime::ensure_streaming_texture(
+    SDL_Texture* existing,
+    SDL_PixelFormat format,
+    int width,
+    int height,
+    int& stored_w,
+    int& stored_h
 ) {
-    if (existing != nullptr && stored_w == width && stored_h == height)
+    if (existing != nullptr && existing->format == format && stored_w == width &&
+        stored_h == height)
         return existing;
     if (existing != nullptr)
         SDL_DestroyTexture(existing);
-    auto* texture = SDL_CreateTexture(
-        sdl_.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, width, height
-    );
+    auto* texture =
+        SDL_CreateTexture(sdl_.renderer, format, SDL_TEXTUREACCESS_STREAMING, width, height);
     if (texture == nullptr)
         throw std::runtime_error(std::string("SDL_CreateTexture: ") + SDL_GetError());
     if (!SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST))
@@ -181,14 +186,26 @@ SDL_Texture* Runtime::ensure_xrgb_texture(
     return texture;
 }
 
-void Runtime::upload_rgb24_xrgb(SDL_Texture* texture, const renderer::Surface& source) {
+SDL_PixelFormat Runtime::frame_texture_format() const {
+    if (sdl_.renderer == nullptr || sdl_.window == nullptr)
+        return SDL_PIXELFORMAT_XRGB8888;
+    const char* name = SDL_GetRendererName(sdl_.renderer);
+    const bool software = name != nullptr && std::strcmp(name, SDL_SOFTWARE_RENDERER) == 0;
+    return software && SDL_GetWindowPixelFormat(sdl_.window) == SDL_PIXELFORMAT_RGB565
+               ? SDL_PIXELFORMAT_RGB565
+               : SDL_PIXELFORMAT_XRGB8888;
+}
+
+void Runtime::upload_rgb24_frame(SDL_Texture* texture, const renderer::Surface& source) {
     if (texture == nullptr || source.rgb.empty())
         return;
     void* pixels = nullptr;
     int pitch = 0;
     if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch))
         throw std::runtime_error(std::string("SDL_LockTexture: ") + SDL_GetError());
-    convert_rgb24_xrgb(
+    const auto convert =
+        texture->format == SDL_PIXELFORMAT_RGB565 ? convert_rgb24_rgb565 : convert_rgb24_xrgb;
+    convert(
         source.rgb.data(),
         source.width,
         source.height,
@@ -366,23 +383,26 @@ void Runtime::present_match_layers() {
     if (match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
     const bool dialogs = compose_match_dialog_layer();
-    match_hud_tex_ = ensure_xrgb_texture(
+    const auto frame_format = frame_texture_format();
+    match_hud_tex_ = ensure_streaming_texture(
         match_hud_tex_,
+        frame_format,
         static_cast<int>(match_hud_cpu_.width),
         static_cast<int>(match_hud_cpu_.height),
         match_hud_tex_w_,
         match_hud_tex_h_
     );
-    match_world_tex_ = ensure_xrgb_texture(
+    match_world_tex_ = ensure_streaming_texture(
         match_world_tex_,
+        frame_format,
         static_cast<int>(match_world_cpu_.width),
         static_cast<int>(match_world_cpu_.height),
         match_world_tex_w_,
         match_world_tex_h_
     );
     const auto upload_start = std::chrono::steady_clock::now();
-    upload_rgb24_xrgb(match_hud_tex_, match_hud_cpu_);
-    upload_rgb24_xrgb(match_world_tex_, match_world_cpu_);
+    upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
+    upload_rgb24_frame(match_world_tex_, match_world_cpu_);
     const auto present_start = std::chrono::steady_clock::now();
     phase_times_.upload += elapsed_since(upload_start);
     // The clear is the blank fill for strip area beyond the chrome's largest
@@ -415,14 +435,15 @@ void Runtime::present_match_layers() {
         throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
     // A placed dialog's part over the side column goes over the HUD layer.
     if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
-        match_dialog_side_tex_ = ensure_xrgb_texture(
+        match_dialog_side_tex_ = ensure_streaming_texture(
             match_dialog_side_tex_,
+            frame_format,
             static_cast<int>(match_dialog_side_.width),
             static_cast<int>(match_dialog_side_.height),
             match_dialog_side_tex_w_,
             match_dialog_side_tex_h_
         );
-        upload_rgb24_xrgb(match_dialog_side_tex_, match_dialog_side_);
+        upload_rgb24_frame(match_dialog_side_tex_, match_dialog_side_);
         const SDL_FRect side{
             static_cast<float>(match_dialog_side_at_.x),
             static_cast<float>(match_dialog_side_at_.y),

@@ -8,6 +8,7 @@
 #include "oa/sim/map_runtime/feature_defs.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <stdexcept>
@@ -343,13 +344,30 @@ void Match::project_feature_plots(std::array<int16_t, 2> cell, std::array<int16_
 }
 
 void Match::project_plot_occupants() {
+    // The share of the map's plots at which the written ones are copied by
+    // copying every plot: 1 in 8.
+    constexpr std::size_t whole_copy_share = 8;
     auto& world = state();
     const auto cells = static_cast<std::size_t>(world.game.map_width) *
                        static_cast<std::size_t>(world.game.map_height);
-    for (std::size_t index = 0; index < cells && index < spatial_.plots.size(); ++index) {
+    const auto count = std::min(cells, spatial_.plots.size());
+    const auto copy = [&](std::size_t index) {
         world.plots[index].ground_unit = spatial_.plots[index].ground;
         world.plots[index].air_unit = spatial_.plots[index].air;
+    };
+    const auto written = spatial_.written_occupant_count;
+    if (!occupants_projected_ || spatial_.written_occupants_lost ||
+        written >= count / whole_copy_share) {
+        for (std::size_t index = 0; index < count; ++index)
+            copy(index);
+        occupants_projected_ = true;
+    } else {
+        for (uint32_t entry = 0; entry < written; ++entry)
+            if (spatial_.written_occupants[entry] < count)
+                copy(spatial_.written_occupants[entry]);
     }
+    spatial_.written_occupant_count = 0;
+    spatial_.written_occupants_lost = false;
 }
 
 bool Match::launch_meteor(

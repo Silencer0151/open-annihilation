@@ -168,6 +168,24 @@ struct ParseResult {
     [[nodiscard]] bool ok() const noexcept { return archive.has_value(); }
 };
 
+struct SequenceResult {
+    std::optional<Sequence> sequence;
+    std::optional<Error> error;
+
+    /// Returns whether a sequence was parsed.
+    [[nodiscard]] bool ok() const noexcept { return sequence.has_value(); }
+};
+
+/// What `parse` keeps of each simple frame's palette indices.
+enum class PixelData {
+    /// The pixels and coverage are decoded and kept.
+    decoded,
+    /// The pixels are decoded and checked as `decoded` checks them, and the
+    /// frame's pixels and coverage are left empty; `parse_sequence` decodes a
+    /// sequence's pixels when they are needed.
+    checked,
+};
+
 struct RenderedFrame {
     uint16_t width = 0;
     uint16_t height = 0;
@@ -198,8 +216,19 @@ struct RenderResult {
 /// against the limit namespace.
 ///
 /// @param bytes the whole file
+/// @param pixels whether each simple frame keeps its decoded pixels and
+///     coverage; either way a file parses, or fails with the same error
 /// @return the archive, or the first error and its byte offset
-[[nodiscard]] ParseResult parse(std::span<const uint8_t> bytes);
+[[nodiscard]] ParseResult
+parse(std::span<const uint8_t> bytes, PixelData pixels = PixelData::decoded);
+
+/// Parses one sequence of a file, with every frame's pixels and coverage
+/// decoded, as `parse` parses it.
+///
+/// @param bytes the whole file
+/// @param index the sequence's place in the file's sequence table, from 0
+/// @return the sequence, or the first error and its byte offset
+[[nodiscard]] SequenceResult parse_sequence(std::span<const uint8_t> bytes, std::size_t index);
 
 /// Returns one frame of a sequence.
 ///

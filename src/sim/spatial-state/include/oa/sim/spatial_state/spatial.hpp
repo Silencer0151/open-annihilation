@@ -261,9 +261,21 @@ struct Unit {
     int8_t bm_code{};          // UnitDef.bm_code
 };
 
+/// The most plot writes World::written_occupants lists.
+inline constexpr std::size_t written_occupant_capacity = 4096;
+
 struct World {
     uint32_t terrain_width{}, terrain_height{}; // Game.map_width, Game.map_height
     std::vector<Plot> plots;
+    // The index in `plots` of each plot whose ground or air word was written
+    // since the list was last emptied, in the order written, the first
+    // written_occupant_count of them; a plot written twice is listed twice.
+    // Writes past written_occupant_capacity are not listed and set
+    // written_occupants_lost instead. Whoever keeps another copy of the words
+    // empties the list.
+    std::array<uint32_t, written_occupant_capacity> written_occupants{};
+    uint32_t written_occupant_count{};
+    bool written_occupants_lost{};
     uint32_t bucket_width{}; // Game.bucket_width
     uint32_t bucket_height{};
     std::vector<Bucket> buckets;
@@ -303,7 +315,8 @@ struct Host {
     virtual void notify_object_footprint_removed(Unit& unit, uint32_t old_tick) = 0;
 };
 
-/// Writes a unit into one layer of a plot.
+/// Writes a unit into one layer of a plot, and lists the plot in
+/// World::written_occupants.
 ///
 /// An empty layer takes the unit. When the layer holds another unit, the
 /// occupant is marked collision_other and the new unit collision_self, and the

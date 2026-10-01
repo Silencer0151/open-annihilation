@@ -137,59 +137,91 @@ read_frame_info(std::span<const uint8_t> bytes, std::size_t at) noexcept {
 class Parser {
   public:
 
-    explicit Parser(std::span<const uint8_t> bytes) : bytes_(bytes) {}
+    Parser(std::span<const uint8_t> bytes, PixelData pixels) : bytes_(bytes), pixels_(pixels) {}
 
     /// Parses the whole file into an archive, or returns the first error.
     [[nodiscard]] ParseResult run() {
-        if (bytes_.size() > limit::input_bytes)
-            return fail(ErrorCode::input_limit, 0, "GAF input exceeds 256 MiB limit");
-        if (!fits(0, layout::header_bytes, bytes_.size()))
-            return fail(ErrorCode::truncated, 0, "truncated GAF header");
-
-        const auto header = read_header(bytes_);
+        std::size_t count = 0;
         Archive archive;
-        archive.version = header.version;
-        archive.raw_sequence_count = header.sequence_count;
-        archive.header_sequence_count = signed16(static_cast<uint16_t>(archive.raw_sequence_count));
-        archive.reserved = header.reserved;
-
-        // The count is the header word's low 16 bits, signed; zero or less loads none.
-        const std::size_t count = archive.header_sequence_count > 0
-                                      ? static_cast<std::size_t>(archive.header_sequence_count)
-                                      : 0U;
-        if (count > limit::sequences)
-            return fail(
-                ErrorCode::sequence_limit,
-                offsetof(on_disk::Header, sequence_count),
-                "GAF sequence count exceeds portable limit"
-            );
-        if (!fits(layout::header_bytes, count * pointer_bytes, bytes_.size())) {
-            return fail(
-                ErrorCode::truncated, layout::header_bytes, "truncated GAF sequence pointer table"
-            );
-        }
+        if (!read_sequence_table(archive, count))
+            return ParseResult{std::nullopt, error_};
         archive.sequences.reserve(count);
         for (std::size_t index = 0; index < count; ++index) {
-            const auto pointer_at = layout::header_bytes + index * pointer_bytes;
             Sequence sequence;
-            const auto sequence_at = static_cast<std::size_t>(le32(bytes_, pointer_at));
-            if (!parse_sequence(sequence_at, sequence))
+            if (!parse_sequence(sequence_offset(index), sequence))
                 return ParseResult{std::nullopt, error_};
             archive.sequences.push_back(std::move(sequence));
         }
         return ParseResult{std::move(archive), std::nullopt};
     }
 
+    /// Parses the sequence at `index` of the file's sequence table, or returns the first error.
+    [[nodiscard]] SequenceResult run_one(std::size_t index) {
+        std::size_t count = 0;
+        Archive archive;
+        if (!read_sequence_table(archive, count))
+            return SequenceResult{std::nullopt, error_};
+        if (index >= count)
+            return SequenceResult{
+                std::nullopt,
+                Error{
+                    ErrorCode::offset_out_of_range,
+                    offsetof(on_disk::Header, sequence_count),
+                    "GAF sequence index is past the sequence count"
+                }
+            };
+        Sequence sequence;
+        if (!parse_sequence(sequence_offset(index), sequence))
+            return SequenceResult{std::nullopt, error_};
+        return SequenceResult{std::move(sequence), std::nullopt};
+    }
+
   private:
 
     std::span<const uint8_t> bytes_;
+    PixelData pixels_ = PixelData::decoded;
+    // A checked frame's pixels and coverage are decoded here and not kept.
+    std::vector<uint8_t> checked_pixels_;
+    std::vector<uint8_t> checked_coverage_;
     std::optional<Error> error_;
     std::size_t total_frame_records_ = 0;
     std::size_t total_decoded_bytes_ = 0;
     std::unordered_set<std::size_t> active_frame_offsets_;
 
-    [[nodiscard]] ParseResult fail(ErrorCode code, std::size_t at, std::string message) {
-        return ParseResult{std::nullopt, Error{code, at, std::move(message)}};
+    /// Reads the file header into `archive` and the sequence count into `count`, after
+    /// checking the input's size, the count and the pointer table.
+    [[nodiscard]] bool read_sequence_table(Archive& archive, std::size_t& count) {
+        if (bytes_.size() > limit::input_bytes)
+            return set_error(ErrorCode::input_limit, 0, "GAF input exceeds 256 MiB limit");
+        if (!fits(0, layout::header_bytes, bytes_.size()))
+            return set_error(ErrorCode::truncated, 0, "truncated GAF header");
+
+        const auto header = read_header(bytes_);
+        archive.version = header.version;
+        archive.raw_sequence_count = header.sequence_count;
+        archive.header_sequence_count = signed16(static_cast<uint16_t>(archive.raw_sequence_count));
+        archive.reserved = header.reserved;
+
+        // The count is the header word's low 16 bits, signed; zero or less loads none.
+        count = archive.header_sequence_count > 0
+                    ? static_cast<std::size_t>(archive.header_sequence_count)
+                    : 0U;
+        if (count > limit::sequences)
+            return set_error(
+                ErrorCode::sequence_limit,
+                offsetof(on_disk::Header, sequence_count),
+                "GAF sequence count exceeds portable limit"
+            );
+        if (!fits(layout::header_bytes, count * pointer_bytes, bytes_.size()))
+            return set_error(
+                ErrorCode::truncated, layout::header_bytes, "truncated GAF sequence pointer table"
+            );
+        return true;
+    }
+
+    /// Returns the offset the sequence pointer table holds for sequence `index`.
+    [[nodiscard]] std::size_t sequence_offset(std::size_t index) const noexcept {
+        return static_cast<std::size_t>(le32(bytes_, layout::header_bytes + index * pointer_bytes));
     }
 
     [[nodiscard]] bool set_error(ErrorCode code, std::size_t at, std::string message) {
@@ -308,33 +340,36 @@ class Parser {
             );
         }
         total_decoded_bytes_ += pixel_count * decoded_bytes_per_pixel;
-        output.pixels.assign(pixel_count, output.transparency_index);
-        output.coverage.assign(pixel_count, 0);
+        // A checked frame decodes into the parser's own buffers and keeps nothing.
+        auto& kept_pixels = pixels_ == PixelData::decoded ? output.pixels : checked_pixels_;
+        auto& kept_coverage = pixels_ == PixelData::decoded ? output.coverage : checked_coverage_;
+        kept_pixels.assign(pixel_count, output.transparency_index);
+        kept_coverage.assign(pixel_count, 0);
         if (pixel_count == 0)
             return true;
+        // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
+        uint8_t* const pixels = kept_pixels.data();
+        uint8_t* const coverage = kept_coverage.data();
         if (!output.compressed) {
             if (!fits(data_at, pixel_count, bytes_.size()))
                 return set_error(ErrorCode::truncated, data_at, "truncated raw GAF pixels");
-            // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
-            uint8_t* const pixels = output.pixels.data();
-            uint8_t* const coverage = output.coverage.data();
             const uint8_t transparent = output.transparency_index;
             std::memcpy(pixels, bytes_.data() + data_at, pixel_count);
             for (std::size_t index = 0; index < pixel_count; ++index)
                 coverage[index] = pixels[index] != transparent ? 1U : 0U;
             return true;
         }
-        return decode_compressed(data_at, output);
+        return decode_compressed(data_at, output, pixels, coverage);
     }
 
-    /// Decodes the row-compressed pixels at `at` into `output`'s pixels and coverage.
-    [[nodiscard]] bool decode_compressed(std::size_t at, Frame& output) {
+    /// Decodes the row-compressed pixels at `at` of `output`, a frame of
+    /// output.width by output.height, into `pixels` and `coverage`.
+    [[nodiscard]] bool
+    decode_compressed(std::size_t at, const Frame& output, uint8_t* pixels, uint8_t* coverage) {
         std::size_t row_at = at;
         const auto width = static_cast<std::size_t>(output.width);
-        // Plain pointers keep the per-byte work free of calls in unoptimised builds.
+        // A plain pointer keeps the per-byte work free of calls in unoptimised builds.
         const uint8_t* const input = bytes_.data();
-        uint8_t* const pixels = output.pixels.data();
-        uint8_t* const coverage = output.coverage.data();
         for (std::size_t y = 0; y < output.height; ++y) {
             if (!fits(row_at, row_length_bytes, bytes_.size()))
                 return set_error(
@@ -474,8 +509,12 @@ class Parser {
 
 } // namespace
 
-ParseResult parse(std::span<const uint8_t> bytes) {
-    return Parser(bytes).run();
+ParseResult parse(std::span<const uint8_t> bytes, PixelData pixels) {
+    return Parser(bytes, pixels).run();
+}
+
+SequenceResult parse_sequence(std::span<const uint8_t> bytes, std::size_t index) {
+    return Parser(bytes, PixelData::decoded).run_one(index);
 }
 
 const Frame* frame_at(const Sequence* sequence, int32_t index) noexcept {

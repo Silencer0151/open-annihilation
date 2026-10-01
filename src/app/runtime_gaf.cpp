@@ -115,7 +115,7 @@ void Runtime::append_gaf_file(oa::formats::gaf::Archive& destination, std::strin
     if (missing_gaf_paths_.count(key) != 0)
         return;
     try {
-        const auto parsed = oa::formats::gaf::parse(assets_.read(std::string(path)).bytes);
+        auto parsed = oa::formats::gaf::parse(assets_.read(std::string(path)).bytes);
         if (!parsed.ok()) {
             missing_gaf_paths_.insert(key);
             std::cerr << "match HUD GAF '" << path << "' parse failed: " << parsed.error->message

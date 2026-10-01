@@ -531,7 +531,7 @@ bool Runtime::load_campaign_map(std::string_view mission_file) {
         throw std::runtime_error(
             "cannot parse campaign mission metadata: " + parsed.error->message
         );
-    const auto terrain = oa::formats::tnt::parse(*tnt_data);
+    auto terrain = oa::formats::tnt::parse(*tnt_data);
     if (!terrain.ok())
         throw std::runtime_error(
             "cannot parse campaign mission terrain: " + terrain.error->message

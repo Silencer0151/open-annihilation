@@ -322,11 +322,15 @@ std::optional<BattlefieldViewport> game_battlefield_viewport(
 ScreenPoint map_pixel_to_screen(const BattlefieldViewport& viewport, MapPixel map_pixel) noexcept {
     const auto dx = static_cast<int64_t>(map_pixel.x) - static_cast<int64_t>(viewport.source_x);
     const auto dy = static_cast<int64_t>(map_pixel.y) - static_cast<int64_t>(viewport.source_y);
-    const auto scale = viewport.scale == 0.0F ? 1.0 : static_cast<double>(viewport.scale);
-    const auto x = static_cast<int64_t>(viewport.destination_x) +
-                   static_cast<int64_t>(std::llround(static_cast<double>(dx) * scale));
-    const auto y = static_cast<int64_t>(viewport.destination_y) +
-                   static_cast<int64_t>(std::llround(static_cast<double>(dy) * scale));
+    // At the whole scale a map pixel is a screen pixel: the offsets are kept as they are.
+    const bool whole = viewport.scale == 0.0F || viewport.scale == 1.0F;
+    const auto scale = whole ? 1.0 : static_cast<double>(viewport.scale);
+    const auto x =
+        static_cast<int64_t>(viewport.destination_x) +
+        (whole ? dx : static_cast<int64_t>(std::llround(static_cast<double>(dx) * scale)));
+    const auto y =
+        static_cast<int64_t>(viewport.destination_y) +
+        (whole ? dy : static_cast<int64_t>(std::llround(static_cast<double>(dy) * scale)));
     return {
         static_cast<int32_t>(std::clamp<int64_t>(
             x, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()

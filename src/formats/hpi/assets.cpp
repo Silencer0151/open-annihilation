@@ -152,6 +152,19 @@ Image decode_pcx(std::span<const uint8_t> data) {
 PaletteMap remap_palette(const PaletteBytes& source, const PaletteBytes& destination) {
     constexpr unsigned rgb_channels = 3;
     constexpr unsigned maximum_channel_difference = 255;
+
+    // The last pair of palettes this thread mapped, and their map: screens
+    // map the same pair on every frame they draw.
+    struct LastMap {
+        bool kept = false;
+        PaletteBytes source{};
+        PaletteBytes destination{};
+        PaletteMap map{};
+    };
+
+    thread_local LastMap last;
+    if (last.kept && last.source == source && last.destination == destination)
+        return last.map;
     PaletteMap result{};
     for (std::size_t color = 0; color < palette_color_count; ++color) {
         unsigned best_distance = rgb_channels * maximum_channel_difference + 1;
@@ -168,6 +181,7 @@ PaletteMap remap_palette(const PaletteBytes& source, const PaletteBytes& destina
             }
         }
     }
+    last = {true, source, destination, result};
     return result;
 }
 

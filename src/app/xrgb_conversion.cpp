@@ -64,4 +64,51 @@ void convert_rgb24_xrgb(
     );
 }
 
+void pack_rgb24_rgb565_row(
+    uint16_t* out, const uint8_t* rgb, int width, const std::array<uint8_t, 256>* gamma
+) noexcept {
+    // Each channel's top bits and where they go in the word.
+    constexpr unsigned red_drop = 3, green_drop = 2, blue_drop = 3;
+    constexpr unsigned red_shift = 11, green_shift = 5;
+    const auto pack = [](unsigned red, unsigned green, unsigned blue) {
+        return static_cast<uint16_t>(
+            ((red >> red_drop) << red_shift) | ((green >> green_drop) << green_shift) |
+            (blue >> blue_drop)
+        );
+    };
+    if (gamma == nullptr) {
+        for (int x = 0; x < width; ++x, rgb += 3)
+            out[x] = pack(rgb[0], rgb[1], rgb[2]);
+        return;
+    }
+    const auto& table = *gamma;
+    for (int x = 0; x < width; ++x, rgb += 3)
+        out[x] = pack(table[rgb[0]], table[rgb[1]], table[rgb[2]]);
+}
+
+void convert_rgb24_rgb565(
+    const uint8_t* rgb,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept {
+    const auto row_pixels = static_cast<int>(width);
+    platform::job_pool::run_bands(
+        pool, platform::job_pool::bands_of_rows(height, xrgb_band_rows), [&](uint32_t band) {
+            const uint32_t first_row = band * xrgb_band_rows;
+            const uint32_t end_row = std::min(height, first_row + xrgb_band_rows);
+            for (uint32_t y = first_row; y < end_row; ++y)
+                pack_rgb24_rgb565_row(
+                    reinterpret_cast<uint16_t*>(pixels + static_cast<std::size_t>(y) * pitch),
+                    rgb + static_cast<std::size_t>(y) * width * 3U,
+                    row_pixels,
+                    gamma
+                );
+        }
+    );
+}
+
 } // namespace oa::app

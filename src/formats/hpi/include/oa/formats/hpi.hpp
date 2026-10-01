@@ -715,7 +715,8 @@ struct Image {
 /// Maps each source colour to the nearest destination colour.
 ///
 /// Nearest means the smallest summed absolute channel difference; the first
-/// index wins ties and byte 3 of each entry is ignored.
+/// index wins ties and byte 3 of each entry is ignored. A thread asking for
+/// the pair it asked for last gets the map it was given then.
 ///
 /// @param source palette whose entries are mapped
 /// @param destination palette searched

@@ -148,7 +148,12 @@ features, the wind, the meteor storm, particles and the viewer's remembered
 sight, in the game loop's order. `tick(Host&)` runs the unit sweep with an
 external host instead. A gameplay branch the engine does not support throws;
 moving collision and occupancy removal need the resolved type metadata and
-collision plots and refuse movement without them.
+collision plots and refuse movement without them. The match copies the
+inputs' collision plots while it is constructed and keeps no reference to
+them. Each tick starts by copying the units' ground and air words into the
+`MapPlot` table: every plot on the first tick, then the plots the spatial
+state lists as written since (`written_occupants`), or every plot again when
+they come to an eighth of the map or the list lost some.
 
 ## Outcomes
 

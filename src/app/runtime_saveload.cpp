@@ -1824,6 +1824,7 @@ void Runtime::run_headless_saveload() {
         rebuild_surface();
         write_ppm(options_.snapshot, surface_);
     }
+    print_memory_status();
 }
 
 } // namespace oa::app

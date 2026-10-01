@@ -571,7 +571,7 @@ class GrayedShade {
     /// @param shade_table the 32x256 shade table
     /// @param row the table row the colours are darkened through, 1 to 31
     GrayedShade(const PaletteBytes& palette, std::span<const uint8_t> shade_table, std::size_t row)
-        : palette_(palette), shade_table_(shade_table), row_(row) {}
+        : palette_(palette), shade_table_(shade_table), row_(row), slots_(remembered_slots()) {}
 
     /// Tells whether the table is whole and the row within it.
     ///
@@ -608,6 +608,37 @@ class GrayedShade {
         bool filled{};
     };
 
+    /// The colours darkened through the last palette, shade table and row a
+    /// thread darkened through: screens darken through the same ones on every
+    /// frame they draw.
+    struct Memory {
+        bool kept{};
+        PaletteBytes palette{};
+        std::vector<uint8_t> shade_table;
+        std::size_t row{};
+        std::vector<Slot> slots;
+    };
+
+    /// Returns the thread's darkened colours for this shade's palette, table
+    /// and row, emptied first when they are not the ones it remembers.
+    [[nodiscard]] std::vector<Slot>& remembered_slots() {
+        thread_local Memory memory;
+        if (!memory.kept || memory.row != row_ || memory.palette != palette_ ||
+            !std::equal(
+                memory.shade_table.begin(),
+                memory.shade_table.end(),
+                shade_table_.begin(),
+                shade_table_.end()
+            )) {
+            memory.kept = true;
+            memory.palette = palette_;
+            memory.shade_table.assign(shade_table_.begin(), shade_table_.end());
+            memory.row = row_;
+            memory.slots.assign(std::size_t{1} << slot_bits, Slot{});
+        }
+        return memory.slots;
+    }
+
     /// Searches the palette for a colour and darkens the entry found.
     [[nodiscard]] std::array<uint8_t, 3> darkened(const uint8_t* rgb) const {
         std::size_t source = 0;
@@ -632,7 +663,7 @@ class GrayedShade {
     const PaletteBytes& palette_;
     std::span<const uint8_t> shade_table_;
     std::size_t row_{};
-    std::vector<Slot> slots_ = std::vector<Slot>(std::size_t{1} << slot_bits);
+    std::vector<Slot>& slots_;
 };
 
 // Darkens a rectangle's colours through a grayed-out button's shade.
@@ -797,16 +828,6 @@ void draw_list_box(
     }
 }
 
-[[nodiscard]] Surface checked_background(const Image& image) {
-    Surface result{image.width, image.height, image.rgb};
-    const auto expected_rgb = static_cast<uint64_t>(result.width) * result.height * 3U;
-    if (expected_rgb > std::numeric_limits<std::size_t>::max() ||
-        result.rgb.size() != static_cast<std::size_t>(expected_rgb)) {
-        throw std::runtime_error("GUI background has inconsistent RGB data");
-    }
-    return result;
-}
-
 ScreenResources load_screen_with_layout(
     AssetStore& assets, const ScreenAssetNames& names, std::span<const uint8_t> layout
 ) {
@@ -820,41 +841,41 @@ ScreenResources load_screen_with_layout(
     }
     std::copy(palette.begin(), palette.end(), result.gui_palette.begin());
 
-    const auto parsed_layout = ui::gui_layout::parse(layout);
+    auto parsed_layout = ui::gui_layout::parse(layout);
     if (!parsed_layout.ok()) {
         throw std::runtime_error(
             "cannot parse GUI layout '" + names.layout + "': " + parsed_layout.error->message
         );
     }
-    result.layout = *parsed_layout.layout;
+    result.layout = std::move(*parsed_layout.layout);
 
     if (!names.sprites.empty()) {
-        const auto parsed_sprites = formats::gaf::parse(assets.read(names.sprites).bytes);
+        auto parsed_sprites = formats::gaf::parse(assets.read(names.sprites).bytes);
         if (!parsed_sprites.ok()) {
             throw std::runtime_error(
                 "cannot parse GUI sprites '" + names.sprites + "': " + parsed_sprites.error->message
             );
         }
-        result.sprites = *parsed_sprites.archive;
+        result.sprites = std::move(*parsed_sprites.archive);
     }
     if (!names.shared_sprites.empty()) {
-        const auto parsed_shared = formats::gaf::parse(assets.read(names.shared_sprites).bytes);
+        auto parsed_shared = formats::gaf::parse(assets.read(names.shared_sprites).bytes);
         if (!parsed_shared.ok()) {
             throw std::runtime_error(
                 "cannot parse shared GUI sprites '" + names.shared_sprites +
                 "': " + parsed_shared.error->message
             );
         }
-        result.shared_sprites = *parsed_shared.archive;
+        result.shared_sprites = std::move(*parsed_shared.archive);
     }
     result.font = formats::fnt::load_gaf(assets, default_gui_font);
     result.label_font = formats::fnt::load_gaf(assets, label_gui_font);
-    const auto parsed_global = formats::gaf::parse(assets.read(global_logo_sprites).bytes);
+    auto parsed_global = formats::gaf::parse(assets.read(global_logo_sprites).bytes);
     if (!parsed_global.ok())
         throw std::runtime_error(
             "cannot parse global LOGOS.GAF sprites: " + parsed_global.error->message
         );
-    result.global_sprites = *parsed_global.archive;
+    result.global_sprites = std::move(*parsed_global.archive);
     result.light_table = assets.read(default_light_table).bytes;
     if (result.light_table.size() != 32U * palette_color_count)
         throw std::runtime_error("PALETTE.LHT must contain 32x256 entries");
@@ -983,7 +1004,28 @@ Surface render_screen(
     std::span<const ButtonPresentation> presentation,
     std::span<const ListPresentation> lists
 ) {
-    Surface result = checked_background(resources.background);
+    Surface result;
+    render_screen_into(result, resources, presentation, lists);
+    return result;
+}
+
+void render_screen_into(
+    Surface& result,
+    const ScreenResources& resources,
+    std::span<const ButtonPresentation> presentation,
+    std::span<const ListPresentation> lists
+) {
+    // The background is copied into the surface's own memory, which keeps
+    // its size from one screen to the next.
+    const Image& background = resources.background;
+    const auto expected_background =
+        static_cast<uint64_t>(background.width) * background.height * 3U;
+    if (expected_background > std::numeric_limits<std::size_t>::max() ||
+        background.rgb.size() != static_cast<std::size_t>(expected_background))
+        throw std::runtime_error("GUI background has inconsistent RGB data");
+    result.width = background.width;
+    result.height = background.height;
+    result.rgb.assign(background.rgb.begin(), background.rgb.end());
     const auto expected_rgb = static_cast<uint64_t>(result.width) * result.height * 3U;
     if (expected_rgb > std::numeric_limits<std::size_t>::max() ||
         result.rgb.size() != static_cast<std::size_t>(expected_rgb)) {
@@ -1200,7 +1242,6 @@ Surface render_screen(
             );
         }
     }
-    return result;
 }
 
 Surface render_main_menu(

@@ -33,6 +33,13 @@ separate land/water slope limits. Static zero-`BMCode` types use the larger
 yard-map test; this API returns `nullopt` at that boundary because moving
 commanders and other mobile types do not use it.
 
+Every write of a plot's ground or air word (by `occupy`, a yard closing and
+`remove_occupancy`) lists the plot's index in `World::written_occupants`, so
+that a copy of the words, such as the match's `MapPlot` table, takes only the
+plots written since it last emptied the list; past
+`written_occupant_capacity` (4096) writes the list marks itself lost, and the
+copy takes every plot.
+
 `remove_occupancy` clears only matching ground or air owners, restores masked
 plot flags, consumes collision bits, and visits spatial buckets X-outer,
 Z-inner. It includes each parent's one-level `attach_first_child` chain and

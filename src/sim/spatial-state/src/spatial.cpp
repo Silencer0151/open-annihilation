@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/spatial_state/spatial.hpp"
+
+#include <functional>
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -37,6 +39,23 @@ bool valid_mask(const Unit& unit) {
                                         static_cast<std::size_t>(unit.footprint[1]);
 }
 
+/// Lists a plot of the world's plots in World::written_occupants, or marks
+/// the list as lost when it is full; a plot outside them is not listed.
+///
+/// @param[in,out] world the world whose plots hold the plot
+/// @param plot the plot whose ground or air word is written
+void note_written_occupant(World& world, const Plot& plot) noexcept {
+    const Plot* first = world.plots.data();
+    const Plot* end = first + world.plots.size();
+    if (std::less<const Plot*>{}(&plot, first) || !std::less<const Plot*>{}(&plot, end))
+        return;
+    if (world.written_occupant_count >= world.written_occupants.size()) {
+        world.written_occupants_lost = true;
+        return;
+    }
+    world.written_occupants[world.written_occupant_count++] = static_cast<uint32_t>(&plot - first);
+}
+
 /// Runs update_occupancy on a unit visit_overlapping_units reached.
 ///
 /// @param[in,out] unit visited unit
@@ -50,6 +69,7 @@ Error wake_occupancy(Unit& unit, World& world, void* /*context*/) {
 
 Error occupy(Plot& plot, bool air_layer, Unit& unit, World& world) {
     auto& slot = air_layer ? plot.air : plot.ground;
+    note_written_occupant(world, plot);
     if (slot != no_unit) {
         if (slot >= world.units.size())
             return Error::invalid_unit_id;
@@ -227,8 +247,10 @@ Error update_occupancy(Unit& unit, World& world) {
                                  [static_cast<std::size_t>(z + row) * world.terrain_width +
                                   static_cast<std::size_t>(x + column)];
                 if ((unit.yard_mask[mask_index++] & yard_bit(unit.yard_open)) == 0) {
-                    if (plot.ground == unit.id)
+                    if (plot.ground == unit.id) {
                         plot.ground = no_unit;
+                        note_written_occupant(world, plot);
+                    }
                 } else if (
                     const auto error = occupy(plot, false, unit, world); error != Error::none
                 )
@@ -447,8 +469,10 @@ Error remove_occupancy(Unit& unit, World& world, Host& host) {
                     auto& plot = world.plots
                                      [static_cast<std::size_t>(z + row) * world.terrain_width +
                                       static_cast<std::size_t>(x + column)];
-                    if (plot.ground == unit.id)
+                    if (plot.ground == unit.id) {
                         plot.ground = no_unit;
+                        note_written_occupant(world, plot);
+                    }
                     if ((unit.yard_mask[mask++] & 1U) != 0)
                         plot.flags &= static_cast<uint8_t>(~plot_claimed);
                 }
@@ -465,8 +489,10 @@ Error remove_occupancy(Unit& unit, World& world, Host& host) {
                                          [static_cast<std::size_t>(z + row) * world.terrain_width +
                                           static_cast<std::size_t>(x + column)];
                         auto& slot = kind == 1 ? plot.ground : plot.air;
-                        if (slot == unit.id)
+                        if (slot == unit.id) {
                             slot = no_unit;
+                            note_written_occupant(world, plot);
+                        }
                     }
         }
     }

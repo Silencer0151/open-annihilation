@@ -104,7 +104,10 @@ enum class Showcase {
     none,
     // From the main menu into the first Arm mission, whose units are sent to
     // the Galactic Gate, and through its victory to the score screen.
-    arm_first_mission
+    arm_first_mission,
+    // From the main menu into a two-player skirmish whose armies fight for a
+    // minute, reporting the ticks and frames a second it played at.
+    skirmish_battle
 };
 
 enum class MatchCommand {

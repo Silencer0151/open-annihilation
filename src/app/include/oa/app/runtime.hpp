@@ -3688,7 +3688,20 @@ class Runtime final : public menu::Host,
     /// advances after a while, and the score screen, held a while. Prints a
     /// "showcase:" line for each step. Throws std::runtime_error when a step
     /// does not come about in its time or the mission is lost.
+    ///
+    /// skirmish_battle: run_battle_showcase.
     void run_showcase();
+
+    /// Plays --showcase skirmish-battle: the main menu for a while, then the
+    /// two-player skirmish the benchmark starts, its game continuing after a
+    /// commander's death, with --combat's armies (50 a
+    /// side without it) and --busy-combat's additions, played on the
+    /// application loop's frames and clock for a minute. Prints a
+    /// "showcase:" line with the ticks and frames a second it played at, the
+    /// game speed it ended at, the mean frame, the longest frame with its
+    /// ticks, drawing and presenting, and the mean tick, drawing and
+    /// presenting times, then the memory report.
+    void run_battle_showcase();
 
     /// Runs one pass of the application loop: the frame's time from the
     /// pacer, the pending SDL events, the idle tick, the sweep of finished
@@ -3977,26 +3990,42 @@ class Runtime final : public menu::Host,
     ///         no screen may see
     bool take_full_screen_event(const SDL_Event& event);
 
-    /// Returns an XRGB8888 streaming texture of a size, recreating it when the size changed.
+    /// Returns a streaming texture of a pixel format and size, recreating it
+    /// when the format or the size changed.
     ///
     /// Throws std::runtime_error when SDL cannot create it.
     ///
     /// @param existing current texture, or null
+    /// @param format its pixel format
     /// @param width texture width
     /// @param height texture height
     /// @param[in,out] stored_w width of `existing`; updated on recreation
     /// @param[in,out] stored_h height of `existing`; updated on recreation
-    /// @return the texture of that size
-    SDL_Texture*
-    ensure_xrgb_texture(SDL_Texture* existing, int width, int height, int& stored_w, int& stored_h);
+    /// @return the texture of that format and size
+    SDL_Texture* ensure_streaming_texture(
+        SDL_Texture* existing,
+        SDL_PixelFormat format,
+        int width,
+        int height,
+        int& stored_w,
+        int& stored_h
+    );
 
-    /// Uploads an RGB24 surface into an XRGB texture through the display gamma.
+    /// Returns the pixel format the match layers are uploaded in: RGB565 when
+    /// the software renderer draws into a 16-bit RGB565 window, whose pixels
+    /// it then copies as they are, and XRGB8888 otherwise.
+    ///
+    /// @return SDL_PIXELFORMAT_RGB565 or SDL_PIXELFORMAT_XRGB8888
+    [[nodiscard]] SDL_PixelFormat frame_texture_format() const;
+
+    /// Uploads an RGB24 surface into a texture of the frame texture formats
+    /// (frame_texture_format) through the display gamma.
     ///
     /// Throws std::runtime_error when the texture cannot be locked.
     ///
-    /// @param texture XRGB texture of the surface's size; null uploads nothing
+    /// @param texture XRGB8888 or RGB565 texture of the surface's size; null uploads nothing
     /// @param source RGB surface
-    void upload_rgb24_xrgb(SDL_Texture* texture, const renderer::Surface& source);
+    void upload_rgb24_frame(SDL_Texture* texture, const renderer::Surface& source);
 
     /// Destroys the match layer textures (HUD, world, cursor and dialog) and forgets their sizes.
     void destroy_match_layer_textures();
@@ -7580,7 +7609,6 @@ class Runtime final : public menu::Host,
     std::optional<oa::sim::map_runtime::PreparedMap> prepared_map_;
     std::vector<oa::sim::visibility_state::AltitudeCell> altitude_cells_;
     std::vector<oa::sim::visibility_state::AltitudeSightPattern> altitude_patterns_;
-    std::vector<oa::sim::spatial_state::Plot> collision_plots_;
     oa::PaletteBytes match_palette_{};
     oa::Image match_chrome_{};
     std::optional<renderer::ScreenResources> match_hud_;
@@ -7739,17 +7767,36 @@ class Runtime final : public menu::Host,
         std::size_t shadow_anim = static_cast<std::size_t>(-1); // seqnameshad, none: -1
     };
 
+    // A sequence of FeatureAssets: its archive's index in `archives` and its
+    // place in the archive's sequence table.
+    struct FeatureSequencePlace {
+        std::size_t archive{};
+        std::size_t index{};
+    };
+
     // GAF archives and 3DO models the match's FeatureDef table references;
-    // a FeatureDefHost ref is the table index + 1. The rendered frames of a
-    // sequence are made when a feature first draws it.
+    // a FeatureDefHost ref is the table index + 1. The archives hold each
+    // frame's size, origin and duration but no pixels: a sequence's pixels
+    // are decoded from its archive's file, and its rendered frames made, when
+    // a feature first draws it.
     struct FeatureAssets {
         std::vector<std::unique_ptr<oa::formats::gaf::Archive>> archives;
+        std::vector<std::vector<uint8_t>> archive_files; // each archive's GAF file
         std::vector<oa::formats::gaf::Sequence*> sequences;
+        std::vector<FeatureSequencePlace> sequence_places; // each of `sequences`
         std::vector<std::vector<oa::formats::gaf::RenderedFrame>> rendered;
         std::vector<std::shared_ptr<const oa::formats::objects3d::Model>> models;
     };
 
     FeatureAssets feature_assets_;
+
+    /// Decodes a feature sequence reference (feature_assets_) with its frames' pixels.
+    ///
+    /// @param sequence sequence reference, from 1
+    /// @return the sequence, with the repeat flags the feature table gave it,
+    ///     or nullopt for no sequence
+    [[nodiscard]] std::optional<oa::formats::gaf::Sequence>
+    decode_feature_sequence(oa_ref32 sequence) const;
 
     /// Returns a rendered frame of a feature sequence reference (feature_assets_), rendering the
     /// sequence on first use.
@@ -8058,6 +8105,9 @@ class Runtime final : public menu::Host,
     SDL_Texture* match_dialog_tex_ = nullptr;
     int match_dialog_tex_w_ = 0, match_dialog_tex_h_ = 0;
     renderer::Surface match_hud_cpu_{};
+    // The HUD layer the frame before showed, whose memory the next frame's
+    // HUD is drawn into.
+    renderer::Surface spare_match_hud_{};
     renderer::Surface match_world_cpu_{};
     SDL_Texture* match_hud_tex_ = nullptr;
     SDL_Texture* match_world_tex_ = nullptr;

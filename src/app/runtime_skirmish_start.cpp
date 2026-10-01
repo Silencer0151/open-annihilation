@@ -227,14 +227,14 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
     host.load_animation = [](void* context, const char* gaf_name) -> oa_ref32 {
         auto& self = *static_cast<Runtime*>(context);
         try {
-            auto parsed = oa::formats::gaf::parse(
-                self.assets_.read("anims/" + std::string(gaf_name) + ".gaf").bytes
-            );
+            auto file = self.assets_.read("anims/" + std::string(gaf_name) + ".gaf").bytes;
+            auto parsed = oa::formats::gaf::parse(file, oa::formats::gaf::PixelData::checked);
             if (!parsed.ok())
                 return 0;
             self.feature_assets_.archives.push_back(
                 std::make_unique<oa::formats::gaf::Archive>(std::move(*parsed.archive))
             );
+            self.feature_assets_.archive_files.push_back(std::move(file));
         } catch (const std::exception&) {
             return 0;
         }
@@ -247,9 +247,11 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
         if (animation == 0 || animation > assets.archives.size())
             return 0;
         oa::formats::gaf::Sequence* sequence = nullptr;
-        for (auto& entry : assets.archives[animation - 1]->sequences)
-            if (tdf_names_equal(entry.name, name)) {
-                sequence = &entry;
+        auto& archive_sequences = assets.archives[animation - 1]->sequences;
+        std::size_t place = 0;
+        for (; place < archive_sequences.size(); ++place)
+            if (tdf_names_equal(archive_sequences[place].name, name)) {
+                sequence = &archive_sequences[place];
                 break;
             }
         if (sequence == nullptr)
@@ -261,6 +263,7 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
             if (assets.sequences[index] == sequence)
                 return static_cast<oa_ref32>(index + 1);
         assets.sequences.push_back(sequence);
+        assets.sequence_places.push_back({animation - 1U, place});
         assets.rendered.emplace_back();
         return table_ref(assets.sequences);
     };
@@ -297,6 +300,19 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
         *duration = out.duration;
     };
     return host;
+}
+
+std::optional<oa::formats::gaf::Sequence>
+Runtime::decode_feature_sequence(oa_ref32 sequence) const {
+    if (sequence == 0 || sequence > feature_assets_.sequences.size())
+        return std::nullopt;
+    const auto& place = feature_assets_.sequence_places[sequence - 1];
+    auto decoded =
+        oa::formats::gaf::parse_sequence(feature_assets_.archive_files[place.archive], place.index);
+    if (!decoded.ok())
+        return std::nullopt;
+    decoded.sequence->repeat_flags = feature_assets_.sequences[sequence - 1]->repeat_flags;
+    return std::move(decoded.sequence);
 }
 
 bool Runtime::feature_sequence_frame(
@@ -626,7 +642,19 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             throw std::runtime_error("cannot load feature catalog: " + catalog.error->message);
         feature_catalog_ = std::move(*catalog.value);
     }
-    std::unordered_map<std::string, oa::formats::gaf::Archive> feature_gafs;
+
+    // Each GAF file the map's sprite features name, with its sequences
+    // without pixels; a sequence's pixels are decoded from the file once, for
+    // the animation the first feature showing it adds.
+    struct FeatureGaf {
+        std::vector<uint8_t> file;
+        oa::formats::gaf::Archive archive;
+    };
+
+    std::unordered_map<std::string, FeatureGaf> feature_gafs;
+    // Each 3DO model the map's object features name, loaded once and shared.
+    std::unordered_map<std::string, std::shared_ptr<const oa::formats::objects3d::Model>>
+        feature_models;
     for (const auto& placed : prepared_map_->placed_features) {
         const auto world_x = (placed.cell_x * 16 + static_cast<int32_t>(placed.footprint_x) * 8)
                              << 16;
@@ -645,14 +673,17 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         }
         if (!placed.object.empty()) {
             try {
-                const auto path = "objects3d/" + placed.object + ".3DO";
-                const auto bytes = assets_.read(path).bytes;
-                const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
-                auto model = std::make_shared<const oa::formats::objects3d::Model>(
-                    oa::formats::objects3d::load_3do({begin, bytes.size()})
-                );
+                auto& model = feature_models[placed.object];
+                if (!model) {
+                    const auto path = "objects3d/" + placed.object + ".3DO";
+                    const auto bytes = assets_.read(path).bytes;
+                    const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+                    model = std::make_shared<const oa::formats::objects3d::Model>(
+                        oa::formats::objects3d::load_3do({begin, bytes.size()})
+                    );
+                }
                 MatchFeatureDraw draw;
-                draw.instance = oa::sim::model_runtime::make_instance(std::move(model));
+                draw.instance = oa::sim::model_runtime::make_instance(model);
                 draw.position = position;
                 draw.cell_x = placed.cell_x;
                 draw.cell_z = placed.cell_z;
@@ -667,23 +698,37 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (placed.filename.empty() || placed.seqname.empty())
             continue;
         try {
-            auto& archive = feature_gafs[placed.filename];
-            if (archive.sequences.empty()) {
+            auto& gaf = feature_gafs[placed.filename];
+            if (gaf.archive.sequences.empty()) {
                 const auto path = "anims/" + placed.filename + ".gaf";
-                const auto parsed = oa::formats::gaf::parse(assets_.read(path).bytes);
+                gaf.file = assets_.read(path).bytes;
+                auto parsed =
+                    oa::formats::gaf::parse(gaf.file, oa::formats::gaf::PixelData::checked);
                 if (!parsed.ok()) {
                     std::cerr << "feature GAF '" << path
                               << "' parse failed: " << parsed.error->message << '\n';
                     continue;
                 }
-                archive = std::move(*parsed.archive);
+                gaf.archive = std::move(*parsed.archive);
             }
-            const auto* sequence = gaf_sequence(archive, placed.seqname);
+            const auto* sequence = gaf_sequence(gaf.archive, placed.seqname);
             if (sequence == nullptr || sequence->frames.empty())
                 continue;
-            const auto anim = intern_gaf_feature_anim(
-                placed.filename, placed.seqname, *sequence, placed.animating
-            );
+            auto anim = static_cast<std::size_t>(-1);
+            if (const auto found =
+                    match_gaf_anim_index_.find(placed.filename + "/" + placed.seqname);
+                found != match_gaf_anim_index_.end())
+                anim = found->second;
+            else {
+                auto decoded = oa::formats::gaf::parse_sequence(
+                    gaf.file, static_cast<std::size_t>(sequence - gaf.archive.sequences.data())
+                );
+                if (!decoded.ok())
+                    continue;
+                anim = intern_gaf_feature_anim(
+                    placed.filename, placed.seqname, *decoded.sequence, placed.animating
+                );
+            }
             if (anim == static_cast<std::size_t>(-1))
                 continue;
             match_gaf_features_.push_back(
@@ -721,23 +766,29 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             los_tables.error.empty() ? std::string("cannot load gamedata/los.tdf")
                                      : los_tables.error
         );
-    collision_plots_.assign(prepared_map_->collision_plots.size(), {});
-    for (std::size_t index = 0; index < collision_plots_.size(); ++index) {
+    // The prepared map's collision plots are let go once copied here, and
+    // this copy once the match, which copies them while it is constructed,
+    // holds its own.
+    std::vector<oa::sim::spatial_state::Plot> collision_plots(
+        prepared_map_->collision_plots.size()
+    );
+    for (std::size_t index = 0; index < collision_plots.size(); ++index) {
         const auto& source = prepared_map_->collision_plots[index];
-        collision_plots_[index].high_height = source.high_height;
-        collision_plots_[index].low_height = source.low_height;
-        collision_plots_[index].blocking_feature = source.blocking_feature;
-        collision_plots_[index].metal_feature = source.metal_feature;
-        collision_plots_[index].geo_feature = source.geo_feature;
-        collision_plots_[index].indestructible_feature = source.indestructible_feature;
-        collision_plots_[index].metal = source.metal;
-        collision_plots_[index].feature_word = source.feature_word;
-        collision_plots_[index].feature_back_x = source.feature_back_x;
-        collision_plots_[index].feature_back_z = source.feature_back_z;
-        collision_plots_[index].feature_height = source.feature_height;
-        collision_plots_[index].feature_footprint_x = source.feature_footprint_x;
-        collision_plots_[index].feature_footprint_z = source.feature_footprint_z;
+        collision_plots[index].high_height = source.high_height;
+        collision_plots[index].low_height = source.low_height;
+        collision_plots[index].blocking_feature = source.blocking_feature;
+        collision_plots[index].metal_feature = source.metal_feature;
+        collision_plots[index].geo_feature = source.geo_feature;
+        collision_plots[index].indestructible_feature = source.indestructible_feature;
+        collision_plots[index].metal = source.metal;
+        collision_plots[index].feature_word = source.feature_word;
+        collision_plots[index].feature_back_x = source.feature_back_x;
+        collision_plots[index].feature_back_z = source.feature_back_z;
+        collision_plots[index].feature_height = source.feature_height;
+        collision_plots[index].feature_footprint_x = source.feature_footprint_x;
+        collision_plots[index].feature_footprint_z = source.feature_footprint_z;
     }
+    std::vector<oa::sim::map_runtime::CollisionPlot>().swap(prepared_map_->collision_plots);
     const auto counter =
         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto random_seed = options_.seed.value_or(
@@ -781,7 +832,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         random_seed,
         this,
         [this] { return clock_milliseconds(); },
-        collision_plots_,
+        collision_plots,
         oa::sim::visibility_state::AltitudeSightData{
             prepared_map_->sight_width,
             prepared_map_->sight_height,
@@ -814,6 +865,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         append_gaf_file(match_fx_, "anims/FX.GAF");
     try {
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
+        std::vector<oa::sim::spatial_state::Plot>().swap(collision_plots);
         bind_match_speech();
         match_->set_difficulty(static_cast<int32_t>(preferences_.difficulty));
         // The mission starts with the top bar's shown stores and the space-bar

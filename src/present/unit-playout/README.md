@@ -125,6 +125,10 @@ are integer arithmetic.
 
 ## Places and jumps
 
+The places are held from the first observation that finds a unit in a
+followed player's range of slots; a match whose followed players hold no
+units keeps none.
+
 Each unit slot keeps a ring of `places_per_unit` places, each at an owner
 tick. A unit that stood still and then moved gets a place at the owner tick
 the observation of the tick before saw, so its move is drawn over the ticks

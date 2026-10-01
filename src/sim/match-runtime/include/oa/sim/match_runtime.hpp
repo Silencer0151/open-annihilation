@@ -151,8 +151,9 @@ struct OfflineInputs {
         scenario_definitions{}; // required selected OTA GlobalHeader, used during construction
     std::function<uint32_t()>
         uptime_milliseconds; // platform uptime in milliseconds, for the floating ground fit
-    std::span<const sim::spatial_state::Plot>
-        collision_plots; // resolved map extrema/features; required for moving collision
+    // Resolved map extrema and features, required for moving collision. The
+    // match copies them while it is constructed and keeps no reference to them.
+    std::span<const sim::spatial_state::Plot> collision_plots;
     std::optional<sim::visibility_state::AltitudeSightData>
         altitude_sight; // real LOS terrain and ray patterns
     int32_t minimum_wind{};
@@ -2379,8 +2380,13 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param cell Top-left cell (x, z); cells off the map are skipped.
     /// @param footprint Size in cells (x, z).
     void project_feature_plots(std::array<int16_t, 2> cell, std::array<int16_t, 2> footprint);
-    /// Copies the ground and air occupant words of every match plot to the
-    /// canonical plots.
+    /// Copies the ground and air occupant words of the match plots to the
+    /// canonical plots, so that every canonical plot holds its match plot's.
+    ///
+    /// The first call copies every plot; a later one copies the plots the
+    /// spatial state lists as written since (written_occupants), or every
+    /// plot when they come to an eighth of the map's plots or more or the
+    /// list lost some, and empties the list.
     void project_plot_occupants();
     /// Sets off a burn weapon at a point: the area damage of a stand-in shot
     /// of no player.
@@ -2672,6 +2678,11 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     // never resized.
     std::vector<sim::air::AirGoal> mirrored_air_goals_;
     sim::spatial_state::World spatial_;
+    // Whether the inputs held the map's collision plots, which moving
+    // collision requires.
+    bool collision_terrain_{};
+    // Whether project_plot_occupants has copied every plot once.
+    bool occupants_projected_{};
     sim::visibility_state::PlayerSightGrid sight_;
     std::array<std::vector<uint8_t>, 10> other_player_coverage_;
     sim::scenario::Controller scenario_;

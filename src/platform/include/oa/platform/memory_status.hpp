@@ -20,6 +20,10 @@ struct MemorySample {
     uint64_t private_resident{}; // resident pages no other process maps
     uint64_t shared_resident{};
     uint64_t page_tables{};
+    // The most committed memory and the largest working set the host has seen
+    // since the process started; 0 when the host keeps no such peak.
+    uint64_t peak_mapped{};
+    uint64_t peak_working_set{};
 };
 
 // Report state kept between calls.
@@ -54,7 +58,8 @@ size_t format_grouped_decimal(uint64_t value, char* out, size_t capacity) noexce
 
 /// Writes the memory report text, sampling when the countdown runs out.
 ///
-/// The peaks are raised from the sample. The text is mapped memory and its
+/// The peaks are raised from the sample: from its current counters and from
+/// the peaks the host keeps. The text is mapped memory and its
 /// peak, then either the working-set breakdown or, when no working set was
 /// ever seen, the code size.
 ///

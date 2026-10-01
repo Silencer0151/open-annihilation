@@ -511,12 +511,13 @@ Runtime::feature_sequence_image(oa_ref32 sequence, uint16_t frame) {
         return nullptr;
     auto& rendered = feature_assets_.rendered[sequence - 1];
     if (rendered.empty())
-        for (const auto& source : feature_assets_.sequences[sequence - 1]->frames) {
-            auto image = oa::formats::gaf::render_normal(source);
-            rendered.push_back(
-                image.ok() ? std::move(*image.frame) : oa::formats::gaf::RenderedFrame{}
-            );
-        }
+        if (const auto decoded = decode_feature_sequence(sequence))
+            for (const auto& source : decoded->frames) {
+                auto image = oa::formats::gaf::render_normal(source);
+                rendered.push_back(
+                    image.ok() ? std::move(*image.frame) : oa::formats::gaf::RenderedFrame{}
+                );
+            }
     return frame < rendered.size() && !rendered[frame].pixels.empty() ? &rendered[frame] : nullptr;
 }
 
@@ -738,9 +739,14 @@ void Runtime::render_match_surface() {
         track_match_drag();
     auto viewport = live_viewport(camera_x, camera_y);
     match_use_layers_ = sdl_.renderer != nullptr && !options_.headless_check;
-    renderer::Surface hud;
+    // The HUD is drawn into the memory of the layer the frame before last
+    // showed, so that a frame takes none of its own.
+    renderer::Surface hud = std::move(spare_match_hud_);
     if (bare) {
         // No interface: the HUD layer stays empty.
+        hud.width = 0;
+        hud.height = 0;
+        hud.rgb.clear();
     } else if (match_hud_) {
         std::vector<renderer::ButtonPresentation> presentation;
         for (std::size_t index = 0; index < match_hud_->layout.gadgets.size(); ++index) {
@@ -811,7 +817,7 @@ void Runtime::render_match_surface() {
         std::vector<renderer::ListPresentation> lists;
         present_team_panel(presentation, lists);
         const auto hud_start = std::chrono::steady_clock::now();
-        hud = renderer::render_screen(*match_hud_, presentation, lists);
+        renderer::render_screen_into(hud, *match_hud_, presentation, lists);
         if (auto* scrolls = hud_scrolls()) {
             renderer::refresh_layout_scrolls(*scrolls, match_hud_->layout);
             renderer::draw_layout_scrolls(
@@ -837,14 +843,15 @@ void Runtime::render_match_surface() {
         match_chrome_.width == static_cast<uint32_t>(kCanvasWidth) &&
         match_chrome_.height == static_cast<uint32_t>(kCanvasHeight) &&
         match_chrome_.rgb.size() == static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3)
-    )
-        hud = {match_chrome_.width, match_chrome_.height, match_chrome_.rgb};
-    else
-        hud = {
-            static_cast<uint32_t>(kCanvasWidth),
-            static_cast<uint32_t>(kCanvasHeight),
-            std::vector<uint8_t>(static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3), 0)
-        };
+    ) {
+        hud.width = match_chrome_.width;
+        hud.height = match_chrome_.height;
+        hud.rgb.assign(match_chrome_.rgb.begin(), match_chrome_.rgb.end());
+    } else {
+        hud.width = static_cast<uint32_t>(kCanvasWidth);
+        hud.height = static_cast<uint32_t>(kCanvasHeight);
+        hud.rgb.assign(static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3), 0);
+    }
     const auto terrain_pixels =
         static_cast<std::size_t>(bf_w) * static_cast<std::size_t>(bf_h) * 3U;
     if (match_terrain_cache_.width != static_cast<uint32_t>(bf_w) ||
@@ -879,6 +886,7 @@ void Runtime::render_match_surface() {
     }
     // The world layer is the battlefield alone; the HUD stays in 640x480
     // source space until presentation (or compose_match_frame) scales it.
+    spare_match_hud_ = std::move(match_hud_cpu_);
     match_hud_cpu_ = std::move(hud);
     match_world_cpu_.width = static_cast<uint32_t>(bf_w);
     match_world_cpu_.height = static_cast<uint32_t>(bf_h);
@@ -1449,16 +1457,17 @@ void Runtime::render_match_surface() {
     };
     std::vector<FeatureToDraw> features_to_draw;
     std::vector<oa::present::world_renderer::FeatureDrawSite> feature_sites;
+    // A feature off the battlefield is passed over before its fog and its
+    // frames are looked at.
     for (auto& feature : match_features_) {
-        if (feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
-            continue;
         const auto feature_screen = project_match_point(
             viewport,
             {static_cast<uint32_t>(feature.position.x),
              static_cast<uint32_t>(feature.position.y),
              static_cast<uint32_t>(feature.position.z)}
         );
-        if (!on_battlefield(feature_screen.x, feature_screen.y))
+        if (!on_battlefield(feature_screen.x, feature_screen.y) ||
+            feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
             continue;
         features_to_draw.push_back({&feature, nullptr, {}, feature_screen});
         feature_sites.push_back(
@@ -1466,19 +1475,18 @@ void Runtime::render_match_surface() {
         );
     }
     for (const auto& feature : match_gaf_features_) {
-        if (feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
-            continue;
-        const auto plan =
-            oa::ui::hud::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
-        if (plan.object)
-            continue;
         const auto screen = project_match_point(
             viewport,
             {static_cast<uint32_t>(feature.position.x),
              static_cast<uint32_t>(feature.position.y),
              static_cast<uint32_t>(feature.position.z)}
         );
-        if (!on_battlefield(screen.x, screen.y))
+        if (!on_battlefield(screen.x, screen.y) ||
+            feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
+            continue;
+        const auto plan =
+            oa::ui::hud::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
+        if (plan.object)
             continue;
         features_to_draw.push_back({nullptr, &feature, plan, screen});
         feature_sites.push_back(

@@ -109,25 +109,41 @@ struct FogPainter {
         }
     }
 
+    // Grays one pixel: its level, the mean of its channels, through the gray table.
+    void gray_pixel(uint8_t* out) const noexcept {
+        const auto level = (static_cast<unsigned>(out[0]) + out[1] + out[2]) / 3u;
+        const auto& rgb = shading.gray_levels[level];
+        out[0] = rgb[0];
+        out[1] = rgb[1];
+        out[2] = rgb[2];
+    }
+
     // Graying remaps the ground through the gray table.
     void gray(PixelSpan xs, PixelSpan ys) noexcept {
         for (int32_t y = ys.begin; y < ys.end; ++y) {
             auto* out = pixel(xs.begin, y);
-            for (int32_t x = xs.begin; x < xs.end; ++x, out += 3) {
-                const auto level = (static_cast<unsigned>(out[0]) + out[1] + out[2]) / 3u;
-                const auto& rgb = shading.gray_levels[level];
-                out[0] = rgb[0];
-                out[1] = rgb[1];
-                out[2] = rgb[2];
-            }
+            for (int32_t x = xs.begin; x < xs.end; ++x, out += 3)
+                gray_pixel(out);
         }
+    }
+
+    // Whether dithering clears the map pixel (map_x, map_z): every other one.
+    [[nodiscard]] bool dithered_out(int32_t map_x, int32_t map_z) const noexcept {
+        return ((static_cast<uint32_t>(view.camera_x + map_x) +
+                 static_cast<uint32_t>(view.camera_z + map_z)) &
+                1u) == 0;
+    }
+
+    // Writes one pixel's colour.
+    static void put(uint8_t* out, const std::array<uint8_t, 3>& rgb) noexcept {
+        out[0] = rgb[0];
+        out[1] = rgb[1];
+        out[2] = rgb[2];
     }
 
     // Dithering clears every other map pixel to palette index 0.
     void dither(int32_t map_x, int32_t map_z, PixelSpan xs, PixelSpan ys) noexcept {
-        if (((static_cast<uint32_t>(view.camera_x + map_x) +
-              static_cast<uint32_t>(view.camera_z + map_z)) &
-             1u) == 0)
+        if (dithered_out(map_x, map_z))
             fill(xs, ys, shading.dither_rgb);
     }
 
@@ -140,16 +156,63 @@ struct FogPainter {
             );
             return;
         }
+        if (zoom_fp == fog_zoom_one) {
+            // A map pixel is one destination pixel: the clipped rows are
+            // walked along, every other pixel cleared.
+            const int32_t first_x = std::max({map_x0, 0, clip_x0});
+            const int32_t end_x = std::min(map_x1, clip_x1);
+            for (int32_t mz = std::max({map_z0, 0, clip_y0}); mz < std::min(map_z1, clip_y1);
+                 ++mz) {
+                auto* out = pixel(first_x, mz);
+                for (int32_t mx = first_x; mx < end_x; ++mx, out += 3)
+                    if (dithered_out(mx, mz))
+                        put(out, shading.dither_rgb);
+            }
+            return;
+        }
         for (int32_t mz = std::max(map_z0, 0); mz < map_z1; ++mz) {
-            const auto ys = dest_span(zoom_fp, mz, mz + 1, clip_y0, clip_y1);
+            const auto ys = pixel_span(mz, clip_y0, clip_y1);
             if (ys.empty())
                 continue;
             for (int32_t mx = std::max(map_x0, 0); mx < map_x1; ++mx) {
-                const auto xs = dest_span(zoom_fp, mx, mx + 1, clip_x0, clip_x1);
+                const auto xs = pixel_span(mx, clip_x0, clip_x1);
                 if (!xs.empty())
                     dither(mx, mz, xs, ys);
             }
         }
+    }
+
+    // Draws the opaque texels of a tile whose top-left map pixel is (map_x0,
+    // map_z0) at the whole zoom, where a texel is one destination pixel:
+    // `texel` gets each texel's pixel, its palette index and its map pixel.
+    template <typename Texel>
+    void
+    masked_whole(const FogTileArt& art, int32_t map_x0, int32_t map_z0, Texel&& texel) noexcept {
+        const int32_t first_tx = std::max({0, -map_x0, clip_x0 - map_x0});
+        const int32_t end_tx = std::min(fog_cell_pixels, clip_x1 - map_x0);
+        if (first_tx >= end_tx)
+            return;
+        for (int32_t ty = 0; ty < fog_cell_pixels; ++ty) {
+            const auto mz = map_z0 + ty;
+            if (mz < 0 || mz < clip_y0 || mz >= clip_y1)
+                continue;
+            const auto* row = &art.opaque[static_cast<std::size_t>(ty) * fog_cell_pixels];
+            const auto* index = &art.index[static_cast<std::size_t>(ty) * fog_cell_pixels];
+            auto* out = pixel(map_x0 + first_tx, mz);
+            for (int32_t tx = first_tx; tx < end_tx; ++tx, out += 3)
+                if (row[tx] != 0)
+                    texel(out, index[tx], map_x0 + tx, mz);
+        }
+    }
+
+    // Destination pixels of the one map pixel `map` (not negative), clipped to
+    // [clip_begin, clip_end): dest_span's, worked out without its products
+    // at the whole zoom, where a map pixel is one destination pixel.
+    [[nodiscard]] PixelSpan
+    pixel_span(int32_t map, int32_t clip_begin, int32_t clip_end) const noexcept {
+        if (zoom_fp == fog_zoom_one)
+            return {std::max(map, clip_begin), std::min(map + 1, clip_end)};
+        return dest_span(zoom_fp, map, map + 1, clip_begin, clip_end);
     }
 
     // Draws the opaque texels of a tile whose top-left map pixel is (map_x0, map_z0).
@@ -159,7 +222,7 @@ struct FogPainter {
             const auto mz = map_z0 + ty;
             if (mz < 0)
                 continue;
-            const auto ys = dest_span(zoom_fp, mz, mz + 1, clip_y0, clip_y1);
+            const auto ys = pixel_span(mz, clip_y0, clip_y1);
             if (ys.empty())
                 continue;
             const auto* row = &art.opaque[static_cast<std::size_t>(ty) * fog_cell_pixels];
@@ -170,7 +233,7 @@ struct FogPainter {
                 const auto mx = map_x0 + tx;
                 if (mx < 0)
                     continue;
-                const auto xs = dest_span(zoom_fp, mx, mx + 1, clip_x0, clip_x1);
+                const auto xs = pixel_span(mx, clip_x0, clip_x1);
                 if (!xs.empty())
                     texel(index[tx], mx, mz, xs, ys);
             }
@@ -220,30 +283,55 @@ void draw_fog_row(FogPainter painter, const FogRows& rows, int32_t row) noexcept
             continue;
         }
         const auto variant = (row + column + grid.variant_phase) & (fog_tile_variants - 1);
+        const bool whole = zoom_fp == fog_zoom_one;
         if (tile.unseen == fog_mask_full) {
             painter.shade(map_x0, map_x0 + fog_cell_pixels, map_z0, map_z0 + fog_cell_pixels);
         } else if (tile.unseen != 0 && rows.have_art) {
-            painter.masked(
-                rows.tiles.at(FogTileSet::gray, variant, tile.unseen),
-                map_x0,
-                map_z0,
-                [&](uint8_t, int32_t mx, int32_t mz, PixelSpan tx, PixelSpan ty) {
-                    if (shading.dithered)
-                        painter.dither(mx, mz, tx, ty);
-                    else
-                        painter.gray(tx, ty);
-                }
-            );
+            const auto& art = rows.tiles.at(FogTileSet::gray, variant, tile.unseen);
+            if (whole && shading.dithered)
+                painter.masked_whole(
+                    art, map_x0, map_z0, [&](uint8_t* out, uint8_t, int32_t mx, int32_t mz) {
+                        if (painter.dithered_out(mx, mz))
+                            FogPainter::put(out, shading.dither_rgb);
+                    }
+                );
+            else if (whole)
+                painter.masked_whole(
+                    art, map_x0, map_z0, [&](uint8_t* out, uint8_t, int32_t, int32_t) {
+                        painter.gray_pixel(out);
+                    }
+                );
+            else
+                painter.masked(
+                    art,
+                    map_x0,
+                    map_z0,
+                    [&](uint8_t, int32_t mx, int32_t mz, PixelSpan tx, PixelSpan ty) {
+                        if (shading.dithered)
+                            painter.dither(mx, mz, tx, ty);
+                        else
+                            painter.gray(tx, ty);
+                    }
+                );
         }
-        if (tile.unmapped != 0 && rows.have_art)
-            painter.masked(
-                rows.tiles.at(FogTileSet::black, variant, tile.unmapped),
-                map_x0,
-                map_z0,
-                [&](uint8_t index, int32_t, int32_t, PixelSpan tx, PixelSpan ty) {
-                    painter.fill(tx, ty, shading.palette_rgb[index]);
-                }
-            );
+        if (tile.unmapped != 0 && rows.have_art) {
+            const auto& art = rows.tiles.at(FogTileSet::black, variant, tile.unmapped);
+            if (whole)
+                painter.masked_whole(
+                    art, map_x0, map_z0, [&](uint8_t* out, uint8_t index, int32_t, int32_t) {
+                        FogPainter::put(out, shading.palette_rgb[index]);
+                    }
+                );
+            else
+                painter.masked(
+                    art,
+                    map_x0,
+                    map_z0,
+                    [&](uint8_t index, int32_t, int32_t, PixelSpan tx, PixelSpan ty) {
+                        painter.fill(tx, ty, shading.palette_rgb[index]);
+                    }
+                );
+        }
     }
 }
 

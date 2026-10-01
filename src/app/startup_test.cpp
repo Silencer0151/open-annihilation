@@ -3,7 +3,8 @@
 
 // oa-game command-line parsing of the trace stream, seed, drawing threads,
 // game directory, data folder, window size, frame rate, video capture and
-// showcase options, and of the options and switches an extension takes.
+// showcase options (arm-first-mission and skirmish-battle), and of the
+// options and switches an extension takes.
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
@@ -535,8 +536,15 @@ int main() {
         parse({"--showcase", "arm-first-mission", "--seed", "9"}).seed == 9u,
         "--seed chooses a showcase's seed"
     );
+    const auto battle = parse({"--showcase", "skirmish-battle", "--combat", "40"});
     expect(
-        rejection({"--showcase", "skirmish"}) == "--showcase knows one showcase: arm-first-mission",
+        battle.showcase == oa::app::Showcase::skirmish_battle && battle.unattended &&
+            battle.combat_units == 40 && !battle.fixed_clock,
+        "--showcase skirmish-battle plays a battle of --combat's armies on the real clock"
+    );
+    expect(
+        rejection({"--showcase", "skirmish"}) ==
+            "--showcase knows two showcases: arm-first-mission and skirmish-battle",
         "an unknown showcase is refused"
     );
     expect(

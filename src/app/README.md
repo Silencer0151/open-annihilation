@@ -76,6 +76,12 @@ and `app-window-icon` that the embedded one decodes.
   ever added to `screens.inc`.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
   camera.
+- `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
+  are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
+  a feature sequence's pixels are decoded from its file when a feature first
+  draws it, and the map's sprite features' sequences once each, as the first
+  of them is placed. A 3DO model the map's features share is loaded once.
+  The collision plots go once the match holds its own copy.
 - `world_draws.hpp`, `world_draws.cpp`, `runtime_match_render.cpp`: the
   battlefield drawn in horizontal bands. `render_match_surface` first works
   out the frame's draws in their order (`WorldDrawList` in `MatchModels`):
@@ -227,7 +233,10 @@ and `app-window-icon` that the embedded one decodes.
 - `xrgb_conversion.hpp`, `xrgb_conversion.cpp`: each frame's RGB layers
   converted into the window's 32-bit pixels (0xffRRGGBB) as they are
   uploaded, through the display gamma's table when the gamma is not 1, in
-  bands of 32 rows. The Runtime keeps a [job pool](../platform/job-pool/README.md)
+  bands of 32 rows; when SDL's software renderer draws into a 16-bit RGB565
+  window (`frame_texture_format`), the match's layers are converted into
+  RGB565 pixels instead, the ones SDL would make of the 32-bit pixels, so
+  that presenting copies them as they are. The Runtime keeps a [job pool](../platform/job-pool/README.md)
   (`draw_pool_`) that this conversion, the terrain fill, the fog and the
   battlefield's draws (`world_draws.hpp`) run their bands on:
   `--draw-threads N` (1 to 32), else the `OA_DRAW_THREADS`
@@ -318,8 +327,12 @@ and `app-window-icon` that the embedded one decodes.
 - `video_capture.hpp`, `video_capture.cpp`: `--capture-video`, the
   developer's capture of the window's frames and the game's sound as an MP4
   video through the `ffmpeg` program; `runtime_showcase.cpp`: the scripted
-  runs `--showcase` plays. [docs/capture.md](../../docs/capture.md)
-  describes both.
+  runs `--showcase` plays, among them `skirmish-battle`, which plays a
+  skirmish's fight for a minute on the game's own loop and reports the ticks
+  and frames a second it kept. [docs/capture.md](../../docs/capture.md)
+  describes both. Benchmarks, `--frame-rate` runs, headless saved-game runs
+  and the battle end with the memory report, its peaks the largest the
+  system saw (`oa/platform/memory_status.hpp`).
 - Director scripts ([docs/director.md](../../docs/director.md)):
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and

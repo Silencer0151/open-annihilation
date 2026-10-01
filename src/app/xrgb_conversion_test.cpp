@@ -3,8 +3,11 @@
 
 // The conversion of RGB frames into the window's XRGB8888 pixels: each pixel
 // packed as 0xffRRGGBB through the gamma table, and the same bytes on pools
-// of every size.
+// of every size; and into a 16-bit window's RGB565 pixels, each the one SDL
+// makes of the XRGB8888 pixel, on pools of every size.
 #include "xrgb_conversion.hpp"
+
+#include <SDL3/SDL.h>
 
 #include <array>
 #include <cstdint>
@@ -111,15 +114,67 @@ void conversion_is_the_same_on_every_pool() {
     }
 }
 
+/// Converts a frame into RGB565 rows `row_slack` bytes wider than its pixels.
+std::vector<uint8_t> convert_rgb565(
+    const std::vector<uint8_t>& rgb,
+    uint32_t width,
+    uint32_t height,
+    const std::array<uint8_t, 256>* gamma,
+    job_pool::Pool* pool
+) {
+    const std::size_t pitch = static_cast<std::size_t>(width) * 2U + row_slack;
+    std::vector<uint8_t> pixels(pitch * height, untouched);
+    oa::app::convert_rgb24_rgb565(rgb.data(), width, height, pixels.data(), pitch, gamma, pool);
+    return pixels;
+}
+
+void rgb565_is_what_sdl_makes_of_xrgb() {
+    std::mt19937 random(test_seed + 2);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(255U - level / 3U);
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    for (const auto [width, height] : {std::pair{1U, 5U}, {7U, 33U}, {640U, 77U}, {1001U, 65U}}) {
+        std::vector<uint8_t> rgb(static_cast<std::size_t>(width) * height * 3U);
+        for (auto& byte : rgb)
+            byte = static_cast<uint8_t>(random());
+        for (const bool corrected : {false, true}) {
+            const auto* table = corrected ? &gamma : nullptr;
+            const auto xrgb = convert(rgb, width, height, table, nullptr);
+            const auto rgb565 = convert_rgb565(rgb, width, height, table, nullptr);
+            const std::size_t xrgb_pitch = static_cast<std::size_t>(width) * 4U + row_slack;
+            const std::size_t pitch = static_cast<std::size_t>(width) * 2U + row_slack;
+            std::vector<uint8_t> expected(pitch * height, untouched);
+            for (uint32_t y = 0; y < height; ++y)
+                CHECK(SDL_ConvertPixels(
+                    static_cast<int>(width),
+                    1,
+                    SDL_PIXELFORMAT_XRGB8888,
+                    &xrgb[y * xrgb_pitch],
+                    static_cast<int>(xrgb_pitch),
+                    SDL_PIXELFORMAT_RGB565,
+                    &expected[y * pitch],
+                    static_cast<int>(pitch)
+                ));
+            CHECK(rgb565 == expected);
+            for (const auto& pool : pools)
+                CHECK(convert_rgb565(rgb, width, height, table, pool.get()) == rgb565);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
     conversion_packs_each_pixel();
     conversion_is_the_same_on_every_pool();
+    rgb565_is_what_sdl_makes_of_xrgb();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return EXIT_FAILURE;
     }
-    std::puts("xrgb conversion: every pixel packed alike on every pool");
+    std::puts("xrgb conversion: every pixel packed alike on every pool, RGB565 as SDL packs it");
     return EXIT_SUCCESS;
 }

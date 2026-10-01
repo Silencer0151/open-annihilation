@@ -19,6 +19,10 @@ loose file, or when the archive that provides `FrontendX` holds no
 the other frontend screens. The explicit names matter: the renderer does not
 infer that every screen follows the main-menu convention.
 
+`render_screen` draws a loaded screen into a new surface; `render_screen_into`
+draws it the same way into a surface the caller keeps, whose memory is used
+again, as the match's side panel and the menus are drawn on every frame.
+
 `FrontendX` remains the active display palette. As in the game's screen setup,
 `guipal` indices used by GUI primitives are mapped into that active PCX palette
 with the nearest-color rule. Normal GAF pixels use the active PCX palette

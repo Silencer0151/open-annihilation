@@ -182,8 +182,9 @@ void Runtime::present_indexed_frame(
         }
         output.texels_ready = true;
     }
-    output.texture =
-        ensure_xrgb_texture(output.texture, width, height, output.width, output.height);
+    output.texture = ensure_streaming_texture(
+        output.texture, SDL_PIXELFORMAT_XRGB8888, width, height, output.width, output.height
+    );
     void* texels = nullptr;
     int texture_pitch = 0;
     if (!SDL_LockTexture(output.texture, nullptr, &texels, &texture_pitch))
