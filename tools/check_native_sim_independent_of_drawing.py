@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Check that what is drawn never changes the game.
+"""Check that what is drawn and heard never changes the game.
 
 One seeded skirmish, two armies of sixty fighting from the first ticks, is
 played headless many ways that change only what is drawn, when and how:
@@ -16,12 +16,20 @@ played headless many ways that change only what is drawn, when and how:
 - drawn at zoom 0.5 and 4;
 - drawn with enhanced anti-aliasing at 4x.
 
+Each frame drawn presents at most one of the unit announcements the fight
+queues, as every frame of the game does; drawn after every tick, none is
+presented, and once the queue is full each new one pushes out the oldest.
+Which announcements are queued depends on the camera, since a unit on screen
+does not say it is under attack.
+
 Every run must write the same trace stream, tick for tick, and every run that
 ends on the same tick must reach the same world digest. The units aim at
 where their targets' pieces are, which the game works out from the units
-themselves, and the debris of explosions starts its particles in the game's
-tick, so neither the camera nor the frames drawn can move the fight. The
-director's drawn and undrawn replays are compared by native-director-view.
+themselves, the debris of explosions starts its particles in the game's
+tick, and the announcements draw their random numbers from a stream of the
+presentation's own, so neither the camera nor the frames drawn can move the
+fight. The director's drawn and undrawn replays are compared by
+native-director-view.
 """
 import argparse
 import concurrent.futures

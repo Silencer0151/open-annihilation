@@ -721,9 +721,10 @@ if(OA_BUILD_PLATFORM)
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-frame-rate PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The seeded skirmish's fight of 120 units writes one trace stream and
-        # reaches one world digest whatever is drawn: from any camera, at any
-        # frame rate (10 leaves most ticks undrawn), drawn after every tick,
-        # at any zoom and with enhanced anti-aliasing.
+        # reaches one world digest whatever is drawn or heard: from any camera,
+        # at any frame rate (10 leaves most ticks undrawn), drawn after every
+        # tick, at any zoom and with enhanced anti-aliasing, however many of
+        # its unit announcements the frames present.
         add_test(NAME native-sim-independent-of-drawing COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_sim_independent_of_drawing.py"
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"

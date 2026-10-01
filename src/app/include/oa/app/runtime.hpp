@@ -5624,8 +5624,9 @@ class Runtime final : public menu::Host,
     void check_options_gamma();
     // The in-game message log, Game.chat_lines (runtime_messages.cpp).
 
-    /// Returns the message log's hooks: interface sounds, camera centring and the match's rand()
-    /// random numbers, then the extension's.
+    /// Returns the message log's hooks: interface sounds, camera centring and
+    /// random numbers from the log's own stream (message_random_, never the
+    /// match's), then the extension's.
     ///
     /// Camera centring moves the camera at once; 3.1c glides it when asked.
     ///
@@ -5636,10 +5637,11 @@ class Runtime final : public menu::Host,
     ///
     /// The log settings kept in Game: TextLines and TextScroll from the
     /// preferences, the line filter session start sets for every session, and
-    /// ScreenChat; the UI colours the log draws in. Elimination lights the
-    /// killer's kills and the victim's losses on the kills board while F4 holds it
-    /// out. Once a player's last unit is gone a multiplayer game announces the
-    /// player leaving, a skirmish its forces' end, a campaign nothing.
+    /// ScreenChat; the UI colours the log draws in. The log's random stream
+    /// starts again. Elimination lights the killer's kills and the victim's
+    /// losses on the kills board while F4 holds it out. Once a player's last
+    /// unit is gone a multiplayer game announces the player leaving, a
+    /// skirmish its forces' end, a campaign nothing.
     void bind_message_log();
 
     /// Posts a line to the match message log.
@@ -7956,6 +7958,8 @@ class Runtime final : public menu::Host,
     Screen options_parent_ = Screen::main_menu;
     int squad_double_tap_ = 0;
     oa::ui::hud::KillBoard kill_board_{};
+    // The message log's random numbers (message_hooks), never the match's.
+    PresentationRandom message_random_{};
     std::optional<oa::ui::gui_layout::Layout> talk_layout_{};
     oa::formats::gaf::Archive match_talk_{};
     int32_t match_camera_x_ = 0, match_camera_z_ = 0;
@@ -8255,8 +8259,9 @@ class Runtime final : public menu::Host,
 
     /// Runs --frame-rate: the headless skirmish played and drawn frame by
     /// frame on a clock that advances 1 / frame_rate seconds a frame, each
-    /// frame taking the steps the match clock owes and drawn between two
-    /// ticks as the application loop draws it, until `ticks` ticks have run.
+    /// frame presenting at most one unit announcement, taking the steps the
+    /// match clock owes and drawn between two ticks as the application loop
+    /// does it, until `ticks` ticks have run.
     /// Prints the frames drawn, the ticks run and the world's digest (the
     /// camera and the clock's frame-counting adaptation left out), which do
     /// not depend on the frame rate; writes the frame log when asked.

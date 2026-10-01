@@ -21,6 +21,30 @@
 
 namespace oa::app {
 
+/// A random stream of the presentation's own, for choices that change only
+/// what is heard and shown, such as which variant of a unit announcement
+/// plays or which taunt a message line takes: the linear congruential
+/// sequence x = x * 214013 + 2531011, drawing bits 16..30. It never draws
+/// from the match's streams, so that how often frames present these choices,
+/// and what the camera shows, never changes the game.
+struct PresentationRandom {
+    static constexpr uint32_t multiplier = 214013;
+    static constexpr uint32_t increment = 2531011;
+    static constexpr uint32_t shift = 16;
+    static constexpr uint32_t mask = 0x7fff;
+    static constexpr uint32_t first_state = 1;
+
+    uint32_t state{first_state}; ///< the generator's state
+
+    /// Steps the generator.
+    ///
+    /// @return 0 to 32767
+    [[nodiscard]] uint16_t next() noexcept {
+        state = state * multiplier + increment;
+        return static_cast<uint16_t>((state >> shift) & mask);
+    }
+};
+
 class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServices {
   public:
 
@@ -70,14 +94,15 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Sets the listener that hears every unit's announcement requests.
     ///
     /// The match's own queue still gets every request afterwards, so what it
-    /// queues and what it draws from the match's LCG stream do not change.
+    /// queues does not change.
     ///
     /// @param hooks the listener; a null `heard` hears none
     void set_announcement_hooks(AnnouncementHooks hooks) noexcept { announcement_hooks_ = hooks; }
 
     /// Binds the unit sound catalog and the match for unit announcements.
     ///
-    /// Maps each type's simulation record to its definition's sound category.
+    /// Maps each type's simulation record to its definition's sound category,
+    /// and starts the announcements' random stream again.
     /// Throws std::runtime_error unless there is exactly one more type than
     /// definitions (type 0 has none).
     ///
@@ -98,6 +123,7 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
         announcement_catalog_ = &catalog;
         match_ = &match;
         announcement_gates_ = gates;
+        announcement_random_ = {};
         sound_categories_.clear();
         for (std::size_t index = 1; index < types.size(); ++index)
             sound_categories_.emplace(
@@ -115,14 +141,15 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Presents at most one queued announcement and hands over those presented since the last call.
     ///
     /// A record is pumped only while the catalog and match are bound and the
-    /// queue is not empty; its random draw comes from the match's LCG stream
-    /// (Match::lcg_rand), the one the wind and the effect scatter draw from.
+    /// queue is not empty; its random draw comes from the announcements' own
+    /// stream (PresentationRandom), never from the match's, so that how often
+    /// this is called never changes the game.
     ///
     /// @return the presented announcements, oldest first; the list starts empty again
     [[nodiscard]] std::vector<oa::audio::game_audio::UnitAnnouncement> pump_announcements() {
         if (announcement_catalog_ != nullptr && match_ != nullptr &&
             announcement_queue_.size() != 0) {
-            const auto random = static_cast<uint16_t>(match_->lcg_rand());
+            const auto random = announcement_random_.next();
             if (auto event = announcement_queue_.pump(
                     *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
                 ))
@@ -283,7 +310,9 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// A category with no announcement is dropped. The announcement listener,
     /// when one is set, hears the request first, whoever owns the unit. When
     /// the queue was full and the record is queued, the record it evicted is
-    /// presented at once, with a draw from the match's LCG stream. Throws
+    /// presented at once, with a draw from the announcements' own stream
+    /// (PresentationRandom): whether the queue is full depends on how often
+    /// frames presented it, so the match's streams are never drawn from. Throws
     /// std::runtime_error when nothing is bound or the unit's type is not in the
     /// catalog.
     ///
@@ -317,15 +346,15 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
             caption
         };
-        // Before the queue is touched, so that it, and the draws it makes
-        // from the match's LCG stream, are the same with a listener or without.
+        // Before the queue is touched, so that what it holds is the same with
+        // a listener or without.
         if (announcement_hooks_.heard != nullptr)
             announcement_hooks_.heard(announcement_hooks_.context, slot.owner_index, request);
         const bool was_full =
             announcement_queue_.size() == oa::audio::game_audio::AnnouncementQueue::capacity;
         const auto result = announcement_queue_.enqueue(request);
         if (was_full && result == oa::audio::game_audio::AnnouncementEnqueueStatus::queued) {
-            const auto random = static_cast<uint16_t>(match_->lcg_rand());
+            const auto random = announcement_random_.next();
             if (auto event = announcement_queue_.present_evicted(
                     *announcement_catalog_, announcement_gates_, random, match_->simulation().tick
                 ))
@@ -338,6 +367,7 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     oa::sim::match_runtime::Match* match_{};
     oa::audio::game_audio::AnnouncementQueue announcement_queue_;
     oa::audio::game_audio::AnnouncementPresentationGates announcement_gates_{};
+    PresentationRandom announcement_random_{};
     std::unordered_map<const oa::sim::simulation_state::UnitType*, std::string> sound_categories_;
     std::vector<oa::audio::game_audio::UnitAnnouncement> presented_announcements_;
     uint8_t viewpoint_{};

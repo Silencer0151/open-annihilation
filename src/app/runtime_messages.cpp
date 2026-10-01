@@ -83,9 +83,10 @@ messages::Hooks Runtime::message_hooks() {
         runtime.match_camera_x_ = x - runtime.visible_map_width() / 2;
         runtime.match_camera_z_ = y - runtime.visible_map_height() / 2;
     };
+    // The log's choices, such as the elimination taunt, draw from a stream
+    // of its own: a line posted never changes the game.
     hooks.random = [](void* context) -> uint32_t {
-        auto& runtime = *static_cast<Runtime*>(context);
-        return runtime.match_ ? static_cast<uint32_t>(runtime.match_->lcg_rand()) : 0U;
+        return static_cast<Runtime*>(context)->message_random_.next();
     };
     if (extension_.message_hooks != nullptr)
         extension_.message_hooks(extension_.context, *this, hooks);
@@ -94,6 +95,7 @@ messages::Hooks Runtime::message_hooks() {
 
 void Runtime::bind_message_log() {
     auto& game = match_->state().game;
+    message_random_ = {};
     messages::set_log_options(
         game,
         static_cast<int32_t>(preferences_.text_lines),

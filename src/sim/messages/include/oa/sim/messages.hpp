@@ -75,7 +75,8 @@ struct Hooks {
     // Redraw TIMEOUT.GUI when it is on screen.
     void (*refresh_panel)(void* context){};
     const char* (*translate)(void* context, const char* text){};
-    // The match's linear congruential stream; picks the elimination taunt.
+    // Random numbers; picks the elimination taunt. The application draws them
+    // from the message log's own stream, never the match's.
     uint32_t (*random)(void* context){};
     // Hands a chat line to the other players.
     void (*share_chat)(void* context, const char* line){};

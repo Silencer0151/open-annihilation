@@ -334,9 +334,12 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
         // where its units turn over.
         frame_run_clock_ns_ =
             (2 * frame + 1) * frame_pacing::kNanosecondsPerSecond / (2 * frames_per_second);
-        // The frame's camera and clock step, in the application loop's order.
+        // The frame's unit announcements, camera and clock step, in the
+        // application loop's order: each frame presents at most one
+        // announcement, as every frame of the game does.
         take_frame_time();
         camera_moved_ = false;
+        present_unit_announcements();
         frame_run_scroll_ = scroll;
         move_match_camera();
         step_match_frame();
