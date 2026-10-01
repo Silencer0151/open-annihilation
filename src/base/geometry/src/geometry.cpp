@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/base/geometry.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -127,7 +128,7 @@ Vec3f vec3f_int_delta(
 double vec3f_length(Vec3f v) noexcept {
     double sum = static_cast<double>(v.z) * v.z + static_cast<double>(v.y) * v.y;
     sum += static_cast<double>(v.x) * v.x;
-    return std::sqrt(sum);
+    return game_math::square_root(sum);
 }
 
 Vec3f vec3f_normalize(Vec3f v) noexcept {

@@ -26,11 +26,11 @@ int32_t scaled_rand(const MeteorHost& host, int64_t range) noexcept {
     return static_cast<int32_t>(static_cast<int64_t>(lcg(host)) * range / lcg_rand_range);
 }
 
-// Seconds to ticks at 30 per second, truncated toward zero as in 3.1c.
+// Seconds to ticks at 30 per second, rounded to a double, then truncated
+// toward zero as in 3.1c.
 int32_t ticks(float seconds) noexcept {
-    return static_cast<int32_t>(
-        static_cast<int64_t>(static_cast<long double>(seconds) * meteor_ticks_per_second)
-    );
+    const double product = static_cast<double>(seconds) * meteor_ticks_per_second;
+    return static_cast<int32_t>(static_cast<int64_t>(product));
 }
 
 int32_t shifted_cell(int32_t cell) noexcept {
@@ -43,9 +43,9 @@ void configure_meteors(MeteorState& state, const MeteorSettings& settings) noexc
     std::memcpy(state.weapon_name, settings.weapon, sizeof(state.weapon_name));
     state.weapon_name[sizeof(state.weapon_name) - 1] = '\0';
     state.radius = settings.radius;
-    state.hit_interval = static_cast<int32_t>(
-        static_cast<int64_t>(static_cast<long double>(meteor_ticks_per_second) / settings.density)
-    );
+    // The quotient is rounded to a double, then truncated toward zero.
+    const double hits_per_tick = static_cast<double>(meteor_ticks_per_second) / settings.density;
+    state.hit_interval = static_cast<int32_t>(static_cast<int64_t>(hits_per_tick));
     state.duration = ticks(settings.duration);
     state.strike_interval = ticks(settings.interval);
 }

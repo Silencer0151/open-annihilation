@@ -58,13 +58,12 @@ and division from platform uptime and the game clock's scale, the multiplier
 unit-script SLEEP uses too. Water bob's zero speed divisor raises a domain
 error.
 
-The rotation and atan functions use the game's binary64 angle constants and
-explicit nearest-even integer conversion. Their transcendentals use host
-`long double` libm. **Full bit equivalence with the game's floating point is
-not established**, particularly around integer-rounding thresholds and across
-hosts with different `long double` precision. Do not claim multiplayer parity
-from this code. Fixed-point terrain sampling and bob arithmetic do not use
-floating point.
+The rotation and slope angles come from
+[src/base/game-math](../../base/game-math/README.md) (`rotate_pair` and
+`direction`), which computes the game's sines, cosines and arctangents with
+integer arithmetic, so they are the same on every platform; this module
+converts them to integers to nearest, ties to even. Fixed-point terrain
+sampling and bob arithmetic do not use floating point.
 
 ```sh
 cmake -S src/sim/unit-movement -B local/build-unit-movement -DCMAKE_BUILD_TYPE=Debug

@@ -54,7 +54,7 @@ Fixed abs32(Fixed v) noexcept {
 }
 
 Fixed norm(Fixed x, Fixed z) noexcept {
-    return low(static_cast<int64_t>(std::hypot(double(x), double(z))));
+    return low(static_cast<int64_t>(base::game_math::hypotenuse(double(x), double(z))));
 }
 
 Fixed square_high(Fixed v) noexcept {
@@ -83,14 +83,7 @@ void wait(sim::simulation_state::Order& order, uint32_t tick, uint32_t duration)
 }
 
 int16_t facing(Fixed x, Fixed z) noexcept {
-    constexpr double radians_to_heading = 10430.37835047; // the game's stored constant
-    const auto value =
-        std::atan2(static_cast<long double>(x), static_cast<long double>(z)) * radians_to_heading;
-    const auto floor_value = std::floor(value), fraction = value - floor_value;
-    const auto rounded =
-        floor_value +
-        ((fraction > 0.5L || (fraction == 0.5L && std::fmod(floor_value, 2.0L) != 0)) ? 1 : 0);
-    return short_bits(static_cast<uint32_t>(static_cast<int32_t>(rounded)));
+    return std::bit_cast<int16_t>(base::game_math::direction(x, z));
 }
 } // namespace
 

@@ -540,7 +540,9 @@ uint32_t TickHost::AirAttackMissions::air_strike(uint32_t events) {
         if (gravity == 0)
             return result_fail;
         const auto fall_ticks =
-            std::sqrt(static_cast<double>(def().cruise_alt) * 2.0 / static_cast<double>(gravity)) *
+            base::game_math::square_root(
+                static_cast<double>(def().cruise_alt) * 2.0 / static_cast<double>(gravity)
+            ) *
             static_cast<double>(ticks_per_second);
         const auto speed = static_cast<int16_t>(speed_high());
         const auto lead = truncate_low(static_cast<double>(speed) * fall_ticks);

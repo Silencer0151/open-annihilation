@@ -3,6 +3,8 @@
 
 #include "oa/sim/model_runtime/instance.hpp"
 
+#include "oa/base/game_math.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,9 +15,6 @@
 
 namespace oa::sim::model_runtime {
 namespace {
-
-// Radians per angle word: the game's stored double, 2*pi/65536 to 13 digits.
-constexpr double kRadiansPerAngleWord = 9.587379924285e-05;
 
 bool equal_fold_ascii(std::string_view a, std::string_view b) {
     if (a.size() != b.size())
@@ -39,50 +38,20 @@ int32_t checked(int64_t value, const char* operation) {
     return static_cast<int32_t>(value);
 }
 
-// One angle word's cosine and sine, worked out once for every point it turns.
-struct PairTurn {
-    bool turns{}; ///< false for a zero angle, which leaves the pair as it is
-    double cosine{};
-    double sine{};
-};
-
-// The three pair turns of a set of angle words.
-struct Turn {
-    PairTurn xy{};
-    PairTurn yz{};
-    PairTurn xz{};
-};
-
-PairTurn pair_turn(int16_t angle) {
+void rotate_pair(int32_t& a, int32_t& b, int16_t angle) {
     if (angle == 0)
-        return {};
-    const auto radians = static_cast<double>(angle) * kRadiansPerAngleWord;
-    return {true, std::cos(radians), std::sin(radians)};
-}
-
-Turn turn_for(RotationWords words) {
-    return {pair_turn(words.xy), pair_turn(words.yz), pair_turn(words.xz)};
-}
-
-void rotate_pair(int32_t& a, int32_t& b, const PairTurn& turn) {
-    if (!turn.turns)
         return;
-    const auto old_a = a;
-    const auto old_b = b;
+    const auto rotated = base::game_math::rotate_pair(a, b, angle);
     // Each coordinate rounds to the nearest integer, ties to even.
-    a = checked(std::llrint(turn.cosine * old_a - turn.sine * old_b), "3DO rotation overflow");
-    b = checked(std::llrint(turn.sine * old_a + turn.cosine * old_b), "3DO rotation overflow");
-}
-
-void rotate(oa::formats::objects3d::FixedVector3& value, const Turn& turn) {
-    // The game's pair order and aliasing.
-    rotate_pair(value.x, value.y, turn.xy);
-    rotate_pair(value.y, value.z, turn.yz);
-    rotate_pair(value.x, value.z, turn.xz);
+    a = checked(std::llrint(rotated.first), "3DO rotation overflow");
+    b = checked(std::llrint(rotated.second), "3DO rotation overflow");
 }
 
 void rotate(oa::formats::objects3d::FixedVector3& value, RotationWords words) {
-    rotate(value, turn_for(words));
+    // The game's pair order and aliasing.
+    rotate_pair(value.x, value.y, words.xy);
+    rotate_pair(value.y, value.z, words.yz);
+    rotate_pair(value.x, value.z, words.xz);
 }
 
 int32_t negate(int32_t value) {
@@ -284,7 +253,7 @@ namespace {
 // parent and script translation, into the parent's space.
 void place_in_parent(
     oa::formats::objects3d::FixedVector3& point,
-    const Turn& turn,
+    RotationWords turn,
     const oa::formats::objects3d::Object& source,
     const PieceState& state
 ) {
@@ -313,11 +282,11 @@ Instance::piece_box(uint32_t piece_index, RotationWords root_rotation, PieceBox 
     if (piece_index >= pieces_.size())
         return box;
     const bool transformed = under_root(piece_index);
-    std::array<Turn, kHeldTurns> turns{};
+    std::array<RotationWords, kHeldTurns> turns{};
     std::size_t held = 0;
     for (auto current = piece_index; transformed && current != kNoPiece && held < turns.size();
          current = pieces_[current].parent)
-        turns[held++] = turn_for(turning_words(current, root_rotation));
+        turns[held++] = turning_words(current, root_rotation);
     for (const auto& vertex : model_->objects[pieces_[piece_index].object_index].vertices) {
         oa::formats::objects3d::FixedVector3 point{negate(vertex.x), vertex.y, negate(vertex.z)};
         std::size_t level = 0;
@@ -326,7 +295,7 @@ Instance::piece_box(uint32_t piece_index, RotationWords root_rotation, PieceBox 
             const auto& state = pieces_[current];
             place_in_parent(
                 point,
-                level < held ? turns[level] : turn_for(turning_words(current, root_rotation)),
+                level < held ? turns[level] : turning_words(current, root_rotation),
                 model_->objects[state.object_index],
                 state
             );
@@ -361,7 +330,7 @@ void Instance::rebuild_transforms(RotationWords root_rotation) {
             const auto& state = pieces_[current];
             const auto& source = model_->objects[state.object_index];
             // Every point of the piece turns by the same words.
-            const Turn turn = turn_for(turning_words(current, root_rotation));
+            const RotationWords turn = turning_words(current, root_rotation);
             place_in_parent(piece.transformed_origin, turn, source, state);
             for (auto& vertex : piece.transformed_vertices)
                 place_in_parent(vertex, turn, source, state);

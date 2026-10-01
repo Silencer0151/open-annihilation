@@ -1,11 +1,63 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include "oa/base/sha256.hpp"
 #include "oa/sim/ballistics.hpp"
 
+#include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
+#include <string>
+
+namespace {
+
+constexpr int pitch_samples = 1 << 18;
+
+// SplitMix64.
+uint64_t next(uint64_t& state) {
+    uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+}
+
+int32_t spread_int(uint64_t r) {
+    return std::bit_cast<int32_t>(static_cast<uint32_t>(r)) >> static_cast<unsigned>(r >> 59);
+}
+
+// Launch pitches over random offsets, velocities, gravities and minimum
+// angles, pinned by digest; they are 3.1c's own results.
+bool pitch_samples_match() {
+    using namespace oa::sim::ballistics;
+    namespace sha256 = oa::base::sha256;
+    sha256::Hasher hasher{};
+    uint64_t state = 7;
+    for (int i = 0; i < pitch_samples; ++i) {
+        const int32_t dx = spread_int(next(state)) >> 4;
+        const int32_t dy = spread_int(next(state)) >> 6;
+        const int32_t dz = spread_int(next(state)) >> 4;
+        const uint64_t r = next(state);
+        const auto velocity = static_cast<int32_t>(r & 0x3ffff) + 1;
+        const auto gravity = static_cast<int32_t>((r >> 18) & 0x3fff);
+        const auto minimum_bits = static_cast<uint32_t>(r >> 32);
+        const float minimum =
+            static_cast<float>(static_cast<int32_t>(minimum_bits & 0xffff) - 0x8000) *
+            (1.0F / 16384.0F);
+        const BallisticParameters parameters{velocity, minimum, gravity};
+        const int16_t pitch = launch_pitch(parameters, dx, dy, dz);
+        sha256::update(hasher, std::bit_cast<std::array<uint8_t, 2>>(pitch));
+    }
+    const auto text = sha256::to_hex(sha256::finish(hasher));
+    const std::string digest{text.begin(), text.end()};
+    if (digest == "9361d4437f9a9e135c423d47c8d7f218f77b5f96de9c4c6c42d7b1ac4868786e")
+        return true;
+    std::fprintf(stderr, "launch pitch digest %s\n", digest.c_str());
+    return false;
+}
+
+} // namespace
 
 int main() {
     using namespace oa::sim::ballistics;
@@ -151,5 +203,7 @@ int main() {
         return 36;
     if (simulation_gravity(true, -1, 0) != default_simulation_gravity)
         return 37;
+    if (!pitch_samples_match())
+        return 42;
     return 0;
 }

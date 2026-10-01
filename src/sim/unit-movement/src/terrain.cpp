@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/unit_movement/terrain.hpp"
+#include "oa/base/game_math.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -21,8 +22,6 @@ constexpr uint32_t live_unit = 0x10000000;
 constexpr uint32_t death_pending = 0x4000;
 constexpr uint32_t bob_decay_ticks = 60, bob_clock_mask = 31;
 constexpr unsigned bob_vertex_phase = 8, bob_angle_shift = 11;
-// The game's stored binary64 angle constants (not recomputed from pi).
-constexpr double radians_to_heading = 10430.37835047, heading_to_radians = 9.587379924285e-05;
 
 Fixed bits(uint32_t a) noexcept {
     return std::bit_cast<Fixed>(a);
@@ -48,12 +47,12 @@ Fixed absolute(Fixed v) noexcept {
     return v < 0 ? subtract(0, v) : v;
 }
 
-Fixed nearest_integer(long double value) noexcept {
+Fixed nearest_integer(double value) noexcept {
     // Rounds to the nearest integer, ties to even.
-    const long double floor_value = std::floor(value);
-    const long double fraction = value - floor_value;
-    long double rounded = floor_value;
-    if (fraction > 0.5L || (fraction == 0.5L && std::fmod(floor_value, 2.0L) != 0))
+    const double floor_value = std::floor(value);
+    const double fraction = value - floor_value;
+    double rounded = floor_value;
+    if (fraction > 0.5 || (fraction == 0.5 && std::fmod(floor_value, 2.0) != 0))
         rounded += 1;
     if (!std::isfinite(rounded) || rounded < std::numeric_limits<Fixed>::min() ||
         rounded > std::numeric_limits<Fixed>::max())
@@ -64,18 +63,12 @@ Fixed nearest_integer(long double value) noexcept {
 std::array<Fixed, 2> rotate(std::array<Fixed, 2> v, uint16_t heading) noexcept {
     if (heading == 0)
         return v;
-    const auto angle = static_cast<long double>(short_bits(heading)) * heading_to_radians;
-    const auto cosine = std::cos(angle), sine = std::sin(angle);
-    // Each product is rounded on its own before the sums, in the game's order.
-    volatile long double a = cosine * v[0], b = sine * v[1], c = sine * v[0], d = cosine * v[1];
-    return {nearest_integer(a - b), nearest_integer(c + d)};
+    const auto rotated = base::game_math::rotate_pair(v[0], v[1], short_bits(heading));
+    return {nearest_integer(rotated.first), nearest_integer(rotated.second)};
 }
 
 int16_t slope_angle(Fixed height, Fixed distance) noexcept {
-    return short_bits(uint32_t(nearest_integer(
-        std::atan2(static_cast<long double>(height), static_cast<long double>(distance)) *
-        radians_to_heading
-    )));
+    return short_bits(base::game_math::direction(height, distance));
 }
 } // namespace
 

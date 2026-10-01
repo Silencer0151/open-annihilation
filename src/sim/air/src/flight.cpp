@@ -18,8 +18,6 @@ constexpr double world_to_fixed = 65536.0;
 constexpr float minimum_steer_distance = 8.0f; // world units
 constexpr int32_t minimum_climb_speed = 0x40000;
 constexpr int32_t minimum_climb_rate = 0x10000;
-// Angle word to radians, as the game stores it.
-constexpr double angle_to_radians = 9.587379924285e-05;
 
 // Keeps each product at double precision so the compiler cannot fuse it.
 double rounded(double value) noexcept {
@@ -44,26 +42,15 @@ int32_t scale_fixed(int32_t value, int32_t scale) noexcept {
 } // namespace
 
 double planar_length(double x, double z) noexcept {
-    const double a = std::fabs(x);
-    const double b = std::fabs(z);
-    const double largest = std::max(a, b);
-    if (largest == 0)
-        return 0;
-    const double nx = rounded(a / largest);
-    const double nz = rounded(b / largest);
-    return rounded(std::sqrt(rounded(rounded(nx * nx) + rounded(nz * nz))) * largest);
+    return base::game_math::hypotenuse(x, z);
 }
 
 void rotate_xz(int16_t angle, int32_t* x, int32_t* z) noexcept {
     if (angle == 0)
         return;
-    const double radians = rounded(static_cast<double>(angle) * angle_to_radians);
-    const double cosine = std::cos(radians);
-    const double sine = std::sin(radians);
-    const double px = *x;
-    const double pz = *z;
-    *x = static_cast<int32_t>(std::nearbyint(rounded(rounded(cosine * px) - rounded(pz * sine))));
-    *z = static_cast<int32_t>(std::nearbyint(rounded(rounded(sine * px) + rounded(pz * cosine))));
+    const auto rotated = base::game_math::rotate_pair(*x, *z, angle);
+    *x = static_cast<int32_t>(std::nearbyint(rotated.first));
+    *z = static_cast<int32_t>(std::nearbyint(rotated.second));
 }
 
 void air_flight_step(
@@ -130,7 +117,7 @@ void air_flight_step(
     sim::unit_movement::turn(unit, movement, static_cast<int16_t>(target.heading - unit.heading));
     const float steer_distance =
         distance < minimum_steer_distance ? minimum_steer_distance : distance;
-    const double gain = -std::sqrt(
+    const double gain = -base::game_math::square_root(
         rounded(rounded(static_cast<double>(acceleration) + acceleration) / steer_distance)
     );
     const double scale = fixed_to_world;

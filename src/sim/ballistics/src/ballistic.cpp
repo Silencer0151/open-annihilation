@@ -7,6 +7,8 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 namespace oa::sim::ballistics {
 namespace {
@@ -42,8 +44,18 @@ uint32_t signed_square_high(int32_t value) noexcept {
     return static_cast<uint32_t>(square >> 32U);
 }
 
-double launch_angle(double root, double velocity) noexcept {
-    return root > 0.0 ? std::acos(rounded(std::sqrt(root) / velocity)) : right_angle_radians;
+using base::game_math::Extended;
+
+// The launch angle for a root of the launch equation, kept at the arccosine's
+// 64-bit significand; no value stands for NaN, an arccosine outside its domain.
+std::optional<Extended> launch_angle(double root, double velocity) noexcept {
+    if (!(root > 0.0))
+        return base::game_math::to_extended(right_angle_radians);
+    return base::game_math::arccosine(rounded(base::game_math::square_root(root) / velocity));
+}
+
+double stored_angle(const std::optional<Extended>& angle) noexcept {
+    return angle ? base::game_math::to_double(*angle) : std::numeric_limits<double>::quiet_NaN();
 }
 
 bool acceptable_first_angle(double angle, float minimum_angle) noexcept {
@@ -52,9 +64,15 @@ bool acceptable_first_angle(double angle, float minimum_angle) noexcept {
            !(angle > maximum_ballistic_angle_radians);
 }
 
-bool acceptable_second_angle(double angle, float minimum_angle) noexcept {
+// The second angle is compared before it is rounded to a double.
+bool acceptable_second_angle(const std::optional<Extended>& angle, float minimum_angle) noexcept {
     // A NaN angle or minimum is rejected before the upper-bound comparison.
-    return angle > static_cast<double>(minimum_angle) && !(angle > maximum_ballistic_angle_radians);
+    if (!angle || std::isnan(minimum_angle))
+        return false;
+    using base::game_math::compare;
+    using base::game_math::to_extended;
+    return compare(*angle, to_extended(static_cast<double>(minimum_angle))) > 0 &&
+           compare(*angle, to_extended(maximum_ballistic_angle_radians)) <= 0;
 }
 
 int16_t pitch_from_radians(double angle) noexcept {
@@ -66,7 +84,8 @@ int16_t pitch_from_radians(double angle) noexcept {
 
 int16_t
 launch_pitch(const BallisticParameters& parameters, int32_t dx, int32_t dy, int32_t dz) noexcept {
-    const double horizontal = rounded(std::hypot(static_cast<double>(dx), static_cast<double>(dz)));
+    const double horizontal =
+        rounded(base::game_math::hypotenuse(static_cast<double>(dx), static_cast<double>(dz)));
     const double vertical = static_cast<double>(dy);
     const double velocity = static_cast<double>(parameters.projectile_velocity);
     const double gravity = static_cast<double>(parameters.simulation_gravity);
@@ -96,15 +115,16 @@ launch_pitch(const BallisticParameters& parameters, int32_t dx, int32_t dy, int3
     const double denominator = rounded(distance_squared + distance_squared);
     const double numerator =
         rounded(rounded(gravity_vertical + velocity_squared) * horizontal_squared);
-    const double radical = std::sqrt(discriminant);
+    const double radical = base::game_math::square_root(discriminant);
     const double first_root = rounded(rounded(numerator + radical) / denominator);
     const double second_root = rounded(rounded(numerator - radical) / denominator);
-    const double first = launch_angle(first_root, velocity);
-    const double second = launch_angle(second_root, velocity);
+    // The first angle is stored as a double; the second is kept as computed.
+    const double first = stored_angle(launch_angle(first_root, velocity));
+    const auto second = launch_angle(second_root, velocity);
     if (acceptable_first_angle(first, parameters.minimum_barrel_angle_radians))
         return pitch_from_radians(first);
     if (acceptable_second_angle(second, parameters.minimum_barrel_angle_radians))
-        return pitch_from_radians(second);
+        return pitch_from_radians(stored_angle(second));
     return invalid_launch_pitch;
 }
 

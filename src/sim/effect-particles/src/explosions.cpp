@@ -3,6 +3,7 @@
 
 #include "oa/sim/effect_particles.hpp"
 
+#include "oa/base/game_math.hpp"
 #include "oa/base/geometry.hpp"
 
 #include <bit>
@@ -236,7 +237,7 @@ int32_t build_flash_frame(int32_t size, uint8_t* shade, const EffectHost& host) 
         const auto row_term = dy * dy * flash_row_weight;
         for (int32_t column = 0; column < size; ++column) {
             const auto dx = centre - static_cast<double>(column);
-            const auto distance = std::sqrt(dx * dx + row_term);
+            const auto distance = base::game_math::square_root(dx * dx + row_term);
             const auto noise = static_cast<int32_t>(
                 static_cast<int64_t>(host.lcg_rand(host.context)) * flash_noise_span /
                 lcg_rand_range

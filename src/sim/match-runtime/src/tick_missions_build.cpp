@@ -152,8 +152,9 @@ uint32_t TickHost::GroundMissions::help_build() {
             return ground::mission_invalid;
         const auto& frame_def = def_of(frame->record);
         const double x = frame_def.footprint_x, z = frame_def.footprint_z;
-        const auto spread =
-            ground::truncate_word(std::sqrt(x * x + z + z) * build::help_ring_scale);
+        const auto spread = ground::truncate_word(
+            base::game_math::square_root(x * x + z + z) * build::help_ring_scale
+        );
         ring_goal(
             ground::position_of(frame->record),
             static_cast<int32_t>(static_cast<uint16_t>(def().build_distance)) + spread / 2,

@@ -199,8 +199,10 @@ differently from one compiler or processor to the next:
 - Prefer the operations IEEE 754 rounds exactly: addition, subtraction,
   multiplication, division, square root and conversions. A host maths
   function such as `std::sin` or `std::atan2` may differ between platforms in
-  its last bit; use one only where 3.1c's result needs it, say so in a
-  comment, and pin its results in a test.
+  its last bit, and `long double` has a different precision on each; use
+  neither. The game's arctangent, sine, cosine, arccosine and vector length
+  come from [src/base/game-math](../src/base/game-math/README.md), which
+  computes them with integer arithmetic at the precision 3.1c keeps.
 
 - **Why:** a replayed, saved and reloaded or shared match must play out the
   same way on every machine; one differing bit grows into a different game.

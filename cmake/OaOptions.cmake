@@ -23,13 +23,11 @@ if(NOT TARGET oa-options)
   # modules. -ffp-contract=off comes after -fno-fast-math because some Clang
   # versions reset contraction to their default on -fno-fast-math.
   #
-  # Two sources of platform differences are outside what these options
-  # control: maths library functions such as atan2, sin, cos and hypot come
-  # from each platform's C library, and the precision of long double differs
-  # (80-bit on x86-64 with GCC or MinGW, 64-bit on macOS arm64, 128-bit on
-  # Linux arm64). src/base/game-math/README.md and
-  # src/sim/unit-movement/README.md record where the simulation depends
-  # on them.
+  # Maths library functions such as atan2, sin, cos and hypot, and the
+  # precision of long double, differ between platforms; these options do not
+  # control them. The simulation therefore uses neither: it takes its
+  # arctangents, sines, cosines and lengths from src/base/game-math, which
+  # computes them with integer arithmetic (see its README.md).
   if(MSVC)
     target_compile_options(oa-options INTERFACE /fp:strict)
   else()

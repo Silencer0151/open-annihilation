@@ -27,11 +27,9 @@ float normalized_strength(int32_t numerator, int32_t denominator) {
     if (denominator == 0) {
         throw std::domain_error("Wind-strength divisor is zero");
     }
-    // The quotient is taken in long double and rounded to float once, as in
-    // 3.1c.
-    return static_cast<float>(
-        static_cast<long double>(numerator) / static_cast<long double>(denominator)
-    );
+    // The quotient is rounded to a double, then to a float, as in 3.1c.
+    const double quotient = static_cast<double>(numerator) / static_cast<double>(denominator);
+    return static_cast<float>(quotient);
 }
 
 } // namespace
