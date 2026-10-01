@@ -5,7 +5,8 @@
 // 16.16 places (across the 32-bit wrap) and of angle words (the shorter
 // turn), steps taken over a batch of ticks, a unit's pose noted tick by tick
 // and batch by batch with its jumps, new instances and ticks run unseen, a
-// unit's copies placed between two poses with the source left alone,
+// unit's copies placed between two poses with the source left alone, its
+// pieces between their two poses across a jump,
 // projectiles followed through the pool's compaction and across a batch,
 // debris followed by slot, and the debug grid's random numbers taken once a
 // tick however often it is drawn.
@@ -171,13 +172,20 @@ void test_unit_motion() {
 
     // Standing still: continued, but no move.
     oa::app::observe_unit(motion, 12, 1, unit_at(104, 100, 0x200), instance);
-    CHECK(motion.continued && !motion.moved);
+    CHECK(motion.continued && !motion.moved && !motion.pieces_moved);
 
-    // A jump further than unit_jump_pixels shows where it lands.
+    // A jump further than unit_jump_pixels shows where it lands; its turret
+    // turning meanwhile still moves between the two ticks for a unit drawn
+    // elsewhere than its record (on its playout).
+    instance.pieces()[1].rotation.xz = 0x800;
     oa::app::observe_unit(
         motion, 13, 1, unit_at(104 + oa::app::unit_jump_pixels + 1, 100, 0x200), instance
     );
-    CHECK(!motion.continued && !motion.moved);
+    CHECK(!motion.continued && !motion.moved && motion.pieces_moved);
+    auto turning = instance;
+    oa::app::blend_unit_pieces(motion.previous, motion.current, quarter_tick, turning);
+    CHECK(turning.pieces()[1].rotation.xz == 0x500);
+    CHECK(instance.pieces()[1].rotation.xz == 0x800);
     oa::app::observe_unit(
         motion, 14, 1, unit_at(104 + oa::app::unit_jump_pixels + 3, 100, 0x200), instance
     );

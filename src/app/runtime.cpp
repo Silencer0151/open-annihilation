@@ -475,6 +475,51 @@ uint32_t unit_slot_generation(void* context, uint32_t slot) noexcept {
     }
 }
 
+/// Fills in what a unit's movement holds for the unit playout to move it on
+/// by (oa::present::unit_playout::Hooks::motion): its ground movement record,
+/// the route its owner shared with its mirrored navigator, and its air
+/// driver's point, heading and seek goal. Reads the match only.
+///
+/// @param context the match (oa::sim::match_runtime::Match)
+/// @param slot the unit slot
+/// @param[out] motion what its movement holds; left as it is for a slot
+///     without a movement record or outside the pool
+void unit_motion(void* context, uint32_t slot, oa::present::unit_playout::Motion& motion) noexcept {
+    try {
+        auto& match = *static_cast<oa::sim::match_runtime::Match*>(context);
+        const auto index = static_cast<uint16_t>(slot);
+        const auto* ground = std::as_const(match).ground_runtime(index);
+        if (ground == nullptr)
+            return;
+        motion.ground = true;
+        motion.speed = ground->movement.speed;
+        motion.velocity = {
+            ground->movement.velocity[0], ground->movement.velocity[1], ground->movement.velocity[2]
+        };
+        motion.layer =
+            static_cast<uint8_t>(ground->movement.flags & oa::sim::unit_movement::occupancy_mask);
+        motion.blocked = (ground->movement.flags & oa::sim::unit_movement::collision_blocked) != 0;
+        if (ground->mirrored_driver) {
+            const auto& route = ground->mirrored_navigation;
+            motion.route_count = static_cast<uint8_t>(std::clamp<int32_t>(route.count, 0, 3));
+            for (std::size_t i = 0; i < motion.route.size() && i < route.points.size(); ++i)
+                motion.route[i] = route.points[i];
+        }
+        if (const auto* driver = match.air_driver(index)) {
+            motion.air = true;
+            motion.air_point = driver->position;
+            motion.air_velocity = driver->velocity;
+            motion.air_heading = driver->heading;
+            if (driver->goal != nullptr && driver->goal->kind == oa::sim::air::AirGoalKind::seek) {
+                motion.seek = true;
+                motion.seek_step = driver->goal->step;
+            }
+        }
+    } catch (const std::exception&) {
+        motion = {};
+    }
+}
+
 } // namespace
 
 void Runtime::advance_match_clock(uint32_t now_ms) {
@@ -518,7 +563,7 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
 
 void Runtime::observe_unit_playout() noexcept {
     if (match_)
-        unit_playout_.observe(match_->state(), {match_.get(), unit_slot_generation});
+        unit_playout_.observe(match_->state(), {match_.get(), unit_slot_generation, unit_motion});
 }
 
 void Runtime::report_match_tick_error(std::string_view message) {

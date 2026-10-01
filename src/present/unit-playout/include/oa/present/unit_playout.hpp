@@ -7,12 +7,16 @@
 //
 // Those units (mirrored units) move only when their owner's unit-state
 // record is applied, and the records arrive in bursts: a mirrored army stands
-// still for a few ticks and then jumps. The playout draws each such unit on
-// the path the simulation actually gave it, a few of its owner's ticks
-// behind the newest one applied, on a clock per owner that runs evenly and
-// adapts its delay to how the owner's records arrive. It is presentation
-// only: it reads the simulation's records after each tick and never writes
-// them, and targeting, sight and hits keep using the simulated places.
+// still for a few ticks and then jumps. The playout draws each such unit
+// where its owner has it about now: on a clock per owner that runs evenly at
+// the owner's pace, near the newest record. Behind the newest record the unit
+// is drawn on the path the simulation gave it; ahead of it, moved on from its
+// newest state along its route at its speed, or after its air goal, for at
+// most predict_ticks. When new records apply, the difference between where
+// the unit was drawn and where it is now drawn fades out over
+// correction_ticks. It is presentation only: it reads the simulation's
+// records after each tick and never writes them, and targeting, sight and
+// hits keep using the simulated places.
 
 #include "oa/core/world.h"
 
@@ -27,28 +31,25 @@ namespace oa::present::unit_playout {
 /// A whole tick in the 16-bit fractions of frame times, clocks and rates.
 inline constexpr uint32_t whole_tick = 1u << 16;
 
-/// The delay, in owner ticks, an owner's clock starts with behind its newest
-/// record, and the least it aims to keep behind the freshest over the first
-/// delay_window_ticks: 200 milliseconds, the interval at which 3.1c sends
-/// unit states by default.
-inline constexpr int32_t start_delay_ticks = 6;
-/// The least an owner's clock aims to run behind the freshest record of the
-/// window, in owner ticks.
-inline constexpr int32_t min_delay_ticks = 2;
-/// The furthest an owner's clock aims to run behind the newest record, in owner ticks.
+/// How far, in owner ticks with 16 bits of fraction, an owner's clock aims
+/// behind the middle of its newest records over the delay window (the mean
+/// of the newest record, carried on at the owner's pace, at each tick of the
+/// window): half a tick.
+inline constexpr int64_t aim_behind_middle = whole_tick / 2;
+/// The furthest an owner's clock runs, and aims, ahead of the newest record,
+/// in owner ticks: a unit is moved on from its newest state for at most this
+/// many of its owner's ticks.
+inline constexpr int32_t predict_ticks = 12;
+/// The furthest an owner's clock aims behind the newest record, in owner ticks.
 inline constexpr int32_t max_delay_ticks = 12;
-/// The owner ticks of places an owner's clock aims to keep in hand at the
-/// stalest moment of the window, just before the longest wait for records
-/// ended: when records arrive evenly, it runs that wait and this margin
-/// behind the freshest.
-inline constexpr int32_t delay_margin_ticks = 2;
-/// How far back, in ticks, the arrivals of an owner's records are measured: three seconds.
+/// How far back, in ticks, the arrivals of an owner's records and its newest
+/// records are measured: three seconds.
 inline constexpr uint32_t delay_window_ticks = 90;
 /// The fewest ticks between the oldest and the newest arrival in the window
 /// over which an owner's pace is measured; over fewer the owner counts as
 /// running one owner tick a tick.
 inline constexpr uint32_t pace_span_ticks = 30;
-/// A clock further than this many owner ticks behind the newest record jumps to its delay.
+/// A clock further than this many owner ticks behind the newest record jumps to its aim.
 inline constexpr int32_t snap_behind_ticks = 30;
 /// An owner's newest record further than this many owner ticks before the
 /// newest seen starts the owner's clock afresh, as a new match does; a
@@ -64,7 +65,8 @@ inline constexpr uint32_t rate_step = whole_tick / 16;
 /// aims to be: a clock 4 ticks behind runs a quarter of a tick a tick faster
 /// than its owner's pace.
 inline constexpr int32_t settle_ticks = 16;
-/// A clock less than this many owner ticks behind the newest record runs at min_rate at once.
+/// A clock less than this many owner ticks short of predict_ticks ahead of
+/// the newest record runs at min_rate at once.
 inline constexpr int32_t low_water_ticks = 1;
 /// A unit whose move between two of its places is longer than its top speed
 /// allows by more than this many steps of that speed jumps there instead of
@@ -73,11 +75,20 @@ inline constexpr int32_t jump_speed_steps = 2;
 /// A unit whose move between two of its places is longer than its top speed
 /// allows by more than this many pixels jumps there, however fast it is.
 inline constexpr int32_t jump_pixels = 48;
+/// The time, in ticks with 16 bits of fraction, over which the difference
+/// between where a unit was drawn and where new records put it fades out:
+/// 250 milliseconds.
+inline constexpr int64_t correction_ticks = whole_tick * 15 / 2;
+/// A difference between where a unit was drawn and where new records put it
+/// longer than this many pixels across the map is not faded out: the unit
+/// jumps.
+inline constexpr int32_t snap_pixels = 48;
 /// The places of one unit the playout keeps; enough for snap_behind_ticks
 /// of moves and stops.
 inline constexpr std::size_t places_per_unit = 48;
-/// The arrivals of one owner's records the playout keeps; more than the
-/// delay window holds, at most one arrival each tick.
+/// The arrivals of one owner's records the playout keeps, and the newest
+/// records of the ticks observed; more than the delay window holds, at most
+/// one each tick.
 inline constexpr std::size_t arrivals_per_owner = 128;
 /// The most ticks one observation runs a clock on, when ticks went unobserved.
 inline constexpr uint32_t max_elapsed_ticks = 64;
@@ -132,11 +143,33 @@ struct OwnerPlayout {
     int64_t clock{};       ///< the owner tick the clock shows, with 16 bits of fraction
     uint32_t rate{};       ///< owner ticks the clock runs each tick, with 16 bits of fraction
     uint32_t pace{}; ///< owner ticks the owner's records advance each tick, 16 bits of fraction
-    /// Owner ticks the clock aims to run behind the freshest record, carried
-    /// on at the owner's pace to the tick observed; 16 bits of fraction.
-    int64_t target_delay{};
-    int64_t delay{};  ///< owner ticks it runs behind it now, with 16 bits of fraction
-    uint32_t jumps{}; ///< times the clock jumped to its delay since it started
+    /// Owner ticks the clock aims to run ahead of the newest record, below 0
+    /// behind it; 16 bits of fraction.
+    int64_t target_lead{};
+    int64_t lead{};   ///< owner ticks it runs ahead of it now, with 16 bits of fraction
+    uint32_t jumps{}; ///< times the clock jumped to its aim since it started
+};
+
+/// Motion::layer of a unit in flight.
+inline constexpr uint8_t motion_layer_air = 2;
+
+/// What a unit's movement holds once its owner's records are applied: what
+/// the playout moves it on by ahead of its newest record.
+struct Motion {
+    bool ground{};                      ///< it has a ground movement record (Movement)
+    bool air{};                         ///< it has an air driver
+    oa_fixed speed{};                   ///< Movement.speed, 16.16 pixels a tick
+    std::array<oa_fixed, 3> velocity{}; ///< Movement.velocity, 16.16 pixels a tick
+    uint8_t layer{};                    ///< Movement.flags occupancy bits: 1 ground, 2 air
+    bool blocked{};                     ///< Movement.flags collision-blocked bit
+    /// The route points its owner shared (the mirrored navigator's), 0 to 3
+    uint8_t route_count{};
+    std::array<std::array<int16_t, 2>, 3> route{}; ///< map pixels x and z
+    FixedVec3 air_point{};                         ///< the air driver's point, 16.16
+    FixedVec3 air_velocity{}; ///< the air driver's point's velocity, 16.16 pixels a tick
+    uint16_t air_heading{};   ///< the air driver's heading
+    bool seek{};              ///< the air driver follows a seek goal
+    FixedVec3 seek_step{};    ///< the seek goal's step each tick, 16.16
 };
 
 /// What the playout reads beside the World.
@@ -146,16 +179,21 @@ struct Hooks {
     /// in it, which tells a unit made in a slot freed during the same tick
     /// from the unit before. Null tells them apart only by type and owner.
     uint32_t (*slot_generation)(void* context, uint32_t slot) noexcept {};
+    /// Fills in what a followed unit's movement holds. Null, or a unit it
+    /// fills nothing in for, is moved on at the pace of its last two places.
+    void (*motion)(void* context, uint32_t slot, Motion& motion) noexcept {};
 };
 
 /// The playout of every mirrored unit of one match.
 ///
 /// observe() reads the match after each of its ticks; unit_pose() then
 /// tells where a frame around that tick draws a unit. Memory is bounded: a
-/// fixed ring of places for each unit slot, allocated when the first mirrored
-/// player is seen, and fixed rings of arrivals and clock values per player.
-/// The same observations and frame times give the same poses on every
-/// machine: the clocks and the places are integers.
+/// fixed ring of places and a path of predict_ticks steps for each unit slot,
+/// allocated when the first mirrored player is seen, and fixed rings of
+/// arrivals, newest records and clock values per player. The clocks and the
+/// places are integers; the paths ahead and the fading corrections are
+/// worked out in double precision, so the same observations and frame times
+/// give the same poses on machines that round alike.
 class Playout {
   public:
 
@@ -163,7 +201,8 @@ class Playout {
     void reset() noexcept;
 
     /// Records the places of the units of the players this machine does not
-    /// simulate and runs their owners' clocks on to the match's tick.
+    /// simulate, runs their owners' clocks on to the match's tick, and works
+    /// out each unit's path ahead of its newest record.
     ///
     /// Call it after each tick of the match, once the tick's records are
     /// applied. Calling it again at the same tick records the units' changes,
@@ -182,12 +221,16 @@ class Playout {
 
     /// Tells where a frame draws a mirrored unit.
     ///
-    /// The unit is drawn at its owner's clock on the path of its recorded
-    /// places, interpolated between the two around the clock and never past
-    /// the newest. It jumps, rather than moving, into a place it reached by
-    /// a jump: as it was created, loaded or unloaded, or corrected further
-    /// than its top speed allows. A unit that dies leaves its slot empty at
-    /// once, and an empty slot gives nothing.
+    /// The unit is drawn at its owner's clock: up to its newest record on the
+    /// path of its recorded places, interpolated between the two around the
+    /// clock; past it, on its path ahead, at most predict_ticks on. The
+    /// difference between where it was drawn and where the records applied
+    /// since put it is added, fading out over correction_ticks. It jumps,
+    /// rather than moving, into a place it reached by a jump: as it was
+    /// created, loaded or unloaded, or corrected further than its top speed
+    /// allows, and when new records put it more than snap_pixels from where
+    /// it was drawn. A unit that dies leaves its slot empty at once, and an
+    /// empty slot gives nothing.
     ///
     /// @param slot the unit's slot in World.units
     /// @param time the moment the frame shows
@@ -215,7 +258,15 @@ class Playout {
         uint8_t flags{}; ///< place_* bits
     };
 
-    /// The recorded places of one unit slot.
+    /// Where a unit is a whole number of its owner's ticks after its newest record.
+    struct Step {
+        double x{};       ///< map pixels
+        double z{};       ///< map pixels
+        double heading{}; ///< 65536 a turn, 0 to 65536
+    };
+
+    /// The recorded places of one unit slot, its path ahead and the
+    /// correction that fades out.
     struct Track {
         std::array<Place, places_per_unit> places{};
         uint32_t first{};      ///< index in `places` of the oldest place
@@ -224,6 +275,14 @@ class Playout {
         uint16_t type_index{}; ///< Unit.type_index the places belong to
         uint8_t owner{};       ///< the owning player's index
         bool active{};         ///< the slot holds a followed unit
+        /// Where the unit is 0 to predict_ticks owner ticks after its newest
+        /// record (the owner's newest_tick), the first its place there.
+        std::array<Step, predict_ticks + 1> ahead{};
+        /// Where the unit was drawn less where it is drawn now, in 16.16
+        /// map coordinates, at correction_moment; it fades out from there.
+        std::array<double, 3> correction{};
+        /// The match moment the correction was taken at, ticks with 16 bits of fraction.
+        int64_t correction_moment{};
     };
 
     /// One arrival of an owner's records.
@@ -246,15 +305,25 @@ class Playout {
         int64_t clock{};           ///< owner ticks at this observation, 16 bits of fraction
         uint32_t rate{whole_tick}; ///< owner ticks each tick from this observation on
         uint32_t pace{whole_tick}; ///< owner ticks the records advance each tick, over the window
-        int64_t target_delay{int64_t{start_delay_ticks} * whole_tick}; ///< 16 bits of fraction
-        /// The freshest arrival's line: its owner tick less pace times the
-        /// tick it arrived at, 16 bits of fraction.
-        int64_t freshest{};
+        int64_t
+            target_lead{}; ///< owner ticks it aims ahead of the newest record, 16 bits of fraction
         uint32_t started_tick{}; ///< the match's tick the clock started at
         uint32_t jumps{};
+        /// The clock the last frame drawn before this observation showed; the
+        /// units' corrections are taken there.
+        int64_t join_clock{};
+        /// The match moment of join_clock, ticks with 16 bits of fraction.
+        int64_t join_moment{};
+        /// newest_tick before this observation took the records applied since.
+        int32_t newest_before{};
         std::array<Arrival, arrivals_per_owner> arrivals{};
         uint32_t first_arrival{}; ///< index in `arrivals` of the oldest
         uint32_t arrival_count{};
+        /// The newest record at each tick observed, oldest first (Arrival's
+        /// fields: the tick and its newest record).
+        std::array<Arrival, arrivals_per_owner> newest{};
+        uint32_t first_newest{}; ///< index in `newest` of the oldest
+        uint32_t newest_count{};
         /// The clock at the last ticks observed, oldest first, ending with this observation.
         std::array<ClockSample, clock_history_ticks> history{};
         uint32_t first_sample{}; ///< index in `history` of the oldest
@@ -284,7 +353,7 @@ class Playout {
     static void
     run_clock(Clock& clock, int32_t newest_tick, uint32_t tick, uint32_t elapsed) noexcept;
 
-    /// Chooses the pace, the delay and the rate an owner's clock runs at
+    /// Chooses the pace, the aim and the rate an owner's clock runs at
     /// until the next observation.
     ///
     /// @param[in,out] clock the owner's clock
@@ -295,10 +364,22 @@ class Playout {
     ///
     /// @param clock the owner's clock
     /// @param time the frame's moment
-    /// @return owner ticks with 16 bits of fraction, never past the newest record
+    /// @return owner ticks with 16 bits of fraction, never more than
+    ///     predict_ticks past the newest record
     [[nodiscard]] int64_t clock_at(const Clock& clock, FrameTime time) const noexcept;
 
-    /// Records the places of one followed player's units.
+    /// Returns where a unit is at an owner tick, without its correction: on
+    /// its recorded places up to its owner's newest record, on its path ahead
+    /// past it.
+    ///
+    /// @param track the unit slot's places and path
+    /// @param newest_tick the owner's newest record
+    /// @param at owner ticks with 16 bits of fraction
+    /// @return the pose
+    [[nodiscard]] static UnitPose
+    track_pose(const Track& track, int32_t newest_tick, int64_t at) noexcept;
+
+    /// Records the places of one followed player's units and works out their paths ahead.
     ///
     /// @param world the match's world
     /// @param hooks what it reads beside the world
@@ -317,7 +398,8 @@ class Playout {
     /// @param clock the owner's clock
     /// @param player the owner's index
     /// @param restarted the owner's clock started afresh at this observation
-    static void record_unit(
+    /// @return true when the places start afresh: the unit is new to the slot
+    static bool record_unit(
         const oa::World& world,
         const oa::Unit& unit,
         uint32_t generation,
@@ -325,6 +407,21 @@ class Playout {
         const Clock& clock,
         uint8_t player,
         bool restarted
+    ) noexcept;
+
+    /// Works out a unit's path ahead of its newest record.
+    ///
+    /// @param world the match's world
+    /// @param unit the unit
+    /// @param motion what its movement holds; nothing filled in for none
+    /// @param newest_tick the owner's newest record
+    /// @param[in,out] track the unit slot's places, the newest the unit's
+    static void plan_ahead(
+        const oa::World& world,
+        const oa::Unit& unit,
+        const Motion& motion,
+        int32_t newest_tick,
+        Track& track
     ) noexcept;
 
     /// Stops following a player and forgets its units' places.
@@ -338,6 +435,11 @@ class Playout {
     uint32_t slot_count_{};    ///< World.unit_slot_count at the last observation
     uint32_t observed_tick_{};
     bool observed_{};
+    /// unit_pose() was asked since the last observation: a frame was drawn.
+    mutable bool drawn_{};
+    /// The latest moment unit_pose() was asked for since the last
+    /// observation, match ticks with 16 bits of fraction.
+    mutable int64_t drawn_moment_{};
 };
 
 } // namespace oa::present::unit_playout

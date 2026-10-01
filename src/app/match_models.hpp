@@ -106,9 +106,8 @@ playout_moment(const MatchPresentation& presentation, uint32_t fraction) noexcep
 /// (in use with OA_PLAYER_STATUS_MIRRORED): where its owner's playout clock
 /// has it at the frame's moment, whole ticks included, rather than where its
 /// owner's newest record put it. A carried unit goes with its carrier: it is
-/// drawn on its own playout when its carrier has the same owner, else moved
-/// as its carrier is; a unit carried by one drawn where its ticks place it is
-/// drawn there too.
+/// moved as far as its carrier is drawn from the carrier's place; a unit
+/// carried by one drawn where its ticks place it is drawn there too.
 ///
 /// @param models the match's renderer state, its tick noted
 /// @param world the match's World

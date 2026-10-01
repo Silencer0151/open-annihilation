@@ -269,24 +269,32 @@ and `app-window-icon` that the embedded one decodes.
   (`runtime_interpolation_check.cpp`) the frames.
 - Units of other machines' players: `advance_match_clock` has the unit
   playout (`src/present/unit-playout`, `Runtime::unit_playout_`) read the
-  match after each step, whether the engine or an extension ran it, and
-  `MatchPresentation::playout` gives the draw paths its places. A unit of a
+  match after each step, whether the engine or an extension ran it, and the
+  director after each tick of a recording it plays; `MatchPresentation::playout`
+  gives the draw paths its places. With each observation it reads what each
+  unit's movement holds (`unit_motion` in `runtime.cpp`: the movement
+  record's speed and velocity, the route head its owner shared with the
+  mirrored navigator, the air driver's point and seek goal). A unit of a
   player in use with `OA_PLAYER_STATUS_MIRRORED` is drawn from copies of its
   record on every frame, whole ticks and a paused game included, placed,
   turned and tilted where its owner's playout clock has it at the frame's
-  moment (`mirrored_pose`, `playout_moment`); its pieces stay those of its
-  ticks. Its shadow, selection box, health bar and digits, the order lines
-  that start at it, the culling and the far-to-near order of the frame, a
-  camera tracking it and the pointer's pick (against the frame last drawn,
-  `MatchPresentation::drawn_moment`) all take that place; a unit it carries
-  goes with it. Whether a unit is seen, the on-screen list, the radar,
-  projectiles, nanolathe streams, explosions and wrecks, and every
-  simulation read keep the simulated place. With no such player the frame is drawn as before. The
-  director's renders do not feed the playout. `--check-unit-playout`
-  (`runtime_unit_playout_check.cpp`) takes the skirmish's other player as
-  another machine's, whose records arrive within the steps in 3.1c's
-  bursts, and checks at 120 frames a second that its runner moves on every
-  frame by about its pace, a few ticks behind its simulated place, on a
+  moment (`mirrored_pose`, `playout_moment`): near its newest record, moved on
+  ahead of it between records, with what new records change faded in; its
+  pieces are placed between their two ticks' poses on every frame, even when
+  its records moved it by a jump (`UnitMotion::pieces_moved`,
+  `blend_unit_pieces`). Its shadow, selection box, health bar and digits, the
+  order lines that start at it, the culling and the far-to-near order of the
+  frame, a camera tracking it and the pointer's pick (against the frame last
+  drawn, `MatchPresentation::drawn_moment`) all take that place; a unit it
+  carries is moved as far as it is drawn from its simulated place. Whether a
+  unit is seen, the on-screen list, the radar, projectiles, nanolathe
+  streams, explosions and wrecks, and every simulation read keep the
+  simulated place. With no such player the frame is drawn as before.
+  `--check-unit-playout` (`runtime_unit_playout_check.cpp`) takes the
+  skirmish's other player as another machine's, whose records, with the
+  runner's speed and route head, arrive within the steps in 3.1c's bursts,
+  and checks at 120 frames a second that its runner moves on every frame by
+  about its pace, within two ticks of its simulated place on average, on a
   whole tick's frame too, with the tracking camera and the pick where it is
   drawn; that the local runner and the world are as without the playout;
   and that, with no such player, every frame is.

@@ -181,6 +181,21 @@ void blend_unit_pose(
     oa::sim::model_runtime::Instance& instance
 );
 
+/// Places the pieces of a copy of a unit's model instance part of the way
+/// from one pose to the next: each piece's translation and rotation is
+/// blended, and its flags stay as the copy holds them.
+///
+/// @param previous the pose at the tick before
+/// @param current the pose at the current tick; it has the instance's pieces
+/// @param fraction the part of the way, 0 to whole_tick
+/// @param[in,out] instance a copy of the unit's model instance
+void blend_unit_pieces(
+    const UnitPose& previous,
+    const UnitPose& current,
+    uint32_t fraction,
+    oa::sim::model_runtime::Instance& instance
+);
+
 /// One unit slot's poses at the last two ticks the presentation saw, and the
 /// copies a draw between those ticks draws the unit from.
 struct UnitMotion {
@@ -198,6 +213,11 @@ struct UnitMotion {
     /// most_batch_ticks earlier, and the unit went on from it (pose_continues).
     bool continued{};
     bool moved{}; ///< continued, and the two poses differ
+    /// `previous` holds the pose of the tick seen before `tick`, with the
+    /// same piece list, and the pieces' poses differ: a unit drawn elsewhere
+    /// than its record (on its playout) shows its pieces between them even
+    /// when it jumped.
+    bool pieces_moved{};
     UnitPose previous{};
     UnitPose current{};
     // The copies a draw between ticks draws, and their own draw state: the

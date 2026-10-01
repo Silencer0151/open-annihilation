@@ -272,6 +272,15 @@ void blend_unit_pose(
     ));
     record.pitch = blend_angle(previous.pitch, current.pitch, fraction);
     record.bank = blend_angle(previous.bank, current.bank, fraction);
+    blend_unit_pieces(previous, current, fraction, instance);
+}
+
+void blend_unit_pieces(
+    const UnitPose& previous,
+    const UnitPose& current,
+    uint32_t fraction,
+    oa::sim::model_runtime::Instance& instance
+) {
     auto pieces = instance.pieces();
     const std::size_t count =
         std::min({pieces.size(), previous.pieces.size(), current.pieces.size()});
@@ -292,6 +301,33 @@ void blend_unit_pose(
     }
 }
 
+namespace {
+
+/// Tells whether two poses have the same piece list with some piece placed
+/// otherwise.
+///
+/// @param a a pose
+/// @param b another pose
+/// @return true when the piece lists are as long and a piece's translation
+///     or rotation differs
+bool pieces_differ(const UnitPose& a, const UnitPose& b) noexcept {
+    if (a.pieces.size() != b.pieces.size())
+        return false;
+    for (std::size_t index = 0; index < a.pieces.size(); ++index) {
+        const auto& first = a.pieces[index];
+        const auto& second = b.pieces[index];
+        if (first.translation.x != second.translation.x ||
+            first.translation.y != second.translation.y ||
+            first.translation.z != second.translation.z ||
+            first.rotation.xy != second.rotation.xy || first.rotation.xz != second.rotation.xz ||
+            first.rotation.yz != second.rotation.yz)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 void observe_unit(
     UnitMotion& motion,
     uint32_t tick,
@@ -310,6 +346,7 @@ void observe_unit(
         motion.seen = true;
         motion.continued = false;
         motion.moved = false;
+        motion.pieces_moved = false;
         return;
     }
     if (tick == motion.tick)
@@ -321,6 +358,7 @@ void observe_unit(
     motion.tick = tick;
     motion.continued = follows && pose_continues(motion.previous, motion.current);
     motion.moved = motion.continued && !poses_equal(motion.previous, motion.current);
+    motion.pieces_moved = follows && pieces_differ(motion.previous, motion.current);
 }
 
 void forget_unit(UnitMotion& motion) noexcept {

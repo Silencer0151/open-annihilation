@@ -204,8 +204,9 @@ bool unit_or_cargo_moved(const MatchModels& models, const oa::World& world, uint
 /// tick: its record and model instance, placed between its two poses when it
 /// moved, with a draw state of their own. A unit of another machine's player
 /// is placed, turned and tilted on its playout (mirrored_pose), whole ticks
-/// included; its pieces stay those of its ticks. The match's record, instance
-/// and draw state are only read.
+/// included, and its pieces are placed between their two poses even when its
+/// records moved it by a jump. The match's record, instance and draw state
+/// are only read.
 ///
 /// The copies are placed once a draw; a later call of the same draw returns
 /// them as they are.
@@ -224,6 +225,9 @@ model_render::ModelRef presented_unit(MatchModels& models, uint16_t slot) {
     if (motion.blended_draw != presentation.draw) {
         motion.record = record;
         motion.instance = runtime.instance->model();
+        const auto pose = mirrored_pose(
+            models, world.record, slot, playout_moment(presentation, presentation.fraction)
+        );
         if (motion.moved)
             blend_unit_pose(
                 motion.previous,
@@ -232,9 +236,13 @@ model_render::ModelRef presented_unit(MatchModels& models, uint16_t slot) {
                 motion.record,
                 motion.instance
             );
-        if (const auto pose = mirrored_pose(
-                models, world.record, slot, playout_moment(presentation, presentation.fraction)
-            )) {
+        else if (pose && motion.pieces_moved)
+            // Placed on its playout, its pieces move between their ticks
+            // however far its records moved it.
+            blend_unit_pieces(
+                motion.previous, motion.current, presentation.fraction, motion.instance
+            );
+        if (pose) {
             motion.record.position = pose->position;
             motion.record.heading = pose->heading;
             motion.record.pitch = pose->pitch;
@@ -370,11 +378,10 @@ std::optional<unit_playout::UnitPose> mirrored_pose(
     const oa::Unit* unit = oa::world_unit_at(&world, slot);
     if (unit == nullptr || unit->type_index == 0 || !mirrored_owner(world, *unit))
         return std::nullopt;
-    const auto pose = playout->unit_pose(slot, moment);
     const oa::Unit* carrier =
         unit->attach_parent != 0 ? oa::world_unit(&world, unit->attach_parent) : nullptr;
     if (carrier == nullptr)
-        return pose;
+        return playout->unit_pose(slot, moment);
     // A carried unit goes where its carrier is drawn.
     const auto carrier_pose =
         mirrored_owner(world, *carrier)
@@ -384,8 +391,6 @@ std::optional<unit_playout::UnitPose> mirrored_pose(
             : std::nullopt;
     if (!carrier_pose)
         return std::nullopt;
-    if (pose && carrier->owner_index == unit->owner_index)
-        return pose;
     // Moved by as much as its carrier is drawn away from the carrier's place.
     const auto moved_with = [](int32_t at, int32_t carrier_at, int32_t carrier_drawn) {
         return wrapping_sub(at, wrapping_sub(carrier_at, carrier_drawn));
@@ -1248,8 +1253,8 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
         }
         // A unit of another machine's player draws from its copies on every
-        // frame, whole ticks included: they stand on its playout, a few of its
-        // owner's ticks behind its simulated place.
+        // frame, whole ticks included: they stand on its playout, near its
+        // simulated place and moved on ahead of it between records.
         const bool on_playout = mirrored_pose(models, world_record, unit_index, moment).has_value();
         if ((between_ticks && unit_or_cargo_moved(models, world_record, unit_index)) ||
             on_playout) {

@@ -5,12 +5,14 @@
 // units) drawn on their playout, over the headless skirmish. The other player
 // is taken as another machine's: its runner follows the path the local runner
 // took beside it, placed only as that machine's records arrive, sent every six
-// ticks and every fourth send late, as 3.1c sends them. Drawn at 120 frames a
-// second by the application loop's frame steps, the mirrored runner moves on
-// every frame by about its pace, a few ticks behind its simulated place, where
-// its records alone hold it still and make it jump; a whole tick's frame keeps
-// it on its playout; the tracking camera and the pointer's pick follow where
-// it is drawn; the local runner and the world are as without the playout.
+// ticks and every fourth send late, as 3.1c sends them, each with the
+// runner's speed and the head of its route. Drawn at 120 frames a second by
+// the application loop's frame steps, the mirrored runner moves on every frame
+// by about its pace, within two ticks of its simulated place on average,
+// where its records alone hold it still and make it jump; a whole tick's
+// frame keeps it on its playout; the tracking camera and the pointer's pick
+// follow where it is drawn; the local runner and the world are as without
+// the playout.
 // With no player taken as another machine's, every frame and the world are as
 // without it.
 #include "oa/app/runtime.hpp"
@@ -25,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -63,6 +66,9 @@ constexpr std::size_t kPlainArmy = 6;
 /// Ticks between the other machine's sends of its records: 200 milliseconds,
 /// 3.1c's default.
 constexpr uint32_t kSendTicks = 6;
+/// The most ticks of its pace the mirrored runner is drawn from its simulated
+/// place on average.
+constexpr double kMostMeanLagTicks = 2.0;
 /// Ticks a send takes to arrive.
 constexpr uint32_t kSendLatency = 2;
 /// Every kLateSendEvery-th send arrives kLateSendTicks later still.
@@ -365,6 +371,29 @@ void Runtime::check_unit_playout() {
         };
         std::vector<FixedVec3> path{beside(match_->world().record.units[trip.runner].position)};
         std::vector<oa_angle> headings{match_->world().record.units[trip.runner].heading};
+        // What each record shares of the runner's movement: the local
+        // runner's speed and the head of its route, a lane over.
+        struct Shared {
+            oa::sim::unit_movement::Fixed speed{};
+            uint8_t count{};
+            std::array<std::array<int16_t, 2>, 3> route{};
+        };
+        const auto share = [&] {
+            Shared shared{};
+            const auto* ground = match_->ground_runtime(trip.runner);
+            if (ground == nullptr)
+                return shared;
+            shared.speed = ground->movement.speed;
+            const auto& navigation = ground->navigation;
+            shared.count = static_cast<uint8_t>(std::min<uint32_t>(navigation.count, 3));
+            for (std::size_t i = 0; i < shared.count; ++i)
+                shared.route[i] = {
+                    static_cast<int16_t>(navigation.points[i][0] + (lane[0] >> 16)),
+                    static_cast<int16_t>(navigation.points[i][1] + (lane[1] >> 16))
+                };
+            return shared;
+        };
+        std::vector<Shared> shared{share()};
         oa::sim::unit_spawn::Request request;
         request.player = other;
         request.type = trip.type;
@@ -405,6 +434,13 @@ void Runtime::check_unit_playout() {
             const auto& place = path[newest];
             match_->place_unit_at(mirrored, place.x, place.y, place.z, kGroundLayer);
             match_->world().record.units[mirrored].heading = headings[newest];
+            // The record's speed and route head, as a shared match applies them.
+            if (auto* ground = match_->ground_runtime(mirrored)) {
+                ground->movement.speed = shared[newest].speed;
+                ground->mirrored_navigation.count = shared[newest].count;
+                for (std::size_t i = 0; i < 3; ++i)
+                    ground->mirrored_navigation.points[i] = shared[newest].route[i];
+            }
             owner.last_sim_tick = static_cast<int32_t>(base_tick + newest);
         };
         struct StepEnd {
@@ -438,6 +474,7 @@ void Runtime::check_unit_playout() {
             while (path.size() <= match_timing_.tick - base_tick) {
                 path.push_back(beside(record.position));
                 headings.push_back(record.heading);
+                shared.push_back(share());
             }
         };
         auto& models = match_models();
@@ -587,7 +624,7 @@ void Runtime::check_unit_playout() {
         );
         std::printf(
             "unit playout: a whole tick's frame draws the mirrored runner on its playout, %d "
-            "pixels behind its simulated place\n",
+            "pixels from its simulated place\n",
             std::abs(
                 along(trip, at_tick->position) -
                 along(trip, match_->world().record.units[mirrored].position)
@@ -664,7 +701,8 @@ void Runtime::check_unit_playout() {
     report("the local runner", local);
     const double lag_mean = lag_total / static_cast<double>(shown.frames.size());
     std::printf(
-        "unit playout: drawn %.2f to %.2f ticks behind its simulated place, %.2f on average\n",
+        "unit playout: drawn %.2f to %.2f ticks behind its simulated place (below 0 ahead of "
+        "it), %.2f on average\n",
         lag_least,
         lag_most,
         lag_mean
@@ -672,7 +710,9 @@ void Runtime::check_unit_playout() {
     std::fflush(stdout);
     // Records alone hold the mirrored runner still on most frames and then
     // jump it on; on its playout it moves on every frame, by three quarters
-    // to one and a half of its pace, kept here within a half and twice.
+    // to one and a half of its pace, kept here within a half and twice, moved
+    // on ahead of its newest record between them and drawn within two ticks
+    // of its simulated place on average.
     require(
         without_playout.still * 2 >= without_playout.steps && without_playout.largest >= 3.0,
         "the mirrored runner's records did not arrive in bursts"
@@ -683,10 +723,10 @@ void Runtime::check_unit_playout() {
         "the mirrored runner did not move evenly on its playout"
     );
     require(
-        lag_least >= 0.0 &&
+        lag_least >= -static_cast<double>(unit_playout::predict_ticks) && lag_least < 0.0 &&
             lag_most <= static_cast<double>(unit_playout::max_delay_ticks + kSendTicks) &&
-            lag_mean >= 1.0,
-        "the mirrored runner was not drawn a few ticks behind its simulated place"
+            std::abs(lag_mean) <= kMostMeanLagTicks,
+        "the mirrored runner was not drawn near its simulated place, moved on ahead of it"
     );
 
     // Passes 3 and 4: the skirmish's fight with no player taken as another

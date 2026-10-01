@@ -333,7 +333,8 @@ void check_even(const std::vector<Frame>& frames, uint32_t from, const char* nam
     }
 }
 
-/// Checks that no frame shows the walker past its newest place or off its path.
+/// Checks that no frame shows the walker more than predict_ticks of its
+/// steps past its newest place, or off its path.
 ///
 /// @param frames the run
 void check_never_ahead(const std::vector<Frame>& frames) {
@@ -341,42 +342,45 @@ void check_never_ahead(const std::vector<Frame>& frames) {
     for (const Frame& frame : frames) {
         if (!frame.pose)
             continue;
-        CHECK_ONCE(reported, frame.pose->position.x <= frame.newest_x);
+        CHECK_ONCE(
+            reported, frame.pose->position.x <= frame.newest_x + walk_step * predict_ticks + 2
+        );
         CHECK_ONCE(reported, frame.pose->position.x >= walk_x(0));
         CHECK_ONCE(reported, frame.pose->position.z == fixed(500));
         CHECK_ONCE(reported, frame.pose->heading == 0x4000);
     }
 }
 
-/// Checks that the clock's delay behind the freshest record settles on its target.
+/// Checks that the walker is drawn near its simulated place: the mean, over
+/// the frames from a tick on, of how far it is drawn from where its newest
+/// record puts it, and that the clock keeps within three ticks of its aim.
 ///
 /// @param frames the run
 /// @param from the first tick checked
-/// @param target the delay expected, in owner ticks
-/// @param tolerance how far the delay and its target may stray, 16.16 owner ticks
-void check_delay(
-    const std::vector<Frame>& frames, uint32_t from, int32_t target, int64_t tolerance = whole / 4
-) {
-    int64_t lowest_aim = std::numeric_limits<int64_t>::max();
-    int64_t highest_aim = std::numeric_limits<int64_t>::min();
+/// @param most_mean_ticks the most the mean may be, in owner ticks of steps
+void check_near(const std::vector<Frame>& frames, uint32_t from, double most_mean_ticks) {
+    double total = 0;
+    uint32_t counted = 0;
     int64_t widest_off = 0;
     for (const Frame& frame : frames) {
-        if (frame.tick < from || frame.fraction != 0)
+        if (frame.tick < from || !frame.pose)
             continue;
-        lowest_aim = std::min(lowest_aim, frame.owner.target_delay);
-        highest_aim = std::max(highest_aim, frame.owner.target_delay);
-        const int64_t off = frame.owner.delay - frame.owner.target_delay;
-        widest_off = std::max(widest_off, off < 0 ? -off : off);
+        total += std::abs(static_cast<double>(frame.pose->position.x) - frame.newest_x) /
+                 static_cast<double>(walk_step);
+        ++counted;
+        if (frame.fraction == 0) {
+            const int64_t off = frame.owner.lead - frame.owner.target_lead;
+            widest_off = std::max(widest_off, off < 0 ? -off : off);
+        }
     }
-    const int64_t expected = int64_t{target} * whole;
-    if (lowest_aim < expected - tolerance || highest_aim > expected + tolerance ||
-        widest_off > tolerance) {
+    const double mean = counted == 0 ? 0.0 : total / counted;
+    if (mean > most_mean_ticks || widest_off > int64_t{3} * whole) {
         std::fprintf(
             stderr,
-            "delay target %d: aims %.3f..%.3f, delay off by up to %.3f\n",
-            target,
-            static_cast<double>(lowest_aim) / whole,
-            static_cast<double>(highest_aim) / whole,
+            "drawn %.3f ticks from its simulated place on average (at most %.3f); clock off its "
+            "aim by up to %.3f\n",
+            mean,
+            most_mean_ticks,
             static_cast<double>(widest_off) / whole
         );
         ++failures;
@@ -386,26 +390,27 @@ void check_delay(
 void test_fast_sender() {
     const auto frames = run(fast, 400);
     check_never_ahead(frames);
-    // A record each tick: a wait of one tick, and the margin.
-    check_delay(frames, 300, 1 + delay_margin_ticks);
+    // A record each tick: the walker is drawn within a tick of it.
+    check_near(frames, 300, 1.0);
     check_even(frames, 200, "fast");
-    // The clock starts at the start delay.
-    CHECK(frames.front().owner.delay == int64_t{start_delay_ticks} * whole);
+    // The clock starts at the newest record.
+    CHECK(frames.front().owner.lead == 0);
 }
 
 void test_steady() {
     const auto frames = run(steady, 400);
     check_never_ahead(frames);
-    // A record each tick: a wait of one tick, and the margin.
-    check_delay(frames, 300, 1 + delay_margin_ticks);
+    // A record each tick: the walker is drawn within a tick of it.
+    check_near(frames, 300, 1.0);
     check_even(frames, 100, "steady");
 }
 
 void test_sent_every_six() {
     const auto frames = run(sent_every_six, 600);
     check_never_ahead(frames);
-    // The longest wait is seven ticks; and the margin.
-    check_delay(frames, 400, 7 + delay_margin_ticks);
+    // Moved on between the sends, it is drawn within two ticks of its
+    // simulated place on average.
+    check_near(frames, 400, 2.0);
     check_even(frames, 100, "sent every six");
     // The simulation's own walker stands still most frames.
     uint32_t standing = 0;
@@ -418,10 +423,9 @@ void test_sent_every_six() {
 void test_queue_bursts() {
     const auto frames = run(queue_bursts, 600);
     check_never_ahead(frames);
-    // The newest record falls seven ticks behind the freshest: six of the
-    // wait, and one more for the five records that came short; and the
-    // margin.
-    check_delay(frames, 400, 7 + delay_margin_ticks);
+    // Moved on between the bursts, it is drawn within two ticks of its
+    // simulated place on average.
+    check_near(frames, 400, 2.0);
     check_even(frames, 100, "queue bursts");
 }
 
@@ -431,8 +435,8 @@ void test_trickle_then_flush() {
     const auto frames = run(trickle_then_flush, 600);
     check_never_ahead(frames);
     // Its uneven arrivals tilt the owner's measured pace a little from one
-    // tick to the next, and the delay with it.
-    check_delay(frames, 400, 6 + delay_margin_ticks, whole * 3 / 8);
+    // tick to the next, and the aim with it.
+    check_near(frames, 400, 3.0);
     check_even(frames, 100, "trickle then flush");
 }
 
@@ -458,15 +462,16 @@ void test_long_stall() {
         CHECK_ONCE(reported, step >= 0 && step <= pace * 3 / 2 + 2);
     }
     CHECK(frames.back().owner.jumps == 0);
-    // Once the stall leaves the window the delay settles again.
-    check_delay(frames, 400, 1 + delay_margin_ticks);
+    // Once the stall leaves the window the clock settles again.
+    check_near(frames, 400, 1.0);
     check_even(frames, 400, "after a stall");
 }
 
 void test_stall_past_the_snap() {
-    // A stall of 40 ticks leaves the clock further behind than it catches
-    // up: it jumps to its delay once.
-    const auto frames = run(stalled(40), 400);
+    // A stall of 50 ticks leaves the clock, which stopped predict_ticks past
+    // the newest record before it, further behind than it catches up: it
+    // jumps to its aim once.
+    const auto frames = run(stalled(50), 400);
     check_never_ahead(frames);
     CHECK(frames.back().owner.jumps == 1);
     const int64_t pace = walk_step / frames_per_tick;
@@ -574,6 +579,20 @@ void test_correction_jumps() {
             CHECK(frame.pose->position.x < walk_x(200));
 }
 
+/// Returns the longest step the walker takes from one frame to the next.
+///
+/// @param frames the run
+/// @return the step, 16.16
+int64_t largest_step(const std::vector<Frame>& frames) {
+    int64_t largest = 0;
+    for (std::size_t i = 1; i < frames.size(); ++i)
+        if (frames[i].pose && frames[i - 1].pose)
+            largest = std::max<int64_t>(
+                largest, int64_t{frames[i].pose->position.x} - frames[i - 1].pose->position.x
+            );
+    return largest;
+}
+
 void test_correction_after_a_burst() {
     // Six owner ticks applied in one tick carry the walker six steps and a
     // full record's correction of 10 pixels: more than two steps of its top
@@ -584,14 +603,15 @@ void test_correction_after_a_burst() {
         if (sent_every_six(tick) >= 120)
             scene.unit(walker).position.x += correction;
     });
-    CHECK(frames_between(frames, walk_x(114) + 1, walk_x(120) + correction) == 0);
+    CHECK(largest_step(frames) >= correction - walk_step * 2);
     // A correction of 3 pixels in the same burst is less than two steps
-    // beyond its walk: it is drawn as part of the move.
+    // beyond its walk: it fades out over the frames that follow.
     const auto small = run(sent_every_six, 300, {}, [](Scene& scene, uint32_t tick) {
         if (sent_every_six(tick) >= 120)
             scene.unit(walker).position.x += fixed(3);
     });
-    CHECK(frames_between(small, walk_x(114) + 1, walk_x(120) + fixed(3)) > 0);
+    CHECK(largest_step(small) <= walk_step * 3 / 2);
+    check_even(small, 140, "after a small correction");
 }
 
 void test_small_correction_is_smoothed() {
