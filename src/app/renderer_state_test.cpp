@@ -7,7 +7,9 @@
 // records file ignored and rewritten, and a garbled sentinel file read as a
 // left-over of no known stage; the trial written with the records as they
 // stand in the file after Off then On and during a match, and with the last
-// run's strike otherwise; a clean exit erasing the trial and writing a
+// run's strike otherwise; the file keeping what Off then On cleared, with a
+// strike found since, until OK; Cancel putting the cleared records back with
+// what was struck since, as a clean exit does; a clean exit erasing the trial and writing a
 // match's records; under 2 GiB no trial written and what a larger machine
 // left kept; writes that fail in a read-only folder and where a file stands
 // in place of the folder, each logged once, with the records kept in memory
@@ -328,14 +330,77 @@ void the_trial_carries_the_records_as_they_stand_in_the_file() {
     on_disk = preferences::load(records_file);
     OA_CHECK(on_disk.count("trial") == 0);
     OA_CHECK(on_disk.count("accelerated-unusable.alpha") == 1);
+    // A failure struck before OK goes to the file at once, beside the
+    // records the clear took away, which any write before OK keeps.
+    rs::Strike call;
+    call.stage = rs::StrikeStage::call;
+    call.call = "SDL_SetRenderTarget";
+    OA_CHECK(rs::note_running_failure(state.records(), "alpha", call, {}, two_in_a_row).changed);
     OA_CHECK(state.write_records());
-    OA_CHECK(preferences::load(records_file).count("accelerated-unusable.alpha") == 0);
+    on_disk = preferences::load(records_file);
+    OA_CHECK(on_disk.count("accelerated-unusable.alpha") == 1);
+    OA_CHECK(on_disk.count("strike.alpha") == 1);
+    // OK writes them cleared, with the strike found since.
+    OA_CHECK(state.confirm_clear());
+    on_disk = preferences::load(records_file);
+    OA_CHECK(on_disk.count("accelerated-unusable.alpha") == 0);
+    OA_CHECK(on_disk.count("strike.alpha") == 1);
     // Erasing a trial that is not there writes nothing.
     std::filesystem::remove(records_file);
     OA_CHECK(state.erase_trial());
     OA_CHECK(!std::filesystem::exists(records_file));
     // A trial for a name that cannot be a driver's is never written.
     OA_CHECK(!state.write_trial(probe_trial("not a driver")));
+    OA_CHECK(log.lines.empty());
+}
+
+void cancel_puts_the_cleared_records_back() {
+    Scratch scratch;
+    LogLines log;
+    const auto records_file = scratch.folder / rs::records_file_name;
+    rs::RendererState state = rs::RendererState::open_folder(
+        scratch.folder, std::string(version), two_in_a_row, log_into(log)
+    );
+    (void)rs::note_adapter(state.records(), "Example Graphics 3000");
+    rs::driver_entry(state.records(), "alpha").accelerated_unusable =
+        rs::Record{rs::RecordedFailure::stopped, false};
+    rs::driver_entry(state.records(), "beta").strike.stage = rs::StrikeStage::create;
+    OA_CHECK(state.write_records());
+    OA_CHECK(state.clear().changed);
+    // A second retry before Cancel keeps what the first took away.
+    rs::driver_entry(state.records(), "gamma").strike.stage = rs::StrikeStage::create;
+    OA_CHECK(state.clear().changed);
+    // The retry's trial goes to the file with the records it holds.
+    OA_CHECK(state.write_trial(probe_trial("alpha")));
+    // A failure struck during the retry.
+    rs::Strike present;
+    present.stage = rs::StrikeStage::present;
+    present.call = "SDL_RenderPresent";
+    OA_CHECK(rs::note_running_failure(state.records(), "beta", present, {}, two_in_a_row).changed);
+    // Cancel: the records in memory are those the file holds, with the
+    // strike found since in place of beta's own, and the trial written since
+    // and the adapter stay.
+    state.restore_failures();
+    OA_CHECK(!rs::acceleration_allowed(state.records(), "alpha", false));
+    OA_CHECK(state.records().drivers.size() == 2);
+    OA_CHECK(rs::find_driver(state.records(), "beta")->strike.stage == rs::StrikeStage::present);
+    OA_CHECK(rs::find_driver(state.records(), "gamma") == nullptr);
+    OA_CHECK(state.records().trial && state.records().trial->driver == "alpha");
+    OA_CHECK(state.records().adapter == "Example Graphics 3000");
+    // A trial written after Cancel carries the records in memory again, the
+    // same as the file's, and a write changes nothing more.
+    OA_CHECK(state.erase_trial());
+    OA_CHECK(state.write_trial(probe_trial("alpha")));
+    const rs::Values on_disk = preferences::load(records_file);
+    OA_CHECK(on_disk.count("accelerated-unusable.alpha") == 1 && on_disk.count("strike.beta") == 1);
+    OA_CHECK(on_disk.at("strike.beta").starts_with("present "));
+    OA_CHECK(state.erase_trial());
+    OA_CHECK(state.write_records());
+    OA_CHECK(preferences::load(records_file).count("accelerated-unusable.alpha") == 1);
+    // A clear never confirmed is put back at a clean exit.
+    OA_CHECK(state.clear().changed);
+    state.clean_exit();
+    OA_CHECK(preferences::load(records_file).count("accelerated-unusable.alpha") == 1);
     OA_CHECK(log.lines.empty());
 }
 
@@ -695,7 +760,7 @@ void leftover_trials_across_starts() {
         OA_CHECK(rs::has_untold_record(after.records()));
         // Off then On gives the driver a fresh try.
         OA_CHECK(after.clear().changed);
-        OA_CHECK(after.write_records());
+        OA_CHECK(after.confirm_clear());
         rs::RendererState retried = rs::RendererState::open_folder(
             scratch.folder, std::string(version), two_in_a_row, log_into(log)
         );
@@ -714,6 +779,7 @@ int main() {
         the_sentinel_is_rewritten_in_place_and_deleted();
         garbled_files_are_never_fatal();
         the_trial_carries_the_records_as_they_stand_in_the_file();
+        cancel_puts_the_cleared_records_back();
         records_from_a_match_are_written_when_it_ends();
         the_last_runs_strike_goes_with_the_trial();
         a_clean_exit_counts_nothing_against_the_driver();

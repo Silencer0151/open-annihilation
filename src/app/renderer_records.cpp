@@ -954,6 +954,32 @@ Change forget_native_density(Records& records, const RecordRules& rules) noexcep
 }
 
 // ---------------------------------------------------------------------------
+// The main menu's notice
+
+std::optional<PendingNotice>
+next_notice(const Records& records, const std::vector<std::string>& passed_over) {
+    for (const DriverRecords& entry : records.drivers) {
+        if (std::find(passed_over.begin(), passed_over.end(), entry.driver) != passed_over.end())
+            continue;
+        const bool failed_driver =
+            entry.failed_driver.failure != RecordedFailure::none && !entry.failed_driver.told;
+        const bool unusable = entry.accelerated_unusable.failure != RecordedFailure::none &&
+                              !entry.accelerated_unusable.told;
+        if (failed_driver)
+            return PendingNotice{entry.driver, NoticeKind::failed_driver};
+        if (unusable)
+            return PendingNotice{entry.driver, NoticeKind::accelerated_unusable};
+    }
+    return std::nullopt;
+}
+
+NoticeAction notice_action(bool unattended, bool marks_told) noexcept {
+    if (!unattended)
+        return NoticeAction::show;
+    return marks_told ? NoticeAction::note_and_mark : NoticeAction::note;
+}
+
+// ---------------------------------------------------------------------------
 // The sentinel and the trial through a run
 
 bool start_stage_passed(uint32_t frames, uint64_t elapsed_ns) noexcept {

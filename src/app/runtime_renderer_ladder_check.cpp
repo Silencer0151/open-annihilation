@@ -5,29 +5,43 @@
 // runs, forced on the renderer the start made, and the game presenting on
 // through it. On the dummy video driver every hardware driver refuses, so
 // the walk ends on SDL's software renderer, and every rebuild makes that
-// renderer again. Two cases run only when --render-fault names them, since
-// they switch the accelerated tier on, as --hardware-acceleration and
-// --force-capable would, where every other case draws in the standard tier:
-// slow frames, which walk the step-down down its ladder to the standard
-// tier, and the memory guard, which refuses the tier's buffers and then
-// drops it.
+// renderer again. Then the renderer records across simulated restarts of
+// the game, each reading the files a start in a scratch folder finds, as
+// the player's own profile keeps them: strikes and records of crashes and
+// of failures while running, the walk that skips a recorded driver and
+// walks again when that leaves nothing able to present, the adapter as
+// another driver words it, a trial that cannot be written, the 2 GiB rule,
+// the main menu's notice and the settings dialog's retry. Two cases run
+// only when --render-fault names them, since they switch the accelerated
+// tier on, as --hardware-acceleration and --force-capable would, where
+// every other case draws in the standard tier: slow frames, which walk the
+// step-down down its ladder to the standard tier, and the memory guard,
+// which refuses the tier's buffers and then drops it.
 #include "oa/app/runtime.hpp"
 #include "engine_settings_match_host.hpp"
+#include "engine_settings_state.hpp"
+#include "graphics_report.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "oa/app/renderer_state.hpp"
 #include "oa/base/float_precision.hpp"
+#include "oa/platform/preferences.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
+#include "oa/ui/frontend_state/app_modes.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cfenv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace oa::app {
@@ -114,6 +128,101 @@ void count_float_change(
 /// @return the answer
 render_probe::DeviceState answered_state(void* context) {
     return *static_cast<render_probe::DeviceState*>(context);
+}
+
+namespace rs = renderer_state;
+namespace preferences = oa::platform::preferences;
+
+/// The physical memory the records' cases take the machine to have, so
+/// that they run alike on every machine: 8 GiB, or 1 GiB for the case of a
+/// machine under 2 GiB.
+constexpr uint64_t records_memory = uint64_t{8} << 30;
+constexpr uint64_t small_memory = uint64_t{1} << 30;
+/// The window the records' cases draw: the front end at a scale that is not
+/// a whole number, which the graphics card scales through a prescale
+/// target where the pixel-art scale mode is missing.
+constexpr int records_window_width = 1000;
+constexpr int records_window_height = 750;
+/// Attempts at a scratch folder of a name no other run has.
+constexpr int scratch_attempts = 64;
+/// Device resets that make the renderer again.
+constexpr int resets_that_rebuild = 3;
+/// The zoom the path cases magnify the battlefield at: one the card scales
+/// sharp-bilinear through the scene's prescale target.
+constexpr float path_zoom = 1.37F;
+/// Frames the notice case draws while it waits for the main menu, and the
+/// most it waits for a screen to change.
+constexpr uint32_t notice_wait_frames = 30;
+/// The adapter the adapter case's driver describes, and how the driver a
+/// record's skip or a rebuild lands on words the same adapter.
+constexpr std::string_view case_adapter = "Example Graphics 3000";
+constexpr std::string_view case_adapter_other_words = "Example Graphics 3000/PCIe/SSE2";
+/// Another adapter altogether.
+constexpr std::string_view other_adapter = "Example Graphics 4000";
+
+/// Reads the check's clock, which the stages of the sentinel are timed by.
+///
+/// @param context the clock, in nanoseconds
+/// @return its time
+uint64_t read_check_clock(void* context) {
+    return *static_cast<uint64_t*>(context);
+}
+
+/// Refuses SDL's software renderer as many times as the count left says,
+/// as if it had failed.
+///
+/// @param context the refusals left
+/// @param driver SDL's name for the render driver
+/// @return true for software while refusals are left
+bool refuse_software(void* context, std::string_view driver) {
+    auto& left = *static_cast<uint32_t*>(context);
+    if (driver != render_probe::software_renderer || left == 0)
+        return false;
+    --left;
+    return true;
+}
+
+/// A folder of the check's own, of a name no other run has, under the
+/// folder the check writes its reports in, removed with everything in it
+/// when the check ends.
+struct ScratchFolder {
+    fs::path path{};
+
+    explicit ScratchFolder(const fs::path& parent) {
+        fs::create_directories(parent);
+        // Making a folder fails where one of the name stands, so two runs at
+        // once never share one.
+        const auto stamp =
+            static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        for (int attempt = 0; attempt < scratch_attempts && path.empty(); ++attempt) {
+            const fs::path folder = parent / ("renderer-records-" + std::to_string(stamp) + "-" +
+                                              std::to_string(attempt));
+            std::error_code error;
+            if (fs::create_directory(folder, error))
+                path = folder;
+        }
+        if (path.empty())
+            throw std::runtime_error("renderer ladder check: no scratch folder could be made");
+    }
+
+    ScratchFolder(const ScratchFolder&) = delete;
+    ScratchFolder& operator=(const ScratchFolder&) = delete;
+
+    ~ScratchFolder() {
+        std::error_code error;
+        fs::remove_all(path, error);
+    }
+};
+
+/// Writes a file's text.
+///
+/// @param file the file
+/// @param text its text
+void write_text(const fs::path& file, std::string_view text) {
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    output << text;
+    if (!output)
+        throw std::runtime_error("renderer ladder check: cannot write " + file.string());
 }
 
 } // namespace
@@ -860,6 +969,11 @@ struct Runtime::RendererLadder {
         );
         runtime.options_.max_frames_per_second = max_frames_per_second;
         run().forced_frame_ns = slow_frame_ns;
+        // The magnified scene's prescale target is made at the first frame
+        // drawn through it, and the budget's steps keep it.
+        expect(
+            magnify_once(where), where, "zoom 1.5 was not drawn through the scene's prescale target"
+        );
         expected.budget = policy::SceneBudget::none;
         step_to(where, zoomed_out_zoom, expected, "budget none");
         expect(scene_buffers_freed(), where, "the scene's buffers outlived budget none");
@@ -1087,6 +1201,1246 @@ struct Runtime::RendererLadder {
         passed.emplace_back(where);
         return 0;
     }
+
+    // -----------------------------------------------------------------------
+    // The renderer records across simulated restarts
+
+    /// Where the records' cases keep their folders.
+    fs::path records_root{};
+    /// The check's clock, which the stages of the sentinel are timed by.
+    uint64_t clock_ns{};
+    /// The first hardware driver of SDL's order, which the records' cases
+    /// name the renderer by where a case needs a driver that can be
+    /// recorded failed-driver; empty when SDL has none.
+    std::string hardware_driver{};
+    /// The refusals of SDL's software renderer the advice case has left.
+    uint32_t software_refusals{};
+
+    /// Returns the renderer's host.
+    RendererHost& host() { return *run().host; }
+
+    /// Returns a driver's strike and records.
+    ///
+    /// @param driver the driver
+    /// @return its entry, or null when it has none
+    const rs::DriverRecords* entry(std::string_view driver) {
+        return rs::find_driver(host().records().records(), driver);
+    }
+
+    /// Makes a case's folder of records.
+    ///
+    /// @param name the case
+    /// @return the folder
+    fs::path records_folder(std::string_view name) {
+        const fs::path folder = records_root / name;
+        fs::create_directories(folder);
+        return folder;
+    }
+
+    /// Reads the records file of a folder as a start would find it.
+    ///
+    /// @param folder the folder
+    /// @return its keys and values
+    static rs::Values records_file(const fs::path& folder) {
+        return preferences::load(folder / rs::records_file_name);
+    }
+
+    /// Takes the overrides the records' cases run with: 8 GiB of memory,
+    /// two left-over trials in a row before a record, the renderer named by
+    /// its own name and no driver refused.
+    void records_defaults() {
+        auto& faults = host().faults();
+        faults.physical_memory = records_memory;
+        faults.crash_evidence = rs::CrashEvidence::two_in_a_row;
+        faults.record_driver.clear();
+        faults.adapter.clear();
+        faults.refuse_driver = nullptr;
+        faults.context = nullptr;
+        run().rung.reset();
+    }
+
+    /// Starts the game again, as its next start would: the run before ends
+    /// cleanly (RendererHost::finish_records) or as a crash leaves its files,
+    /// then the start reads the records in a folder, walks the drivers and
+    /// decides its first frame's tier with the setting On on the player's
+    /// own profile, under --force-capable.
+    ///
+    /// @param folder the folder of the records; empty keeps them in memory,
+    ///     as with a named preferences file, with the setting at that file's
+    ///     default
+    /// @param clean_end the run before ended cleanly
+    void start_on(const fs::path& folder, bool clean_end) {
+        auto& renderer = host();
+        if (clean_end)
+            renderer.finish_records();
+        to_main_menu();
+        runtime.forget_render_textures();
+        runtime.switch_accelerated_presentation(false, runtime.accelerated_.rung);
+        runtime.sdl_.renderer = nullptr;
+        RecordsPlace place;
+        place.folder = folder;
+        place.engine_version = renderer.records_place().engine_version;
+        renderer.create(runtime.sdl_.window, renderer.faults(), place);
+        runtime.sdl_.renderer = renderer.renderer();
+        runtime.take_renderer_names(
+            renderer.facts().renderer, stats_adapter_name(renderer.facts())
+        );
+        TierRequest request;
+        request.force_capable = !folder.empty();
+        request.players_own_profile = !folder.empty();
+        request.setting_on = !folder.empty();
+        renderer.decide_start_tier(request);
+        auto& state = run();
+        state.pending_rebuild.clear();
+        state.pending_failure = {};
+        state.device_lost = false;
+        state.resets = {};
+        state.notices_noted.clear();
+        state.main_menu_frames = 0;
+        state.presented_since_rebuild = 0;
+        runtime.apply_output_mode();
+    }
+
+    /// Draws main menu frames as the game's loop does, the main menu's
+    /// notice first.
+    ///
+    /// @param frames the frames
+    void menu_frames(uint32_t frames) {
+        for (uint32_t frame = 0; frame < frames; ++frame) {
+            runtime.tell_renderer_records();
+            runtime.render();
+        }
+    }
+
+    /// Passes the start-up stage: 2 s on the check's clock and 60 frames.
+    ///
+    /// @param where the case
+    void pass_start(std::string_view where) {
+        clock_ns += rs::start_stage_ns;
+        menu_frames(rs::start_stage_frames);
+        const auto& sentinel = host().records().sentinel();
+        expect(
+            sentinel && sentinel->stage == rs::SentinelStage::running,
+            where,
+            "the start-up stage did not pass after 60 frames and 2 s"
+        );
+        expect(!host().records().records().trial, where, "the trial stood after the stage passed");
+    }
+
+    /// Leaves the files a crash in a start-up stage leaves: a sentinel, and
+    /// no trial, as before the function test.
+    ///
+    /// @param folder the folder of the records
+    /// @param sentinel the sentinel's value
+    static void leave_over_sentinel(const fs::path& folder, std::string_view sentinel) {
+        rs::Values values = records_file(folder);
+        values.erase(std::string(rs::trial_key));
+        preferences::save(folder / rs::records_file_name, values);
+        preferences::save(
+            folder / rs::sentinel_file_name,
+            rs::Values{{std::string(rs::sentinel_key), std::string(sentinel)}}
+        );
+    }
+
+    /// Returns the tier the last frame was drawn in.
+    render_policy::TierDecision tier() { return run().tier; }
+
+    /// Returns the status the settings dialog shows.
+    oa::ui::engine_settings::AccelerationState status() {
+        return runtime.acceleration_report().status.state;
+    }
+
+    /// Checks the notices the main menu noted in this start.
+    ///
+    /// @param where the case
+    /// @param kinds the notices' kinds, in order
+    void expect_notices(std::string_view where, std::initializer_list<rs::NoticeKind> kinds) {
+        const auto& noted = run().notices_noted;
+        bool same = noted.size() == kinds.size();
+        std::size_t index = 0;
+        for (const rs::NoticeKind kind : kinds)
+            same = same && noted[index++].kind == kind;
+        expect(same, where, "the main menu did not note one notice for each new record");
+    }
+
+    /// A left-over trial is a strike on the first restart, which runs as if
+    /// nothing were recorded, also with the sentinel's file garbled or lost
+    /// as a system crash leaves it; the second in a row records
+    /// accelerated-unusable, which keeps the start standard and is told
+    /// once. The start tests and accelerates by itself; the front end's
+    /// prescale target, first used under the start-up sentinel, writes no
+    /// sentinel or trial of its own.
+    void left_over_trial() {
+        constexpr std::string_view where = "records-trial";
+        records_defaults();
+        const fs::path folder = records_folder("trial");
+        start_on(folder, true);
+        menu_frames(1);
+        expect(
+            tier().tier == render_policy::RenderTier::accelerated,
+            where,
+            "the start did not run the function test and accelerate by itself"
+        );
+        const auto& trial = host().records().records().trial;
+        expect(
+            trial && trial->stage == rs::StrikeStage::probe &&
+                trial->driver == render_probe::software_renderer,
+            where,
+            "no trial probe software stood through the first accelerated frames"
+        );
+        expect(
+            records_file(folder).count(std::string(rs::trial_key)) == 1,
+            where,
+            "the trial was not written before the function test"
+        );
+        const auto& sentinel = host().records().sentinel();
+        expect(
+            sentinel && sentinel->stage == rs::SentinelStage::accelerated,
+            where,
+            "the first accelerated frame did not move the sentinel"
+        );
+        expect(
+            runtime.accelerated_.screen_prescale.made(),
+            where,
+            "the front end was not scaled through a prescale target"
+        );
+        // A crash in the first accelerated frames, the sentinel's file
+        // garbled.
+        write_text(folder / rs::sentinel_file_name, "garbled");
+        start_on(folder, false);
+        const auto* struck = entry(render_probe::software_renderer);
+        expect(
+            host().leftovers().unclean_exit && struck != nullptr &&
+                struck->strike.stage == rs::StrikeStage::probe &&
+                struck->accelerated_unusable.failure == rs::RecordedFailure::none,
+            where,
+            "the first left-over trial was not a strike alone"
+        );
+        menu_frames(1);
+        expect(
+            tier().tier == render_policy::RenderTier::accelerated,
+            where,
+            "the start after a strike did not run as if nothing were recorded"
+        );
+        // Again, the sentinel's file lost with the power.
+        fs::remove(folder / rs::sentinel_file_name);
+        start_on(folder, false);
+        const auto* recorded = entry(render_probe::software_renderer);
+        expect(
+            recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::stopped &&
+                host().leftovers().change.new_record,
+            where,
+            "the second left-over trial in a row was not recorded accelerated-unusable"
+        );
+        menu_frames(3);
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable &&
+                !host().records().records().trial,
+            where,
+            "the recorded driver did not stay standard with no trial"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::game_stopped,
+            where,
+            "the status did not say the game stopped while using it"
+        );
+        expect_notices(where, {rs::NoticeKind::accelerated_unusable});
+        expect(
+            entry(render_probe::software_renderer)->accelerated_unusable.told,
+            where,
+            "the notice did not mark the record told"
+        );
+        // The next start honours the record and tells nothing.
+        start_on(folder, true);
+        menu_frames(3);
+        expect_notices(where, {});
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable,
+            where,
+            "the next start did not honour the record"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// Where a fault in a trial's stage can stop the whole system, as on
+    /// Windows before Vista and on Linux, the first left-over trial is
+    /// already a record.
+    void first_trial_counts() {
+        constexpr std::string_view where = "records-first-trial";
+        records_defaults();
+        host().faults().crash_evidence = rs::CrashEvidence::first_counts;
+        const fs::path folder = records_folder("first-trial");
+        start_on(folder, true);
+        menu_frames(1);
+        start_on(folder, false);
+        const auto* recorded = entry(render_probe::software_renderer);
+        expect(
+            recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::stopped,
+            where,
+            "the first left-over trial was not recorded"
+        );
+        menu_frames(1);
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable,
+            where,
+            "the start after it did not stay standard"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// A start that passes its start-up stage clears the strike of a crash
+    /// before it; a run that ends after its start-up stage, without a clean
+    /// exit, is only logged at the next start.
+    void clean_pass() {
+        constexpr std::string_view where = "records-clean-pass";
+        records_defaults();
+        const fs::path folder = records_folder("clean-pass");
+        start_on(folder, true);
+        menu_frames(1);
+        start_on(folder, false);
+        const auto* struck = entry(render_probe::software_renderer);
+        expect(
+            struck != nullptr && struck->strike.stage == rs::StrikeStage::probe,
+            where,
+            "the left-over trial was not struck"
+        );
+        menu_frames(1);
+        pass_start(where);
+        struck = entry(render_probe::software_renderer);
+        expect(
+            struck == nullptr || struck->strike.stage == rs::StrikeStage::none,
+            where,
+            "passing the stage did not clear the strike"
+        );
+        expect(
+            records_file(folder).count(std::string(rs::trial_key)) == 0,
+            where,
+            "the trial was not erased from the file"
+        );
+        // A crash once the start-up stage passed.
+        start_on(folder, false);
+        const auto& leftovers = host().leftovers();
+        const auto log = host().records_log();
+        expect(
+            leftovers.unclean_exit && leftovers.driver.empty() && !leftovers.change.changed,
+            where,
+            "a left-over running marker was struck or recorded"
+        );
+        expect(
+            std::count_if(
+                log.begin(),
+                log.end(),
+                [](const std::string& line) {
+                    return line.find("without a clean exit (running") != std::string::npos;
+                }
+            ) == 1,
+            where,
+            "the left-over running marker was not logged once"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// A left-over create or standard sentinel strikes its driver, and the
+    /// same at the next start records failed-driver, which the walk then
+    /// skips and the main menu tells once; a clean pass between them clears
+    /// the strike, and SDL's software renderer is never recorded so.
+    void left_over_sentinel() {
+        constexpr std::string_view where = "records-sentinel";
+        records_defaults();
+        const fs::path software_folder = records_folder("software-sentinel");
+        start_on(software_folder, true);
+        menu_frames(1);
+        for (int start = 0; start < 2; ++start) {
+            leave_over_sentinel(software_folder, "standard software");
+            start_on(software_folder, false);
+        }
+        const auto* software = entry(render_probe::software_renderer);
+        expect(
+            software == nullptr || software->failed_driver.failure == rs::RecordedFailure::none,
+            where,
+            "software was recorded failed-driver"
+        );
+        host().faults().record_driver = hardware_driver;
+        const fs::path folder = records_folder("sentinel");
+        start_on(folder, true);
+        menu_frames(1);
+        leave_over_sentinel(folder, "standard " + hardware_driver);
+        start_on(folder, false);
+        expect(
+            entry(hardware_driver) != nullptr &&
+                entry(hardware_driver)->strike.stage == rs::StrikeStage::standard,
+            where,
+            "a left-over standard sentinel was not struck"
+        );
+        menu_frames(1);
+        pass_start(where);
+        expect(
+            entry(hardware_driver)->strike.stage == rs::StrikeStage::none,
+            where,
+            "a clean pass did not clear the strike"
+        );
+        for (int start = 0; start < 2; ++start) {
+            leave_over_sentinel(folder, "create " + hardware_driver);
+            start_on(folder, false);
+        }
+        expect(
+            entry(hardware_driver)->failed_driver.failure == rs::RecordedFailure::stopped,
+            where,
+            "the same create sentinel twice in a row was not recorded failed-driver"
+        );
+        const auto attempts = host().attempts();
+        expect(
+            std::none_of(
+                attempts.begin(),
+                attempts.end(),
+                [&](const CreationAttempt& attempt) { return attempt.driver == hardware_driver; }
+            ) && host().skipped_drivers().size() == 1 &&
+                host().skipped_drivers().front() == hardware_driver,
+            where,
+            "the walk did not skip the recorded driver"
+        );
+        menu_frames(3);
+        expect_notices(where, {rs::NoticeKind::failed_driver});
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::in_use_on_another_driver,
+            where,
+            "the status did not say another driver is in use"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// Records that would leave nothing able to present are ignored for the
+    /// run: the walk starts again from the top with them ignored.
+    void advice() {
+        constexpr std::string_view where = "records-advice";
+        records_defaults();
+        host().faults().record_driver = hardware_driver;
+        const fs::path folder = records_folder("advice");
+        start_on(folder, true);
+        menu_frames(1);
+        for (int start = 0; start < 2; ++start) {
+            leave_over_sentinel(folder, "create " + hardware_driver);
+            start_on(folder, false);
+        }
+        expect(
+            rs::skips_driver(host().records().records(), hardware_driver),
+            where,
+            "the driver was not recorded failed-driver"
+        );
+        // SDL's software renderer refuses once: the walk that skips the
+        // recorded driver ends with nothing able to present.
+        software_refusals = 1;
+        auto& faults = host().faults();
+        faults.context = &software_refusals;
+        faults.refuse_driver = refuse_software;
+        start_on(folder, true);
+        faults.refuse_driver = nullptr;
+        faults.context = nullptr;
+        const auto attempts = host().attempts();
+        expect(
+            host().records_ignored() && host().renderer() != nullptr &&
+                std::any_of(
+                    attempts.begin(),
+                    attempts.end(),
+                    [&](const CreationAttempt& attempt) {
+                        return attempt.driver == hardware_driver;
+                    }
+                ),
+            where,
+            "the walk did not start again with the records ignored"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// A trial that cannot be written skips the function test and keeps the
+    /// start standard, with the status saying the game cannot save its
+    /// files and nothing recorded; switching Off then On tries the write
+    /// again.
+    void unwritable_trial() {
+        constexpr std::string_view where = "records-unwritable";
+        records_defaults();
+        // A file stands where the profile's folder should be.
+        const fs::path blocker = records_folder("unwritable") / "blocker";
+        write_text(blocker, "a file, not a folder");
+        start_on(blocker / "profile", true);
+        menu_frames(1);
+        auto& inputs = host().tier_inputs();
+        expect(
+            inputs.function_test == render_policy::FunctionTest::trial_unwritten &&
+                tier().reason == render_policy::TierReason::trial_unwritten,
+            where,
+            "the function test ran with no trial written"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::cannot_save &&
+                !runtime.acceleration_report().acceleration_unavailable,
+            where,
+            "the status did not say the game cannot save its files, with the row free"
+        );
+        expect(
+            !host().records().records().trial && host().records().records().drivers.empty(),
+            where,
+            "a trial or a record was kept"
+        );
+        const auto log = host().records_log();
+        expect(
+            std::any_of(
+                log.begin(),
+                log.end(),
+                [](const std::string& line) {
+                    return line.find("cannot write") != std::string::npos;
+                }
+            ),
+            where,
+            "the failed writes were not logged"
+        );
+        // Off then On tries the trial again, which fails again.
+        auto& dialog = runtime.open_engine_settings_dialog();
+        ++dialog.forget_renderer_failures;
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::changed);
+        expect(
+            inputs.function_test == render_policy::FunctionTest::not_run,
+            where,
+            "Off then On did not let the test try again"
+        );
+        menu_frames(1);
+        expect(
+            inputs.function_test == render_policy::FunctionTest::trial_unwritten,
+            where,
+            "the retry did not try the trial again"
+        );
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::accepted);
+        passed.emplace_back(where);
+    }
+
+    /// The first use of an accelerated path after the start-up stage writes
+    /// its trial and sentinel, which its first frames pass; a crash in them
+    /// is struck, and the second in a row records accelerated-unusable; a
+    /// path whose trial cannot be written drops the tier and records
+    /// nothing.
+    void paths() {
+        constexpr std::string_view where = "records-paths";
+        records_defaults();
+        const auto magnify = rs::AcceleratedPath::magnify;
+        const fs::path folder = records_folder("paths");
+        start_on(folder, true);
+        menu_frames(1);
+        pass_start(where);
+        expect(host().begin_path(magnify), where, "the path's trial could not be written");
+        const auto& sentinel = host().records().sentinel();
+        const auto& trial = host().records().records().trial;
+        expect(
+            sentinel && sentinel->stage == rs::SentinelStage::path && sentinel->path == magnify &&
+                trial && trial->stage == rs::StrikeStage::path && trial->path == magnify,
+            where,
+            "the path's first use did not write its trial and sentinel"
+        );
+        for (uint32_t frame = 0; frame < rs::path_stage_frames; ++frame)
+            host().note_presented_frame(path_bit(magnify));
+        expect(
+            host().records().sentinel()->stage == rs::SentinelStage::running &&
+                !host().records().records().trial,
+            where,
+            "the path's first frames did not pass"
+        );
+        expect(host().begin_path(magnify), where, "a later use of the path was refused");
+        expect(
+            host().records().sentinel()->stage == rs::SentinelStage::running,
+            where,
+            "a later use of the path wrote its sentinel again"
+        );
+        for (int start = 0; start < 2; ++start) {
+            start_on(folder, start == 0);
+            menu_frames(1);
+            pass_start(where);
+            expect(host().begin_path(magnify), where, "the path's trial could not be written");
+        }
+        start_on(folder, false);
+        const auto* recorded = entry(render_probe::software_renderer);
+        expect(
+            recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::stopped,
+            where,
+            "two left-over path trials in a row were not recorded"
+        );
+        // A path whose trial cannot be written: a folder stands where the
+        // records file should be.
+        const fs::path unwritable = records_folder("path-unwritable");
+        start_on(unwritable, true);
+        menu_frames(1);
+        pass_start(where);
+        fs::remove(unwritable / rs::records_file_name);
+        fs::create_directories(unwritable / rs::records_file_name / "blocked");
+        bool dropped = false;
+        try {
+            runtime.begin_accelerated_path(magnify);
+        } catch (const AccelerationError& error) {
+            runtime.take_acceleration_error(error);
+            dropped = true;
+        }
+        expect(
+            dropped && host().tier_inputs().drop == render_policy::Drop::path_trial_unwritten &&
+                host().records().records().drivers.empty(),
+            where,
+            "a path whose trial could not be written did not drop the tier with nothing struck"
+        );
+        menu_frames(1);
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::cannot_save,
+            where,
+            "the status did not say the game cannot save its files"
+        );
+        fs::remove_all(unwritable / rs::records_file_name);
+        passed.emplace_back(where);
+    }
+
+    /// Returns a rung with magnify on and the card's sharp-bilinear
+    /// magnification through prescale targets, as a machine of a tested
+    /// class starts at.
+    static render_policy::LadderState magnify_rung() {
+        render_policy::LadderState rung{};
+        rung.method = render_policy::ZoomOutMethod::area;
+        rung.budget = render_policy::SceneBudget::full;
+        rung.magnify = true;
+        rung.filtered_chrome = true;
+        rung.card = render_policy::CardFilter::prescale_full;
+        rung.standard = false;
+        return rung;
+    }
+
+    /// Checks that the sentinel stands at `running` with no trial.
+    ///
+    /// @param where the case
+    /// @param what what was expected
+    void expect_running(std::string_view where, std::string_view what) {
+        const auto& sentinel = host().records().sentinel();
+        expect(
+            sentinel && sentinel->stage == rs::SentinelStage::running &&
+                !host().records().records().trial,
+            where,
+            what
+        );
+    }
+
+    /// Draws match frames at a zoom.
+    ///
+    /// @param zoom the battlefield's zoom
+    /// @param frames the frames
+    void match_frames(float zoom, uint32_t frames) {
+        runtime.match_zoom_ = runtime.match_zoom_target_ = zoom;
+        for (uint32_t frame = 0; frame < frames; ++frame)
+            runtime.render();
+    }
+
+    /// The magnified world's path begins at the first frame drawn through
+    /// it: a match on a magnify rung played at zoom 1, however long, leaves
+    /// the sentinel at `running` with no trial and makes none of its
+    /// textures; the first zoomed-in frame writes the path's trial and
+    /// sentinel, which its first 60 magnified frames pass. Switching the
+    /// tier off while a path's first frames stand closes their stage.
+    void path_window() {
+        constexpr std::string_view where = "records-path-window";
+        records_defaults();
+        run().rung = magnify_rung();
+        const fs::path folder = records_folder("path-window");
+        start_on(folder, true);
+        menu_frames(1);
+        pass_start(where);
+        start_match();
+        match_frames(1.0F, rs::path_stage_frames * 2);
+        expect(
+            tier().tier == render_policy::RenderTier::accelerated &&
+                runtime.accelerated_.rung.magnify,
+            where,
+            "the match was not drawn in the accelerated tier on a magnify rung"
+        );
+        expect_running(where, "a match at zoom 1 left a path's sentinel or trial standing");
+        expect(
+            !runtime.accelerated_.scene.made() && !runtime.accelerated_.overlay_texture.made(),
+            where,
+            "the magnified world's textures were made at zoom 1"
+        );
+        match_frames(path_zoom, 1);
+        const auto& sentinel = host().records().sentinel();
+        const auto& trial = host().records().records().trial;
+        expect(
+            runtime.accelerated_.magnified && sentinel &&
+                sentinel->stage == rs::SentinelStage::path &&
+                sentinel->path == rs::AcceleratedPath::magnify && trial &&
+                trial->stage == rs::StrikeStage::path,
+            where,
+            "the first zoomed-in frame did not write the magnified world's trial and sentinel"
+        );
+        expect(
+            records_file(folder).count(std::string(rs::trial_key)) == 1,
+            where,
+            "the path's trial was not written before its first frame"
+        );
+        match_frames(path_zoom, rs::path_stage_frames - 1);
+        expect_running(where, "the path's first 60 magnified frames did not pass its stage");
+        // Switched off while the path's first frames stand.
+        start_on(folder, true);
+        menu_frames(1);
+        pass_start(where);
+        start_match();
+        match_frames(path_zoom, 1);
+        expect(
+            host().records().sentinel()->stage == rs::SentinelStage::path,
+            where,
+            "the path's first frame wrote no sentinel"
+        );
+        auto& settings = runtime.engine_settings_state().current;
+        settings.hardware_acceleration = false;
+        match_frames(path_zoom, 1);
+        settings.hardware_acceleration = true;
+        expect(!runtime.accelerated_.on, where, "the setting turned Off left the tier on");
+        expect_running(where, "switching the tier off left the path's sentinel or trial standing");
+        expect(
+            records_file(folder).count(std::string(rs::trial_key)) == 0,
+            where,
+            "switching the tier off left the path's trial in the file"
+        );
+        to_main_menu();
+        run().rung.reset();
+        passed.emplace_back(where);
+    }
+
+    /// Each driver describes the adapter in words of its own, so only a
+    /// start whose walk no record steered notes it: a start that skips the
+    /// recorded driver, and a rebuild, keep the records whatever the driver
+    /// they land on calls the adapter; a start that skips nothing and reads
+    /// another adapter clears them.
+    void adapter() {
+        constexpr std::string_view where = "records-adapter";
+        records_defaults();
+        auto& faults = host().faults();
+        faults.record_driver = hardware_driver;
+        faults.adapter = case_adapter;
+        const fs::path folder = records_folder("adapter");
+        start_on(folder, true);
+        menu_frames(1);
+        expect(
+            host().records().records().adapter == case_adapter,
+            where,
+            "the start did not note the adapter"
+        );
+        for (int start = 0; start < 2; ++start) {
+            leave_over_sentinel(folder, "create " + hardware_driver);
+            start_on(folder, false);
+        }
+        expect(
+            rs::skips_driver(host().records().records(), hardware_driver),
+            where,
+            "the driver was not recorded failed-driver"
+        );
+        // The driver the skip lands on words the adapter its own way.
+        faults.adapter = case_adapter_other_words;
+        start_on(folder, true);
+        const std::string record_key = std::string(rs::failed_driver_prefix) + hardware_driver;
+        expect(
+            host().skipped_drivers().size() == 1 &&
+                rs::skips_driver(host().records().records(), hardware_driver) &&
+                host().records().records().adapter == case_adapter &&
+                records_file(folder).count(record_key) == 1,
+            where,
+            "a start that skipped a recorded driver took its driver's words for another adapter"
+        );
+        // A rebuild's driver too, after a lost device it strikes.
+        menu_frames(2);
+        post_render_event(SDL_EVENT_RENDER_DEVICE_LOST);
+        menu_frames(1);
+        const auto* kept = entry(hardware_driver);
+        expect(
+            kept != nullptr && kept->failed_driver.failure == rs::RecordedFailure::stopped &&
+                kept->strike.stage == rs::StrikeStage::lost &&
+                host().records().records().adapter == case_adapter,
+            where,
+            "a rebuild took its driver's words for another adapter and cleared the records"
+        );
+        // A start that skips nothing and reads another adapter clears them.
+        const fs::path other = records_folder("adapter-other");
+        faults.adapter = case_adapter;
+        start_on(other, true);
+        menu_frames(1);
+        leave_over_sentinel(other, "standard " + hardware_driver);
+        faults.adapter = other_adapter;
+        start_on(other, false);
+        const auto* cleared = entry(hardware_driver);
+        expect(
+            (cleared == nullptr || cleared->strike.stage == rs::StrikeStage::none) &&
+                host().records().records().adapter == other_adapter,
+            where,
+            "another adapter did not clear the records"
+        );
+        faults.adapter.clear();
+        passed.emplace_back(where);
+    }
+
+    /// After a start with -n the multiplayer signal waits on the main menu
+    /// until the frontend's next pass, which runs at the player's first
+    /// input: the notice of a new record waits through that and through the
+    /// multiplayer screens, and is told once when the main menu shows again.
+    void notice_waits() {
+        constexpr std::string_view where = "records-notice-wait";
+        records_defaults();
+        const fs::path folder = records_folder("notice-wait");
+        start_on(folder, true);
+        menu_frames(1);
+        start_on(folder, false);
+        menu_frames(1);
+        start_on(folder, false);
+        expect(
+            rs::has_untold_record(host().records().records()),
+            where,
+            "the second left-over trial left no record to tell"
+        );
+        // The main menu as -n leaves it: the multiplayer signal waits.
+        frontend::set_frontend_signal(runtime.state_, runtime, frontend::signal_id::multiplayer);
+        for (uint32_t frame = 0; frame < notice_wait_frames; ++frame)
+            runtime.idle_tick();
+        expect(
+            runtime.screen_ == Screen::main_menu && run().notices_noted.empty(),
+            where,
+            "the notice was told while the multiplayer signal waited"
+        );
+        // The player's first input runs the frontend's pass.
+        runtime.activate();
+        for (uint32_t frame = 0; frame < notice_wait_frames && runtime.screen_ == Screen::main_menu;
+             ++frame)
+            runtime.idle_tick();
+        expect(runtime.screen_ != Screen::main_menu, where, "the multiplayer screens never showed");
+        for (uint32_t frame = 0; frame < notice_wait_frames; ++frame)
+            runtime.idle_tick();
+        expect(
+            run().notices_noted.empty(), where, "the notice was told over the multiplayer screens"
+        );
+        // Back to the main menu, as the multiplayer screens' Cancel goes.
+        frontend::set_frontend_signal(runtime.state_, runtime, frontend::signal_id::back);
+        for (uint32_t frame = 0; frame < notice_wait_frames && runtime.screen_ != Screen::main_menu;
+             ++frame) {
+            runtime.frontend_pass_requested_ = true;
+            runtime.idle_tick();
+        }
+        expect(runtime.screen_ == Screen::main_menu, where, "the main menu never showed again");
+        for (uint32_t frame = 0; frame < notice_wait_frames; ++frame)
+            runtime.idle_tick();
+        expect_notices(where, {rs::NoticeKind::accelerated_unusable});
+        expect(
+            !rs::has_untold_record(host().records().records()),
+            where,
+            "the notice did not mark the record told"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// A lost device records accelerated-unusable at once and strikes the
+    /// driver; the next start makes the same driver on the standard tier,
+    /// and a second lost device there, in a match, records failed-driver
+    /// when the match ends, which the start after skips.
+    void lost_device() {
+        constexpr std::string_view where = "records-lost";
+        records_defaults();
+        host().faults().record_driver = hardware_driver;
+        const fs::path folder = records_folder("lost");
+        start_on(folder, true);
+        menu_frames(2);
+        post_render_event(SDL_EVENT_RENDER_DEVICE_LOST);
+        menu_frames(1);
+        const auto* recorded = entry(hardware_driver);
+        expect(
+            recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::lost &&
+                recorded->strike.stage == rs::StrikeStage::lost &&
+                recorded->failed_driver.failure == rs::RecordedFailure::none,
+            where,
+            "a lost device did not record accelerated-unusable with a strike"
+        );
+        menu_frames(2);
+        expect_notices(where, {rs::NoticeKind::accelerated_unusable});
+        start_on(folder, true);
+        expect(host().skipped_drivers().empty(), where, "a single lost device skipped the driver");
+        menu_frames(2);
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable,
+            where,
+            "the start after a lost device did not stay standard"
+        );
+        start_match();
+        runtime.render();
+        post_render_event(SDL_EVENT_RENDER_DEVICE_LOST);
+        runtime.render();
+        expect(
+            entry(hardware_driver)->failed_driver.failure == rs::RecordedFailure::lost,
+            where,
+            "a second lost device in a row was not recorded failed-driver"
+        );
+        expect(
+            records_file(folder).count(std::string(rs::failed_driver_prefix) + hardware_driver) ==
+                0,
+            where,
+            "a record was written while the match ran"
+        );
+        to_main_menu();
+        expect(
+            records_file(folder).count(std::string(rs::failed_driver_prefix) + hardware_driver) ==
+                1,
+            where,
+            "the record was not written when the match ended"
+        );
+        menu_frames(3);
+        expect_notices(where, {rs::NoticeKind::failed_driver});
+        start_on(folder, true);
+        expect(
+            host().skipped_drivers().size() == 1,
+            where,
+            "the start after two lost devices did not skip the driver"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// Posts the device resets that make the renderer again, and draws the
+    /// frame that makes it.
+    void post_resets() {
+        forget_resets();
+        for (int reset = 0; reset < resets_that_rebuild; ++reset)
+            post_render_event(SDL_EVENT_RENDER_DEVICE_RESET);
+        menu_frames(1);
+    }
+
+    /// Three resets within 60 s record accelerated-unusable and strike the
+    /// driver; a clean run between two such runs clears the strike, so the
+    /// second records no failed-driver.
+    void resets() {
+        constexpr std::string_view where = "records-resets";
+        records_defaults();
+        host().faults().record_driver = hardware_driver;
+        const fs::path folder = records_folder("resets");
+        start_on(folder, true);
+        menu_frames(2);
+        post_resets();
+        const auto* recorded = entry(hardware_driver);
+        expect(
+            recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::resets &&
+                recorded->strike.stage == rs::StrikeStage::resets,
+            where,
+            "three resets did not record accelerated-unusable with a strike"
+        );
+        start_on(folder, true);
+        menu_frames(2);
+        start_on(folder, true);
+        expect(
+            entry(hardware_driver)->strike.stage == rs::StrikeStage::none,
+            where,
+            "a clean run did not clear the strike"
+        );
+        menu_frames(2);
+        post_resets();
+        expect(
+            entry(hardware_driver)->failed_driver.failure == rs::RecordedFailure::none &&
+                entry(hardware_driver)->strike.stage == rs::StrikeStage::resets,
+            where,
+            "resets after a clean run recorded failed-driver"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// A present error is struck, and recorded failed-driver only when the
+    /// same call fails in the next run on the driver.
+    void present_repeats() {
+        constexpr std::string_view where = "records-present";
+        records_defaults();
+        host().faults().record_driver = hardware_driver;
+        const fs::path folder = records_folder("present");
+        start_on(folder, true);
+        for (int start = 0; start < 2; ++start) {
+            if (start == 1)
+                start_on(folder, true);
+            menu_frames(2);
+            arm(RenderFaultPoint::present, 1);
+            present_until_fault(where);
+        }
+        const auto* recorded = entry(hardware_driver);
+        expect(
+            recorded != nullptr && recorded->failed_driver.failure == rs::RecordedFailure::present,
+            where,
+            "the same present error in two runs was not recorded failed-driver"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// Under 2 GiB the start stays standard with no function test and no
+    /// trial, and the row is locked; a lost device keeps only its strike,
+    /// and the second in a row records failed-driver, never
+    /// accelerated-unusable, which frees the row.
+    void small_machine() {
+        constexpr std::string_view where = "records-small";
+        records_defaults();
+        auto& faults = host().faults();
+        faults.physical_memory = small_memory;
+        faults.record_driver = hardware_driver;
+        const fs::path folder = records_folder("small");
+        start_on(folder, true);
+        menu_frames(2);
+        expect(
+            tier().reason == render_policy::TierReason::memory &&
+                host().tier_inputs().function_test == render_policy::FunctionTest::not_run &&
+                !host().records().records().trial &&
+                records_file(folder).count(std::string(rs::trial_key)) == 0,
+            where,
+            "a machine under 2 GiB ran the function test or wrote a trial"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::needs_memory &&
+                runtime.acceleration_report().acceleration_unavailable,
+            where,
+            "the status did not say it needs the memory, with the row locked"
+        );
+        for (int start = 0; start < 2; ++start) {
+            if (start == 1)
+                start_on(folder, true);
+            menu_frames(2);
+            post_render_event(SDL_EVENT_RENDER_DEVICE_LOST);
+            menu_frames(1);
+            expect(
+                entry(hardware_driver)->accelerated_unusable.failure == rs::RecordedFailure::none,
+                where,
+                "a lost device under 2 GiB recorded accelerated-unusable"
+            );
+        }
+        expect(
+            entry(hardware_driver)->failed_driver.failure == rs::RecordedFailure::lost,
+            where,
+            "two lost devices in a row under 2 GiB were not recorded failed-driver"
+        );
+        start_on(folder, true);
+        menu_frames(1);
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::needs_memory_driver_skipped &&
+                !runtime.acceleration_report().acceleration_unavailable,
+            where,
+            "a skipped driver under 2 GiB did not show, with the row free"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// An error of the game's own drops the tier with nothing struck. An
+    /// accelerated-only failure drops the tier with a strike, and the
+    /// same in the next run records accelerated-unusable. Then the settings
+    /// dialog's retry: switching Off then On clears the records in memory
+    /// and tries the graphics card at once, the file keeping them, and a
+    /// failure struck meanwhile beside them; Cancel puts them back, with
+    /// that strike, and OK writes them cleared.
+    void accelerated_failure_and_retry() {
+        constexpr std::string_view where = "records-call";
+        records_defaults();
+        const fs::path folder = records_folder("call");
+        const AccelerationError failure("SDL_CreateTexture of a scene tile: out of memory");
+        // An error of the game's own drops the tier and strikes nothing.
+        start_on(folder, true);
+        menu_frames(1);
+        runtime.take_acceleration_error(AccelerationError(
+            "the prescale target is smaller than the source it is to hold",
+            AccelerationFault::engine
+        ));
+        menu_frames(1);
+        expect(
+            !runtime.accelerated_.on &&
+                host().tier_inputs().drop == render_policy::Drop::engine_fault &&
+                entry(render_probe::software_renderer) == nullptr,
+            where,
+            "an error of the game's own did not drop the tier, or was struck against the driver"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::engine_error,
+            where,
+            "the status did not say an error stopped it"
+        );
+        start_on(folder, true);
+        for (int start = 0; start < 2; ++start) {
+            if (start == 1)
+                start_on(folder, true);
+            menu_frames(1);
+            expect(
+                tier().tier == render_policy::RenderTier::accelerated,
+                where,
+                "the tier was not accelerated before the failure"
+            );
+            runtime.take_acceleration_error(failure);
+            expect(
+                !runtime.accelerated_.on &&
+                    host().tier_inputs().drop == render_policy::Drop::driver_failure,
+                where,
+                "the failure did not drop the tier"
+            );
+            const auto* struck = entry(render_probe::software_renderer);
+            expect(
+                struck != nullptr &&
+                    (start == 0
+                         ? struck->strike.stage == rs::StrikeStage::call &&
+                               struck->strike.call == "SDL_CreateTexture-of-a-scene-tile"
+                         : struck->accelerated_unusable.failure == rs::RecordedFailure::call),
+                where,
+                start == 0 ? "the failure was not struck"
+                           : "the same failure in the next run was not recorded"
+            );
+        }
+        start_on(folder, true);
+        menu_frames(1);
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable,
+            where,
+            "the start after the record did not stay standard"
+        );
+        const std::string record_key = std::string(rs::accelerated_unusable_prefix) +
+                                       std::string(render_probe::software_renderer);
+        // Off then On, then Cancel.
+        auto* dialog = &runtime.open_engine_settings_dialog();
+        ++dialog->forget_renderer_failures;
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::changed);
+        expect(
+            entry(render_probe::software_renderer) == nullptr &&
+                records_file(folder).count(record_key) == 1,
+            where,
+            "Off then On did not clear the records in memory alone"
+        );
+        menu_frames(1);
+        expect(
+            tier().tier == render_policy::RenderTier::accelerated,
+            where,
+            "the retry did not try the graphics card at once"
+        );
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::cancelled);
+        expect(
+            entry(render_probe::software_renderer) != nullptr,
+            where,
+            "Cancel did not put the records back"
+        );
+        menu_frames(1);
+        expect(
+            tier().reason == render_policy::TierReason::accelerated_unusable,
+            where,
+            "the records put back did not keep the tier standard"
+        );
+        // A failure struck during a retry reaches the file at once, beside
+        // the records the retry cleared, and Cancel puts both back.
+        dialog = &runtime.open_engine_settings_dialog();
+        ++dialog->forget_renderer_failures;
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::changed);
+        menu_frames(1);
+        runtime.take_acceleration_error(AccelerationError("SDL_SetRenderTarget: device removed"));
+        const std::string strike_key =
+            std::string(rs::strike_prefix) + std::string(render_probe::software_renderer);
+        const rs::Values during = records_file(folder);
+        expect(
+            during.count(record_key) == 1 && during.count(strike_key) == 1,
+            where,
+            "a strike during the retry did not reach the file beside the records it cleared"
+        );
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::cancelled);
+        const auto* restored = entry(render_probe::software_renderer);
+        expect(
+            restored != nullptr &&
+                restored->accelerated_unusable.failure == rs::RecordedFailure::call &&
+                restored->strike.stage == rs::StrikeStage::call &&
+                restored->strike.call == "SDL_SetRenderTarget",
+            where,
+            "Cancel did not put back the records with the strike found since"
+        );
+        // Off then On, then OK.
+        dialog = &runtime.open_engine_settings_dialog();
+        ++dialog->forget_renderer_failures;
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::changed);
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::accepted);
+        expect(
+            entry(render_probe::software_renderer) == nullptr &&
+                records_file(folder).count(record_key) == 0,
+            where,
+            "OK did not write the records cleared"
+        );
+        passed.emplace_back(where);
+    }
+
+    /// Runs the records' cases, then starts again on records in memory with
+    /// the setting at the named file's default, as the check began.
+    void records() {
+        const ScratchFolder scratch(report_directory);
+        records_root = scratch.path;
+        for (int index = 0; index < SDL_GetNumRenderDrivers(); ++index) {
+            const char* name = SDL_GetRenderDriver(index);
+            if (name != nullptr && std::string_view(name) != render_probe::software_renderer) {
+                hardware_driver = name;
+                break;
+            }
+        }
+        auto& renderer = host();
+        renderer.set_stage_clock({&clock_ns, read_check_clock});
+        const bool force_capable = runtime.options_.force_capable;
+        auto& settings = runtime.engine_settings_state().current;
+        const bool setting = settings.hardware_acceleration;
+        runtime.options_.force_capable = true;
+        settings.hardware_acceleration = true;
+        to_main_menu();
+        expect(
+            SDL_SetWindowSize(runtime.sdl_.window, records_window_width, records_window_height) &&
+                SDL_SyncWindow(runtime.sdl_.window),
+            "records",
+            std::string("SDL_SetWindowSize: ") + SDL_GetError()
+        );
+        // Whatever happens, the check goes on, or ends, on records in
+        // memory, with nothing left in the scratch folder's records.
+        const auto back_in_memory = [&]() {
+            runtime.options_.force_capable = force_capable;
+            settings.hardware_acceleration = setting;
+            auto& faults = renderer.faults();
+            faults.physical_memory.reset();
+            faults.crash_evidence.reset();
+            faults.record_driver.clear();
+            faults.adapter.clear();
+            run().rung.reset();
+            faults.refuse_driver = nullptr;
+            faults.context = nullptr;
+            start_on({}, true);
+            renderer.set_stage_clock({});
+        };
+        try {
+            left_over_trial();
+            first_trial_counts();
+            clean_pass();
+            unwritable_trial();
+            paths();
+            path_window();
+            notice_waits();
+            accelerated_failure_and_retry();
+            if (hardware_driver.empty()) {
+                std::cout << "renderer ladder check: SDL has no hardware render driver; the "
+                             "cases that record one are left out\n";
+            } else {
+                left_over_sentinel();
+                advice();
+                adapter();
+                lost_device();
+                resets();
+                present_repeats();
+                small_machine();
+            }
+        } catch (...) {
+            back_in_memory();
+            throw;
+        }
+        back_in_memory();
+        menu_frames(1);
+    }
 };
 
 int Runtime::check_renderer_ladder() {
@@ -1130,9 +2484,11 @@ int Runtime::check_renderer_ladder() {
         ladder.stall(frame);
     if (runs(RenderFaultPoint::float_state))
         ladder.float_state(frame);
-    // The tiles force no failure: they run with every case.
-    if (!fault)
+    // The records and the tiles force no failure: they run with every case.
+    if (!fault) {
+        ladder.records();
         ladder.tiles();
+    }
     std::cout << "renderer ladder check:";
     for (const auto& name : ladder.passed)
         std::cout << ' ' << name;

@@ -114,12 +114,16 @@ bool Runtime::take_render_event(const SDL_Event& event) {
             render_run_->host->facts().renderer + " device reset; the textures are made again"
         );
         if (render_policy::note_device_reset(render_run_->resets, SDL_GetTicks()) &&
-            render_run_->pending_rebuild.empty())
+            render_run_->pending_rebuild.empty()) {
             render_run_->pending_rebuild = std::string(device_resets_reason);
+            render_run_->pending_failure = {renderer_state::StrikeStage::resets};
+        }
         break;
     case SDL_EVENT_RENDER_DEVICE_LOST:
-        if (render_run_ && render_run_->pending_rebuild.empty())
+        if (render_run_ && render_run_->pending_rebuild.empty()) {
             render_run_->pending_rebuild = std::string(device_lost_reason);
+            render_run_->pending_failure = {renderer_state::StrikeStage::lost};
+        }
         break;
     default:
         break;
@@ -163,8 +167,11 @@ void Runtime::note_present_error(const std::string& reason, bool now) {
     // ends with the device's reset.
     if (render_device_lost())
         return;
-    if (run.pending_rebuild.empty())
+    if (run.pending_rebuild.empty()) {
         run.pending_rebuild = reason;
+        run.pending_failure = {renderer_state::StrikeStage::present};
+        run.pending_failure.call = failing_call_name(reason);
+    }
     if (now)
         rebuild_renderer(run.pending_rebuild);
 }
@@ -179,11 +186,13 @@ void Runtime::rebuild_renderer(const std::string& reason) {
     if (failed == render_probe::software_renderer && run.rebuilds > 0 &&
         run.presented_since_rebuild == 0)
         throw std::runtime_error(why);
+    const renderer_state::Strike failure = run.pending_failure;
     run.pending_rebuild.clear();
+    run.pending_failure = {};
     run.device_lost = false;
     forget_render_textures();
     sdl_.renderer = nullptr;
-    host.rebuild(why);
+    host.rebuild(why, failure);
     sdl_.renderer = host.renderer();
     take_renderer_names(host.facts().renderer, stats_adapter_name(host.facts()));
     ++run.rebuilds;
@@ -265,9 +274,13 @@ void Runtime::note_present_time(uint64_t present_ns) {
         watch.ticks_seen_ns = phase_times_.simulation;
         watch.draw_seen_ns = phase_times_.compose;
     }
+    const PathSet drawn = run.paths_drawn;
+    run.paths_drawn = 0;
     // A lost device's presents show nothing and say nothing of the driver.
     if (run.device_lost)
         return;
+    // The frame counts towards the stage of the sentinel that stands.
+    run.host->note_presented_frame(drawn);
     // A forced stall stands in for the measure alone: whether the frame
     // counts stays the steady frames' rule.
     if (forced)

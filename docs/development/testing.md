@@ -67,7 +67,9 @@ executable inside the application bundle `open-annihilation.app`), the file
 the `oa-game` target builds; tests start it through `$<TARGET_FILE:oa-game>`.
 
 Every native check names its preferences file with `--preferences-file`, so
-that it never reads or writes the player's own. With a named file, each
+that it never reads or writes the player's own, nor the renderer records
+the game keeps beside it, which with a named file live in memory for the
+run. With a named file, each
 Open Annihilation setting's default is the game's own behaviour on every
 platform, and the installation's `totala.ini` is not read for the unit
 limit, so a check plays the same on every machine. A check that depends on a
@@ -240,8 +242,9 @@ walk runs:
 
 - `app-render-host` walks made-up drivers through stand-in hooks, at start
   and in a rebuild, then makes, rebuilds and loses a renderer on the dummy
-  video driver; `app-render-host-env` names a driver that does not exist
-  through `SDL_RENDER_DRIVER` itself;
+  video driver, with its renderer records in scratch folders, one that
+  cannot be written among them; `app-render-host-env` names a driver that
+  does not exist through `SDL_RENDER_DRIVER` itself;
 - `app-scaled-world-software` draws textures beyond a texture limit of
   1024 as tiles on SDL's software renderer and reads them back as one
   texture with no limit draws them;
@@ -253,7 +256,28 @@ walk runs:
   load, in a drain of input and through a movie's hook, a lost device, a
   device that waits to be reset, present stalls on steady frames and on
   frames that are not, a changed floating-point setting, and window-size
-  layers in tiles past a texture limit of 2048.
+  layers in tiles past a texture limit of 2048. Then it starts the game
+  again and again, in the one process, on renderer records in a folder of
+  its own beside its reports, removed when it ends, as the player's own
+  profile keeps them, with the setting On under `--force-capable`, 8 GiB
+  of memory taken
+  and its own clock for the stages of the sentinel: a left-over trial
+  struck at the first restart, also with the sentinel's file garbled or
+  lost, and recorded at the second, or at the first where a fault can stop
+  the whole system; a clean pass that clears the strike, and a left-over
+  `running` marker only logged; a trial that cannot be written; an
+  accelerated path's trial and sentinel, the magnified world's written only
+  at the first zoomed-in frame of a match and closed by switching the tier
+  off; the notice waiting through `-n`'s multiplayer signal and the
+  multiplayer screens; an error of the game's own, struck against nothing;
+  an accelerated-only failure and the dialog's retry, a failure struck
+  during it, Cancel and OK; and, naming the renderer by SDL's first
+  hardware driver, left-over `create` and `standard` sentinels that make
+  the walk skip it, the walk again with the records ignored, the adapter
+  in another driver's words after a skip or a rebuild, lost devices,
+  repeated resets, present errors and a machine under 2 GiB, each new
+  record told once at the main menu. A named preferences file keeps
+  the cases before them, and the other checks, on records in memory.
   `--render-fault POINT[@FRAME]` forces one failure alone, at a presented
   frame of its case; `native-renderer-ladder-create` makes every driver but
   software refuse at start;

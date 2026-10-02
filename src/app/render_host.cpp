@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -139,8 +140,21 @@ CreationOutcome walk_drivers(
         std::string reason;
         made.created = hooks.create != nullptr && hooks.create(hooks.context, made.driver, reason);
         if (made.created) {
-            outcome.attempts.push_back(std::move(made));
             outcome.created = true;
+            outcome.skipped_by_record = walk.skipped_by_record && !walk.records_ignored;
+            outcome.records_ignored = walk.records_ignored;
+            // A start walks SDL's order from the top, so what it passed over
+            // by record are the recorded drivers before the one it made.
+            if (outcome.skipped_by_record && walk.kind == render_policy::WalkKind::start)
+                for (const std::string_view driver : inputs.sdl_order) {
+                    if (driver == made.driver)
+                        break;
+                    if (std::find(
+                            inputs.failed_drivers.begin(), inputs.failed_drivers.end(), driver
+                        ) != inputs.failed_drivers.end())
+                        outcome.skipped.emplace_back(driver);
+                }
+            outcome.attempts.push_back(std::move(made));
             return outcome;
         }
         made.error = reason.empty() ? std::string(unexplained_refusal) : std::move(reason);
@@ -148,6 +162,8 @@ CreationOutcome walk_drivers(
             log_line(hooks, refusal_log_line(made.driver, made.error));
         outcome.attempts.push_back(std::move(made));
     }
+    outcome.skipped_by_record = walk.skipped_by_record && !walk.records_ignored;
+    outcome.records_ignored = walk.records_ignored;
     outcome.error = std::string(renderer_creation_error);
     outcome.error += outcome.attempts.empty() ? no_render_driver
                                               : std::string_view(outcome.attempts.back().error);
@@ -178,16 +194,45 @@ struct SdlCreation {
     SDL_Window* window{};             ///< the window the renderer is made for
     SDL_Renderer* renderer{};         ///< the renderer made; null until one is
     const RenderFaultHooks* faults{}; ///< what a check forces; null for nothing
+    /// The window presents SDL's software renderer through a framebuffer of
+    /// its own, so the framebuffer hint names no driver.
+    bool native_framebuffer{};
+    /// The framebuffer hint the walk last set; empty before it sets one.
+    std::string hint{};
+    void* creating_context{}; ///< passed back to creating
+    /// Notes the driver about to be tried, with the framebuffer hint's list
+    /// it presents through where it is SDL's software renderer on a window
+    /// with no framebuffer of its own; null notes nothing.
+    void (*creating)(
+        void* context, const std::string& driver, const std::vector<std::string>& via
+    ){};
 };
+
+/// Splits a comma list of drivers.
+///
+/// @param list the list
+/// @return its names, in its order
+std::vector<std::string> split_driver_list(std::string_view list) {
+    std::vector<std::string> names;
+    for (std::size_t start = 0; start < list.size();) {
+        const std::size_t comma = std::min(list.find(',', start), list.size());
+        if (comma > start)
+            names.emplace_back(list.substr(start, comma - start));
+        start = comma + 1;
+    }
+    return names;
+}
 
 /// Sets SDL's framebuffer hint at normal priority, so that an environment
 /// variable still wins.
 ///
+/// @param context the SdlCreation, which keeps the value
 /// @param value the hint's value
 /// @param[out] error SDL's reason when the hint was not taken; empty when
 ///     SDL gave none, as when the hint is already held at a higher priority
 /// @return true when SDL took it
-bool set_sdl_framebuffer_hint(void*, const std::string& value, std::string& error) {
+bool set_sdl_framebuffer_hint(void* context, const std::string& value, std::string& error) {
+    static_cast<SdlCreation*>(context)->hint = value;
     // SDL gives a reason only for some refusals, so an older error must not
     // stand in for one it did not give.
     SDL_ClearError();
@@ -205,6 +250,14 @@ bool set_sdl_framebuffer_hint(void*, const std::string& value, std::string& erro
 /// @return true when the renderer was made
 bool create_sdl_renderer(void* context, const std::string& driver, std::string& error) {
     auto& creation = *static_cast<SdlCreation*>(context);
+    if (creation.creating != nullptr && !driver.empty()) {
+        // SDL presents its software renderer through the first driver of
+        // the hint's list that starts, which the sentinel names.
+        std::vector<std::string> via;
+        if (driver == render_probe::software_renderer && !creation.native_framebuffer)
+            via = split_driver_list(creation.hint);
+        creation.creating(creation.creating_context, driver, via);
+    }
     if (const auto* faults = creation.faults; faults != nullptr &&
                                               faults->refuse_driver != nullptr && !driver.empty() &&
                                               faults->refuse_driver(faults->context, driver)) {
@@ -247,20 +300,14 @@ render_policy::CreationInputs driver_inputs(DriverNames& names) {
             names.sdl_names.emplace_back(name);
     const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
     const std::string_view list = named != nullptr ? std::string_view(named) : std::string_view();
-    for (std::size_t start = 0; start < list.size();) {
-        const std::size_t comma = std::min(list.find(',', start), list.size());
-        if (comma > start)
-            names.environment_names.emplace_back(list.substr(start, comma - start));
-        start = comma + 1;
-    }
+    names.environment_names = split_driver_list(list);
     names.sdl_order.assign(names.sdl_names.begin(), names.sdl_names.end());
     names.environment_order.assign(names.environment_names.begin(), names.environment_names.end());
     const char* video_driver = SDL_GetCurrentVideoDriver();
     render_policy::CreationInputs inputs;
     inputs.sdl_order = names.sdl_order;
     inputs.environment_order = names.environment_order;
-    // phase 1: the records fill inputs.failed_drivers here; until then the
-    // walk skips none and never starts again from the top.
+    // The drivers the records hold failed are the caller's to add.
     inputs.render_driver_named = !list.empty();
     inputs.native_window_framebuffer =
         render_probe::native_window_framebuffer(video_driver != nullptr ? video_driver : "");
@@ -758,48 +805,178 @@ FunctionTestResult run_function_test(SDL_Renderer* renderer, const FunctionTestF
     return result;
 }
 
+std::string failing_call_name(std::string_view error) {
+    const std::string_view words = error.substr(0, error.find(':'));
+    std::string name;
+    bool separated = false;
+    for (const char letter : words) {
+        const bool kept = (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z') ||
+                          (letter >= '0' && letter <= '9') || letter == '_' || letter == '-';
+        if (!kept) {
+            separated = !name.empty();
+            continue;
+        }
+        if (separated) {
+            if (name.size() + 1 >= renderer_state::max_name_bytes)
+                break;
+            name += '-';
+            separated = false;
+        }
+        if (name.size() >= renderer_state::max_name_bytes)
+            break;
+        name += letter;
+    }
+    while (!name.empty() && name.back() == '-')
+        name.pop_back();
+    return name.empty() ? std::string(unnamed_call) : name;
+}
+
+std::string trial_unwritten_log_line() {
+    std::string line(graphics_log_prefix);
+    line += "the start-up test is skipped: its trial cannot be written to ";
+    line += renderer_state::records_file_name;
+    line += ", so the processor draws everything";
+    return line;
+}
+
+std::string path_trial_unwritten_log_line(renderer_state::AcceleratedPath path) {
+    std::string line(graphics_log_prefix);
+    line += "the graphics card's ";
+    switch (path) {
+    case renderer_state::AcceleratedPath::magnify:
+        line += "magnification";
+        break;
+    case renderer_state::AcceleratedPath::prescale:
+        line += "prescale target";
+        break;
+    case renderer_state::AcceleratedPath::blend:
+        line += "two-level reduction";
+        break;
+    }
+    line += " is not used: its trial cannot be written to ";
+    line += renderer_state::records_file_name;
+    return line;
+}
+
+namespace {
+
+/// Writes a line of the renderer records' log through the host.
+///
+/// @param context the host's log of the records' lines
+/// @param text the line, without the game's prefix
+void keep_records_line(void* context, std::string_view text) {
+    auto& lines = *static_cast<std::vector<std::string>*>(context);
+    std::string line(graphics_log_prefix);
+    line += text;
+    std::cout << line << '\n' << std::flush;
+    lines.push_back(std::move(line));
+}
+
+/// Returns the steady clock's time.
+///
+/// @return nanoseconds since the clock's epoch
+uint64_t steady_clock_ns() noexcept {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()
+    )
+                                     .count());
+}
+
+} // namespace
+
 RendererHost::~RendererHost() {
     destroy();
 }
 
-void RendererHost::create(SDL_Window* window, const RenderFaultHooks& faults) {
+void RendererHost::create(
+    SDL_Window* window, const RenderFaultHooks& faults, const std::optional<RecordsPlace>& records
+) {
     destroy();
     window_ = window;
     faults_ = faults;
     adapter_asked_ = false;
+    // A start decides its tier afresh.
+    tier_ = {};
     machine_.legacy_windows = oa::platform::running_on_windows_before_vista();
-    DriverNames names;
-    const render_policy::CreationInputs inputs = driver_inputs(names);
-    named_ = inputs.render_driver_named;
-    SdlCreation creation;
-    creation.window = window;
-    creation.faults = &faults_;
-    CreationOutcome outcome = walk_render_drivers(inputs, sdl_creation_hooks(creation));
-    attempts_ = std::move(outcome.attempts);
-    if (!outcome.created)
-        throw std::runtime_error(outcome.error);
-    renderer_ = creation.renderer;
-    take_renderer();
+    if (records)
+        open_records(*records);
+    make_renderer({}, false);
 }
 
-void RendererHost::rebuild(std::string_view reason) {
-    const std::string failed = facts_.renderer;
-    std::cout << rebuild_log_line(failed, reason) << '\n' << std::flush;
-    // phase 1: the failure is a strike against the driver, which becomes a
-    // record when the same fails in the next run on it.
-    destroy();
-    lost_noted_ = false;
+void RendererHost::make_renderer(const std::string& failed_driver, bool rebuilding) {
     DriverNames names;
-    const render_policy::CreationInputs inputs = driver_inputs(names);
+    render_policy::CreationInputs inputs = driver_inputs(names);
+    if (!rebuilding)
+        named_ = inputs.render_driver_named;
+    // The records are advice: the walk skips the drivers they hold failed
+    // and walks again with them ignored when nothing else could present,
+    // which holds for the rest of the run.
+    const std::vector<std::string_view> failed =
+        records_.storage() == renderer_state::Storage::disabled || (rebuilding && records_ignored_)
+            ? std::vector<std::string_view>{}
+            : renderer_state::failed_driver_list(records_.records());
+    inputs.failed_drivers = failed;
     SdlCreation creation;
     creation.window = window_;
     creation.faults = &faults_;
-    CreationOutcome outcome = walk_rebuild_drivers(inputs, failed, sdl_creation_hooks(creation));
+    creation.native_framebuffer = inputs.native_window_framebuffer;
+    creation.creating_context = this;
+    creation.creating = [](void* context,
+                           const std::string& driver,
+                           const std::vector<std::string>& via) {
+        auto& host = *static_cast<RendererHost*>(context);
+        host.via_ = via;
+        std::ignore = host.step_sentinel(
+            renderer_state::LifeEvent::creating, renderer_state::AcceleratedPath::magnify, driver
+        );
+    };
+    CreationOutcome outcome =
+        rebuilding ? walk_rebuild_drivers(inputs, failed_driver, sdl_creation_hooks(creation))
+                   : walk_render_drivers(inputs, sdl_creation_hooks(creation));
     attempts_ = std::move(outcome.attempts);
+    // What the start's walk skipped, or ignored, holds for the run.
+    if (!rebuilding) {
+        records_ignored_ = outcome.records_ignored;
+        skipped_drivers_ = std::move(outcome.skipped);
+    }
     if (!outcome.created)
         throw std::runtime_error(outcome.error);
     renderer_ = creation.renderer;
+    driver_made_ = attempts_.back().driver;
+    // Probe items 1 to 3, the intro and the first standard frames stand
+    // under `standard`; a crash there strikes the driver like one in its
+    // creation.
+    function_test_ran_ = false;
+    std::ignore = step_sentinel(renderer_state::LifeEvent::probing);
+    begin_stage();
     take_renderer();
+    // Each driver describes the adapter in words of its own, so it is noted
+    // only where the start made the driver every start makes with no record
+    // in its way. A driver a record's skip or a rebuild lands on would read
+    // as another adapter and clear the records that sent the walk there.
+    const bool steered = rebuilding || outcome.skipped_by_record;
+    if (!steered && facts_.adapter_state == render_probe::AdapterState::read &&
+        records_.storage() != renderer_state::Storage::disabled &&
+        renderer_state::note_adapter(records_.records(), facts_.adapter).changed)
+        std::ignore = records_.write_records();
+    sync_record_facts();
+}
+
+void RendererHost::rebuild(std::string_view reason, const renderer_state::Strike& failure) {
+    const std::string failed = facts_.renderer;
+    std::cout << rebuild_log_line(failed, reason) << '\n' << std::flush;
+    // The failure is a strike against the driver, which becomes a record
+    // when the same fails in the next run on it.
+    if (failure.stage != renderer_state::StrikeStage::none)
+        std::ignore = note_running_failure(failure);
+    // The accelerated tier stops with the renderer, so the stages it
+    // covered are over; the new renderer's own stand as a start's do.
+    end_path_stage();
+    std::ignore = records_.erase_trial();
+    life_.trial = false;
+    destroy();
+    lost_noted_ = false;
+    make_renderer(failed, true);
     // The driver failed, so the processor draws everything for the rest of
     // the run unless it was dropped for another reason already; the new
     // renderer's function test is to run again.
@@ -815,6 +992,10 @@ void RendererHost::rebuild(std::string_view reason) {
 
 void RendererHost::take_renderer() {
     facts_ = describe_game_renderer(renderer_, adapter_asked_);
+    if (!faults_.adapter.empty()) {
+        facts_.adapter = faults_.adapter;
+        facts_.adapter_state = render_probe::AdapterState::read;
+    }
     oa::base::float_precision::restore_program_float_control();
     tier_.renderer = renderer_ != nullptr;
     // The renderer is assessed at the host's texture limit, which a fault
@@ -852,8 +1033,11 @@ bool RendererHost::take_event(const SDL_Event& event) {
 }
 
 void RendererHost::service() {
-    if (lost_noted_ && renderer_ != nullptr)
-        rebuild(device_lost_reason);
+    if (lost_noted_ && renderer_ != nullptr) {
+        renderer_state::Strike lost;
+        lost.stage = renderer_state::StrikeStage::lost;
+        rebuild(device_lost_reason, lost);
+    }
 }
 
 void RendererHost::destroy() noexcept {
@@ -923,25 +1107,41 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
         render_policy::windowless_video_driver(video_driver != nullptr ? video_driver : "");
     tier_.players_own_profile = request.players_own_profile;
     tier_.setting_on = request.setting_on;
-    tier_.memory = physical_memory();
+    tier_.memory = machine_memory();
     take_machine(machine_, tier_.memory);
-    // No trial is written before the test yet, so on the player's own
-    // profile it waits for the player or a flag.
-    tier_.function_test = render_policy::start_function_test(tier_);
+    // The trial written before the test guards it, so the test runs at
+    // start wherever the tier could be accelerated but for it.
+    tier_.function_test = render_policy::FunctionTest::not_run;
+    tier_.records_unreadable_after_unclean_start =
+        records_.records_unreadable_after_unclean_start();
+    sync_record_facts();
     const render_policy::TierDecision decision =
         render_policy::step_tier(tier_, false, function_test_hooks()).decision;
-    const AccelerationReport report = report_acceleration(tier_acceleration_facts(
+    AccelerationFacts facts = tier_acceleration_facts(
         tier_, start_rung(), decision.tier == render_policy::RenderTier::accelerated
-    ));
+    );
+    fill_record_facts(facts);
+    const AccelerationReport report = report_acceleration(facts);
     std::cout << graphics_log_line(facts_, tier_description(report.status)) << '\n' << std::flush;
 }
 
 void RendererHost::test_function() {
+    // The trial stands from before the test until the start-up stage
+    // passes, so a crash in the test or the first accelerated frames, even
+    // one that takes the whole system down, is struck at the next start.
+    if (!step_sentinel(renderer_state::LifeEvent::function_test)) {
+        tier_.function_test = render_policy::FunctionTest::trial_unwritten;
+        std::cout << trial_unwritten_log_line() << '\n' << std::flush;
+        return;
+    }
     const FunctionTestResult result = run_function_test(renderer_, faults_.function_test);
     oa::base::float_precision::restore_program_float_control();
     tier_.function_test =
         result.passed ? render_policy::FunctionTest::passed : render_policy::FunctionTest::failed;
     machine_.pixelart = result.pixelart;
+    function_test_ran_ = true;
+    std::ignore = step_sentinel(renderer_state::LifeEvent::function_test_done);
+    begin_stage();
     if (!result.passed)
         std::cout << function_test_log_line(result.failure) << '\n' << std::flush;
 }
@@ -967,6 +1167,304 @@ const render_policy::TierInputs& RendererHost::tier_inputs() const noexcept {
 
 render_policy::LadderState RendererHost::start_rung() const noexcept {
     return render_policy::start_rung(machine_);
+}
+
+void RendererHost::open_records(const RecordsPlace& place) {
+    place_ = place;
+    records_log_.clear();
+    // SDL_RENDER_DRIVER gives SDL's own start, which reads and writes no
+    // records and keeps no sentinel.
+    const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    const bool render_driver_named = named != nullptr && *named != '\0';
+    renderer_state::RecordRules rules;
+    rules.evidence = faults_.crash_evidence.value_or(
+        renderer_state::crash_evidence(
+            oa::platform::running_on_windows_before_vista(), oa::platform::running_on_linux()
+        )
+    );
+    rules.below_two_gib = machine_memory() < render_policy::smallest_accelerated_memory;
+    const renderer_state::LogHooks log{&records_log_, keep_records_line};
+    if (render_driver_named)
+        records_ = renderer_state::RendererState::disabled();
+    else if (place.folder.empty())
+        records_ = renderer_state::RendererState::in_memory(place.engine_version, rules, log);
+    else
+        records_ = renderer_state::RendererState::open_folder(
+            place.folder, place.engine_version, rules, log
+        );
+    leftovers_ = records_.resolve_leftovers();
+    // A strike or record made of what the last run left reaches the file
+    // now, so that the same again at the next start counts as a second.
+    std::ignore = records_.write_records();
+    life_ = renderer_state::start_sentinel_life(render_driver_named);
+    via_.clear();
+    paths_begun_ = 0;
+    path_frames_ = 0;
+    stage_frames_ = 0;
+    function_test_ran_ = false;
+}
+
+renderer_state::RendererState& RendererHost::records() noexcept {
+    return records_;
+}
+
+const renderer_state::RendererState& RendererHost::records() const noexcept {
+    return records_;
+}
+
+const RecordsPlace& RendererHost::records_place() const noexcept {
+    return place_;
+}
+
+const renderer_state::LeftoverOutcome& RendererHost::leftovers() const noexcept {
+    return leftovers_;
+}
+
+std::span<const std::string> RendererHost::records_log() const noexcept {
+    return records_log_;
+}
+
+std::string RendererHost::record_driver() const {
+    if (renderer_ == nullptr)
+        return {};
+    if (!faults_.record_driver.empty())
+        return faults_.record_driver;
+    if (!facts_.renderer.empty())
+        return facts_.renderer;
+    return driver_made_;
+}
+
+std::span<const std::string> RendererHost::skipped_drivers() const noexcept {
+    return skipped_drivers_;
+}
+
+bool RendererHost::records_ignored() const noexcept {
+    return records_ignored_;
+}
+
+void RendererHost::set_stage_clock(const StageClock& clock) noexcept {
+    clock_ = clock;
+}
+
+void RendererHost::note_first_accelerated_frame() {
+    std::ignore = step_sentinel(renderer_state::LifeEvent::first_accelerated_frame);
+}
+
+void RendererHost::note_presented_frame(PathSet drawn) {
+    using renderer_state::SentinelStage;
+    if (!life_.stage)
+        return;
+    switch (*life_.stage) {
+    case SentinelStage::standard:
+    case SentinelStage::accelerated: {
+        ++stage_frames_;
+        if (!renderer_state::start_stage_passed(stage_frames_, stage_now_ns() - stage_started_ns_))
+            return;
+        // The sentinel the start passed, with the framebuffer hint's list
+        // a strike of SDL's software renderer is made against.
+        renderer_state::Sentinel passed;
+        passed.stage = *life_.stage;
+        passed.driver = record_driver();
+        passed.via = via_;
+        std::ignore = step_sentinel(renderer_state::LifeEvent::start_passed);
+        if (renderer_state::note_start_passed(
+                records_.records(), passed, function_test_ran_, records_.rules()
+            )
+                .changed)
+            std::ignore = records_.write_records();
+        sync_record_facts();
+        return;
+    }
+    case SentinelStage::path: {
+        if ((drawn & path_bit(life_.path)) == 0 ||
+            ++path_frames_ < renderer_state::path_stage_frames)
+            return;
+        const renderer_state::AcceleratedPath path = life_.path;
+        std::ignore = step_sentinel(renderer_state::LifeEvent::path_passed, path);
+        if (renderer_state::note_path_passed(records_.records(), record_driver(), path).changed)
+            std::ignore = records_.write_records();
+        return;
+    }
+    case SentinelStage::create:
+    case SentinelStage::probe:
+    case SentinelStage::running:
+        return;
+    }
+}
+
+bool RendererHost::begin_path(renderer_state::AcceleratedPath path) {
+    if ((paths_begun_ & path_bit(path)) != 0)
+        return true;
+    if (!step_sentinel(renderer_state::LifeEvent::path_first_use, path)) {
+        std::cout << path_trial_unwritten_log_line(path) << '\n' << std::flush;
+        return false;
+    }
+    paths_begun_ = static_cast<PathSet>(paths_begun_ | path_bit(path));
+    path_frames_ = 0;
+    return true;
+}
+
+void RendererHost::end_path_stage() {
+    if (life_.stage == renderer_state::SentinelStage::path)
+        std::ignore = step_sentinel(renderer_state::LifeEvent::path_passed, life_.path);
+}
+
+renderer_state::Change RendererHost::note_running_failure(const renderer_state::Strike& failure) {
+    const std::string driver = record_driver();
+    if (records_.storage() == renderer_state::Storage::disabled || driver.empty())
+        return {};
+    // SDL's software renderer is never recorded failed-driver, and draws
+    // the accelerated tier only under --force-capable.
+    if (driver == render_probe::software_renderer && !tier_.force_capable)
+        return {};
+    renderer_state::DriverFacts facts;
+    facts.loses_device_in_ordinary_use = driver_traits(driver).loses_device_in_normal_use;
+    const renderer_state::Change change = renderer_state::note_running_failure(
+        records_.records(), driver, failure, facts, records_.rules()
+    );
+    if (change.changed)
+        std::ignore = records_.write_records();
+    sync_record_facts();
+    return change;
+}
+
+renderer_state::Change RendererHost::clear_records() {
+    const renderer_state::Change change = records_.clear();
+    tier_.records_unreadable_after_unclean_start = false;
+    sync_record_facts();
+    return change;
+}
+
+void RendererHost::keep_cleared_records() noexcept {
+    try {
+        std::ignore = records_.confirm_clear();
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: the renderer records were not written: " << error.what()
+                  << '\n';
+    }
+}
+
+void RendererHost::restore_records() noexcept {
+    records_.restore_failures();
+    sync_record_facts();
+    try {
+        std::ignore = records_.write_records();
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: the renderer records were not written: " << error.what()
+                  << '\n';
+    }
+}
+
+void RendererHost::set_match_running(bool running) {
+    records_.set_match_running(running);
+    if (!running)
+        std::ignore = records_.write_records();
+}
+
+void RendererHost::fill_record_facts(AccelerationFacts& facts) const {
+    if (records_.storage() == renderer_state::Storage::disabled)
+        return;
+    const auto trouble_of = [](renderer_state::RecordedFailure failure) {
+        return failure == renderer_state::RecordedFailure::stopped ? RecordedTrouble::stopped
+                                                                   : RecordedTrouble::failure;
+    };
+    const renderer_state::Records& records = records_.records();
+    facts.driver_skipped = !skipped_drivers_.empty();
+    bool skipped_standing = false;
+    for (const std::string& driver : skipped_drivers_) {
+        const renderer_state::DriverRecords* entry = renderer_state::find_driver(records, driver);
+        if (entry == nullptr ||
+            entry->failed_driver.failure == renderer_state::RecordedFailure::none)
+            continue;
+        // A crash or hang says more than a failure the driver reported.
+        const RecordedTrouble trouble = trouble_of(entry->failed_driver.failure);
+        if (!skipped_standing || trouble == RecordedTrouble::stopped)
+            facts.skipped_recorded = trouble;
+        skipped_standing = true;
+    }
+    facts.skipped_cleared = facts.driver_skipped && !skipped_standing;
+    if (const renderer_state::DriverRecords* entry =
+            renderer_state::find_driver(records, record_driver());
+        entry != nullptr &&
+        entry->accelerated_unusable.failure != renderer_state::RecordedFailure::none)
+        facts.recorded = trouble_of(entry->accelerated_unusable.failure);
+}
+
+void RendererHost::finish_records() noexcept {
+    try {
+        // A failure struck in an earlier run that this one did not see
+        // again on its driver is cleared.
+        const std::string driver = record_driver();
+        if (!driver.empty() && records_.storage() != renderer_state::Storage::disabled)
+            std::ignore =
+                renderer_state::note_clean_run(records_.records(), driver, records_.rules());
+        records_.set_match_running(false);
+        records_.clean_exit();
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: the renderer records were not ended cleanly: "
+                  << error.what() << '\n';
+    }
+}
+
+bool RendererHost::step_sentinel(
+    renderer_state::LifeEvent event, renderer_state::AcceleratedPath path, const std::string& driver
+) {
+    const renderer_state::SentinelWrite write = renderer_state::sentinel_step(life_, event, path);
+    const std::string named = driver.empty() ? record_driver() : driver;
+    if (write.write_trial) {
+        renderer_state::Trial trial;
+        trial.stage = write.trial_stage;
+        trial.path = write.trial_path;
+        trial.driver = named;
+        if (!records_.write_trial(trial)) {
+            renderer_state::note_trial_unwritten(life_);
+            return false;
+        }
+    }
+    if (write.set_sentinel && renderer_state::valid_driver_name(named)) {
+        renderer_state::Sentinel sentinel;
+        sentinel.stage = write.sentinel;
+        sentinel.path = write.sentinel_path;
+        sentinel.driver = named;
+        // Only SDL's software renderer presents through the hint's list.
+        if (named == render_probe::software_renderer)
+            for (const std::string& through : via_)
+                if (renderer_state::valid_driver_name(through) &&
+                    sentinel.via.size() < renderer_state::max_via_drivers)
+                    sentinel.via.push_back(through);
+        records_.set_sentinel(sentinel);
+    }
+    if (write.erase_trial)
+        std::ignore = records_.erase_trial();
+    return true;
+}
+
+void RendererHost::begin_stage() noexcept {
+    stage_frames_ = 0;
+    try {
+        stage_started_ns_ = stage_now_ns();
+    } catch (...) {
+        stage_started_ns_ = 0;
+    }
+}
+
+uint64_t RendererHost::stage_now_ns() const {
+    return clock_.now_ns != nullptr ? clock_.now_ns(clock_.context) : steady_clock_ns();
+}
+
+uint64_t RendererHost::machine_memory() const noexcept {
+    return faults_.physical_memory.value_or(physical_memory());
+}
+
+void RendererHost::sync_record_facts() noexcept {
+    try {
+        const std::string driver = record_driver();
+        tier_.accelerated_unusable_record =
+            records_.storage() != renderer_state::Storage::disabled && !driver.empty() &&
+            !renderer_state::acceleration_allowed(records_.records(), driver, false);
+    } catch (const std::exception&) {
+        // The name could not be copied; the fact stays as it was.
+    }
 }
 
 } // namespace oa::app

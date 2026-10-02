@@ -102,6 +102,14 @@ void only_linux_reads_the_device_tree() {
 #endif
 }
 
+void only_linux_is_linux() {
+#if defined(__linux__)
+    CHECK(platform::running_on_linux());
+#else
+    CHECK(!platform::running_on_linux());
+#endif
+}
+
 } // namespace
 
 void light_machines_are_told_apart() {
@@ -169,6 +177,7 @@ int main() {
     other_boards_are_not();
     model_files_are_read_up_to_their_limit();
     only_linux_reads_the_device_tree();
+    only_linux_is_linux();
     light_machines_are_told_apart();
     windows_before_vista_is_told_apart();
     this_machine_is_read();

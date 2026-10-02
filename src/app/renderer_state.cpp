@@ -5,6 +5,7 @@
 
 #include "oa/platform/preferences.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <iostream>
 #include <system_error>
@@ -13,6 +14,49 @@
 namespace oa::app::renderer_state {
 
 namespace preferences = oa::platform::preferences;
+
+namespace {
+
+/// Returns the drivers' entries a clear() took away, with what was struck or
+/// recorded since laid over them: a strike, a record or a remembered rung
+/// found since replaces the driver's own, and a driver first noted since is
+/// added, up to max_drivers.
+///
+/// @param before every driver's entry as the clear found it
+/// @param since every driver's entry since the clear
+/// @return the entries
+std::vector<DriverRecords>
+laid_over(std::vector<DriverRecords> before, const std::vector<DriverRecords>& since) {
+    for (const DriverRecords& entry : since) {
+        const bool struck = entry.strike.stage != StrikeStage::none;
+        const bool failed = entry.failed_driver.failure != RecordedFailure::none;
+        const bool unusable = entry.accelerated_unusable.failure != RecordedFailure::none;
+        if (!struck && !failed && !unusable && !entry.scale_level)
+            continue;
+        const auto kept =
+            std::find_if(before.begin(), before.end(), [&](const DriverRecords& candidate) {
+                return candidate.driver == entry.driver;
+            });
+        if (kept == before.end()) {
+            if (before.size() < max_drivers)
+                before.push_back(entry);
+            continue;
+        }
+        if (struck) {
+            kept->strike = entry.strike;
+            kept->struck_this_run = entry.struck_this_run;
+        }
+        if (failed)
+            kept->failed_driver = entry.failed_driver;
+        if (unusable)
+            kept->accelerated_unusable = entry.accelerated_unusable;
+        if (entry.scale_level)
+            kept->scale_level = entry.scale_level;
+    }
+    return before;
+}
+
+} // namespace
 
 RendererState::RendererState(
     Storage storage, std::string engine_version, const RecordRules& rules, LogHooks log
@@ -117,12 +161,17 @@ bool RendererState::save_records_file(const Values& values) {
     return true;
 }
 
+Values RendererState::records_values() const {
+    if (!clear_pending_)
+        return format_records(records_, engine_version_);
+    Records kept = records_;
+    kept.drivers = laid_over(cleared_, records_.drivers);
+    return format_records(kept, engine_version_);
+}
+
 bool RendererState::save_records() {
-    const Values values = format_records(records_, engine_version_);
-    if ((values != written_ || file_unreadable_) && !save_records_file(values))
-        return false;
-    clear_pending_ = false;
-    return true;
+    const Values values = records_values();
+    return (values == written_ && !file_unreadable_) || save_records_file(values);
 }
 
 bool RendererState::write_records() {
@@ -142,13 +191,13 @@ bool RendererState::write_trial(const Trial& trial) {
         return true;
     }
     // The records as they stand, the last run's strike among them, unless a
-    // match's or an unconfirmed clearing's must wait.
+    // match's must wait.
     Values values;
-    if (match_running_ || clear_pending_) {
+    if (match_running_) {
         if (!file_unreadable_)
             values = written_;
     } else {
-        values = format_records(records_, engine_version_);
+        values = records_values();
     }
     values.insert_or_assign(std::string(trial_key), format_trial(trial));
     if (!save_records_file(values))
@@ -206,6 +255,7 @@ void RendererState::delete_sentinel() {
 void RendererState::clean_exit() {
     if (storage_ == Storage::disabled)
         return;
+    restore_failures();
     if (own_trial_) {
         own_trial_ = false;
         records_.trial.reset();
@@ -215,11 +265,37 @@ void RendererState::clean_exit() {
     delete_sentinel();
 }
 
+void RendererState::restore_failures() noexcept {
+    if (!clear_pending_)
+        return;
+    std::vector<DriverRecords> restored;
+    try {
+        restored = laid_over(cleared_, records_.drivers);
+    } catch (const std::exception&) {
+        // Short of memory, what the clear took away comes back alone.
+        restored = std::move(cleared_);
+    }
+    records_.drivers = std::move(restored);
+    cleared_.clear();
+    clear_pending_ = false;
+}
+
 Change RendererState::clear() {
+    std::vector<DriverRecords> before;
+    if (!clear_pending_)
+        before = records_.drivers;
     const Change change = clear_failures(records_);
-    if (change.changed)
+    if (change.changed && !clear_pending_) {
+        cleared_ = std::move(before);
         clear_pending_ = true;
+    }
     return change;
+}
+
+bool RendererState::confirm_clear() {
+    cleared_.clear();
+    clear_pending_ = false;
+    return write_records();
 }
 
 } // namespace oa::app::renderer_state

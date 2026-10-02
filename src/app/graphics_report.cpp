@@ -78,6 +78,7 @@ render_policy::DriverTraits driver_traits(std::string_view renderer) noexcept {
     driver.software = renderer == render_probe::software_renderer;
     driver.capable_before_vista = render_probe::capable_before_vista(renderer);
     driver.adapter_required = render_probe::adapter_needed(renderer);
+    driver.loses_device_in_normal_use = render_probe::loses_device_in_ordinary_use(renderer);
     driver.texture_limit_source = render_probe::reports_fixed_texture_limit(renderer)
                                       ? render_policy::TextureLimitSource::fixed_report
                                       : render_policy::TextureLimitSource::reported;

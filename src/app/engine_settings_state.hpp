@@ -36,6 +36,10 @@ struct Runtime::EngineSettingsState {
     /// The open dialog's requests to try the graphics card afresh
     /// (Dialog::forget_renderer_failures) that the run has acted on.
     uint32_t retries_taken{};
+    /// The renderer host whose records the open dialog's retries cleared,
+    /// which OK writes and Cancel puts back; it outlives the runtime. Null
+    /// when no retry cleared them.
+    RendererHost* records_host{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
     /// The section the dialog showed when it last closed; it opens there.
     oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};

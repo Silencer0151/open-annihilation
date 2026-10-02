@@ -219,7 +219,7 @@ void Runtime::present_indexed_frame(
             draw_accelerated_screen(output.texture, width, height, ++accelerated_.screen_revision);
             drawn = true;
         } catch (const AccelerationError& error) {
-            drop_acceleration(error.what());
+            take_acceleration_error(error);
         }
     }
     if (!drawn && !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))

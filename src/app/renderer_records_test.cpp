@@ -12,7 +12,8 @@
 // kept; the native-density key, written only by a run that kept the
 // accelerated tier above the magnify-off rung where the flag does something,
 // and erased by any drop and by a run that ended at or below that rung; the
-// adapter, the told mark and clearing; and the sentinel and the
+// adapter, the told mark and clearing; the main menu's notice: which record
+// it tells of next and what a run does with it; and the sentinel and the
 // trial through a run, with none under SDL_RENDER_DRIVER. The drivers are
 // named "alpha", "beta" and "gamma", and SDL's own "software".
 #include "oa/app/renderer_records.hpp"
@@ -1381,6 +1382,48 @@ void the_told_mark_and_clearing() {
     OA_CHECK(!rs::clear_failures(records).changed);
 }
 
+void the_notice_tells_each_new_record_once() {
+    rs::Records records = adapter_records();
+    const std::vector<std::string> none;
+    OA_CHECK(!rs::next_notice(records, none));
+    // A strike shows no notice.
+    rs::driver_entry(records, "alpha").strike = strike_of(rs::StrikeStage::create);
+    OA_CHECK(!rs::next_notice(records, none));
+    // An accelerated-unusable record, then a failed-driver one, in the order
+    // the drivers were noted; a driver with both has failed-driver's.
+    rs::driver_entry(records, "beta").accelerated_unusable =
+        rs::Record{rs::RecordedFailure::stopped, false};
+    rs::DriverRecords& gamma = rs::driver_entry(records, "gamma");
+    gamma.failed_driver = rs::Record{rs::RecordedFailure::lost, false};
+    gamma.accelerated_unusable = rs::Record{rs::RecordedFailure::lost, false};
+    auto notice = rs::next_notice(records, none);
+    OA_CHECK(
+        notice && notice->driver == "beta" && notice->kind == rs::NoticeKind::accelerated_unusable
+    );
+    // A notice passed over in this run, as a run nobody watches notes it,
+    // leaves the next.
+    notice = rs::next_notice(records, {"beta"});
+    OA_CHECK(notice && notice->driver == "gamma" && notice->kind == rs::NoticeKind::failed_driver);
+    OA_CHECK(!rs::next_notice(records, {"beta", "gamma"}));
+    // Told records show nothing again; one told mark covers both of a
+    // driver's records.
+    OA_CHECK(rs::mark_told(records, "beta").changed);
+    OA_CHECK(rs::mark_told(records, "gamma").changed);
+    OA_CHECK(!rs::next_notice(records, none));
+    // A new record of a told driver is told again.
+    rs::driver_entry(records, "beta").failed_driver =
+        rs::Record{rs::RecordedFailure::stopped, false};
+    notice = rs::next_notice(records, none);
+    OA_CHECK(notice && notice->driver == "beta" && notice->kind == rs::NoticeKind::failed_driver);
+
+    // A run someone watches shows it; one nobody watches notes it and
+    // leaves it untold; the ladder check notes it and marks it told.
+    OA_CHECK(rs::notice_action(false, false) == rs::NoticeAction::show);
+    OA_CHECK(rs::notice_action(false, true) == rs::NoticeAction::show);
+    OA_CHECK(rs::notice_action(true, false) == rs::NoticeAction::note);
+    OA_CHECK(rs::notice_action(true, true) == rs::NoticeAction::note_and_mark);
+}
+
 void a_left_over_trial_decides_alone() {
     // The trial decides whatever the sentinel holds, one that names another
     // driver included: only the trial's driver is struck.
@@ -1667,6 +1710,7 @@ int main() {
     the_native_density_key_follows_the_runs();
     the_adapter_clears_records_when_it_changes();
     the_told_mark_and_clearing();
+    the_notice_tells_each_new_record_once();
     a_left_over_trial_decides_alone();
     a_failure_repeated_in_one_run_counts_once();
     strikes_compare_and_drivers_keep_their_order();

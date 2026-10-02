@@ -228,8 +228,8 @@ target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256
 # The renderer records: what the engine has seen of each render driver on
 # this machine, and the sentinel of the stage a start has reached. Their text
 # and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
-# their two files beside the preferences file. The game does not use them
-# yet.
+# their two files beside the preferences file. The game's renderer host
+# reads them at start and keeps them through the run.
 add_library(oa-app-renderer-records src/app/renderer_records.cpp)
 add_library(oa::app::renderer_records ALIAS oa-app-renderer-records)
 target_link_libraries(oa-app-renderer-records PUBLIC oa-app-headers PRIVATE oa-options)
@@ -259,9 +259,8 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 # of the accelerated tier (memory_guard.hpp), the samples of the system's
 # memory judged against thresholds scaled to physical memory, as a pure
 # state machine with no clock. The game uses its walk of the render
-# drivers, its texture limit, the tier each frame is drawn in, the
-# step-down and the memory guard; the records wait for the code that acts
-# on them.
+# drivers, with the drivers the records hold failed, its texture limit,
+# the tier each frame is drawn in, the step-down and the memory guard.
 add_library(oa-app-render-policy src/app/render_policy.cpp src/app/memory_guard.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers oa-platform-shims
@@ -280,11 +279,13 @@ if(OA_BUILD_PLATFORM)
   add_library(oa::app::video_capture ALIAS oa-app-video-capture)
   target_link_libraries(oa-app-video-capture PUBLIC oa-app-headers SDL3::SDL3 PRIVATE oa-options)
   # The game's renderer (render_host.hpp): made by walking SDL's render
-  # drivers in SDL's own order, logging each refusal, with the framebuffer
-  # hint set before SDL's software renderer, or by SDL's own call under
-  # SDL_RENDER_DRIVER; then described, its first frame's tier decided after
-  # the start-up function test where it could be accelerated, and logged
-  # (graphics_report.hpp);
+  # drivers in SDL's own order, skipping those the renderer records hold
+  # failed, logging each refusal, with the framebuffer hint set before SDL's
+  # software renderer, or by SDL's own call under SDL_RENDER_DRIVER; then
+  # described, its first frame's tier decided after the start-up function
+  # test, guarded by its trial record, where it could be accelerated, and
+  # logged (graphics_report.hpp); the records and the sentinel kept through
+  # the run;
   # made again after a failure while the game runs; its window-size
   # textures, as tiles beyond its texture limit, and the accelerated tier's
   # drawing on the card (scaled_world.hpp), with the frames' conversion for
@@ -293,7 +294,8 @@ if(OA_BUILD_PLATFORM)
     src/app/scaled_world.cpp src/app/xrgb_conversion.cpp)
   add_library(oa::app::render_host ALIAS oa-app-render-host)
   target_link_libraries(oa-app-render-host PUBLIC oa-app-headers oa-app-render-policy
-    oa-platform-render-probe oa-ui-engine-settings oa-app-acceleration-status
+    oa-app-renderer-state oa-platform-render-probe oa-ui-engine-settings
+    oa-app-acceleration-status
     oa-platform-job-pool oa-present-world-renderer PRIVATE oa-platform-shims
     oa-base-float-precision SDL3::SDL3 oa-options)
   if(BUILD_TESTING)
@@ -311,12 +313,14 @@ if(OA_BUILD_PLATFORM)
     # hint; software named is made with no hint; the start-up function test
     # passes on SDL's software renderer; the start's tier, logged with its
     # reason, accelerated only with --hardware-acceleration and
-    # --force-capable from 2 GiB; and a rebuild drops the tier.
-    # app-render-host-env names the missing driver through the environment
-    # variable itself.
+    # --force-capable from 2 GiB; and a rebuild drops the tier. The renderer
+    # records in scratch folders: the trial before the function test, the
+    # sentinel, a lost device recorded, a clean end, and a profile that
+    # cannot be written. app-render-host-env names the missing driver
+    # through the environment variable itself.
     add_executable(oa-app-render-host-test src/app/render_host_test.cpp)
     target_link_libraries(oa-app-render-host-test PRIVATE oa-app-render-host SDL3::SDL3
-      oa-test-support oa-options)
+      oa-platform-preferences oa-test-support oa-options)
     add_test(NAME app-render-host COMMAND oa-app-render-host-test)
     set_tests_properties(app-render-host PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
@@ -574,8 +578,9 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp
   src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp)
 # The run manifest of a director render and the settings dialog's header
-# name the engine's version.
-set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp APPEND
+# name the engine's version, and the renderer records are written under it.
+set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp
+  src/app/main.cpp APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
   oa-app-video-capture oa-app-render-host

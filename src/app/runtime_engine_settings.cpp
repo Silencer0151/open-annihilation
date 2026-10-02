@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 
 #ifndef OA_ENGINE_VERSION
 #error "OA_ENGINE_VERSION names the engine's version for the dialog's header"
@@ -199,6 +200,10 @@ bool Runtime::EngineSettingsState::escape_opens_menu(Runtime& runtime) {
 }
 
 void Runtime::destroy_engine_settings_state(EngineSettingsState* state) noexcept {
+    // A retry the player never confirmed is put back before the run ends,
+    // so that its clean exit writes the records the dialog opened with.
+    if (state != nullptr && state->records_host != nullptr)
+        state->records_host->restore_records();
     delete state;
 }
 
@@ -287,6 +292,7 @@ AccelerationFacts Runtime::acceleration_facts() const {
         facts.asked = hardware_acceleration_asked(options_, setting);
         facts.flag = options_.hardware_acceleration;
         facts.force_capable = options_.force_capable;
+        render_run_->host->fill_record_facts(facts);
         const std::string_view renderer_name = render_run_->host->facts().renderer;
         facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
         facts.vertical_sync_refused = vertical_sync_refused_;
@@ -331,7 +337,27 @@ void Runtime::take_renderer_retry(const settings::Dialog& dialog) {
     if (dialog.forget_renderer_failures == state.retries_taken)
         return;
     state.retries_taken = dialog.forget_renderer_failures;
+    if (render_run_ && render_run_->host != nullptr) {
+        // The host keeps what the dialog opened with for Cancel, not what an
+        // earlier retry in it left.
+        state.records_host = render_run_->host;
+        std::ignore = state.records_host->clear_records();
+    }
     forget_render_failures();
+}
+
+void Runtime::keep_renderer_records() {
+    auto& state = engine_settings_state();
+    if (state.records_host != nullptr)
+        state.records_host->keep_cleared_records();
+    state.records_host = nullptr;
+}
+
+void Runtime::restore_renderer_records() {
+    auto& state = engine_settings_state();
+    if (state.records_host != nullptr)
+        state.records_host->restore_records();
+    state.records_host = nullptr;
 }
 
 AccelerationReport Runtime::acceleration_report() const {
@@ -388,6 +414,7 @@ settings::Dialog& Runtime::open_engine_settings_dialog() {
     state.opened_run_unit_limit = frontend_game().max_units_setting;
     auto& dialog = state.dialog.emplace();
     state.retries_taken = 0;
+    state.records_host = nullptr;
     settings::open_dialog(
         dialog,
         state.current,
@@ -421,6 +448,7 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         return false;
     case settings::DialogAction::accepted: {
         take_renderer_retry(*dialog);
+        keep_renderer_records();
         apply_engine_settings(dialog->chosen);
         const auto failure = save_engine_settings(dialog->opened, dialog->chosen, dialog->restored);
         state.last_page = dialog->page;
@@ -431,6 +459,7 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
     }
     case settings::DialogAction::cancelled: {
         const bool zoom_changed = match_ && match_zoom_target_ != state.opened_zoom_target;
+        restore_renderer_records();
         apply_engine_settings(dialog->opened);
         // The battlefield's zoom and the next game's unit limit go back to
         // what they were, a loaded game's limit included.

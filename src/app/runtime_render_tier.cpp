@@ -9,7 +9,10 @@
 // applies at once too, except that a match played with other machines or a
 // replay, known from its loading screen, keeps the tier it began with until
 // it ends. Once the step-down has moved, the tier switches on at the rung
-// it reached.
+// it reached. The renderer records follow the run: the first accelerated
+// frame moves the sentinel, switching off closes the stage of a path's
+// first frames, and what a match strikes or records is written when it
+// ends.
 #include "oa/app/runtime.hpp"
 
 #include "engine_settings_state.hpp"
@@ -39,9 +42,13 @@ void Runtime::update_render_tier() {
     case policy::TierAction::switch_on:
         begin_accelerated_watch();
         switch_accelerated_presentation(true, render_tier_rung());
+        host.note_first_accelerated_frame();
         break;
     case policy::TierAction::switch_off:
         switch_accelerated_presentation(false, accelerated_.rung);
+        // A path whose first frames stood under its own sentinel stops with
+        // the tier, as when it is dropped.
+        host.end_path_stage();
         break;
     case policy::TierAction::none:
     case policy::TierAction::run_function_test:
@@ -54,11 +61,15 @@ void Runtime::begin_render_tier_match(policy::MatchKind kind) {
     if (!render_run_ || render_run_->host == nullptr)
         return;
     policy::begin_match(render_run_->host->tier_inputs().match, kind, accelerated_.on);
+    // Strikes and records that arise from here wait for the match's end.
+    render_run_->host->set_match_running(true);
 }
 
 void Runtime::end_render_tier_match() {
-    if (render_run_ && render_run_->host != nullptr)
-        policy::end_match(render_run_->host->tier_inputs().match);
+    if (!render_run_ || render_run_->host == nullptr)
+        return;
+    policy::end_match(render_run_->host->tier_inputs().match);
+    render_run_->host->set_match_running(false);
 }
 
 void Runtime::forget_render_failures() {

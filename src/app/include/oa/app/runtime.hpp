@@ -53,6 +53,7 @@
 #include "oa/ui/engine_settings.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
 #include "oa/app/acceleration_status.hpp"
+#include "oa/app/renderer_records.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
@@ -2314,8 +2315,10 @@ class Runtime final : public menu::Host,
     /// (RendererHost::function_test_hooks), and the frame noted in a shared
     /// game or a replay; then switches the accelerated presentation on, with
     /// its watch (begin_accelerated_watch), at the rung render_tier_rung
-    /// gives, or off, to match. A runtime without the game's renderer keeps
-    /// the standard tier.
+    /// gives, noting the first accelerated frame, or off, closing the stage
+    /// of a path's first frames that stands (RendererHost::end_path_stage),
+    /// to match. A runtime without the game's renderer keeps the standard
+    /// tier.
     void update_render_tier();
 
     /// Notes that a match's loading screen begins: in a shared game or a
@@ -2341,11 +2344,36 @@ class Runtime final : public menu::Host,
     /// Acts on the dialog's requests to try the graphics card afresh, as
     /// Hardware acceleration passing from Off to On and Restore defaults
     /// make them (Dialog::forget_renderer_failures): once for any new
-    /// request since the dialog opened, the run forgets what failed
-    /// (forget_render_failures).
+    /// request since the dialog opened, the renderer records' strikes and
+    /// failure records are cleared in memory (RendererHost::clear_records),
+    /// those the dialog opened with kept for Cancel, and the run forgets
+    /// what failed (forget_render_failures). OK writes the cleared records
+    /// (keep_renderer_records); Cancel puts them back
+    /// (restore_renderer_records).
     ///
     /// @param dialog the open dialog
     void take_renderer_retry(const oa::ui::engine_settings::Dialog& dialog);
+
+    /// Writes the renderer records the dialog's retries cleared, as OK does,
+    /// best effort (RendererHost::keep_cleared_records).
+    void keep_renderer_records();
+
+    /// Puts back the renderer records the dialog's retries cleared, as
+    /// Cancel does, with what was struck or recorded since
+    /// (RendererHost::restore_records).
+    void restore_renderer_records();
+
+    /// Tells the player at the main menu of a renderer record the main
+    /// menu's notice has not shown yet, one at a time: once the main menu,
+    /// its own and not a screen package's, has shown for a frame and stays,
+    /// with no multiplayer signal waiting to leave it, so that a start that
+    /// passes it (-n, whose signal waits for the frontend's next pass, and
+    /// --play-demo) waits for it to show again, and with no dialog over it. A run nobody watches
+    /// notes the request instead and leaves the record untold, and
+    /// --check-renderer-ladder notes it and marks it told as a shown notice
+    /// would (renderer_state::notice_action); a shown or marked notice
+    /// marks the record told and writes the records.
+    void tell_renderer_records();
 
     /// Returns the rung the accelerated presentation is switched on at: the
     /// one the step-down reached, once it has moved in the run; else the one
@@ -4293,10 +4321,11 @@ class Runtime final : public menu::Host,
     /// @param now make the renderer again now, rather than at the next render()
     void note_present_error(const std::string& reason, bool now);
 
-    /// Makes the renderer again after a failure (RendererHost::rebuild):
-    /// forgets every texture, lays the screen out again on the new renderer,
-    /// keeps the pointer's hold on the window, and in a match says so in the
-    /// message log.
+    /// Makes the renderer again after a failure (RendererHost::rebuild),
+    /// striking the failure the rebuild was asked for against the driver
+    /// (RenderRun::pending_failure): forgets every texture, lays the screen
+    /// out again on the new renderer, keeps the pointer's hold on the
+    /// window, and in a match says so in the message log.
     ///
     /// Throws std::runtime_error with the reason when SDL's software
     /// renderer, made by an earlier rebuild, failed before it presented a
@@ -4577,6 +4606,35 @@ class Runtime final : public menu::Host,
     /// @param present_ns the frame's present measure, nanoseconds
     void feed_render_step_down(uint64_t present_ns);
 
+    /// Drops the accelerated presentation after an AccelerationError: where
+    /// it came from a path refused because its trial could not be written
+    /// (begin_accelerated_path), for that reason, with nothing struck
+    /// (render_policy::Drop::path_trial_unwritten); where it is the game's
+    /// own (AccelerationFault::engine), as an engine fault, with nothing
+    /// struck (render_policy::Drop::engine_fault); otherwise as a failure of
+    /// the call it names, struck against the driver
+    /// (RendererHost::note_running_failure), as drop_acceleration drops it.
+    ///
+    /// @param error what failed
+    void take_acceleration_error(const AccelerationError& error);
+
+    /// Takes note that the accelerated presentation is about to use a path,
+    /// whose first use in the run writes its trial (RendererHost::begin_path).
+    ///
+    /// Throws AccelerationError when the path's trial could not be written,
+    /// so that the frame is presented as the standard tier presents it and
+    /// take_acceleration_error drops the tier for that reason.
+    ///
+    /// @param path the path
+    void begin_accelerated_path(renderer_state::AcceleratedPath path);
+
+    /// Notes the accelerated paths a frame draws with, for the stage of a
+    /// path's first frames: the prescale path where the card scales through
+    /// a prescale target.
+    ///
+    /// @param scale how the card scales a layer of the frame
+    void note_card_scale_drawn(const CardScale& scale) noexcept;
+
     /// Frees every texture and buffer the accelerated presentation made,
     /// and, while it is switched on, the scene's buffers, which only it
     /// holds at a scene's size (free_accelerated_scene_buffers).
@@ -4610,13 +4668,18 @@ class Runtime final : public menu::Host,
     void area_filter_scene(const oa::present::world_renderer::Surface& scene);
 
     /// Makes the accelerated presentation's match textures for the live
-    /// layout, once, at their largest: the scene's tiles at the largest scene
-    /// a magnified frame draws, the overlay at the battlefield's size, and
-    /// the prescale targets of the scene and the HUD layer where the card's
-    /// filter needs them, within the prescale budget; each in tiles beyond
-    /// the renderer's texture limit.
+    /// layout, once, at their largest, each at the first frame drawn through
+    /// it, whose path's first use is noted first (begin_accelerated_path):
+    /// the HUD layer's prescale target where the card's filter needs it; at
+    /// the first magnified frame, the scene's tiles at the largest scene a
+    /// magnified frame draws and the overlay at the battlefield's size; and
+    /// at the first magnified frame whose zoom the card scales
+    /// sharp-bilinear through one, the scene's prescale target; the prescale
+    /// targets within the prescale budget, each texture in tiles beyond the
+    /// renderer's texture limit.
     ///
-    /// Throws AccelerationError when the card refuses one.
+    /// Throws AccelerationError when the card refuses one, or a path's
+    /// trial cannot be written.
     void ensure_accelerated_match_textures();
 
     /// Returns how the card scales a layer at a scale by a filter: the

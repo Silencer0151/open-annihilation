@@ -24,6 +24,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -91,10 +92,51 @@ void Runtime::drop_acceleration(const std::string& reason, render_policy::Drop d
     free_accelerated_presentation();
     accelerated_.on = false;
     if (render_run_ && render_run_->host != nullptr) {
-        auto& inputs = render_run_->host->tier_inputs();
+        auto& host = *render_run_->host;
+        auto& inputs = host.tier_inputs();
         if (inputs.drop == render_policy::Drop::none)
-            inputs.drop = drop;
+            inputs.drop =
+                render_run_->path_refused ? render_policy::Drop::path_trial_unwritten : drop;
+        // A path whose first frames stood under its own sentinel stops with
+        // the tier.
+        host.end_path_stage();
     }
+}
+
+void Runtime::take_acceleration_error(const AccelerationError& error) {
+    if (render_run_ && render_run_->host != nullptr && !render_run_->path_refused) {
+        auto& host = *render_run_->host;
+        if (error.fault() == AccelerationFault::driver) {
+            // The call that failed is struck against the driver; the same in
+            // the next run on it keeps the driver on the standard tier.
+            renderer_state::Strike failure;
+            failure.stage = renderer_state::StrikeStage::call;
+            failure.call = failing_call_name(error.what());
+            std::ignore = host.note_running_failure(failure);
+        } else if (host.tier_inputs().drop == render_policy::Drop::none) {
+            // The game's own error says nothing of the driver.
+            host.tier_inputs().drop = render_policy::Drop::engine_fault;
+        }
+    }
+    drop_acceleration(error.what());
+    if (render_run_)
+        render_run_->path_refused = false;
+}
+
+void Runtime::begin_accelerated_path(renderer_state::AcceleratedPath path) {
+    if (!render_run_ || render_run_->host == nullptr)
+        return;
+    if (!render_run_->host->begin_path(path)) {
+        render_run_->path_refused = true;
+        throw AccelerationError(std::string(path_trial_unwritten_reason));
+    }
+}
+
+void Runtime::note_card_scale_drawn(const CardScale& scale) noexcept {
+    if (render_run_ && scale.filter == policy::ScaleFilter::sharp_bilinear && scale.factor > 1)
+        render_run_->paths_drawn = static_cast<PathSet>(
+            render_run_->paths_drawn | path_bit(renderer_state::AcceleratedPath::prescale)
+        );
 }
 
 void Runtime::free_accelerated_layout_textures() noexcept {
@@ -212,13 +254,18 @@ void Runtime::ensure_accelerated_match_textures() {
             if (accelerated_buffer_allowed(
                     policy::AcceleratedBuffer::prescale,
                     uint64_t{target_w} * target_h * bytes_per_texel
-                ))
+                )) {
+                begin_accelerated_path(renderer_state::AcceleratedPath::prescale);
                 state.hud_prescale.ensure(
                     sdl_.renderer, nullptr, target_w, target_h, limit, state.counts
                 );
+            }
         }
     }
-    if (!state.rung.magnify)
+    // The magnified world's textures are made at the first frame drawn
+    // through them, so that the stage of the path's first frames, which
+    // counts the frames drawn with it, begins with its first draws.
+    if (!state.rung.magnify || state.frame.method != SceneMethod::magnify)
         return;
     // The scene, at the largest a magnified frame draws, and the overlay.
     const auto largest = largest_magnified_scene(battlefield_width, battlefield_height);
@@ -226,12 +273,14 @@ void Runtime::ensure_accelerated_match_textures() {
     const auto scene_h = static_cast<uint32_t>(largest.height);
     // The scene's texture, the overlay's and the overlay's buffer, unless
     // the memory guard refuses them: the tier then stays at magnify off.
-    if ((!state.scene.made() || !state.overlay_texture.made()) &&
-        !accelerated_buffer_allowed(
-            policy::AcceleratedBuffer::scene,
-            (uint64_t{scene_w} * scene_h + 2 * uint64_t{bf_w} * bf_h) * bytes_per_texel
-        ))
-        return;
+    if (!state.scene.made() || !state.overlay_texture.made()) {
+        if (!accelerated_buffer_allowed(
+                policy::AcceleratedBuffer::scene,
+                (uint64_t{scene_w} * scene_h + 2 * uint64_t{bf_w} * bf_h) * bytes_per_texel
+            ))
+            return;
+        begin_accelerated_path(renderer_state::AcceleratedPath::magnify);
+    }
     if (!state.scene.made())
         state.scene.create(
             sdl_.renderer, scene_w, scene_h, limit, SDL_BLENDMODE_NONE, state.counts
@@ -248,10 +297,35 @@ void Runtime::ensure_accelerated_match_textures() {
     }
     // The scene's prescale target, at the largest any zoom above 1 needs on
     // the display within what the HUD's target leaves of the budget, in
-    // tiles beyond the renderer's limit as the scene is.
+    // tiles beyond the renderer's limit as the scene is; made at the first
+    // frame whose scale on the display the card magnifies through it.
     const bool prescaled = state.rung.card == policy::CardFilter::prescale_full ||
                            state.rung.card == policy::CardFilter::prescale_quarter;
     if (!prescaled || state.world_prescale.made())
+        return;
+
+    // The corner a zoom shows and the column and row past it, which LINEAR
+    // reads, and its prescale factor; 1 or less where nothing is prescaled.
+    struct Corner {
+        uint32_t width{};
+        uint32_t height{};
+        uint32_t factor{};
+    };
+
+    const auto corner_at = [&](float zoom, double scale) {
+        Corner corner;
+        corner.width = std::min(magnified_corner(bf_w, zoom, scene_w) + 1, scene_w);
+        corner.height = std::min(magnified_corner(bf_h, zoom, scene_h) + 1, scene_h);
+        corner.factor = accelerated_prescale_factor(
+            scale, corner.width, corner.height, state.hud_prescale.pixels()
+        );
+        return corner;
+    };
+    // The frame's scene at its scale on the display, as the draw takes it.
+    const float frame_zoom = match_zoom();
+    const double frame_scale = world_display_scale(state.frame, frame_zoom, density);
+    if (policy::world_filter(state.rung, frame_scale) != policy::ScaleFilter::sharp_bilinear ||
+        corner_at(frame_zoom, frame_scale).factor <= 1)
         return;
     uint32_t widest = 0;
     uint32_t tallest = 0;
@@ -261,14 +335,11 @@ void Runtime::ensure_accelerated_match_textures() {
         const double scale = static_cast<double>(zoom) * density;
         if (std::floor(scale) == scale)
             continue;
-        const uint32_t region_w = std::min(magnified_corner(bf_w, zoom, scene_w) + 1, scene_w);
-        const uint32_t region_h = std::min(magnified_corner(bf_h, zoom, scene_h) + 1, scene_h);
-        const uint32_t factor =
-            accelerated_prescale_factor(scale, region_w, region_h, state.hud_prescale.pixels());
-        if (factor <= 1)
+        const Corner corner = corner_at(zoom, scale);
+        if (corner.factor <= 1)
             continue;
-        widest = std::max(widest, factor * region_w);
-        tallest = std::max(tallest, factor * region_h);
+        widest = std::max(widest, corner.factor * corner.width);
+        tallest = std::max(tallest, corner.factor * corner.height);
     }
     const policy::PrescaleBudget left{
         policy::prescale_budget(state.rung.card), state.hud_prescale.pixels()
@@ -276,8 +347,10 @@ void Runtime::ensure_accelerated_match_textures() {
     if (widest != 0 && uint64_t{widest} * tallest + left.charged <= left.limit &&
         accelerated_buffer_allowed(
             policy::AcceleratedBuffer::prescale, uint64_t{widest} * tallest * bytes_per_texel
-        ))
+        )) {
+        begin_accelerated_path(renderer_state::AcceleratedPath::prescale);
         state.world_prescale.ensure(sdl_.renderer, nullptr, widest, tallest, limit, state.counts);
+    }
 }
 
 void Runtime::present_accelerated_match_layers(bool dialogs) {
@@ -392,6 +465,15 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
               static_cast<float>(strip.w),
               static_cast<float>(strip.h)}}
         );
+    const double chrome = match_layout_.scale * density;
+    const CardScale hud_scale = accelerated_card_scale(
+        policy::chrome_filter(state.rung, chrome),
+        chrome,
+        match_hud_cpu_.width,
+        match_hud_cpu_.height,
+        state.hud_prescale
+    );
+    note_card_scale_drawn(hud_scale);
     sharp_draw(
         sdl_.renderer,
         nullptr,
@@ -399,13 +481,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         match_hud_cpu_.width,
         match_hud_cpu_.height,
         strips,
-        accelerated_card_scale(
-            policy::chrome_filter(state.rung, match_layout_.scale * density),
-            match_layout_.scale * density,
-            match_hud_cpu_.width,
-            match_hud_cpu_.height,
-            state.hud_prescale
-        ),
+        hud_scale,
         state.hud_revision,
         state.hud_prescale,
         state.counts
@@ -438,6 +514,18 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         };
         // The magnified scene's filter, chosen on its scale at the display.
         const double scene_scale = world_display_scale(frame, zoom, density);
+        const CardScale world_scale = accelerated_card_scale(
+            policy::world_filter(state.rung, scene_scale),
+            scene_scale,
+            std::min(width + 1, scene_w),
+            std::min(height + 1, scene_h),
+            state.world_prescale
+        );
+        note_card_scale_drawn(world_scale);
+        if (render_run_)
+            render_run_->paths_drawn = static_cast<PathSet>(
+                render_run_->paths_drawn | path_bit(renderer_state::AcceleratedPath::magnify)
+            );
         draw_scaled_world(
             sdl_.renderer,
             nullptr,
@@ -448,13 +536,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             height,
             destination,
             battlefield,
-            accelerated_card_scale(
-                policy::world_filter(state.rung, scene_scale),
-                scene_scale,
-                std::min(width + 1, scene_w),
-                std::min(height + 1, scene_h),
-                state.world_prescale
-            ),
+            world_scale,
             state.world_prescale,
             state.counts
         );
@@ -472,9 +554,12 @@ void Runtime::draw_accelerated_screen(
         return;
     // The letterbox's scale: window pixels per frame pixel.
     SDL_FRect area{};
+    // The letterbox is SDL's own reckoning, which no driver call makes: one
+    // that cannot be had is the game's error.
     if (!SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &area) || !(area.w > 0.0F))
         throw AccelerationError(
-            std::string("SDL_GetRenderLogicalPresentationRect: ") + SDL_GetError()
+            std::string("SDL_GetRenderLogicalPresentationRect: ") + SDL_GetError(),
+            AccelerationFault::engine
         );
     const double scale = static_cast<double>(area.w) / static_cast<double>(width);
     const auto w = static_cast<uint32_t>(width);
@@ -489,15 +574,21 @@ void Runtime::draw_accelerated_screen(
         if (factor > 1 && (made || accelerated_buffer_allowed(
                                        policy::AcceleratedBuffer::prescale,
                                        uint64_t{factor * w} * (factor * h) * bytes_per_texel
-                                   )))
+                                   ))) {
+            begin_accelerated_path(renderer_state::AcceleratedPath::prescale);
             state.screen_prescale.ensure(
                 sdl_.renderer, nullptr, factor * w, factor * h, state.texture_limit, state.counts
             );
+        }
     }
     const SharpPart whole{
         {0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)},
         {0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)}
     };
+    const CardScale screen_scale = accelerated_card_scale(
+        policy::chrome_filter(state.rung, scale), scale, w, h, state.screen_prescale
+    );
+    note_card_scale_drawn(screen_scale);
     sharp_draw(
         sdl_.renderer,
         nullptr,
@@ -505,9 +596,7 @@ void Runtime::draw_accelerated_screen(
         w,
         h,
         {&whole, 1},
-        accelerated_card_scale(
-            policy::chrome_filter(state.rung, scale), scale, w, h, state.screen_prescale
-        ),
+        screen_scale,
         revision,
         state.screen_prescale,
         state.counts

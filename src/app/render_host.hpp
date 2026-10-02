@@ -23,12 +23,23 @@
 // targets as the accelerated tier draws and reads them back
 // (run_function_test). The facts the tier is decided from stay with the
 // renderer for the runtime to keep up to date (RendererHost::tier_inputs).
+//
+// The host keeps the run's renderer records (renderer_state.hpp): read at
+// the start, with what the last run left behind turned into strikes and
+// records, the drivers recorded failed skipped by the walk, and the
+// sentinel and the trial moved through the run's stages, from each
+// driver's creation to `running` and each accelerated path's first frames.
+// A failure while the game runs is struck against the driver that failed,
+// and a clean exit erases the sentinel.
 #pragma once
 
+#include "oa/app/acceleration_status.hpp"
 #include "oa/app/render_policy.hpp"
+#include "oa/app/renderer_state.hpp"
 #include "oa/platform/render_probe.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -79,7 +90,48 @@ struct RenderFaultHooks {
     bool (*rgb565_window)(void* context){};
     /// What the start-up function test draws wrongly (run_function_test).
     FunctionTestFaults function_test{};
+    /// The physical memory taken in place of the machine's, in bytes; empty
+    /// reads the machine's.
+    std::optional<uint64_t> physical_memory{};
+    /// How a left-over trial counts in place of the rule of the system the
+    /// game runs on (renderer_state::crash_evidence); empty keeps that rule.
+    std::optional<renderer_state::CrashEvidence> crash_evidence{};
+    /// The name the records keep the renderer's driver under, in place of
+    /// its own, so that SDL's software renderer, which is never recorded
+    /// failed-driver, can stand for a driver that is; empty keeps its own.
+    std::string record_driver{};
+    /// The adapter the probe is taken to have read, in place of what it
+    /// read, as a driver that describes the adapter in words of its own
+    /// would; empty keeps what it read.
+    std::string adapter{};
 };
+
+/// Where a start keeps the renderer records.
+struct RecordsPlace {
+    /// The folder of the player's own preferences file, which holds both
+    /// files of the records; empty keeps the records and the sentinel in
+    /// memory for the run, as with a named --preferences-file.
+    std::filesystem::path folder{};
+    std::string engine_version{}; ///< the running engine's version
+};
+
+/// The clock the stages of the sentinel are timed by.
+struct StageClock {
+    void* context{};
+    /// Returns the time in nanoseconds; null reads the steady clock.
+    uint64_t (*now_ns)(void* context){};
+};
+
+/// A set of accelerated paths, one bit each (path_bit).
+using PathSet = uint8_t;
+
+/// Returns the bit of an accelerated path in a PathSet.
+///
+/// @param path the path
+/// @return its bit
+[[nodiscard]] constexpr PathSet path_bit(renderer_state::AcceleratedPath path) noexcept {
+    return static_cast<PathSet>(1U << static_cast<unsigned>(path));
+}
 
 /// One attempt of a walk of the render drivers.
 struct CreationAttempt {
@@ -108,6 +160,16 @@ struct CreationHooks {
 struct CreationOutcome {
     std::vector<CreationAttempt> attempts{}; ///< every attempt, in the order made
     bool created{};                          ///< the last attempt made the renderer
+    /// The walk passed over a driver recorded failed-driver, and did not
+    /// start again with the records ignored.
+    bool skipped_by_record{};
+    /// For a start's walk that made the renderer: the drivers it passed over
+    /// because the records hold them failed-driver, before the one it made,
+    /// in SDL's order; empty when it passed over none.
+    std::vector<std::string> skipped{};
+    /// The records left nothing able to present, so the walk started again
+    /// from the top with them ignored for the run.
+    bool records_ignored{};
     /// When nothing was made: renderer_creation_error and the last refusal's
     /// reason, or no_render_driver when nothing was tried.
     std::string error{};
@@ -173,6 +235,36 @@ walk_render_drivers(const render_policy::CreationInputs& inputs, const CreationH
     std::string_view failed_driver,
     const CreationHooks& hooks
 );
+
+/// The name a failing call is struck under when its error names none.
+inline constexpr std::string_view unnamed_call = "unnamed";
+
+/// Returns the name the renderer records strike a failing call under: the
+/// words of its error before the first colon, each run of characters other
+/// than letters, digits, `_` and `-` made one `-`, none at either end, cut
+/// to renderer_state::max_name_bytes, so that the same call failing again
+/// is the same strike.
+///
+/// @param error the error, as "SDL_RenderClear: reason"
+/// @return the name, or unnamed_call when nothing is left
+[[nodiscard]] std::string failing_call_name(std::string_view error);
+
+/// Returns the line logged when the start-up function test is skipped
+/// because its trial record could not be written.
+///
+/// @return the line, without its line break
+[[nodiscard]] std::string trial_unwritten_log_line();
+
+/// Why the accelerated tier stops when a path's trial cannot be written.
+inline constexpr std::string_view path_trial_unwritten_reason =
+    "the trial of the graphics card's first use cannot be written";
+
+/// Returns the line logged when an accelerated path is not used because
+/// its trial record could not be written.
+///
+/// @param path the path
+/// @return the line, without its line break
+[[nodiscard]] std::string path_trial_unwritten_log_line(renderer_state::AcceleratedPath path);
 
 /// Returns the line logged when a renderer fails while the game runs and
 /// another is made: "open-annihilation: graphics: <driver> failed:
@@ -243,11 +335,12 @@ struct DensityRequest {
     bool unattended{}; ///< a check, a benchmark or another scripted run
     bool capture{};    ///< the run captures video (--capture-video)
     /// The driver the native-density record names under the running
-    /// engine's version (renderer_state::native_density_driver); empty
-    /// when there is none, as while the start reads no records before the
-    /// window opens.
+    /// engine's version (renderer_state::native_density_driver), read from
+    /// the records the start opens before the window; empty when there is
+    /// none, as with no records under SDL_RENDER_DRIVER.
     std::string record_driver{};
-    /// The step-down rung remembered for that driver; none when none is.
+    /// The step-down rung remembered for that driver; none when none is,
+    /// as at every start while the game writes no scale-level key.
     std::optional<render_policy::LadderState> remembered{};
 };
 
@@ -295,16 +388,24 @@ class RendererHost {
     /// capable (oa::platform::running_on_windows_before_vista);
     /// decide_start_tier logs it. With SDL_RENDER_DRIVER set, by SDL's own
     /// call, which tries only the drivers it names. Otherwise by walking
-    /// SDL's render drivers (walk_render_drivers): no driver is recorded as
-    /// failed yet, so the walk tries every driver in SDL's order and stops
-    /// at the first that starts. The framebuffer hint is set before SDL's
-    /// software renderer only when an earlier driver refused: "0" where the
-    /// window has a framebuffer of its own
+    /// SDL's render drivers (walk_render_drivers) in SDL's order, skipping
+    /// those the records hold failed-driver, but walking again with the
+    /// records ignored where they would leave nothing able to present, and
+    /// stopping at the first that starts, with the sentinel `create
+    /// <driver>` before each attempt. The framebuffer hint is set before
+    /// SDL's software renderer only when an earlier driver refused or was
+    /// skipped: "0" where the window has a framebuffer of its own
     /// (oa::platform::render_probe::native_window_framebuffer), otherwise
-    /// the hardware drivers in SDL's order, or the first of them alone when
-    /// SDL's headers or library are older than 3.4. Then the floating-point
-    /// settings the game started with are put back, should the driver or
-    /// the probe's reading of it have changed them.
+    /// the hardware drivers in SDL's order that no record skips, or the
+    /// first of them alone when SDL's headers or library are older than
+    /// 3.4. The sentinel then stands at `standard <driver>` while the
+    /// probe reads the renderer, and, where the walk passed over no driver
+    /// by record, the adapter it describes is noted in the records: each
+    /// driver describes the adapter in words of its own, so only a start
+    /// that makes the driver every such start makes compares like with
+    /// like. Then the floating-point settings the game started with are
+    /// put back, should the driver or the probe's reading of it have
+    /// changed them.
     ///
     /// Throws std::runtime_error, beginning renderer_creation_error, when
     /// no renderer was made.
@@ -312,7 +413,14 @@ class RendererHost {
     /// @param window the game's window, which has no renderer yet
     /// @param faults what --check-renderer-ladder forces; empty in a
     ///     player's run. They are kept for the run (faults).
-    void create(SDL_Window* window, const RenderFaultHooks& faults = {});
+    /// @param records where the start keeps its records, read first
+    ///     (open_records); empty keeps the records the host holds, which
+    ///     until the first are none at all, as under SDL_RENDER_DRIVER
+    void create(
+        SDL_Window* window,
+        const RenderFaultHooks& faults = {},
+        const std::optional<RecordsPlace>& records = std::nullopt
+    );
 
     /// Makes the renderer again after it failed while the game ran, and
     /// logs what was made (report_game_renderer), on the standard tier
@@ -327,11 +435,21 @@ class RendererHost {
     /// dropped already. Every texture made on the renderer must be
     /// destroyed first.
     ///
+    /// The failure is struck against the driver that failed
+    /// (note_running_failure), any accelerated path's stage under way is
+    /// closed, and the trial the run wrote is erased; each attempt then
+    /// stands under its `create` sentinel and the new renderer's first
+    /// frames under `standard`, as at a start. The adapter the new driver
+    /// describes is not noted, since its words for it are its own.
+    ///
     /// Throws std::runtime_error, beginning renderer_creation_error, when
     /// no driver starts: the run ends, as a start does.
     ///
     /// @param reason what failed, for the log
-    void rebuild(std::string_view reason);
+    /// @param failure the failure as the records strike it: a present error,
+    ///     a lost device or repeated resets; StrikeStage::none strikes
+    ///     nothing
+    void rebuild(std::string_view reason, const renderer_state::Strike& failure = {});
 
     /// Takes a render event that comes while no runtime handles events, as
     /// while the intro movies play: a lost device is noted for service; a
@@ -418,11 +536,11 @@ class RendererHost {
     /// 1 to 3 found (render_policy::assess_renderer), with the adapter read
     /// under SDL_RENDER_DRIVER too when --hardware-acceleration or
     /// --force-capable asks for more than SDL's own start; and the facts the
-    /// starting rung is sized from. On the player's own profile the
-    /// function test waits for the player, unless a flag asks for it
-    /// (render_policy::start_function_test). Where the tier could be
-    /// accelerated but for the function test, and so never under 2 GiB,
-    /// runs it first (render_policy::step_tier, test_function).
+    /// starting rung is sized from; and what the records say of the driver
+    /// (an accelerated-unusable record, records that could not be read
+    /// after an unclean start). Where the tier could be accelerated but for
+    /// the function test, and so never under 2 GiB, runs it first
+    /// (render_policy::step_tier, test_function).
     ///
     /// @param request what the command line and the settings ask
     void decide_start_tier(const TierRequest& request);
@@ -432,7 +550,12 @@ class RendererHost {
     /// settings the game started with, and keeps what it found: the
     /// function test passed or failed in the tier's facts, logging a
     /// failure, and whether the pixel-art scale mode works for the starting
-    /// rung.
+    /// rung. The trial `probe <driver>` is written first and stands until
+    /// the start-up stage passes, and the sentinel stands at `probe
+    /// <driver>` through the test and at `standard <driver>` after it.
+    /// Where the trial cannot be written the test does not run: its state
+    /// becomes render_policy::FunctionTest::trial_unwritten, which keeps the
+    /// standard tier until the player tries again, and the skip is logged.
     void test_function();
 
     /// Returns the hooks through which render_policy::step_tier runs the
@@ -459,12 +582,203 @@ class RendererHost {
     /// @return the rung
     [[nodiscard]] render_policy::LadderState start_rung() const noexcept;
 
+    /// Reads the records a start keeps and applies what the last run left
+    /// behind (renderer_state::RendererState::resolve_leftovers), writing
+    /// the strikes and records that made: under SDL_RENDER_DRIVER none at
+    /// all; with no folder, records in memory for the run; otherwise the two
+    /// files in the folder. How a left-over trial counts follows the
+    /// system the game runs on, and on a machine under 2 GiB nothing of the
+    /// accelerated tier is struck or recorded (renderer_state::RecordRules).
+    /// The game's start calls it before the window opens, so that the
+    /// native-density key reaches the window's density, and create keeps
+    /// what it read; create calls it when it is given a place, and a check
+    /// calls create again with one to start afresh on what the files hold,
+    /// as a new start of the game would.
+    ///
+    /// @param place where the records live
+    void open_records(const RecordsPlace& place);
+
+    /// Returns the run's records.
+    ///
+    /// @return the records and their files
+    [[nodiscard]] renderer_state::RendererState& records() noexcept;
+
+    /// Returns the run's records.
+    ///
+    /// @return the records and their files
+    [[nodiscard]] const renderer_state::RendererState& records() const noexcept;
+
+    /// Returns where the records were last opened.
+    ///
+    /// @return the place
+    [[nodiscard]] const RecordsPlace& records_place() const noexcept;
+
+    /// Returns what the start made of what the last run left behind.
+    ///
+    /// @return the outcome of open_records
+    [[nodiscard]] const renderer_state::LeftoverOutcome& leftovers() const noexcept;
+
+    /// Returns the lines the records logged since they were opened.
+    ///
+    /// @return the lines, without their line breaks
+    [[nodiscard]] std::span<const std::string> records_log() const noexcept;
+
+    /// Returns the name the records keep the renderer's driver under: the
+    /// faults' record_driver where it is set, otherwise the renderer's own.
+    ///
+    /// @return the name; empty while there is no renderer
+    [[nodiscard]] std::string record_driver() const;
+
+    /// Returns the drivers the start's walk passed over because the records
+    /// hold them failed-driver, before the driver it made
+    /// (CreationOutcome::skipped).
+    ///
+    /// @return the drivers, in SDL's order; empty when none was skipped or
+    ///     the walk ignored the records
+    [[nodiscard]] std::span<const std::string> skipped_drivers() const noexcept;
+
+    /// Says whether the start's walk ignored the records, since they left
+    /// nothing able to present; the rebuilds of the run ignore them too.
+    ///
+    /// @return true when it walked again with them ignored
+    [[nodiscard]] bool records_ignored() const noexcept;
+
+    /// Sets the clock the stages of the sentinel are timed by.
+    ///
+    /// @param clock the clock; an empty one reads the steady clock
+    void set_stage_clock(const StageClock& clock) noexcept;
+
+    /// Notes the first accelerated frame of a start or of a retry: the
+    /// sentinel moves from `standard` to `accelerated`.
+    void note_first_accelerated_frame();
+
+    /// Notes a presented frame, of the menus, a loading screen or a match:
+    /// after renderer_state::start_stage_frames frames and
+    /// renderer_state::start_stage_ns the start-up stage has passed, so its
+    /// strikes are cleared, the sentinel becomes `running` and its trial is
+    /// erased; after renderer_state::path_stage_frames frames drawn with an
+    /// accelerated path whose first frames stand under its own sentinel, so
+    /// has the path's.
+    ///
+    /// @param drawn the accelerated paths the frame was drawn with
+    void note_presented_frame(PathSet drawn);
+
+    /// Takes note that an accelerated path is about to be used. Its first
+    /// use in the run, once the start-up stage has passed, writes the trial
+    /// `path <name> <driver>` and the sentinel `path <name> <driver>`; while
+    /// another stage stands that stage covers it, and nothing is written.
+    ///
+    /// @param path the path
+    /// @return false when the path's trial could not be written (logged):
+    ///     the path is not used, and a later call tries the write again
+    [[nodiscard]] bool begin_path(renderer_state::AcceleratedPath path);
+
+    /// Closes the stage of an accelerated path's first frames when the
+    /// accelerated tier stops before it has passed: the sentinel goes back
+    /// to `running` and the trial is erased, its strike left as it is.
+    void end_path_stage();
+
+    /// Strikes a failure seen while the game runs against the renderer's
+    /// driver (renderer_state::note_running_failure) and writes the records
+    /// when they changed. Nothing is struck or recorded under
+    /// SDL_RENDER_DRIVER, against a driver whose device is lost in
+    /// ordinary use, or against SDL's software renderer unless
+    /// --force-capable runs the accelerated tier on it.
+    ///
+    /// @param failure the failure: a present error, an accelerated-only
+    ///     call, a lost device or repeated resets
+    /// @return what changed
+    renderer_state::Change note_running_failure(const renderer_state::Strike& failure);
+
+    /// Clears the strikes and the failure records in memory, as switching
+    /// Hardware acceleration Off then On or Restore defaults does, and lets
+    /// a start whose records could not be read try again. The clearing
+    /// waits for OK (keep_cleared_records) or Cancel (restore_records):
+    /// until then the file keeps what it took away.
+    ///
+    /// @return what changed
+    renderer_state::Change clear_records();
+
+    /// Writes the records clear_records cleared, as OK does
+    /// (renderer_state::RendererState::confirm_clear), best effort.
+    void keep_cleared_records() noexcept;
+
+    /// Puts back the strikes, failure records and remembered rungs that
+    /// clear_records took away, as Cancel does, with what was struck or
+    /// recorded since (renderer_state::RendererState::restore_failures),
+    /// and writes the records, best effort.
+    void restore_records() noexcept;
+
+    /// Tells the records whether a match runs, during which they are written
+    /// only at its end; at the end it writes them.
+    ///
+    /// @param running a match runs
+    void set_match_running(bool running);
+
+    /// Fills the facts the settings dialog's status reads from the records:
+    /// a driver skipped by a record at this start, whether the skipped
+    /// drivers' records still stand, and what the records hold against the
+    /// renderer's driver or, where it is not able, against the drivers
+    /// skipped before it.
+    ///
+    /// @param[in,out] facts the facts
+    void fill_record_facts(AccelerationFacts& facts) const;
+
+    /// Ends the run's records cleanly, as every exit through main does: the
+    /// strikes of failures the renderer's driver did not see again are
+    /// cleared, the run's trial erased, the records written and the
+    /// sentinel deleted. Call it before destroy.
+    void finish_records() noexcept;
+
   private:
 
     /// Notes what was made: the facts, with the adapter read as
-    /// adapter_asked_ says, the capability, the layers' formats and the
-    /// floating-point settings put back.
+    /// adapter_asked_ says or the faults' in its place, the capability, the
+    /// layers' formats and the floating-point settings put back.
     void take_renderer();
+
+    /// Walks the drivers of a start or a rebuild with the records' failed
+    /// drivers, keeps what the walk made, and stands the new renderer's
+    /// sentinel at `standard` while the probe reads it.
+    ///
+    /// Throws std::runtime_error when no driver starts.
+    ///
+    /// @param failed_driver the rebuild's driver that failed; empty for a start
+    /// @param rebuilding the walk is a rebuild's
+    void make_renderer(const std::string& failed_driver, bool rebuilding);
+
+    /// Moves the sentinel and the trial for an event of the run
+    /// (renderer_state::sentinel_step) and writes what it asks.
+    ///
+    /// @param event the event
+    /// @param path the path, for the path events
+    /// @param driver the driver the sentinel names; empty for the renderer's
+    ///     (record_driver)
+    /// @return false when a trial it asked for could not be written, and the
+    ///     stage it would cover is then skipped
+    bool step_sentinel(
+        renderer_state::LifeEvent event,
+        renderer_state::AcceleratedPath path = renderer_state::AcceleratedPath::magnify,
+        const std::string& driver = {}
+    );
+
+    /// Starts the timing of a stage of the sentinel.
+    void begin_stage() noexcept;
+
+    /// Returns the time the stages are timed by.
+    ///
+    /// @return nanoseconds
+    [[nodiscard]] uint64_t stage_now_ns() const;
+
+    /// Returns the machine's physical memory, or the faults' in its place.
+    ///
+    /// @return bytes; 0 when the system does not say
+    [[nodiscard]] uint64_t machine_memory() const noexcept;
+
+    /// Takes into the tier's facts whether the records hold the renderer's
+    /// driver accelerated-unusable; where that cannot be told, as when
+    /// memory runs short, the fact is left as it was.
+    void sync_record_facts() noexcept;
 
     /// Says whether the window's pixels are 16-bit RGB565, or the faults'
     /// answer where they give one.
@@ -485,6 +799,27 @@ class RendererHost {
     /// reads none.
     bool adapter_asked_{};
     bool lost_noted_{}; ///< take_event saw the device lost; service rebuilds
+    /// The run's records: none at all until open_records.
+    renderer_state::RendererState records_{renderer_state::RendererState::disabled()};
+    RecordsPlace place_{};                        ///< where the records were opened
+    renderer_state::LeftoverOutcome leftovers_{}; ///< what the start made of the last run's
+    std::vector<std::string> records_log_{};      ///< the records' lines since they were opened
+    renderer_state::SentinelLife life_{};         ///< where the sentinel and the trial stand
+    /// For SDL's software renderer presenting through the framebuffer
+    /// hint's list of drivers: that list, which its sentinels carry.
+    std::vector<std::string> via_{};
+    /// The driver the walk made the renderer of; empty for SDL's own choice.
+    std::string driver_made_{};
+    std::vector<std::string> skipped_drivers_{}; ///< the start's drivers passed over by record
+    bool records_ignored_{};                     ///< the start's walk ignored the records
+    StageClock clock_{};                         ///< what the stages are timed by
+    uint32_t stage_frames_{};                    ///< frames presented in the start-up stage
+    uint64_t stage_started_ns_{};                ///< when the start-up stage began
+    uint32_t path_frames_{}; ///< frames drawn with the path whose first frames stand
+    PathSet paths_begun_{};  ///< the accelerated paths used in the run
+    /// The function test ran in the start-up stage that stands, so its
+    /// passing clears a probe strike too.
+    bool function_test_ran_{};
 };
 
 } // namespace oa::app

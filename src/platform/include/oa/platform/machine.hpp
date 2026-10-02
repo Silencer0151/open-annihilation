@@ -68,6 +68,12 @@ inline constexpr uint32_t vista_major_version = 6;
 ///     false on every other system
 [[nodiscard]] bool running_on_windows_before_vista() noexcept;
 
+/// Tells whether the game runs on Linux, the Raspberry Pis included, where
+/// a fault of the graphics card can lock the whole machine.
+///
+/// @return true on Linux; false on every other system
+[[nodiscard]] bool running_on_linux() noexcept;
+
 /// The physical memory under which a machine is light, in bytes: 512 MiB.
 inline constexpr uint64_t light_machine_memory = uint64_t{512} * 1024 * 1024;
 

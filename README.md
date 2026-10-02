@@ -121,11 +121,14 @@ they are open; a multiplayer game keeps running.
   Hardware acceleration (on by default): the graphics card scales the
   picture, only where it is able to and the computer has at least 2 GB of
   memory; a short test first draws known patterns on the card and reads
-  them back, and a card that draws them wrongly is not used. The game does
-  not yet keep the records that would let it skip that test after it
-  crashed a graphics driver, so a start does not run it by itself: switching
-  the setting Off and On, Restore defaults or `--hardware-acceleration`
-  runs it. Its two status lines say whether it is in use, and why not. Off,
+  them back, and a card that draws them wrongly is not used. The game runs
+  that test at start, and keeps beside its preferences file what it saw of
+  each graphics driver: a driver that stopped the game, or failed, at two
+  starts or in two runs in a row is passed over, or left to the processor,
+  and on Linux and on Windows XP, where such a stop can halt the whole
+  computer, one stop while the card is being tried is enough; the main
+  menu says so once. Switching the setting Off and On, or Restore defaults,
+  tries them again. Its two status lines say whether it is in use, and why not. Off,
   or wherever it is not in use, the processor draws and scales every frame,
   as before; turned Off or On it applies at once. `--hardware-acceleration`
   and `--no-hardware-acceleration` decide it for one run. Vertical sync

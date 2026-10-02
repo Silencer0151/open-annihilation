@@ -456,7 +456,10 @@ void TiledTexture::create(
     reset();
     const policy::TileGrid grid = policy::plan_tiles(width, height, limit);
     if (grid.columns == 0 || grid.rows == 0)
-        throw AccelerationError("a texture cannot be split into tiles under the renderer's limit");
+        throw AccelerationError(
+            "a texture cannot be split into tiles under the renderer's limit",
+            AccelerationFault::engine
+        );
     counts_ = &counts;
     make(renderer, SDL_PIXELFORMAT_ARGB8888, grid, limit, blend);
 }
@@ -635,7 +638,8 @@ void PrescaleTarget::ensure(
     if (grid_.columns == 0 || grid_.rows == 0) {
         grid_ = {};
         throw AccelerationError(
-            "a prescale target cannot be split into tiles under the renderer's limit"
+            "a prescale target cannot be split into tiles under the renderer's limit",
+            AccelerationFault::engine
         );
     }
     // Each tile is made and checked in turn; a failure destroys those made.
@@ -794,7 +798,10 @@ void draw_scaled_world(
         const uint32_t factor = scale.factor;
         if (!prescale.made() || prescale.width() < region_width * factor ||
             prescale.height() < region_height * factor)
-            throw AccelerationError("the prescale target is smaller than the scene it is to hold");
+            throw AccelerationError(
+                "the prescale target is smaller than the scene it is to hold",
+                AccelerationFault::engine
+            );
         if (!scene.set_scale_mode(SDL_SCALEMODE_NEAREST))
             fail(renderer, final_target, "SDL_SetTextureScaleMode");
         const auto& grid = scene.grid();
@@ -863,7 +870,10 @@ void sharp_draw(
     const uint32_t factor = scale.factor;
     if (!prescale.made() || prescale.width() < source_width * factor ||
         prescale.height() < source_height * factor)
-        throw AccelerationError("the prescale target is smaller than the source it is to hold");
+        throw AccelerationError(
+            "the prescale target is smaller than the source it is to hold",
+            AccelerationFault::engine
+        );
     if (prescale.drawn_revision != revision || prescale.drawn_factor != factor) {
         const SourcePiece whole{source, {0, 0, source_width, source_height}, 0, 0};
         fill_prescale(

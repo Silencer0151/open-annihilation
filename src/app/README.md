@@ -79,8 +79,14 @@ one does on some renderers while another program holds the screen
 are reset nothing it fails makes a rebuild and nothing is read back. A
 present SDL refuses is the game's own fault: the render target goes back
 to the window and it is logged once. Presents over 2 s three times within
-10 s of steady frames are logged once and the game carries on. Nothing is
-recorded yet. Window-size textures beyond the renderer's texture limit
+10 s of steady frames are logged once and the game carries on. The
+renderer records keep what fails (below): a present error, a lost device
+and three resets are struck against the driver, a lost device or the
+resets also recording at once that the graphics card is not to be used
+with it, and the same in the next run on it recording it failed. Nothing
+is struck or recorded on a driver whose device is lost in ordinary use,
+on SDL's software renderer unless `--force-capable` runs the accelerated
+tier on it, or under `SDL_RENDER_DRIVER`. Window-size textures beyond the renderer's texture limit
 (the world, the match dialog layer, the OA settings layer and the front
 end's) are made as tiles with gutters (`TiledTexture`), and a match makes
 no front-end texture beyond it, since it never draws one; within the limit
@@ -93,7 +99,9 @@ for the front end. SDL's software renderer asks the window for its pixels
 at each frame, since a display mode of another depth or another display
 can change them while the game runs. `--check-renderer-ladder`
 (`native-renderer-ladder`) forces each of these failures on the dummy
-video driver and checks that the game presents on through it;
+video driver and checks that the game presents on through it, then
+starts the game again on renderer records in scratch folders to check
+what each crash and failure counts for at the next start;
 `--render-fault POINT[@FRAME]` narrows it to one
 (`native-renderer-ladder-create` makes every driver but software refuse at
 start). Two cases switch the accelerated tier on and run only when named:
@@ -236,13 +244,14 @@ logs it.
   uploaded 1:1 as always; lasers, lightning and selection lines are drawn
   thicker in that scene, so they stay about one screen pixel thick
   (`scene_line_thickness`). A zoomed-in frame draws its scene at 1, which is
-  uploaded to a streaming ARGB8888 texture made once at the largest size a
-  magnified frame needs, in tiles beyond the renderer's texture limit
+  uploaded to a streaming ARGB8888 texture made once, at the first zoomed-in
+  frame, at the largest size a magnified frame needs, in tiles beyond the
+  renderer's texture limit
   (`TiledTexture`), and the card magnifies it into the battlefield
   (`draw_scaled_world`): NEAREST at a whole-number zoom, the renderer's
   PIXELART where it has it (`probe_pixelart`), and otherwise sharp-bilinear,
-  NEAREST into a prescale target made once at its largest within the
-  prescale budget, then LINEAR; the prescale target is split into tiles with
+  NEAREST into a prescale target made once, at the first frame so drawn, at
+  its largest within the prescale budget, then LINEAR; the prescale target is split into tiles with
   gutters beyond the renderer's texture limit, as the scene is, and each of
   the scene's tiles is drawn into each of its tiles (`PrescaleTarget`).
   The nearest picture of the scene is kept as
@@ -261,7 +270,9 @@ logs it.
   the front end's target is freed during a match. A call
   only this tier makes that fails throws `AccelerationError`, after which
   the tier is dropped for the run and the frame presented as the standard
-  tier presents it (`drop_acceleration`). Screenshots, film frames, the
+  tier presents it (`drop_acceleration`); the failing call is struck
+  against the driver, but an error of the game's own, which no driver call
+  made (`AccelerationFault::engine`), is not (`take_acceleration_error`). Screenshots, film frames, the
   load and save backdrop, the briefing's backdrop and the end screen keep
   the standard tier's picture of the same moment (`ensure_screen_world`),
   drawn again with the frame's counts of units drawn kept and the HUD's
@@ -284,7 +295,7 @@ logs it.
   them; that the picture kept for a reader is the standard tier's and eases
   nothing; that a zoom ease makes no texture; and that prescale targets are
   drawn once a painted frame; it writes pictures of one moment at zoom
-  0.5, 1 and 2.5 in both tiers. The records are not wired yet.
+  0.5, 1 and 2.5 in both tiers. The records are wired (below).
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
@@ -293,9 +304,12 @@ logs it.
   setting On or `--hardware-acceleration`, in a class of machine measured
   at native density, from a start above budget none and a remembered rung
   above magnify off, and with the `native-density` record an earlier run
-  left (`note_density_run_end`, `forget_native_density`). No class has
-  been measured (`native_density_measured`), and the start reads no records
-  before the window opens yet, so only `--native-density`, which the
+  left (`note_density_run_end`, `forget_native_density`, rules the game
+  does not apply yet). The start reads the records before the window opens
+  (`HostDisplay`, `RendererHost::open_records`), so the key's driver
+  reaches the rule, though no remembered rung does, since the game writes
+  no `scale-level` key yet. No class has been measured
+  (`native_density_measured`), so only `--native-density`, which the
   render tiers check alone takes, opens a window at native density; every
   other opens at the window system's density, as before. On a window at
   native density (`at_native_density`) `apply_output_mode` lays the match
@@ -352,8 +366,8 @@ logs it.
   step drops the tier, as the status then says, until Off then On or
   Restore defaults starts the ladder again from the top. A later switch-on, after
   a lost device or a shared game, keeps the rung reached. The rung is not
-  yet kept for the next start: the renderer records' `scale-level` key
-  holds it once the game reads and writes the records.
+  yet kept for the next start: the game reads and writes the renderer
+  records, but not yet their `scale-level` key, which is to hold it.
   `--check-renderer-ladder --render-fault slow`
   (`native-renderer-ladder-slow`) forces slow frames and sees idle frames
   and the standard tier never feeding it, a frame's ticks taken out
@@ -377,13 +391,14 @@ logs it.
   average, PIXELART (`probe_pixelart`), and a seeded pattern drawn NEAREST
   through a source rectangle into a prescale target, reduced LINEAR and
   overlaid, read back against `sharp_bilinear_rgb24` and `overlay_rgb24`
-  within 3 and 0.5 on the mean. No trial record is written before the
-  test yet, so on the player's own profile a start does not run it by
-  itself: it waits for the player to switch the setting Off then On, or
-  Restore defaults, unless `--hardware-acceleration` asks for it
-  (`start_function_test`); with a named preferences file it runs where
-  the file turns the setting On. The start-up line names the tier with
-  what it does, or the reason the processor draws everything
+  within 3 and 0.5 on the mean. The trial `probe <driver>` is written and
+  flushed before the test (`RendererHost::test_function`), so a start on
+  the player's own profile runs it by itself where the policy allows; a
+  trial that cannot be written skips the test and keeps the standard tier
+  (`FunctionTest::trial_unwritten`) until the player tries again. With a
+  named preferences file the records live in memory and it runs where the
+  file turns the setting On. The start-up line names the tier with what it
+  does, or the reason the processor draws everything
   (`tier_description`). Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the
   director, a lost device) and takes the frame's step from the render
@@ -395,14 +410,21 @@ logs it.
   from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
   the tier it began with until it ends (`begin_render_tier_match`,
   `end_render_tier_match`). Switching it Off then On, or Restore defaults,
-  lets a failed function test run again, lifts a drop other than the
-  memory guard's and starts the step-down again from the top
-  (`take_renderer_retry`). A failed call of the accelerated tier, a
-  renderer made again, the memory guard and the step-down's last rung
-  drop it for the run. The dialog's status and
-  locks follow these facts (`tier_acceleration_facts`); a driver that
-  failed in the run locks nothing, so that the row can retry it. `+stats`
-  names the tier. `native-engine-settings` turns the row On and Off
+  clears the renderer records' strikes and failure records in memory, lets
+  a failed function test or an unwritten trial try again, lifts a drop
+  other than the memory guard's and starts the step-down again from the
+  top (`take_renderer_retry`); OK writes the cleared records
+  (`keep_renderer_records`) and Cancel puts them back
+  (`restore_renderer_records`). A failed call of the accelerated tier
+  drops it for the run and is struck against the driver
+  (`take_acceleration_error`), and so is a renderer made again after a
+  present error, a lost device or three resets within a minute; the memory
+  guard and the step-down's last rung drop it for the run with nothing
+  struck. The dialog's status and locks follow these facts
+  (`tier_acceleration_facts`, with what the records hold,
+  `RendererHost::fill_record_facts`); a driver that failed in the run, a
+  record and a driver a record passed over lock nothing, so that the row
+  can retry them. `+stats` names the tier. `native-engine-settings` turns the row On and Off
   through the dialog under `--force-capable` and retries it after a drop
   and after a function test forced to draw wrongly.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
@@ -762,7 +784,7 @@ logs it.
   the parts that need no running game.
 - `renderer_records.hpp`, `renderer_records.cpp` (`oa-app-renderer-records`)
   and `renderer_state.hpp`, `renderer_state.cpp` (`oa-app-renderer-state`):
-  the renderer records, which the game does not use yet. What the engine has
+  the renderer records, which the renderer host keeps (below). What the engine has
   seen of each render driver on this machine is kept in `renderer-state.conf`
   beside the preferences file: a strike against a driver for a stage the game
   died in, or a failure seen while running, which becomes a record only when
@@ -785,13 +807,23 @@ logs it.
   `RendererState` reads and writes the files: every write best effort, logged
   once on failure with the records kept in memory, except the trial's, whose
   failure the caller is told of; the records written only when one changes,
-  flushed with the folder synced, and not while a match runs; a trial written
-  with the strike the last run left; the sentinel rewritten in place
+  flushed with the folder synced, and not while a match runs; while Off then
+  On's clearing waits for OK, what it cleared kept in the file with what was
+  struck since, and put back with it by Cancel (`confirm_clear`,
+  `restore_failures`); a trial written with the strike the last run left; the sentinel rewritten in place
   unflushed; a clean exit erasing the run's trial, writing the records left
   and deleting the sentinel; a missing or garbled file read as empty. With a
   named `--preferences-file` they live in memory, and under
   `SDL_RENDER_DRIVER` nothing is read or written. `app-renderer-state` tests
-  the files in scratch folders, read-only and garbled ones among them.
+  the files in scratch folders, read-only and garbled ones among them. The
+  main menu's notice of a new record (`next_notice`, `notice_action`) is
+  told once (`Runtime::tell_renderer_records`, `runtime_notices.cpp`): once
+  the main menu, its own, has shown for a frame and stays, with no
+  multiplayer signal waiting to leave it, so that a start with `-n`, whose
+  signal waits for the frontend's next pass, or with `--play-demo`, which
+  passes the main menu, waits for it to show again; a run nobody watches
+  notes the request and leaves the record untold, and
+  `--check-renderer-ladder` notes it and marks it told.
 - `video_capture.hpp`, `video_capture.cpp`: `--capture-video`, the
   developer's capture of the window's frames and the game's sound as an MP4
   video through the `ffmpeg` program; `runtime_showcase.cpp`: the scripted
@@ -819,10 +851,30 @@ logs it.
   borrows it with the renderer: `render_run.hpp`'s `Runtime::RenderRun` is
   the runtime's own renderer state, made only when it is handed a window,
   a renderer and its host, so a headless run, a window the runtime made
-  itself and a loopback check's second runtime have none. No driver is
-  recorded as failed yet, so the walk skips none. `walk_rebuild_drivers`
-  and `RendererHost::rebuild` make the renderer again after a failure;
-  `RenderFaultHooks` are what `--check-renderer-ladder` forces.
+  itself and a loopback check's second runtime have none. The host keeps
+  the run's renderer records: `HostDisplay` has it read them before the
+  walk (`RendererHost::open_records`, `RecordsPlace`), beside the player's
+  own preferences file or in memory with a named one, applying what the
+  last run left behind; the walk skips the drivers they hold failed and
+  walks again with them ignored, for the run, where that leaves nothing
+  able to present; the sentinel stands at `create <driver>` before each
+  attempt and `standard <driver>` while the probe reads the renderer, and,
+  where the walk passed over no driver by record, the adapter the probe
+  describes is noted, since each driver names it in words of its own. The
+  runtime moves it on: the first accelerated frame, the start-up stage
+  passing after 60 presented frames and 2 s on the host's `StageClock`
+  (`note_presented_frame`), and each accelerated path's first use
+  (`begin_path`, `begin_accelerated_path` at the first frame drawn through
+  a scene, overlay or prescale target, which is made then), a path whose
+  trial cannot be written dropping the tier, and switching the tier off
+  closing a path's stage under way. Strikes and records a match
+  makes are written when it ends, and `HostDisplay`'s destructor ends the
+  records cleanly at every exit through `main` (`finish_records`).
+  `walk_rebuild_drivers` and `RendererHost::rebuild` make the renderer
+  again after a failure, striking it against the driver that failed;
+  `RenderFaultHooks` are what `--check-renderer-ladder` forces, among them
+  the machine's memory, how a left-over trial counts and the name the
+  records keep the renderer under.
   `RendererHost::decide_start_tier` decides the first frame's tier and
   logs the start-up line, running the start-up function test
   (`run_function_test`) where the tier could be accelerated; the facts the
@@ -849,7 +901,7 @@ logs it.
   the render drivers and its rebuilds (`render_host.hpp`), the texture
   limit, in the line it logs at start and for the tiles, the capability,
   the tier each frame is drawn in and the step that acts on it
-  (`step_tier`, `tier_action`, `forget_failures`, `start_function_test`),
+  (`step_tier`, `tier_action`, `forget_failures`),
   the shared-game gate, the starting rung, the stall rule, the count of
   device resets (`note_device_reset`), the layers' texture formats
   (`layer_formats`), the step-down and the rung below a buffer the memory

@@ -30,6 +30,10 @@
 #include <utility>
 #include <SDL3/SDL_main.h>
 
+#ifndef OA_ENGINE_VERSION
+#error "OA_ENGINE_VERSION names the engine's version, which the renderer records are written under"
+#endif
+
 namespace oa::app {
 namespace {
 
@@ -138,6 +142,26 @@ RenderFaultHooks start_faults(const Options& options) {
     return faults;
 }
 
+/// Returns where the start keeps the renderer records: beside the player's
+/// own preferences file, or in memory for the run with a named
+/// --preferences-file, or where the player's folder cannot be found.
+///
+/// @param options the parsed command line
+/// @return the place
+RecordsPlace records_place(const Options& options) {
+    RecordsPlace place;
+    place.engine_version = OA_ENGINE_VERSION;
+    if (options.preferences_file)
+        return place;
+    try {
+        place.folder = preference_file(std::nullopt).parent_path();
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: the renderer records are kept in memory for this run: "
+                  << error.what() << '\n';
+    }
+    return place;
+}
+
 struct HostDisplay {
     SDL_Window* window = nullptr;
     // The window's renderer, made by walking SDL's render drivers, and what
@@ -150,7 +174,9 @@ struct HostDisplay {
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
     /// (start_settings, starting_screen_size), at the display's own pixel
-    /// density only where decide_window_density allows it, and its renderer
+    /// density only where decide_window_density allows it, with the
+    /// renderer records read first (records_place,
+    /// RendererHost::open_records), and its renderer
     /// (RendererHost::create), which it describes and logs with the tier its
     /// first frame is drawn in, from the flags and the Hardware acceleration
     /// setting read before the window opens (RendererHost::decide_start_tier).
@@ -179,6 +205,11 @@ struct HostDisplay {
         const auto start = start_settings(options, desktop_size());
         const auto screen = starting_screen_size(options, start);
         const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
+        // The renderer records, read before the window opens so that their
+        // native-density key reaches the window's density, and kept for the
+        // walk of the render drivers.
+        const RecordsPlace place = records_place(options);
+        renderer_host.open_records(place);
         // The window's pixel density is fixed once it opens: the display's
         // own only where the rule allows it (decide_window_density).
         DensityRequest density;
@@ -187,12 +218,13 @@ struct HostDisplay {
         density.setting_on = start.hardware_acceleration;
         density.unattended = options.unattended;
         density.capture = !options.capture_video.empty();
-        // The renderer records are not read before the window opens yet, so
-        // no native-density record and no remembered rung reach the rule,
-        // and only --native-density opens the window at native density.
-        // Once they are, the record's driver
-        // (renderer_state::native_density_driver) and the rung remembered
-        // for it go here.
+        // The driver the native-density record names under this engine's
+        // version. The game does not write the scale-level key yet, so no
+        // rung is remembered for it.
+        if (const auto driver = renderer_state::native_density_driver(
+                renderer_host.records().records(), place.engine_version
+            ))
+            density.record_driver = std::string(*driver);
         window = SDL_CreateWindow(
             "Open Annihilation",
             options.window_resolution ? options.match_width
@@ -219,8 +251,12 @@ struct HostDisplay {
         renderer_host.decide_start_tier(request);
     }
 
+    /// Ends the run's renderer records cleanly, deleting the sentinel, and
+    /// closes the window and SDL. It runs at every exit through main, the
+    /// fatal error's among them, as the error unwinds.
     ~HostDisplay() {
         release_pointer(window);
+        renderer_host.finish_records();
         renderer_host.destroy();
         if (window != nullptr)
             SDL_DestroyWindow(window);

@@ -42,9 +42,11 @@ inline constexpr std::string_view unknown_adapter_name = "unknown adapter";
 /// its name: whether it is SDL's software renderer, whether it may be
 /// accelerated on Windows before Vista
 /// (oa::platform::render_probe::capable_before_vista), whether its adapter
-/// must be read (oa::platform::render_probe::adapter_needed) and whether it
+/// must be read (oa::platform::render_probe::adapter_needed), whether it
 /// reports a fixed texture limit
-/// (oa::platform::render_probe::reports_fixed_texture_limit).
+/// (oa::platform::render_probe::reports_fixed_texture_limit) and whether
+/// its device is lost in ordinary use
+/// (oa::platform::render_probe::loses_device_in_ordinary_use).
 ///
 /// @param renderer SDL's name for the render driver
 /// @return the traits

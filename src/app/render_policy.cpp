@@ -212,13 +212,6 @@ TierStep step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestH
     return step;
 }
 
-FunctionTest start_function_test(const TierInputs& inputs) noexcept {
-    const bool asked = inputs.flag == AccelerationFlag::on || inputs.force_capable;
-    return records_on_disk(inputs.players_own_profile, inputs.render_driver_named) && !asked
-               ? FunctionTest::trial_unwritten
-               : FunctionTest::not_run;
-}
-
 // ---------------------------------------------------------------------------
 // Creating the renderer
 

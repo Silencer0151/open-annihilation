@@ -170,6 +170,15 @@ names_software_rasteriser(std::string_view name, uint32_t vendor, uint32_t devic
 /// @return true for direct3d
 [[nodiscard]] bool capable_before_vista(std::string_view renderer) noexcept;
 
+/// Says whether a render driver's device is lost in ordinary use, when its
+/// exclusive full screen loses the focus, the screen is locked or the
+/// display mode changes: direct3d, SDL's Direct3D 9 renderer. What fails on
+/// it while the game runs is never recorded against it.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true for direct3d
+[[nodiscard]] bool loses_device_in_ordinary_use(std::string_view renderer) noexcept;
+
 /// Says whether the accelerated tier has been run with this build's system
 /// and processor architecture on a render driver: metal on 64-bit ARM
 /// macOS, and direct3d11 on x86 and x64 Windows. Every other class is one

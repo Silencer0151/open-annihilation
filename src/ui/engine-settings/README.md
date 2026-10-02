@@ -50,13 +50,17 @@ and 2 GiB of memory, which a machine sold with 2 GB counts as having. Its two
 hint lines are its status (`AccelerationStatus`), which the host gives the
 dialog when it opens and again each frame: what runs, or why not, and what
 draws the view, what the player can do, or what the card does on this
-machine. The game does not use the card yet, so the status says why the
-processor draws. Under 2 GiB it says the machine needs more memory, whatever
-the setting; otherwise, the setting or `--no-hardware-acceleration` turned it
+machine. Under 2 GiB it says the machine needs more memory, whatever the
+setting; otherwise, the setting or `--no-hardware-acceleration` turned it
 off, the environment names a render driver, a shared game or a replay waits
-for its end, no usable graphics card was found, or, on a renderer nothing has
-looked at yet, On takes effect from the next start. A key only reads as a
-number: `off` gives the default, and `0` turns it off.
+for its end, the graphics driver failed or the game stopped while using it,
+in this run or as the game's records of earlier ones say, no usable graphics
+card was found, the card lacks a feature, the game cannot save the files
+that guard trying it, the card is in use, on another driver where a record
+passed over one, or, on a renderer nothing has looked at yet, On takes
+effect from the next start. A driver a record passed over at this start
+shows whatever the setting. A key only reads as a number: `off` gives the
+default, and `0` turns it off.
 
 Vertical sync has each frame wait for the display, so that no frame tears;
 while it is in effect the frame rate keeps just below the display's. Off,

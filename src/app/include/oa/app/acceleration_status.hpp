@@ -17,6 +17,14 @@
 
 namespace oa::app {
 
+/// What the renderer records hold that keeps the graphics card from
+/// scaling the frames.
+enum class RecordedTrouble : uint8_t {
+    none,    ///< nothing
+    failure, ///< the graphics driver failed while the game ran
+    stopped, ///< the game stopped while using it: a crash or a hang
+};
+
 /// What the run knows of whether the graphics card could scale its frames:
 /// the facts the Hardware acceleration row's status and the renderer's
 /// locks follow from.
@@ -63,6 +71,9 @@ struct AccelerationFacts {
     /// this run, short of the last; a rung lowered because the memory guard
     /// refused a buffer does not count.
     bool slow_frames_stepped{};
+    /// The graphics card stopped scaling the frames for the rest of the run
+    /// after an error of the game's own, which says nothing of the driver.
+    bool engine_error{};
     /// Each change of the wait for the display resets the renderer's device,
     /// and the game does not yet recover a device such a reset leaves lost.
     bool vertical_sync_resets_device{};
@@ -78,6 +89,22 @@ struct AccelerationFacts {
     oa::ui::engine_settings::AccelerationReach reach{
         oa::ui::engine_settings::AccelerationReach::menus
     };
+    /// A record skipped a graphics driver that failed before, at this start.
+    bool driver_skipped{};
+    /// The records that skipped drivers at this start have been cleared
+    /// since, so that the next start tries those drivers again.
+    bool skipped_cleared{};
+    /// What the records hold against the renderer's own driver: that the
+    /// graphics card could not be used with it.
+    RecordedTrouble recorded{RecordedTrouble::none};
+    /// What the records hold against the drivers skipped before it.
+    RecordedTrouble skipped_recorded{RecordedTrouble::none};
+    /// The renderer records could not be read after a run that did not end
+    /// cleanly, which keeps the start on the processor.
+    bool records_unreadable{};
+    /// A trial record that guards the graphics card's first use could not
+    /// be written, so the card was not tried.
+    bool trial_unwritten{};
 };
 
 /// The Hardware acceleration row's status and the renderer's locks, as the
@@ -107,22 +134,33 @@ struct AccelerationReport {
 /// Reports what the settings dialog says of the renderer.
 ///
 /// The status is the first that applies: under 2 GiB, whatever the setting
-/// or the flags; Off by --no-hardware-acceleration; Off by the setting; then,
-/// with acceleration asked for, an environment that names a driver (unless
+/// or the flags, saying so whether a record skipped a driver; Off, by
+/// either, with a driver a record skipped and still holds; Off by
+/// --no-hardware-acceleration; Off by the setting; then, with acceleration
+/// asked for, an environment that names a driver (unless
 /// --hardware-acceleration or --force-capable); a shared game or a replay,
 /// where a renderer not found unable waits for the match to end; a driver
-/// that failed in this run; a renderer found unable, SDL's software
-/// renderer among them (unless --force-capable), as lacking a feature or
-/// as no usable graphics card; in use while the graphics card scales the
-/// frames, with less smoothing once the step-down has lowered its rung for
-/// slow frames, else with no smoothing where it started at the lowest
-/// budget; and
-/// otherwise from the next start, which a renderer not yet looked at
-/// shows. Acceleration is out of reach under 2 GiB, on the environment's
-/// driver (unless --hardware-acceleration or --force-capable), or on a
-/// renderer found unable (unless --force-capable, which never lifts a
-/// failed function test) where no driver failed in this run; a renderer not
-/// yet looked at, and one a failed driver left, leave it within reach.
+/// that failed in this run; the memory guard's drop in this run; an error
+/// of the game's own in this run; a record against the renderer's driver
+/// (unless --hardware-acceleration), or records that could not be read
+/// after an unclean exit, as a failure or as the game having stopped; a
+/// renderer found unable after drivers skipped by records, as their records
+/// say, or from the next start once those are cleared; a renderer found
+/// unable, SDL's software renderer among them (unless --force-capable), as
+/// lacking a feature or as no usable graphics card; a trial that could not
+/// be written; the step-down's last rung in this run, as frames too slow;
+/// in use while the graphics card scales the frames, on another driver
+/// where a record skipped one, with less smoothing once the step-down has
+/// lowered its rung for slow frames, else with no smoothing where it
+/// started at the lowest budget; and otherwise from the next start, which
+/// a renderer not yet looked at shows. Acceleration is out of reach on the
+/// environment's driver (unless --hardware-acceleration or
+/// --force-capable), under 2 GiB, or on a renderer found unable (unless
+/// --force-capable, which never lifts a failed function test), unless a
+/// record skipped a driver at this start or, on an unable renderer, a
+/// driver failed in this run; a renderer not yet looked at, a record, and a
+/// trial that could not be written leave it within reach, so that the row
+/// can try again.
 /// Vertical sync is out of reach on SDL's software renderer (unless
 /// --force-capable), on a renderer whose device each change resets, and
 /// once the renderer refused it.
@@ -139,10 +177,14 @@ struct AccelerationReport {
 /// items 1 to 3 found it capable and the function test did not fail, and
 /// lacking a feature for a small texture limit or a failed function test;
 /// whether the function test failed;
-/// SDL's software renderer; a drop after a driver failure; a shared game or
-/// a replay the tier waits for; whether the graphics card scales the frames
-/// now; and what it does at the rung. Vertical sync's facts and whether the
-/// step-down has lowered the rung for slow frames are left for the caller.
+/// SDL's software renderer; a drop after a driver failure, the memory
+/// guard, the step-down's last rung or an error of the game's own; where
+/// the records live on disk, a trial that could not be written and records
+/// that could not be read after an unclean start; a shared game or a
+/// replay the tier waits for; whether the graphics card scales the frames
+/// now; and what it does at the rung. Vertical sync's facts, whether the
+/// step-down has lowered the rung for slow frames and what the records
+/// hold against drivers are left for the caller.
 ///
 /// @param inputs the facts the tier is decided from
 /// @param rung the rung the accelerated tier draws at

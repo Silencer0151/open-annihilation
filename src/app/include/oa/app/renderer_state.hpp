@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace oa::app::renderer_state {
 
@@ -148,8 +149,12 @@ class RendererState {
     /// Writes the records when they differ from what the file holds.
     ///
     /// While a match runs the changes stay in memory, to be written by the
-    /// first call after it ends. A failure is logged once and the records
-    /// stay in memory; the next call tries again.
+    /// first call after it ends. While a clear() waits for the player's OK
+    /// (confirm_clear()), the file keeps what the clear took away, with what
+    /// was struck or recorded since laid over it, so that Cancel and a crash
+    /// before OK leave the records as they were and lose nothing found
+    /// since. A failure is logged once and the records stay in memory; the
+    /// next call tries again.
     ///
     /// @return true when the file holds the records, or the records live in
     ///     memory, are disabled or wait for the match to end
@@ -157,12 +162,13 @@ class RendererState {
 
     /// Writes the trial before the stage it covers, flushed.
     ///
-    /// The file then holds the records as they stand in memory, with the
-    /// trial, so that a strike made of what the last run left reaches the
-    /// disk with the trial or before it. While a match runs, and after
-    /// clear() until write_records() writes the cleared records, the trial
-    /// is written with the records as the file holds them instead. The trial
-    /// stands until erase_trial() once its stage passes, or clean_exit().
+    /// The file then holds the records as write_records() writes them, with
+    /// the trial, so that a strike made of what the last run left reaches
+    /// the disk with the trial or before it; while a clear() waits, that is
+    /// what the clear took away with what was found since. While a match
+    /// runs, the trial is written with the records as the file holds them
+    /// instead. The trial stands until erase_trial() once its stage passes,
+    /// or clean_exit().
     ///
     /// @param trial the stage and driver; the driver's name valid
     /// @return false when it could not be written (logged once), and the
@@ -195,9 +201,8 @@ class RendererState {
     /// sentinel, so that the next start counts nothing against a driver.
     ///
     /// Every exit that unwinds through main is clean, the fatal error's
-    /// included. The writes are best effort, a failure logged once. A change
-    /// the player has not confirmed, such as clear() before OK, is put back
-    /// by the caller first.
+    /// included. The writes are best effort, a failure logged once. A clear()
+    /// the player has not confirmed is put back first (restore_failures()).
     void clean_exit();
 
     /// Returns the sentinel this run set.
@@ -214,12 +219,27 @@ class RendererState {
     /// Clears every strike, failure record and remembered rung in memory, as
     /// switching the setting Off then On and Restore defaults do.
     ///
-    /// The file keeps them until write_records(), so that Cancel can put the
-    /// records back; a trial written before then carries them as the file
-    /// holds them.
+    /// The clear waits for the player's OK (confirm_clear()) or Cancel
+    /// (restore_failures()): until then the file keeps what it took away,
+    /// with what was struck or recorded since (write_records()). A second
+    /// clear() before either keeps what the first took away for Cancel.
     ///
     /// @return what changed
     Change clear();
+
+    /// Writes the records a clear() cleared, as OK does, with what was struck
+    /// or recorded since; with no clear waiting, as write_records().
+    ///
+    /// @return as write_records()
+    bool confirm_clear();
+
+    /// Puts back the strikes, failure records and remembered rungs a clear()
+    /// took away, as Cancel does, with what was struck or recorded since laid
+    /// over them: a driver's strike, record or remembered rung found since
+    /// replaces its own, and the adapter, the native-density key and a trial
+    /// written since stay as they are. Nothing changes with no clear
+    /// waiting. The file is written by the next write_records().
+    void restore_failures() noexcept;
 
   private:
 
@@ -245,8 +265,15 @@ class RendererState {
     /// @return true when the file holds them; a failure is logged once
     bool save_records_file(const Values& values);
 
+    /// Returns the keys and values the records file is to hold: the records
+    /// in memory, or while a clear() waits, what it took away with what was
+    /// struck or recorded since.
+    ///
+    /// @return the keys and values
+    [[nodiscard]] Values records_values() const;
+
     /// Writes the records to the file when they differ from what it holds,
-    /// whether or not a match runs.
+    /// whether or not a match runs (records_values()).
     ///
     /// @return true when the file holds the records; a failure is logged once
     bool save_records();
@@ -266,9 +293,11 @@ class RendererState {
     std::optional<Sentinel> sentinel_{};
     /// The trial that stands was written by this run.
     bool own_trial_{};
-    /// clear() changed the records, and the file does not hold the cleared
-    /// records yet.
+    /// A clear() changed the records and waits for confirm_clear() or
+    /// restore_failures(); the file does not hold the cleared records.
     bool clear_pending_{};
+    /// Every driver's entry as it stood before the clear() that waits.
+    std::vector<DriverRecords> cleared_{};
     bool match_running_{};
     bool resolved_{};
     bool records_failure_logged_{};

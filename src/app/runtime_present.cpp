@@ -539,7 +539,7 @@ void Runtime::present_match_layers() {
             present_accelerated_match_layers(dialogs);
             return;
         } catch (const AccelerationError& error) {
-            drop_acceleration(error.what());
+            take_acceleration_error(error);
         }
     }
     const auto frame_format = opaque_layer_format();
@@ -842,7 +842,7 @@ void Runtime::present_front_end() {
             );
             drawn = true;
         } catch (const AccelerationError& error) {
-            drop_acceleration(error.what());
+            take_acceleration_error(error);
         }
     }
     if (!drawn)

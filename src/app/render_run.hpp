@@ -6,8 +6,10 @@
 // no window, has none.
 #pragma once
 
+#include "render_host.hpp"
 #include "oa/app/memory_guard.hpp"
 #include "oa/app/render_policy.hpp"
+#include "oa/app/renderer_records.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/platform/memory_status.hpp"
 
@@ -15,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace oa::app {
 
@@ -29,8 +32,8 @@ struct AcceleratedWatch {
     /// memory guard refused: each later switch-on draws at its rung, which
     /// never rises again until Hardware acceleration is switched Off then On
     /// or Restore defaults asks for a fresh try. The rung reached is what
-    /// the renderer records keep for the next start as the driver's
-    /// scale-level key; the game does not read or write those records yet,
+    /// the renderer records' scale-level key is to keep for the next start;
+    /// the game keeps the records but does not read or write that key yet,
     /// so it lasts for this run alone.
     bool moved{};
     /// The step-down has lowered the rung for slow frames since the ladder
@@ -62,6 +65,23 @@ struct Runtime::RenderRun {
     /// rebuild waits for the next frame's render(), never a hook or a
     /// drain of events.
     std::string pending_rebuild{};
+    /// The failure the pending rebuild strikes against the driver: a
+    /// present error, a lost device or repeated resets; none strikes
+    /// nothing.
+    renderer_state::Strike pending_failure{};
+    /// The accelerated paths the frame being drawn uses, for the stage of a
+    /// path's first frames (RendererHost::note_presented_frame).
+    PathSet paths_drawn{};
+    /// An accelerated path was refused because its trial could not be
+    /// written; the AccelerationError that follows drops the tier for it.
+    bool path_refused{};
+    /// The main menu's notices the run noted rather than showed, as a run
+    /// nobody watches does, in the order noted.
+    std::vector<renderer_state::PendingNotice> notices_noted{};
+    uint32_t notices_shown{}; ///< the main menu's notices shown
+    /// Frames in a row the main menu, its own and not a screen package's,
+    /// has been drawn.
+    uint32_t main_menu_frames{};
     /// The device is lost until the system resets it: nothing that fails
     /// meanwhile is the driver's fault, and nothing is read back.
     bool device_lost{};

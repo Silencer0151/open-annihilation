@@ -5,11 +5,16 @@
 // row's status, first rule first, for the machine's memory against the 2 GiB
 // threshold, the setting, either flag, the environment's driver, a shared
 // game or a replay, the renderer, looked at or not, lacking a feature or
-// failed in the run, a drop by the memory guard or for slow frames, and
-// --force-capable; in use, at the lowest budget or
-// above it, or after the step-down lowered its rung for slow frames; whether nothing could help the run; what the graphics card
+// failed in the run, a drop by the memory guard or for slow frames, an
+// error of the game's own, and --force-capable; in use, at the lowest budget
+// or above it, or after the step-down lowered its rung for slow frames;
+// whether nothing could help the run; what the graphics card
 // does at each rung; the status the facts the tier is decided from give;
-// and whether Vertical sync is out of reach.
+// what the renderer records add: a driver a record skipped, a record
+// against the renderer's driver or the drivers skipped before it, as a
+// failure or a crash, records cleared since, records that could not be read
+// after an unclean exit and a trial that could not be written; and whether
+// Vertical sync is out of reach.
 
 #include "oa/app/acceleration_status.hpp"
 
@@ -314,6 +319,34 @@ void a_drop_for_memory_or_slow_frames_says_so() {
     );
 }
 
+void an_error_of_the_games_own_says_so() {
+    auto facts = able();
+    facts.engine_error = true;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::engine_error);
+    // Off then On may try again, so the row stays within reach.
+    OA_CHECK(!report.acceleration_unavailable);
+    // A driver failure in the same run says more.
+    facts.driver_failed = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+    facts.driver_failed = false;
+    // Off says so first; in use again, the error no longer shows.
+    facts.asked = false;
+    OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
+    facts.asked = true;
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
+    // The tier's facts give it from the drop, and no driver failure.
+    namespace policy = oa::app::render_policy;
+    policy::TierInputs inputs{};
+    inputs.renderer = true;
+    inputs.memory = kAmpleMemory;
+    inputs.setting_on = true;
+    inputs.drop = policy::Drop::engine_fault;
+    const auto tier_facts = oa::app::tier_acceleration_facts(inputs, policy::LadderState{}, false);
+    OA_CHECK(tier_facts.engine_error && !tier_facts.driver_failed);
+}
+
 void in_use_at_the_lowest_budget_says_nothing_smooths() {
     auto facts = able();
     facts.tier_accelerated = true;
@@ -472,6 +505,101 @@ void the_tier_facts_give_the_status() {
     OA_CHECK(report.status.state == State::needs_memory && report.acceleration_unavailable);
 }
 
+void the_records_say_what_they_hold() {
+    using oa::app::RecordedTrouble;
+    // A record skipped a driver at this start: it shows whatever the
+    // setting, under 2 GiB too, and frees the row there.
+    auto facts = able();
+    facts.driver_skipped = true;
+    facts.asked = false;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::off_driver_skipped && !report.acceleration_unavailable);
+    facts.flag = false;
+    OA_CHECK(report_acceleration(facts).status.state == State::off_driver_skipped);
+    facts.flag.reset();
+    facts.physical_memory = 0;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::needs_memory_driver_skipped);
+    OA_CHECK(!report.acceleration_unavailable);
+    // Once its records are cleared, Off and the memory show as without it.
+    facts.skipped_cleared = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::needs_memory);
+    facts.physical_memory = kAmpleMemory;
+    OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
+    // In use on the driver after it.
+    facts = able();
+    facts.driver_skipped = true;
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use_on_another_driver);
+    // The driver left is not able: its skipped drivers' records say why,
+    // and once cleared the next start tries them; the row stays free.
+    facts = able();
+    facts.renderer_capable = false;
+    facts.software_renderer = true;
+    facts.driver_skipped = true;
+    facts.skipped_recorded = RecordedTrouble::stopped;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::game_stopped && !report.acceleration_unavailable);
+    facts.skipped_recorded = RecordedTrouble::failure;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+    facts.skipped_recorded = RecordedTrouble::none;
+    facts.skipped_cleared = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+    // A record against the renderer's own driver, unless
+    // --hardware-acceleration ignores it; the row stays free.
+    facts = able();
+    facts.recorded = RecordedTrouble::stopped;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::game_stopped && !report.acceleration_unavailable);
+    facts.recorded = RecordedTrouble::failure;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+    facts.flag = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
+    // Records that could not be read after an unclean exit.
+    facts = able();
+    facts.records_unreadable = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::game_stopped);
+    // A trial that could not be written, after what rules the card out.
+    facts = able();
+    facts.trial_unwritten = true;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::cannot_save && !report.acceleration_unavailable);
+    facts.renderer_capable = false;
+    facts.lacks_feature = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::lacks_feature);
+}
+
+void the_tier_facts_give_what_the_trial_and_the_file_say() {
+    using oa::app::tier_acceleration_facts;
+    namespace policy = oa::app::render_policy;
+    policy::TierInputs inputs{};
+    inputs.renderer = true;
+    inputs.memory = kAmpleMemory;
+    inputs.players_own_profile = true;
+    inputs.setting_on = true;
+    const policy::LadderState rung{};
+    // Where the records live on disk a trial that could not be written,
+    // for the function test or a path, says so; in memory it cannot fail.
+    inputs.function_test = policy::FunctionTest::trial_unwritten;
+    OA_CHECK(tier_acceleration_facts(inputs, rung, false).trial_unwritten);
+    inputs.players_own_profile = false;
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).trial_unwritten);
+    inputs.function_test = policy::FunctionTest::not_run;
+    inputs.drop = policy::Drop::path_trial_unwritten;
+    OA_CHECK(tier_acceleration_facts(inputs, rung, false).trial_unwritten);
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).driver_failed);
+    inputs.drop = policy::Drop::none;
+    // Records that could not be read after an unclean start, on disk alone.
+    inputs.records_unreadable_after_unclean_start = true;
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).records_unreadable);
+    inputs.players_own_profile = true;
+    OA_CHECK(tier_acceleration_facts(inputs, rung, false).records_unreadable);
+    inputs.render_driver_named = true;
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).records_unreadable);
+}
+
 void vertical_sync_is_out_of_reach_on_the_software_renderer() {
     auto facts = able();
     OA_CHECK(!report_acceleration(facts).vertical_sync_unavailable);
@@ -511,10 +639,13 @@ int main() {
     a_renderer_that_lacks_a_feature_says_so();
     a_driver_that_failed_says_so_until_it_is_in_use_again();
     a_drop_for_memory_or_slow_frames_says_so();
+    an_error_of_the_games_own_says_so();
     in_use_at_the_lowest_budget_says_nothing_smooths();
     in_use_after_slow_frames_says_it_smooths_less();
     the_reach_follows_the_rung();
     the_tier_facts_give_the_status();
+    the_records_say_what_they_hold();
+    the_tier_facts_give_what_the_trial_and_the_file_say();
     vertical_sync_is_out_of_reach_on_the_software_renderer();
     return oa::test::check_exit_status();
 }

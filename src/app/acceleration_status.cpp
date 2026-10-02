@@ -30,16 +30,30 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
     // SDL's software renderer has no graphics card at all, whatever it lacks.
     const bool lacks_feature = facts.lacks_feature && !facts.software_renderer;
     // A driver that failed in this run explains the renderer it left, which
-    // switching Off then On may try again, so it locks nothing.
-    report.acceleration_unavailable = environment || !memory || (!capable && !facts.driver_failed);
+    // switching Off then On may try again, so it locks nothing; neither does
+    // a renderer reached because records skipped the drivers before it,
+    // since clearing them lets the next start try those again.
+    report.acceleration_unavailable = environment || (!memory && !facts.driver_skipped) ||
+                                      (!capable && !facts.driver_failed && !facts.driver_skipped);
+    // The records that skipped a driver still stand.
+    const bool skipping = facts.driver_skipped && !facts.skipped_cleared;
     report.vertical_sync_unavailable = (facts.software_renderer && !facts.force_capable) ||
                                        facts.vertical_sync_resets_device ||
                                        facts.vertical_sync_refused;
     report.status.reach = facts.reach;
     // Under 2 GiB the processor draws whatever the setting or the flags say,
     // and the status says why first.
+    const auto recorded_state = [](RecordedTrouble trouble) {
+        return trouble == RecordedTrouble::stopped ? AccelerationState::game_stopped
+                                                   : AccelerationState::driver_failed;
+    };
+    // --hardware-acceleration ignores a record against the driver.
+    const bool recorded = facts.recorded != RecordedTrouble::none && !flag_on;
     if (!memory)
-        report.status.state = AccelerationState::needs_memory;
+        report.status.state = skipping ? AccelerationState::needs_memory_driver_skipped
+                                       : AccelerationState::needs_memory;
+    else if ((facts.flag == false || !facts.asked) && skipping)
+        report.status.state = AccelerationState::off_driver_skipped;
     else if (facts.flag == false)
         report.status.state = AccelerationState::off_by_command_line;
     else if (!facts.asked)
@@ -55,16 +69,28 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = AccelerationState::driver_failed;
     else if (facts.memory_dropped && !facts.tier_accelerated)
         report.status.state = AccelerationState::too_little_memory;
-    else if (facts.slow_frames_dropped && !facts.tier_accelerated)
-        report.status.state = AccelerationState::slow_frames;
+    else if (facts.engine_error && !facts.tier_accelerated)
+        report.status.state = AccelerationState::engine_error;
+    else if (recorded && !facts.tier_accelerated)
+        report.status.state = recorded_state(facts.recorded);
+    else if (facts.records_unreadable && !facts.tier_accelerated)
+        report.status.state = AccelerationState::game_stopped;
+    else if (!capable && facts.skipped_recorded != RecordedTrouble::none && skipping)
+        report.status.state = recorded_state(facts.skipped_recorded);
+    else if (!capable && facts.driver_skipped && facts.skipped_cleared)
+        report.status.state = AccelerationState::next_start;
     else if (!capable)
         report.status.state =
             lacks_feature ? AccelerationState::lacks_feature : AccelerationState::no_usable_card;
-    else if (facts.tier_accelerated && facts.slow_frames_stepped)
-        report.status.state = AccelerationState::in_use_less_smoothing;
+    else if (facts.trial_unwritten && !facts.tier_accelerated)
+        report.status.state = AccelerationState::cannot_save;
+    else if (facts.slow_frames_dropped && !facts.tier_accelerated)
+        report.status.state = AccelerationState::slow_frames;
     else if (facts.tier_accelerated)
-        report.status.state =
-            facts.no_smoothing ? AccelerationState::in_use_no_smoothing : AccelerationState::in_use;
+        report.status.state = facts.driver_skipped ? AccelerationState::in_use_on_another_driver
+                              : facts.slow_frames_stepped ? AccelerationState::in_use_less_smoothing
+                              : facts.no_smoothing        ? AccelerationState::in_use_no_smoothing
+                                                          : AccelerationState::in_use;
     else
         report.status.state = AccelerationState::next_start;
     // The wait says whether it is for a replay.
@@ -96,6 +122,15 @@ AccelerationFacts tier_acceleration_facts(
     facts.driver_failed = inputs.drop == render_policy::Drop::driver_failure;
     facts.memory_dropped = inputs.drop == render_policy::Drop::memory;
     facts.slow_frames_dropped = inputs.drop == render_policy::Drop::slow_frames;
+    facts.engine_error = inputs.drop == render_policy::Drop::engine_fault;
+    // Where the records live in memory a trial is always written, and a file
+    // that could not be read keeps nothing standard.
+    const bool on_disk =
+        render_policy::records_on_disk(inputs.players_own_profile, inputs.render_driver_named);
+    facts.trial_unwritten =
+        (inputs.function_test == render_policy::FunctionTest::trial_unwritten && on_disk) ||
+        inputs.drop == render_policy::Drop::path_trial_unwritten;
+    facts.records_unreadable = inputs.records_unreadable_after_unclean_start && on_disk;
     facts.shared_game = inputs.match.kind == render_policy::MatchKind::shared_game;
     facts.replay = inputs.match.kind == render_policy::MatchKind::replay;
     facts.tier_accelerated = tier_accelerated;

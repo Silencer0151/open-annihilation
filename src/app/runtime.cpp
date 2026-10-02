@@ -514,6 +514,8 @@ void Runtime::idle_tick() {
     frame_draws_.units_drawn = 0;
     frame_draws_.units_between_ticks = 0;
     frame_draws_.probe_drawn = false;
+    // A new renderer record is told of once the main menu shows.
+    tell_renderer_records();
     render();
     presentation_alpha_ = 1.0F;
     capture_film_frame();

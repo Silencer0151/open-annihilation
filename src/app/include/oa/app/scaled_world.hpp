@@ -44,13 +44,41 @@ class PresentError : public std::runtime_error {
 /// @param what the call or texture that failed
 [[noreturn]] void throw_present_error(const std::string& what);
 
+/// Whose fault an AccelerationError is.
+enum class AccelerationFault : uint8_t {
+    /// A call to the graphics driver failed, or a new render target read
+    /// back another colour than it was cleared to: kept against the driver.
+    driver,
+    /// The game asked for something it cannot do, with no driver call
+    /// failing: a texture that cannot be split into tiles under the limit, a
+    /// prescale target smaller than what it is to hold, or no letterbox to
+    /// scale the screen into. Never kept against the driver.
+    engine,
+};
+
 /// A call that only the accelerated tier makes failed: the tier is dropped
 /// for the rest of the run and the frame presented as the standard tier
 /// presents it.
 class AccelerationError : public std::runtime_error {
   public:
 
-    using std::runtime_error::runtime_error;
+    /// Makes the error.
+    ///
+    /// @param what what failed, with SDL's error where a call failed
+    /// @param fault whose fault it is
+    explicit AccelerationError(
+        const std::string& what, AccelerationFault fault = AccelerationFault::driver
+    )
+        : std::runtime_error(what), fault_(fault) {}
+
+    /// Returns whose fault the error is.
+    ///
+    /// @return the driver's, or the game's own
+    [[nodiscard]] AccelerationFault fault() const noexcept { return fault_; }
+
+  private:
+
+    AccelerationFault fault_{AccelerationFault::driver};
 };
 
 /// What the accelerated tier made and drew on the card, counted for the checks.

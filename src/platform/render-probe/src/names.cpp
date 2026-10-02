@@ -55,6 +55,8 @@ constexpr std::array<std::string_view, 3> kAdapterNeeded{"direct3d12", "vulkan",
 /// SDL's name of the one render driver that may draw through the graphics
 /// card on Windows before Vista: its Direct3D 9 renderer.
 constexpr std::string_view kBeforeVistaRenderer = "direct3d";
+/// The renderer whose device is lost in ordinary use: SDL's Direct3D 9 one.
+constexpr std::string_view kDeviceLosingRenderer = "direct3d";
 
 /// SDL's name of the render driver the accelerated tier has been run on with
 /// this build's system and processor architecture; empty for none.
@@ -184,6 +186,10 @@ bool adapter_needed(std::string_view renderer) noexcept {
 
 bool capable_before_vista(std::string_view renderer) noexcept {
     return renderer == kBeforeVistaRenderer;
+}
+
+bool loses_device_in_ordinary_use(std::string_view renderer) noexcept {
+    return renderer == kDeviceLosingRenderer;
 }
 
 bool accelerated_tier_run(std::string_view renderer) noexcept {

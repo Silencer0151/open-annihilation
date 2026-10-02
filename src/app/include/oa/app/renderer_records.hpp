@@ -611,6 +611,59 @@ Change note_density_run_end(
 Change forget_native_density(Records& records, const RecordRules& rules) noexcept;
 
 // ---------------------------------------------------------------------------
+// The main menu's notice
+
+/// What the main menu's notice of a new record says.
+enum class NoticeKind : uint8_t {
+    /// A graphics driver failed, so the game now uses another one: a
+    /// failed-driver record, whatever tier the next driver runs.
+    failed_driver,
+    /// The graphics card could not be used, so the processor draws the game:
+    /// an accelerated-unusable record.
+    accelerated_unusable,
+};
+
+/// A record the main menu's notice has not shown yet.
+struct PendingNotice {
+    std::string driver{}; ///< the driver the record is against
+    NoticeKind kind{NoticeKind::failed_driver};
+};
+
+/// Returns the record the main menu tells of next.
+///
+/// A driver with both records has one notice, failed-driver's, since the
+/// game changed driver; mark_told then marks both.
+///
+/// @param records the records
+/// @param passed_over drivers whose notice the run has dealt with already
+///     but left untold, as an unattended run does
+/// @return the first driver, in the order the records noted them, with a
+///     record not yet told and not passed over; nullopt when there is none
+[[nodiscard]] std::optional<PendingNotice>
+next_notice(const Records& records, const std::vector<std::string>& passed_over);
+
+/// What a run does with a notice that is due.
+enum class NoticeAction : uint8_t {
+    show, ///< show it, then mark the record told
+    /// Note the request and leave the record untold, for the next start
+    /// someone watches.
+    note,
+    /// Note the request and mark the record told, as a shown notice would,
+    /// so that a check can see the decision.
+    note_and_mark,
+};
+
+/// Decides what a run does with a notice that is due.
+///
+/// @param unattended nobody watches the run: an unattended run, CI, or a
+///     video driver that draws no window
+/// @param marks_told the run is a check that marks a noted request told
+///     (--check-renderer-ladder)
+/// @return NoticeAction::show for a run someone watches; otherwise note,
+///     or note_and_mark for the check
+[[nodiscard]] NoticeAction notice_action(bool unattended, bool marks_told) noexcept;
+
+// ---------------------------------------------------------------------------
 // The sentinel and the trial through a run
 
 /// The frames a start presents, at the menus, loading screens and matches

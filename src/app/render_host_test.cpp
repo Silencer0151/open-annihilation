@@ -30,23 +30,32 @@
 // function test passes on SDL's software renderer, which has no PIXELART,
 // and puts back the render target and the draw colour, and fails the
 // reduction by half or the known pattern drawn NEAREST; the start's tier on
-// the dummy video driver, standard with the reason in the line, waiting
-// for the player on the player's own profile, or with
+// the dummy video driver, standard with the reason in the line, or with
 // --hardware-acceleration and --force-capable accelerated after the
 // function test passed, from 2 GiB, and standard where it failed; and a
-// rebuild drops the tier for the run.
+// rebuild drops the tier for the run. The name a failing call is struck
+// under. The records on the dummy video driver in scratch folders: the
+// trial before the function test, the sentinel, a lost device recorded, a
+// clean end, and a profile that cannot be written, which logs each file's
+// failure once and keeps the start standard with the test skipped.
 #include "render_host.hpp"
 
+#include "oa/platform/preferences.hpp"
 #include "oa/test/check.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -285,8 +294,25 @@ void test_skipping() {
     CreationInputs inputs = start_inputs(true, true);
     inputs.failed_drivers = recorded;
     Stand stand;
-    OA_CHECK(walk(inputs, stand).created);
+    const CreationOutcome skipped = walk(inputs, stand);
+    OA_CHECK(skipped.created && skipped.skipped_by_record && !skipped.records_ignored);
     OA_CHECK(stand.calls == std::vector<std::string>{"create beta"});
+    OA_CHECK(skipped.skipped == std::vector<std::string>{"alpha"});
+
+    // A recorded driver after the one made was never passed over.
+    const std::vector<std::string_view> around{driver_alpha, driver_gamma};
+    inputs.failed_drivers = around;
+    Stand before;
+    const CreationOutcome passed = walk(inputs, before);
+    OA_CHECK(passed.created && passed.attempts.back().driver == driver_beta);
+    OA_CHECK(passed.skipped == std::vector<std::string>{"alpha"});
+    // Nor is any where the first driver starts.
+    const std::vector<std::string_view> later{driver_gamma};
+    inputs.failed_drivers = later;
+    Stand first;
+    const CreationOutcome none = walk(inputs, first);
+    OA_CHECK(none.created && none.attempts.back().driver == driver_alpha);
+    OA_CHECK(!none.skipped_by_record && none.skipped.empty());
 
     // Skipping a driver counts as a miss: the hint is set before software.
     const std::vector<std::string_view> all_but_software{
@@ -309,7 +335,8 @@ void test_advice_rule() {
     inputs.failed_drivers = every_hardware;
     Stand stand;
     const CreationOutcome outcome = walk(inputs, stand);
-    OA_CHECK(outcome.created);
+    OA_CHECK(outcome.created && outcome.records_ignored && !outcome.skipped_by_record);
+    OA_CHECK(outcome.skipped.empty());
     OA_CHECK(stand.calls == std::vector<std::string>{"create alpha"});
     OA_CHECK(stand.log == std::vector<std::string>{oa::app::second_walk_log_line()});
 
@@ -859,8 +886,7 @@ void test_function_test_fails_wrong_draws() {
 
 /// The start's tier on the dummy video driver, which draws no window: with
 /// the setting On the processor draws everything, the function test does
-/// not run, waiting for the player on the player's own profile, and the
-/// line says why; a named preferences file says it is off; with
+/// not run, and the line says why; a named preferences file says it is off; with
 /// --hardware-acceleration and --force-capable the function test runs and
 /// passes on SDL's software renderer and the tier is accelerated, where the
 /// machine has 2 GiB, and otherwise the line says it needs the memory; and
@@ -894,9 +920,7 @@ void test_start_tier_on_dummy() {
     const Case cases[] = {
         {own,
          false,
-         "standard tier: the processor draws everything (the environment names a driver)",
-         false,
-         policy::FunctionTest::trial_unwritten},
+         "standard tier: the processor draws everything (the environment names a driver)"},
         {named,
          false,
          "standard tier: the processor draws everything (hardware acceleration is off)"},
@@ -984,6 +1008,151 @@ void test_rebuild_drops_the_tier() {
     close_window(window);
 }
 
+/// The name a failing call is struck under: the words of its error before
+/// the colon, joined by single hyphens, cut to the records' limit.
+void test_failing_call_name() {
+    OA_CHECK(
+        oa::app::failing_call_name("SDL_RenderClear: the device is gone") == "SDL_RenderClear"
+    );
+    OA_CHECK(
+        oa::app::failing_call_name("SDL_CreateTexture of a scene tile: out of memory") ==
+        "SDL_CreateTexture-of-a-scene-tile"
+    );
+    OA_CHECK(oa::app::failing_call_name("injected present error") == "injected-present-error");
+    OA_CHECK(oa::app::failing_call_name("  (odd)  words!  ") == "odd-words");
+    OA_CHECK(oa::app::failing_call_name("") == oa::app::unnamed_call);
+    OA_CHECK(oa::app::failing_call_name(": nothing before the colon") == oa::app::unnamed_call);
+    const std::string long_name = oa::app::failing_call_name(std::string(200, 'x') + ": reason");
+    OA_CHECK(long_name.size() == oa::app::renderer_state::max_name_bytes);
+    OA_CHECK(oa::app::renderer_state::valid_driver_name(long_name));
+    OA_CHECK(
+        oa::app::renderer_state::valid_driver_name(
+            oa::app::failing_call_name("a " + std::string(70, 'y') + " b")
+        )
+    );
+}
+
+/// The host's records on the dummy video driver, in scratch folders as the
+/// player's own profile keeps them: a start writes the trial before the
+/// function test and leaves the sentinel at `standard software` after it,
+/// a clean end erases the trial and deletes the sentinel, and a lost
+/// device mended by a rebuild is recorded against the driver under
+/// --force-capable. A profile that cannot be written logs each file's
+/// failure once and the start goes on, with the function test skipped,
+/// the tier standard and the line saying the game cannot save its files.
+void test_records_on_dummy() {
+    namespace policy = oa::app::render_policy;
+    namespace rs = oa::app::renderer_state;
+    const std::filesystem::path scratch = oa::test::make_scratch_directory("render-host-records");
+    oa::app::RenderFaultHooks faults{};
+    faults.physical_memory = uint64_t{8} << 30;
+    faults.crash_evidence = rs::CrashEvidence::two_in_a_row;
+    oa::app::TierRequest flagged{};
+    flagged.flag = true;
+    flagged.force_capable = true;
+    flagged.players_own_profile = true;
+    {
+        SDL_Window* window = open_window();
+        if (window != nullptr) {
+            const std::filesystem::path folder = scratch / "profile";
+            RendererHost host;
+            oa::app::RecordsPlace place;
+            place.folder = folder;
+            place.engine_version = "test";
+            const auto lines = logged_lines([&]() {
+                host.create(window, faults, place);
+                host.decide_start_tier(flagged);
+            });
+            OA_CHECK(host.records().storage() == rs::Storage::disk);
+            OA_CHECK(
+                policy::decide_render_tier(host.tier_inputs()).tier ==
+                policy::RenderTier::accelerated
+            );
+            const auto& trial = host.records().records().trial;
+            OA_CHECK(
+                trial && trial->stage == rs::StrikeStage::probe && trial->driver == "software"
+            );
+            const auto written = oa::platform::preferences::load(folder / rs::records_file_name);
+            OA_CHECK(written.count(std::string(rs::trial_key)) == 1);
+            const auto sentinel = oa::platform::preferences::load(folder / rs::sentinel_file_name);
+            OA_CHECK(
+                sentinel.count(std::string(rs::sentinel_key)) == 1 &&
+                sentinel.at(std::string(rs::sentinel_key)) == "standard software"
+            );
+            // A lost device, mended by a rebuild, is recorded at once.
+            SDL_Event lost{};
+            lost.type = SDL_EVENT_RENDER_DEVICE_LOST;
+            lost.render.windowID = SDL_GetWindowID(window);
+            OA_CHECK(host.take_event(lost));
+            std::ignore = logged_lines([&]() { host.service(); });
+            const rs::DriverRecords* recorded =
+                rs::find_driver(host.records().records(), "software");
+            OA_CHECK(
+                recorded != nullptr &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::lost &&
+                recorded->strike.stage == rs::StrikeStage::lost
+            );
+            OA_CHECK(host.tier_inputs().accelerated_unusable_record);
+            // A clean end erases the trial and deletes the sentinel.
+            host.finish_records();
+            OA_CHECK(!std::filesystem::exists(folder / rs::sentinel_file_name));
+            const auto ended = oa::platform::preferences::load(folder / rs::records_file_name);
+            OA_CHECK(
+                ended.count(std::string(rs::trial_key)) == 0 &&
+                ended.count(std::string(rs::accelerated_unusable_prefix) + "software") == 1
+            );
+            OA_CHECK(!lines.empty());
+            host.destroy();
+        }
+        close_window(window);
+    }
+    {
+        SDL_Window* window = open_window();
+        if (window != nullptr) {
+            // A file stands where the profile's folder should be.
+            const std::filesystem::path blocker = scratch / "blocker";
+            {
+                std::ofstream(blocker) << "a file, not a folder";
+            }
+            RendererHost host;
+            oa::app::RecordsPlace place;
+            place.folder = blocker / "profile";
+            place.engine_version = "test";
+            const auto lines = logged_lines([&]() {
+                host.create(window, faults, place);
+                host.decide_start_tier(flagged);
+            });
+            const auto& inputs = host.tier_inputs();
+            OA_CHECK(inputs.function_test == policy::FunctionTest::trial_unwritten);
+            OA_CHECK(
+                policy::decide_render_tier(inputs).reason == policy::TierReason::trial_unwritten
+            );
+            const auto counted = [&](std::string_view part) {
+                std::size_t count = 0;
+                for (const auto& line : lines)
+                    if (line.find(part) != std::string::npos)
+                        ++count;
+                return count;
+            };
+            OA_CHECK(counted("cannot write renderer-sentinel.conf") == 1);
+            OA_CHECK(counted("cannot write renderer-state.conf") == 1);
+            OA_CHECK(counted(oa::app::trial_unwritten_log_line()) == 1);
+            OA_CHECK(
+                !lines.empty() &&
+                lines.back().ends_with(
+                    "standard tier: the processor draws everything (the game cannot save its "
+                    "files)"
+                )
+            );
+            OA_CHECK(!host.records().records().trial);
+            host.destroy();
+        }
+        close_window(window);
+    }
+    std::error_code error;
+    std::filesystem::remove_all(scratch, error);
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string_view(argv[1]) == "--case" &&
         std::string_view(argv[2]) == "named-missing") {
@@ -1011,5 +1180,7 @@ int main(int argc, char** argv) {
     test_function_test_fails_wrong_draws();
     test_start_tier_on_dummy();
     test_rebuild_drops_the_tier();
+    test_failing_call_name();
+    test_records_on_dummy();
     return oa::test::check_exit_status();
 }

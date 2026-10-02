@@ -84,6 +84,14 @@ bool running_on_windows_before_vista() noexcept {
 #endif
 }
 
+bool running_on_linux() noexcept {
+#if defined(__linux__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool light_machine(const MachineTraits& machine) noexcept {
     return machine.processors <= 1 || !machine.sse2 ||
            (machine.memory != 0 && machine.memory < light_machine_memory);

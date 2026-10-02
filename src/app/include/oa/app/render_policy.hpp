@@ -374,8 +374,10 @@ void forget_failures(TierInputs& inputs) noexcept;
 struct FunctionTestHooks {
     void* context{};
     /// Runs the function test on the renderer and returns what it found,
-    /// FunctionTest::passed or FunctionTest::failed. Null runs none, so the
-    /// frame stays in the standard tier with the test still due.
+    /// FunctionTest::passed or FunctionTest::failed, or
+    /// FunctionTest::trial_unwritten when the trial record written before
+    /// it could not be, so it did not run. Null runs none, so the frame
+    /// stays in the standard tier with the test still due.
     FunctionTest (*run)(void* context){};
 };
 
@@ -404,19 +406,6 @@ struct TierStep {
 /// @return the frame's decision and what the host does
 [[nodiscard]] TierStep
 step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestHooks& test);
-
-/// Returns what the function test starts a run as while no trial record is
-/// written before it: FunctionTest::trial_unwritten where the records
-/// would live on disk (records_on_disk) and neither --hardware-acceleration
-/// nor --force-capable asks for the test, so that a start on the player's
-/// own profile never runs it unguarded, and only the player switching
-/// Hardware acceleration Off then On, or Restore defaults
-/// (forget_failures), lets it run; FunctionTest::not_run otherwise, as with
-/// a named preferences file, whose records live in memory.
-///
-/// @param inputs the run's facts as the start fills them
-/// @return the function test's state at start
-[[nodiscard]] FunctionTest start_function_test(const TierInputs& inputs) noexcept;
 
 // ---------------------------------------------------------------------------
 // Creating the renderer

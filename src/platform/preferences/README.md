@@ -10,6 +10,14 @@ defaults belong to the frontend.
 | Windows | Local AppData / `CorePrime/Open Annihilation/preferences.conf` |
 | Linux | `$XDG_CONFIG_HOME/open-annihilation/preferences.conf`, or `$HOME/.config/open-annihilation/preferences.conf` |
 
+Beside the preferences file the game keeps two files of its own, in the
+same format, which it writes itself and the player never needs to edit:
+`renderer-state.conf`, what it has seen of each graphics driver on this
+machine (`src/app/include/oa/app/renderer_state.hpp`), and
+`renderer-sentinel.conf`, the stage a start has reached, which a clean exit
+deletes. Deleting either loses nothing but that record. With
+`--preferences-file` neither is read or written.
+
 Data the engine keeps for the player, such as game data it unpacks, goes in a
 per-user data folder (`data_directory()`), beside the preferences file on
 macOS and Windows and in the XDG data folder on Linux:

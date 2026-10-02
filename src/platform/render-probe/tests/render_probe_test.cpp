@@ -184,6 +184,15 @@ void test_capable_before_vista() {
         OA_CHECK(!capable_before_vista(renderer));
 }
 
+/// Only direct3d, SDL's Direct3D 9 renderer, loses its device in ordinary
+/// use, in SDL's own spelling.
+void test_loses_device_in_ordinary_use() {
+    OA_CHECK(loses_device_in_ordinary_use("direct3d"));
+    for (const std::string_view renderer :
+         {"opengl", "direct3d11", "direct3d12", "vulkan", "metal", "software", "", "Direct3D"})
+        OA_CHECK(!loses_device_in_ordinary_use(renderer));
+}
+
 /// What a stand-in reader gives describe_reported, and how often it was
 /// asked.
 struct StandInAdapter {
@@ -478,6 +487,7 @@ int main() {
     test_adapter_needed();
     test_run_class();
     test_capable_before_vista();
+    test_loses_device_in_ordinary_use();
     test_describe_reported();
     test_classify();
     test_clean_name();

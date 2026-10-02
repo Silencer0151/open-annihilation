@@ -2785,14 +2785,22 @@ void test_forget_failures() {
 struct StandInTest {
     bool passes{true}; ///< it finds the renderer draws right
     int runs{};        ///< the times it ran
+    /// Its trial record cannot be written, so it is skipped.
+    bool trial_unwritable{};
+    int skipped{}; ///< the times it was skipped for its trial
 };
 
 /// Runs the stand-in function test (FunctionTestHooks::run).
 ///
 /// @param context the StandInTest
-/// @return FunctionTest::passed or FunctionTest::failed, as it finds
+/// @return FunctionTest::trial_unwritten where its trial cannot be written,
+///     else FunctionTest::passed or FunctionTest::failed, as it finds
 FunctionTest run_stand_in_test(void* context) {
     auto& test = *static_cast<StandInTest*>(context);
+    if (test.trial_unwritable) {
+        ++test.skipped;
+        return FunctionTest::trial_unwritten;
+    }
     ++test.runs;
     return test.passes ? FunctionTest::passed : FunctionTest::failed;
 }
@@ -2870,39 +2878,12 @@ void test_step_tier() {
     OA_CHECK(test.runs == 1);
 }
 
-/// The function test's state at start, while no trial is written before
-/// it: on the player's own profile it waits for the player unless
-/// --hardware-acceleration or --force-capable asks for it; with a named
-/// preferences file or SDL_RENDER_DRIVER, whose records live in memory, it
-/// is free to run.
-void test_start_function_test() {
-    TierInputs own;
-    own.players_own_profile = true;
-    OA_CHECK(start_function_test(own) == FunctionTest::trial_unwritten);
-    own.setting_on = true;
-    OA_CHECK(start_function_test(own) == FunctionTest::trial_unwritten);
-    TierInputs refused = own;
-    refused.flag = AccelerationFlag::off;
-    OA_CHECK(start_function_test(refused) == FunctionTest::trial_unwritten);
-    TierInputs flagged = own;
-    flagged.flag = AccelerationFlag::on;
-    OA_CHECK(start_function_test(flagged) == FunctionTest::not_run);
-    TierInputs forced = own;
-    forced.force_capable = true;
-    OA_CHECK(start_function_test(forced) == FunctionTest::not_run);
-    TierInputs named = own;
-    named.players_own_profile = false;
-    OA_CHECK(start_function_test(named) == FunctionTest::not_run);
-    TierInputs environment = own;
-    environment.render_driver_named = true;
-    OA_CHECK(start_function_test(environment) == FunctionTest::not_run);
-}
-
 /// A player's run as the game drives it (step_tier): on the player's own
-/// profile the start keeps the standard tier with no function test until
-/// the player switches the setting Off then On, unless
-/// --hardware-acceleration asks for it; a named preferences file that turns
-/// the setting On tests at start; then the setting switched Off and On, a
+/// profile the start writes the trial and runs the function test at once,
+/// and where the trial cannot be written keeps the standard tier until the
+/// player switches the setting Off then On; --hardware-acceleration and a
+/// named preferences file that turns the setting On test at start; then
+/// the setting switched Off and On, a
 /// shared game and a replay, a failed function test retried, and the runs
 /// that stay on the standard tier whatever happens: a named preferences
 /// file at its default, the dummy video driver, under 2 GiB, headless and
@@ -2918,19 +2899,23 @@ void test_host_runs() {
     TierInputs named_on = player;
     named_on.players_own_profile = false;
 
-    // The player's own profile: no test at start; Off then On runs it once,
-    // and the frame is accelerated from then.
+    // The player's own profile whose trial cannot be written: the test is
+    // skipped and the start stays standard, trying no more; Off then On
+    // writes the trial and runs the test once, and the frame is accelerated
+    // from then.
     {
         TierInputs inputs = player;
-        inputs.function_test = start_function_test(inputs);
         bool on = false;
         StandInTest test;
+        test.trial_unwritable = true;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::trial_unwritten);
-        OA_CHECK(!on && test.runs == 0);
+        OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::trial_unwritten);
+        OA_CHECK(!on && test.runs == 0 && test.skipped == 1);
         inputs.setting_on = false;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::setting_off);
         forget_failures(inputs);
         inputs.setting_on = true;
+        test.trial_unwritable = false;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
         OA_CHECK(on && test.runs == 1);
         // Off applies at once, On again at once, with no second test.
@@ -2954,12 +2939,12 @@ void test_host_runs() {
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
         OA_CHECK(on && test.runs == 1);
     }
-    // --hardware-acceleration on the player's own profile, and a named
-    // preferences file that turns the setting On, test at start.
-    for (TierInputs inputs : {player, named_on}) {
-        if (inputs.players_own_profile)
-            inputs.flag = AccelerationFlag::on;
-        inputs.function_test = start_function_test(inputs);
+    // The player's own profile, with --hardware-acceleration or without,
+    // and a named preferences file that turns the setting On, test at
+    // start.
+    TierInputs flagged = player;
+    flagged.flag = AccelerationFlag::on;
+    for (TierInputs inputs : {player, flagged, named_on}) {
         bool on = false;
         StandInTest test;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
@@ -3045,7 +3030,6 @@ void test_host_runs() {
     for (const auto& run : standards) {
         TierInputs inputs = player;
         run.change(inputs);
-        inputs.function_test = start_function_test(inputs);
         bool on = false;
         StandInTest test;
         const TierDecision decision = drawn_frame(inputs, on, test);
@@ -3066,7 +3050,6 @@ void test_host_runs() {
         inputs.force_capable = true;
         inputs.capability = Capability::software_renderer;
         inputs.memory = smallest_accelerated_memory;
-        inputs.function_test = start_function_test(inputs);
         bool on = false;
         StandInTest test;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
@@ -3110,7 +3093,6 @@ int main() {
     test_tier_action();
     test_forget_failures();
     test_step_tier();
-    test_start_function_test();
     test_host_runs();
     return oa::test::check_exit_status();
 }
