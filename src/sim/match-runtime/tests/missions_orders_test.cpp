@@ -222,8 +222,11 @@ struct Fixture {
                 fields[i].movement_class = 0;
         }
         loaded[tank_type].unit_name = "TANK";
-        weapons.install_tdf_section(1, "TESTGUN", "0.1");
-        weapons.install_target_fields(1, "400", "1", "0", "0", "0", "0", "10", "100", "", "1");
+        (void)sim::combat_state::install_weapon_text(
+            weapons,
+            "[TESTGUN]{id=1; reloadtime=0.1; range=400; lineofsight=1; weaponvelocity=100; "
+            "turret=1; [DAMAGE]{default=10;}}"
+        );
         sim::match_runtime::OfflineInputs input{
             map,
             loaded,

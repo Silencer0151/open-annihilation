@@ -3,6 +3,7 @@
 
 #include "oa/media/intro_player.hpp"
 #include "oa/formats/smacker.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -43,7 +44,7 @@ std::filesystem::path write_fixture() {
     bytes[118] = 2;
     bytes[119] = 3;
     bytes[120] = 0;
-    const auto path = std::filesystem::temp_directory_path() / "oa-intro-smacker-test.zrb";
+    const auto path = oa::test::make_scratch_directory("oa-intro-smacker-test") / "intro.zrb";
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output.write(
         reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
@@ -85,7 +86,7 @@ void test_fixture() {
         reader.read_huffman_trees(trees, error) && trees.size() == 3 && trees[0] == 0xAA,
         "fixture trees"
     );
-    std::filesystem::remove(path);
+    std::filesystem::remove_all(path.parent_path());
 }
 
 void test_letterbox() {

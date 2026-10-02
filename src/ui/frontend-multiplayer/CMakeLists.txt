@@ -16,8 +16,8 @@ target_include_directories(oa-ui-frontend-multiplayer PUBLIC include)
 target_link_libraries(oa-ui-frontend-multiplayer
   PUBLIC oa-core-types oa-ui-gui-layout oa-ui-gui-input oa-netgame oa-ui-screen-registry oa-options
     oa-data-campaign
-  PRIVATE oa-ui-frontend-renderer oa-formats-hpi oa-data-defs-assets oa-formats-tnt oa-data-unit-definitions
-    oa-data-campaign-assets oa-data-defs oa-netgame-sync oa-present oa-present-model)
+  PRIVATE oa-base-bytes oa-ui-frontend-renderer oa-ui-decoded oa-formats-hpi oa-data-defs-assets oa-formats-tnt oa-data-unit-definitions
+    oa-data-campaign-assets oa-data-defs oa-netgame-sync oa-present oa-present-model oa-base-game-loop)
 
 if(BUILD_TESTING)
   add_executable(oa-ui-frontend-multiplayer-lobby-test tests/lobby_test.cpp)

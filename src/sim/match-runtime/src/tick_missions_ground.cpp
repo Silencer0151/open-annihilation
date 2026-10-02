@@ -24,7 +24,7 @@ uint32_t TickHost::GroundMissions::reclaim() {
     case 1: {
         if (events & ground::path_failed_event)
             return ground::mission_failed;
-        remaining = ground::truncate_word(
+        remaining = truncate_low32(
             (static_cast<double>(site->def->metal) + static_cast<double>(site->def->energy)) *
                 ground::reclaim_time_scale +
             ground::reclaim_time_base
@@ -100,7 +100,7 @@ uint32_t TickHost::GroundMissions::resurrect() {
         const auto& raised = world().unit_defs[static_cast<size_t>(type)];
         const auto workers = static_cast<int32_t>(static_cast<uint16_t>(def().worker_time)) /
                              ground::worker_ticks_per_second;
-        remaining = ground::truncate_word(
+        remaining = truncate_low32(
             static_cast<double>(raised.build_time) * ground::resurrect_time_scale /
             static_cast<double>(workers)
         );
@@ -351,7 +351,7 @@ uint32_t TickHost::GroundMissions::build_weapon() {
         const auto total = static_cast<int32_t>(weapon->reload_time_ticks);
         const auto step = std::min(progress + ground::stockpile_step, total);
         const auto share = [&](int32_t ticks, float cost) {
-            return ground::truncate_word(
+            return truncate_low32(
                 static_cast<double>(ticks) * static_cast<double>(cost) / static_cast<double>(total)
             );
         };
@@ -543,7 +543,7 @@ uint32_t TickHost::GroundMissions::unload() {
         if (def().flags & OA_UNIT_DEF_FLAG_CAN_HOVER) {
             const auto* bounds = host.match.bounds_for(*s.unit);
             const auto extent_z = bounds ? static_cast<int16_t>(bounds->size_z >> 16) : 0;
-            reach = ground::truncate_word(extent_z * ground::hover_unload_reach);
+            reach = truncate_low32(extent_z * ground::hover_unload_reach);
         }
         circle_goal(record.extra.destination, reach);
         order.wait_events = ground::goal_events | ground::target_lost_event;

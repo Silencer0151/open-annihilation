@@ -55,7 +55,7 @@ void copy_field(char* out, std::size_t capacity, std::string_view text) noexcept
 
 const PlayerSetupInfo*
 session_info(const SessionEntry& session, PlayerSetupInfo& scratch) noexcept {
-    std::memset(&scratch, 0, sizeof(scratch));
+    std::memset(static_cast<void*>(&scratch), 0, sizeof(scratch));
     std::memcpy(
         reinterpret_cast<uint8_t*>(&scratch) + kSessionUserInfoOffset,
         session.user,

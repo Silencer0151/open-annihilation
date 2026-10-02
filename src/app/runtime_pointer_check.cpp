@@ -1,15 +1,20 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The two interface types' pointer buttons, the queued-order cancel and the
-// factory queue's right click, then the on-screen unit list, the pointer's
-// pick and what they drive, through synthetic SDL input.
+// The screen's edges scrolling the camera, the two interface types' pointer
+// buttons, the queued-order cancel and the factory queue's right click, then
+// the on-screen unit list, the pointer's pick and what they drive, through
+// synthetic SDL input.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/sim/messages.hpp"
+#include "oa/ui/hud/camera_scroll.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/order_overlays.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -56,6 +61,7 @@ void Runtime::check_pointer_interfaces() {
         fail("needs the SDL renderer");
     start_benchmark_skirmish();
     apply_output_mode();
+    check_edge_scroll();
     auto& world = match_->state();
     auto& slots = match_->world().slots;
     uint16_t commander = 0;
@@ -1055,15 +1061,11 @@ void Runtime::check_pointer_picks() {
     require_pick(&*unit_info_panel_ == opened, "a second F1 opened the panel again");
     const auto* commander_def = oa::world_unit_def_of(&world, &slots[commander].record);
     require_pick(commander_def != nullptr, "the commander has no type");
-    const auto picture = oa::decode_pcx(
-        assets_
-            .read(
-                "unitpics/" +
-                std::string(commander_def->unit_name, strnlen(commander_def->unit_name, 32)) +
-                ".PCX"
-            )
-            .bytes
-    );
+    const auto picture_path =
+        "unitpics/" + std::string(commander_def->unit_name, strnlen(commander_def->unit_name, 32)) +
+        ".PCX";
+    const auto picture =
+        oa::ui::decoded::require(oa::decode_pcx(assets_.read(picture_path).bytes), picture_path);
     const oa::ui::gui_layout::Gadget* hotr = nullptr;
     const oa::ui::gui_layout::Gadget* done = nullptr;
     for (const auto& gadget : unit_info_panel_->screen->layout.gadgets) {
@@ -1309,6 +1311,231 @@ void Runtime::check_pointer_picks() {
                  "box, smaller unit and tie, still pointer, under-attack only off screen, unit "
                  "panel status, target, build button and unidentified blip, F1 panel and its "
                  "picture, 'n', Ctrl+S, click visits, Escape, LOAD/UNLOAD and pad landing\n";
+}
+
+} // namespace oa::app
+
+namespace oa::app {
+namespace {
+
+/// Fails the edge scroll check with a message.
+///
+/// @param what what went wrong
+[[noreturn]] void fail_edge(std::string_view what) {
+    throw std::runtime_error("edge scroll check: " + std::string(what));
+}
+
+/// Fails the edge scroll check with a message unless a condition holds.
+///
+/// @param ok the condition
+/// @param what what went wrong when it does not hold
+void require_edge(bool ok, std::string_view what) {
+    if (!ok)
+        fail_edge(what);
+}
+
+/// Returns the way a value moved: -1 down, 1 up, 0 not at all.
+///
+/// @param from the value before
+/// @param to the value after
+/// @return the sign of the change
+int32_t way_moved(int32_t from, int32_t to) {
+    return static_cast<int32_t>(to > from) - static_cast<int32_t>(to < from);
+}
+
+/// Formats a way to scroll as "(x, y)".
+///
+/// @param way the way along each axis
+/// @return the text
+std::string way_text(const oa::ui::hud::EdgeScroll& way) {
+    return '(' + std::to_string(way.x) + ", " + std::to_string(way.y) + ')';
+}
+
+// The frame time a probe's scrolling starts from (the scroll clock counts
+// from a time above 0), and the frame it scrolls for: a whole second, so
+// that the camera moves at the largest zoom too.
+constexpr uint64_t kProbeClockNs = frame_pacing::kNanosecondsPerSecond;
+constexpr uint64_t kProbeFrameNs = frame_pacing::kNanosecondsPerSecond;
+
+} // namespace
+
+void Runtime::check_edge_scroll() {
+    if (sdl_.renderer == nullptr || sdl_.window == nullptr || screen_ != Screen::match || !match_)
+        fail_edge("needs the SDL window and a match");
+    require_edge(
+        (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_MOUSE_FOCUS) != 0,
+        "the window does not have the pointer"
+    );
+    bool running = true;
+    const auto saved_frame_time = frame_time_ns_;
+    const auto saved_scroll_clock = scroll_clock_;
+    // The way one frame scrolls the camera along each axis; the camera goes
+    // back where it was.
+    const auto scrolled = [&] {
+        const auto x = match_camera_x_;
+        const auto z = match_camera_z_;
+        scroll_clock_ = kProbeClockNs;
+        frame_time_ns_ = kProbeClockNs + kProbeFrameNs;
+        pan_match_camera();
+        const oa::ui::hud::EdgeScroll way{
+            way_moved(x, match_camera_x_), way_moved(z, match_camera_z_)
+        };
+        match_camera_x_ = x;
+        match_camera_z_ = z;
+        return way;
+    };
+    const auto expect = [&](const oa::ui::hud::EdgeScroll& expected, std::string_view what) {
+        const auto way = scrolled();
+        if (way.x != expected.x || way.y != expected.y)
+            fail_edge(
+                std::string(what) + " scrolled " + way_text(way) + ", not " + way_text(expected)
+            );
+    };
+    // The pointer moved to a point of the window, as SDL reports it.
+    const auto move_to = [&](float x, float y) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.windowID = SDL_GetWindowID(sdl_.window);
+        event.motion.x = x;
+        event.motion.y = y;
+        dispatch_event(event, running);
+    };
+    const auto window_event = [&](SDL_EventType type) {
+        SDL_Event event{};
+        event.type = type;
+        event.window.windowID = SDL_GetWindowID(sdl_.window);
+        dispatch_event(event, running);
+    };
+    // The window's own events reach the game as its loop pumps them.
+    const auto settle = [&] {
+        (void)SDL_SyncWindow(sdl_.window);
+        SDL_Event event{};
+        while (SDL_PollEvent(&event))
+            dispatch_event(event, running);
+    };
+    const auto key = [&](SDL_EventType type) {
+        SDL_Event event{};
+        event.type = type;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = SDLK_RETURN;
+        event.key.scancode = SDL_SCANCODE_RETURN;
+        event.key.mod = SDL_KMOD_LALT;
+        event.key.down = type == SDL_EVENT_KEY_DOWN;
+        dispatch_event(event, running);
+    };
+    const auto full_screen = [&] {
+        return (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0;
+    };
+
+    // Before SDL reports the pointer in the match its place is not known, and
+    // the place the game holds meanwhile, the top-left corner, scrolls
+    // nothing.
+    match_pointer_x_ = 0.0F;
+    match_pointer_y_ = 0.0F;
+    expect({}, "the pointer before it first moved");
+
+    // Each edge scrolls toward itself, over the side column and the bars as
+    // over the battlefield, and each corner both ways; the window's
+    // outermost points only, so a point further in scrolls nothing.
+    const auto probe_edges = [&](std::string_view where) {
+        require_edge(
+            match_layout_.left > 0 && match_layout_.top > 0 && match_layout_.bottom > 0,
+            "the screen has no side column or bars " + std::string(where)
+        );
+        int width = 0;
+        int height = 0;
+        if (!SDL_GetWindowSize(sdl_.window, &width, &height))
+            fail_edge(SDL_GetError());
+        const auto right = static_cast<float>(width - 1);
+        const auto bottom = static_cast<float>(height - 1);
+        const auto middle_x = std::floor(static_cast<float>(width) / 2.0F);
+        const auto middle_y = std::floor(static_cast<float>(height) / 2.0F);
+        struct Probe {
+            float x{};
+            float y{};
+            oa::ui::hud::EdgeScroll way{};
+            std::string_view place{};
+        };
+        const std::array<Probe, 13> probes{{
+            {0.0F, middle_y, {-1, 0}, "the left edge, over the side column,"},
+            {right, middle_y, {1, 0}, "the right edge"},
+            {middle_x, 0.0F, {0, -1}, "the top edge, over the top bar,"},
+            {middle_x, bottom, {0, 1}, "the bottom edge, over the bottom bar,"},
+            {0.0F, 0.0F, {-1, -1}, "the top-left corner"},
+            {right, 0.0F, {1, -1}, "the top-right corner"},
+            {0.0F, bottom, {-1, 1}, "the bottom-left corner"},
+            {right, bottom, {1, 1}, "the bottom-right corner"},
+            {middle_x, middle_y, {}, "the middle"},
+            {1.0F, middle_y, {}, "a point inside the left edge"},
+            {right - 1.0F, middle_y, {}, "a point inside the right edge"},
+            {middle_x, 1.0F, {}, "a point inside the top edge"},
+            {middle_x, bottom - 1.0F, {}, "a point inside the bottom edge"},
+        }};
+        for (const auto& probe : probes) {
+            move_to(probe.x, probe.y);
+            expect(
+                probe.way, "the pointer on " + std::string(probe.place) + ' ' + std::string(where)
+            );
+        }
+    };
+    probe_edges(full_screen() ? "in full screen" : "in a window");
+
+    // The pointer that leaves the window scrolls nothing until it comes back.
+    move_to(0.0F, 0.0F);
+    window_event(SDL_EVENT_WINDOW_MOUSE_LEAVE);
+    expect({}, "the pointer that left the window");
+    window_event(SDL_EVENT_WINDOW_MOUSE_ENTER);
+    expect({}, "the pointer back in the window before it moved");
+    move_to(0.0F, 0.0F);
+    expect({-1, -1}, "the pointer back in the top-left corner");
+
+    // Alt+Enter to the other mode and back: the edges scroll in full screen
+    // and in a window alike, and on a screen laid out at another size the
+    // pointer's old place scrolls nothing until it moves.
+    const bool started_full_screen = full_screen();
+    // Leaving full screen brings a window that lay off its display back onto
+    // it, so the window's own place and size are put back after the round
+    // trip for the checks that follow.
+    int window_x = 0;
+    int window_y = 0;
+    int window_width = 0;
+    int window_height = 0;
+    (void)SDL_GetWindowPosition(sdl_.window, &window_x, &window_y);
+    (void)SDL_GetWindowSize(sdl_.window, &window_width, &window_height);
+    for (const bool full : {!started_full_screen, started_full_screen}) {
+        move_to(0.0F, 0.0F);
+        const auto before = match_layout_;
+        key(SDL_EVENT_KEY_DOWN);
+        key(SDL_EVENT_KEY_UP);
+        settle();
+        const std::string where = full ? "in full screen" : "in a window";
+        require_edge(
+            full_screen() == full, "Alt+Enter did not switch to the window's mode " + where
+        );
+        if (match_layout_.width != before.width || match_layout_.height != before.height)
+            expect({}, "the pointer's place before Alt+Enter " + where);
+        probe_edges(where);
+    }
+    if (!started_full_screen) {
+        (void)SDL_SetWindowSize(sdl_.window, window_width, window_height);
+        (void)SDL_SetWindowPosition(sdl_.window, window_x, window_y);
+        settle();
+    }
+
+    // The pointer rests in the middle for the checks that follow.
+    int width = 0;
+    int height = 0;
+    (void)SDL_GetWindowSize(sdl_.window, &width, &height);
+    move_to(
+        std::floor(static_cast<float>(width) / 2.0F), std::floor(static_cast<float>(height) / 2.0F)
+    );
+    frame_time_ns_ = saved_frame_time;
+    scroll_clock_ = saved_scroll_clock;
+    scroll_zoom_carry_ = 0.0;
+    std::cout << "edge scroll check: each edge and corner scrolls toward itself over the side "
+                 "column, the bars and the battlefield, a point further in and the middle do "
+                 "not, nor the pointer before it moved, outside the window or on a screen laid "
+                 "out again, in full screen and in a window\n";
 }
 
 } // namespace oa::app

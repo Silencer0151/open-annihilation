@@ -7,7 +7,7 @@ add_library(oa-formats-pe src/resources.cpp)
 add_library(oa::formats::pe ALIAS oa-formats-pe)
 target_include_directories(oa-formats-pe PUBLIC include)
 target_compile_features(oa-formats-pe PUBLIC cxx_std_20)
-target_link_libraries(oa-formats-pe PRIVATE oa-options)
+target_link_libraries(oa-formats-pe PRIVATE oa-base-bytes oa-options)
 if(BUILD_TESTING)
   # Builds synthetic PE images for the tests of code that reads them
   # (oa/test/pe_image.hpp).

@@ -6,6 +6,7 @@
 #include "oa/sim/air/flight.hpp"
 #include "oa/sim/air/goal.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/sim/ground_orders/orders.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -200,7 +201,10 @@ void test_driver() {
     // Arrival raises 0x20 and drops the non-tracking goal (raising 0x80).
     plane.position.x = world(500);
     air_driver_update(&driver, f.host, layer_air);
-    CHECK((events & event_arrived) != 0 && (events & event_goal_replaced) != 0);
+    CHECK(
+        (events & sim::ground_orders::arrived_event) != 0 &&
+        (events & sim::ground_orders::goal_replaced_event) != 0
+    );
     CHECK(!air_driver_has_goal(&driver));
     const AirSteeringTarget target = air_driver_steering_target(&driver);
     CHECK(target.position.x == world(500) && target.velocity.x == 0);
@@ -265,40 +269,6 @@ void test_flight_step() {
     CHECK(movement.velocity[1] == 75);
 }
 
-// An aircraft off the map heads 50 units back toward the map's middle,
-// arriving within 128.
-void test_return_to_map() {
-    Fixture f;
-    Unit& plane = f.unit(1);
-    plane.position = {world(300), world(90), world(400)};
-    air_driver_init_local(&f.drivers[1], &plane);
-    OrderFixture o(&plane);
-    CHECK(!air_return_to_map(&o.order, f.host));
-    CHECK(o.order.wait_events == 0);
-    f.outside = true;
-    CHECK(air_return_to_map(&o.order, f.host));
-    CHECK(o.order.wait_events == wait_for_goal);
-    CHECK((o.goal.flags & goal_arrival_radius) != 0 && o.goal.arrival_radius == 0x80);
-    CHECK(o.goal.point.y == plane.position.y);
-}
-
-void test_repair_pad_search() {
-    Fixture f;
-    Unit& plane = f.unit(1);
-    plane.position = {world(100), world(90), world(100)};
-    OrderFixture o(&plane);
-    CHECK(!air_seek_repair_pad(&o.order, f.host));
-    Unit& pad = f.unit(4);
-    pad.def = oa_ref_from_index(2);
-    pad.position = {world(300), 0, world(100)};
-    CHECK(!air_seek_repair_pad(&o.order, f.host));
-    pad.state_flags = OA_UNIT_STATE_ACTIVE;
-    o.order.wait_events = 0x55;
-    CHECK(air_seek_repair_pad(&o.order, f.host));
-    CHECK(std::strcmp(f.pushed, "VTOL_LANDING") == 0 && f.pushed_target == &pad);
-    CHECK(o.order.wait_events == 0);
-}
-
 // Kinds the target and seek goals report; the air driver's delta capture
 // sends only these two.
 static_assert(static_cast<int>(AirGoalKind::target) == 2);
@@ -314,7 +284,5 @@ int main() {
     test_attitude();
     test_driver();
     test_flight_step();
-    test_return_to_map();
-    test_repair_pad_search();
     return finish("air");
 }

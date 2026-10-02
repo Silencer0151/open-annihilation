@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/palette_tables.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -9,6 +10,9 @@
 #include <new>
 
 namespace oa::present {
+using base::game_math::truncate_low32;
+using base::game_math::truncate_to_int64;
+
 namespace {
 
 constexpr int32_t table_row = 256;
@@ -25,21 +29,6 @@ constexpr int64_t sprite_max_pixels = 16 * 1024 * 1024;
 constexpr int32_t lens_max_width = 0x7FFF; // the block header stores 2 * width in 16 bits
 constexpr int32_t lens_offset_bytes = 2;
 constexpr int32_t lens_radius_divisor = 4;
-constexpr double int64_limit = 9223372036854775808.0; // 2^63
-
-// Truncation toward zero to 64 bits: NaN and out-of-range values give
-// INT64_MIN.
-int64_t truncate_to_int64(double value) noexcept {
-    if (!(value > -int64_limit - 1.0 && value < int64_limit))
-        return INT64_MIN;
-    return static_cast<int64_t>(value);
-}
-
-int32_t truncate_low32(double value) noexcept {
-    return static_cast<int32_t>(
-        static_cast<uint32_t>(static_cast<uint64_t>(truncate_to_int64(value)))
-    );
-}
 
 bool load_table(uint8_t*& slot, int32_t size) noexcept {
     delete[] slot;

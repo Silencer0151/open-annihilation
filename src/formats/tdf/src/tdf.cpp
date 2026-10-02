@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/formats/tdf.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <cstring>
 
 namespace oa::formats::tdf {
+using base::game_math::truncate_to_int64;
 
 struct ArenaChunk {
     ArenaChunk* next;
@@ -490,13 +492,6 @@ double parse_double(const char* text) noexcept {
     }
     buffer[used] = '\0';
     return std::strtod(buffer, nullptr);
-}
-
-int64_t truncate_to_int64(double value) noexcept {
-    constexpr double limit = 9223372036854775808.0; // 2^63
-    if (!(value > -limit && value < limit))
-        return INT64_MIN;
-    return static_cast<int64_t>(std::trunc(value));
 }
 
 const Block* find_child(const Block* block, const char* name) noexcept {

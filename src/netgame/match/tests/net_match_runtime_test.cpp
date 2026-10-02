@@ -400,13 +400,17 @@ struct Machine {
         def.energy_storage = 1000.0F;
         def.metal_storage = 1000.0F;
         if (armed) {
-            weapons.install_tdf_section(kGun, "TESTGUN", "0.1");
-            weapons.install_target_fields(
-                kGun, "400", "1", "0", "0", "0", "0", "10", "100", "", "1"
+            (void)sim::combat_state::install_weapon_text(
+                weapons,
+                std::string(
+                    "[TESTGUN]{id=" + std::to_string(kGun) +
+                    "; reloadtime=0.1; range=400; lineofsight=1; weaponvelocity=100; turret=1; "
+                    "[DAMAGE]{default=10;}}"
+                )
             );
-            weapons.install_tdf_section(kRock, "TESTROCK", "1");
-            const_cast<sim::combat_state::WeaponDefinition&>(*weapons.find("TESTROCK")).flags |=
-                sim::combat_state::weapon_meteor_flag;
+            (void)sim::combat_state::install_weapon_text(
+                weapons, "[TESTROCK]{id=" + std::to_string(kRock) + "; reloadtime=1; meteor=1;}"
+            );
             def.weapon1 = "TESTGUN";
         }
         fields[1].definition = &def;
@@ -1729,56 +1733,27 @@ constexpr uint8_t kInterceptor = 3;
 constexpr uint8_t kMissile = 4;
 
 void install_interceptors(Machine& m) {
-    m.weapons.install_tdf_section(kInterceptor, "TESTAMD", "1");
-    m.weapons.install_target_fields(
-        kInterceptor,
-        "1000",
-        "1",
-        "0",
-        "0",
-        "0",
-        "0",
-        "10",
-        "100",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "96",
-        "",
-        "",
-        "",
-        "",
-        "1"
+    (void)sim::combat_state::install_weapon_text(
+        m.weapons,
+        std::string(
+            "[TESTAMD]{id=" + std::to_string(kInterceptor) +
+            "; reloadtime=1; range=1000; lineofsight=1; weaponvelocity=100; areaofeffect=96; "
+            "interceptor=1; [DAMAGE]{default=10;}}"
+        )
     );
-    m.weapons.install_tdf_section(kMissile, "TESTMISSILE", "1");
-    m.weapons.install_target_fields(
-        kMissile,
-        "1000",
-        "1",
-        "0",
-        "0",
-        "0",
-        "0",
-        "10",
-        "100",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "32"
+    (void)sim::combat_state::install_weapon_text(
+        m.weapons,
+        std::string(
+            "[TESTMISSILE]{id=" + std::to_string(kMissile) +
+            "; reloadtime=1; range=1000; lineofsight=1; weaponvelocity=100; areaofeffect=32; "
+            "[DAMAGE]{default=10;}}"
+        )
     );
-    sim::weapon_execution::store_weapon_defs(m.weapons, m.match->state().game.weapon_defs);
+    std::copy(
+        m.weapons.records().begin(),
+        m.weapons.records().end(),
+        std::begin(m.match->state().game.weapon_defs)
+    );
 }
 
 // A live shot of a weapon at a point, aimed at that point, fired by a unit of

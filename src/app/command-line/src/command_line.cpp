@@ -99,8 +99,11 @@ bool debug_heap_switch(const char* token) noexcept {
 /// @param[out] destination Field receiving the text.
 /// @param source Text to copy.
 void copy_text(char (&destination)[kTextBytes], const char* source) noexcept {
-    destination[0] = '\0';
-    std::strncat(destination, source, kTextBytes - 1);
+    std::size_t length = 0;
+    while (length + 1 < kTextBytes && source[length] != '\0')
+        ++length;
+    std::memcpy(destination, source, length);
+    destination[length] = '\0';
 }
 
 // strtok over the private copy, with blank and tab as the only delimiters.

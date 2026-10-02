@@ -9,12 +9,26 @@ env:
     zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev
     libxfixes-dev libxss-dev libxtst-dev libasound2-dev libpulse-dev libwayland-dev
     libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libdbus-1-dev
+  # The installer of the Total Annihilation demo (1997), which the demo job
+  # downloads: the file README.md's "Get the demo" links to, and the one
+  # src/app/demo_installer.cpp recognises by this SHA-256.
+  DEMO_INSTALLER_URL: https://archive.org/download/TotalAnnihilation_201405/Total%20Annihilation.exe
+  DEMO_INSTALLER_SHA256: 5e41cf05226c274b4ac9e4398f74f6b321506bd7a4317ee1744ff7aceba34c49
 jobs:
+  # Every platform in two build types: Debug, and Check, which is optimised
+  # but keeps assertions and must compute the same results bit for bit, so
+  # the pinned-digest tests (match-determinism, match-trace,
+  # persist-bank-golden, game-math, game-math-extended) fail when an
+  # optimised build drifts from Debug. macos-latest runs on arm64. Clang and
+  # GCC treat every warning in engine code as an error
+  # (OA_WARNINGS_AS_ERRORS); Visual Studio's compiler does not yet.
   build:
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
+        build_type: [Debug, Check]
+    name: build (${{ matrix.os }}, ${{ matrix.build_type }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +42,7 @@ jobs:
       # format-check skips where that release is not
       # installed, which is everywhere this step has not run.
       - name: Format and licence checks
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.build_type == 'Debug'
         run: |
           python -m pip install --require-hashes -r tools/format/requirements.txt
           python tools/format_sources.py --check --diff
@@ -43,23 +57,23 @@ jobs:
         run: python tools/bootstrap_sdl.py
       - name: Configure Unix
         if: runner.os != 'Windows'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Configure Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: cmake -S . -B build -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
       - name: Build
-        run: cmake --build build --config Debug --parallel 4
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel 4
       # Clang reads the /// blocks of the public headers; a @param that names
       # no parameter or a command it does not know fails the build
       # (cmake/OaDocumentationCheck.cmake).
       - name: Documentation check
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.build_type == 'Debug'
         run: cmake --build build --config Debug --target oa-doc-check --parallel 4
       # oa-intro exists only when the intro player was configured, so this
       # fails if SDL3 was not found.
       - name: Intro player
-        run: cmake --build build --config Debug --target oa-intro
+        run: cmake --build build --config ${{ matrix.build_type }} --target oa-intro
       - name: Game executable starts
         shell: bash
         env:
@@ -72,12 +86,73 @@ jobs:
             plutil -lint "$bundle/Contents/Info.plist"
             game="$bundle/Contents/MacOS/open-annihilation"
           fi
-          if [ -f build/Debug/open-annihilation.exe ]; then game=build/Debug/open-annihilation.exe; fi
+          if [ -f build/${{ matrix.build_type }}/open-annihilation.exe ]; then
+            game=build/${{ matrix.build_type }}/open-annihilation.exe
+          fi
           "$game" --help | grep "usage: open-annihilation"
       # Without a game installation the checks that start the game on game
       # data are not registered and the game-data tests skip.
       - name: Synthetic conformance and platform smoke tests
-        run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error
+        run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure --no-tests=error
+
+  # The demo's tests (ctest label demo) over the free Total Annihilation demo
+  # (1997), the only game data CI may download: the 3.1c installation the
+  # other game-data tests and native checks read is not redistributable, so
+  # those run on contributors' machines. The installer is cached by its
+  # SHA-256 and checked against it before use; OA_REQUIRE_DEMO_INSTALLER
+  # makes a demo test that skips fail.
+  demo:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    name: demo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      SDL_VIDEO_DRIVER: dummy
+      SDL_AUDIO_DRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux development dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - name: Cached demo installer
+        id: demo-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/oa-demo
+          key: demo-installer-${{ env.DEMO_INSTALLER_SHA256 }}
+          enableCrossOsArchive: true
+      - name: Download the demo installer
+        if: steps.demo-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/oa-demo
+          curl -fL --retry 5 --retry-all-errors --retry-delay 30 --connect-timeout 60 \
+            -o ~/oa-demo/"Total Annihilation.exe" "$DEMO_INSTALLER_URL"
+      - name: Check the demo installer's SHA-256
+        shell: bash
+        run: |
+          python - "$HOME/oa-demo/Total Annihilation.exe" "$DEMO_INSTALLER_SHA256" <<'PY'
+          import hashlib, sys
+          digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()
+          if digest != sys.argv[2]:
+              sys.exit(f"the demo installer's SHA-256 is {digest}, not {sys.argv[2]}")
+          PY
+      - name: Build pinned SDL
+        run: python tools/bootstrap_sdl.py
+      - name: Configure
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Check -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+          -DOA_DEMO_INSTALLER="$HOME/oa-demo/Total Annihilation.exe" -DOA_REQUIRE_DEMO_INSTALLER=ON
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Tests over the demo
+        run: ctest --test-dir build -L demo --output-on-failure --no-tests=error
 
   # The engine with oa-game linked to the two test extensions of
   # tests/extension beside network play's: the recorder, which fills every
@@ -103,7 +178,7 @@ jobs:
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_RECORD_EXTENSION_HOOKS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DOA_RECORD_EXTENSION_HOOKS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Build
         run: cmake --build build --parallel 4
       - name: Tests with the recorder extensions
@@ -130,7 +205,7 @@ jobs:
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_SANITIZERS=ON -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_SANITIZERS=ON -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Build
         run: cmake --build build --parallel 4
       # AddressSanitizer's shadow memory fails to map when the kernel

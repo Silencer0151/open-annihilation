@@ -45,20 +45,6 @@ struct LoadedType {
     std::string unit_name, model_path, script_path;
 };
 
-/// Resolves a unit type's footprint from its movement class.
-///
-/// Searches CLASS0..31 of moveinfo in order and takes the first whose Name matches the
-/// FBI movement class; an unknown or empty class falls back to the FBI footprint.
-///
-/// Throws std::invalid_argument for a footprint value that is not an integer.
-///
-/// @param definition parsed FBI unit definition
-/// @param moveinfo parsed moveinfo.tdf
-/// @return footprint x and z, in map cells
-std::array<int16_t, 2> resolve_movement_footprint(
-    const data::unit_definitions::UnitDefinition& definition,
-    const data::unit_definitions::TdfDocument& moveinfo
-);
 /// Loads a unit type's runtime fields, model and script from the game data.
 ///
 /// Uses the base asset paths objects3d/<object>.3DO and scripts/<unit>.COB; mod-prefixed
@@ -69,7 +55,7 @@ std::array<int16_t, 2> resolve_movement_footprint(
 /// movement class, or for an unbounded asset name; std::runtime_error for a missing model
 /// or an invalid script.
 ///
-/// @param definition parsed FBI unit definition
+/// @param definition the unit type's fields, from its loaded UnitDef
 /// @param bindings availability, limit, default mission and resolved footprint
 /// @param assets game file reader
 /// @return the type and shared ownership of its parsed assets; keep it alive while the

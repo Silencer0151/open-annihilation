@@ -247,7 +247,7 @@ bool campaign_advance_next_mission(CampaignFile* file, const CampaignEnv* env);
 /// @param env file services, game block and difficulty
 /// @param index mission index
 /// @return false when the mission info does not load
-bool campaign_bind_mission(CampaignFile* file, const CampaignEnv* env, int32_t index);
+[[nodiscard]] bool campaign_bind_mission(CampaignFile* file, const CampaignEnv* env, int32_t index);
 
 /// Loads the selected mission's OTA header, briefing and placement tables.
 ///

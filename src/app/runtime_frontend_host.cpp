@@ -3,6 +3,7 @@
 
 // Frontend dispatcher, preferences, map list and main-menu host services.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/data/campaign/campaign_assets.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -459,6 +460,9 @@ int16_t Runtime::shift_key_state() {
 
 void Runtime::drain_input() {
     SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+    // The window events dropped here may have changed whether the pointer is
+    // kept on the screen; the window's own state settles it.
+    keep_pointer_on_screen(sdl_.window);
 }
 
 void Runtime::check_frontend_integrity() {
@@ -530,7 +534,9 @@ int32_t Runtime::load_named_background(const char* name, bool redraw, bool apply
         auto& runtime = *static_cast<Runtime*>(context);
         std::unique_ptr<Image> image;
         try {
-            image = std::make_unique<Image>(oa::decode_pcx(runtime.assets_.read(path).bytes));
+            image = std::make_unique<Image>(
+                oa::ui::decoded::require(oa::decode_pcx(runtime.assets_.read(path).bytes), path)
+            );
         } catch (const std::exception&) {
             return 0;
         }

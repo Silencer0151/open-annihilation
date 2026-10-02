@@ -719,7 +719,7 @@ void test_sqsh() {
             }
             std::vector<uint8_t> decoded;
             if (compression == 1) {
-                decoded = oa::formats::sqsh::decode_lz77(payload, 3000);
+                decoded = oa::formats::sqsh::decode_lz77(payload, 3000).value.value();
             } else {
                 decoded.resize(3000);
                 uLongf length = 3000;

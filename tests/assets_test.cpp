@@ -405,7 +405,7 @@ void test_hpi_archive_key() {
     TemporaryFile plain_file(plaintext);
     oa::HpiArchive plain(plain_file.path());
     require(
-        plain.read("a") == std::vector<uint8_t>{'Q'},
+        plain.read("a").value == std::vector<uint8_t>{'Q'},
         "header byte 0xFF must not decrypt the directory"
     );
 
@@ -415,7 +415,7 @@ void test_hpi_archive_key() {
     TemporaryFile encrypted_file(with_trailer(encrypted));
     oa::HpiArchive archive(encrypted_file.path());
     require(
-        archive.read("a") == std::vector<uint8_t>{'Q'},
+        archive.read("a").value == std::vector<uint8_t>{'Q'},
         "hpi_archive_key key must undo position ^ ~byte ^ key"
     );
 }
@@ -429,25 +429,28 @@ void test_hpi_all_compression_methods() {
         entries[0].path == "raw.bin" && entries[0].size == 3, "wrong first HPI metadata record"
     );
     require(
-        archive.read("RAW.BIN") == std::vector<uint8_t>({'r', 'a', 'w'}),
+        archive.read("RAW.BIN").value == std::vector<uint8_t>({'r', 'a', 'w'}),
         "encrypted raw HPI extraction failed"
     );
     require(
-        archive.read("z.bin") ==
+        archive.read("z.bin").value ==
             std::vector<uint8_t>({'z', 'l', 'i', 'b', '-', 'd', 'a', 't', 'a'}),
         "zlib SQSH extraction failed"
     );
     require(
-        archive.read("lz.bin") == std::vector<uint8_t>({'L', 'Z', '7', '7'}),
+        archive.read("lz.bin").value == std::vector<uint8_t>({'L', 'Z', '7', '7'}),
         "LZ77 SQSH extraction failed"
     );
     // A stored (type 0) SQSH chunk never matches its unpacked size: fatal.
-    require_throws_containing(
-        [&] { (void)archive.read("stored.bin"); },
-        "SQUASHERR_BADUNPACKSIZE",
+    const auto stored = archive.read("stored.bin");
+    require(
+        !stored.ok() && std::string_view(stored.error.message) == "SQUASHERR_BADUNPACKSIZE",
         "stored SQSH chunk was accepted"
     );
-    require_throws([&] { (void)archive.read("missing"); }, "missing HPI path was accepted");
+    require(
+        archive.read("missing").error.code == oa::base::bytes::DecodeCode::not_found,
+        "missing HPI path was accepted"
+    );
 }
 
 void test_hpi_malformed_inputs() {
@@ -484,7 +487,7 @@ void test_hpi_malformed_inputs() {
     bad_checksum[sqsh_offset + 15] ^= 0x01;
     TemporaryFile checksum_file(bad_checksum);
     oa::HpiArchive corrupt(checksum_file.path());
-    require_throws([&] { (void)corrupt.read("z.bin"); }, "bad SQSH checksum was accepted");
+    require(!corrupt.read("z.bin").ok(), "bad SQSH checksum was accepted");
 
     auto bad_zlib = make_archive(false);
     const auto zlib_marker =
@@ -504,7 +507,7 @@ void test_hpi_malformed_inputs() {
     // zlib 1.0.4 leaves the expected length in place on a failed inflate, so
     // the chunk passes its size check and decodes as zero bytes.
     require(
-        invalid_zlib.read("z.bin") == std::vector<uint8_t>(9, 0),
+        invalid_zlib.read("z.bin").value == std::vector<uint8_t>(9, 0),
         "an undecodable zlib chunk with a valid checksum must read as its expected length"
     );
 
@@ -523,9 +526,10 @@ void test_hpi_malformed_inputs() {
         tail << archive_trailer;
     }
     oa::HpiArchive sparse(sparse_file.path());
-    require_throws_containing(
-        [&] { (void)sparse.read("z.bin"); },
-        "1 MiB safety limit",
+    const auto oversized = sparse.read("z.bin");
+    require(
+        !oversized.ok() && std::string_view(oversized.error.message).find("1 MiB safety limit") !=
+                               std::string_view::npos,
         "oversized stored chunk was not rejected before allocation"
     );
 }
@@ -559,7 +563,7 @@ std::vector<uint8_t> make_indexed_pcx() {
 
 void test_pcx_indexed_and_malformed() {
     const auto pcx = make_indexed_pcx();
-    const oa::Image image = oa::decode_pcx(pcx);
+    const oa::Image image = oa::decode_pcx(pcx).value.value();
     require(image.width == 3 && image.height == 2, "wrong indexed PCX dimensions");
     require(
         image.rgb == std::vector<uint8_t>(
@@ -584,20 +588,61 @@ void test_pcx_indexed_and_malformed() {
     auto underflow = pcx;
     put16(underflow, 4, 5);
     put16(underflow, 8, 2);
-    require_throws(
-        [&] { (void)oa::decode_pcx(underflow); }, "PCX coordinate underflow was accepted"
-    );
+    require(!oa::decode_pcx(underflow).ok(), "PCX coordinate underflow was accepted");
 
     auto missing_palette = pcx;
     missing_palette[missing_palette.size() - 769] = 0;
-    require_throws(
-        [&] { (void)oa::decode_pcx(missing_palette); }, "palette-less indexed PCX was accepted"
-    );
+    require(!oa::decode_pcx(missing_palette).ok(), "palette-less indexed PCX was accepted");
 
     auto crossing_run = pcx;
     crossing_run[128] = 0xC5;
-    require_throws(
-        [&] { (void)oa::decode_pcx(crossing_run); }, "PCX RLE run crossing a scanline was accepted"
+    const auto crossed = oa::decode_pcx(crossing_run);
+    require(
+        !crossed.ok() && crossed.error.code == oa::base::bytes::DecodeCode::malformed &&
+            crossed.error.offset == 128,
+        "PCX RLE run crossing a scanline was accepted"
+    );
+
+    // Each way the data can end early or be wrong, with its offset.
+    const auto fails_at =
+        [](const std::vector<uint8_t>& bytes, oa::base::bytes::DecodeCode code, uint64_t offset) {
+            const auto decoded = oa::decode_pcx(bytes);
+            return !decoded.ok() && decoded.error.code == code && decoded.error.offset == offset;
+        };
+    require(
+        fails_at(
+            std::vector<uint8_t>(pcx.begin(), pcx.begin() + 127),
+            oa::base::bytes::DecodeCode::truncated,
+            127
+        ),
+        "a short PCX header was accepted"
+    );
+    auto manufacturer = pcx;
+    manufacturer[0] = 0x0B;
+    require(
+        fails_at(manufacturer, oa::base::bytes::DecodeCode::bad_signature, 0),
+        "a bad PCX manufacturer byte was accepted"
+    );
+    auto version = pcx;
+    version[1] = 1;
+    require(
+        fails_at(version, oa::base::bytes::DecodeCode::unsupported_version, 1),
+        "an unsupported PCX version was accepted"
+    );
+    auto cut = pcx;
+    cut.erase(cut.begin() + 129, cut.end() - 769);
+    require(
+        fails_at(cut, oa::base::bytes::DecodeCode::truncated, 129) ||
+            fails_at(cut, oa::base::bytes::DecodeCode::malformed, 128),
+        "PCX pixel data that ends early was accepted"
+    );
+    auto huge = pcx;
+    put16(huge, 8, 0xFFFE);
+    put16(huge, 10, 0xFFFF);
+    put16(huge, 66, 0xFFFF);
+    require(
+        fails_at(huge, oa::base::bytes::DecodeCode::limit_exceeded, 4),
+        "a PCX over the pixel limit was accepted"
     );
 }
 
@@ -611,7 +656,7 @@ void test_pcx_planar_rgb() {
     pcx[65] = 3;
     put16(pcx, 66, 2);
     pcx.insert(pcx.end(), {1, 2, 3, 4, 5, 6});
-    const auto image = oa::decode_pcx(pcx);
+    const auto image = oa::decode_pcx(pcx).value.value();
     require(image.rgb == std::vector<uint8_t>({1, 3, 5, 2, 4, 6}), "planar RGB PCX decode failed");
     require(!image.palette.has_value(), "true-color PCX must not invent a palette");
 }

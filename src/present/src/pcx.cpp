@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/pcx.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -42,19 +43,9 @@ constexpr uint16_t bmp_bits_per_pixel = 8;
 constexpr uint32_t bmp_palette_colors = OA_PALETTE_COLORS;
 constexpr int32_t bmp_row_alignment = 4;
 
-uint16_t le16(const uint8_t* data) noexcept {
-    return static_cast<uint16_t>(data[0] | (data[1] << 8));
-}
-
-void put_le16(uint8_t* data, uint16_t value) noexcept {
-    data[0] = static_cast<uint8_t>(value);
-    data[1] = static_cast<uint8_t>(value >> 8);
-}
-
-void put_le32(uint8_t* data, uint32_t value) noexcept {
-    for (int i = 0; i < 4; ++i)
-        data[i] = static_cast<uint8_t>(value >> (8 * i));
-}
+using base::bytes::load_le16;
+using base::bytes::store_le16;
+using base::bytes::store_le32;
 
 int32_t stream_read(ByteStream& stream, void* data, int32_t size) noexcept {
     return stream.read ? stream.read(stream.user, data, size) : 0;
@@ -74,8 +65,10 @@ bool has_signature(const uint8_t* header) noexcept {
 
 // Width and height from the header's inclusive bounds.
 bool header_extent(const uint8_t* header, int32_t& width, int32_t& height) noexcept {
-    width = static_cast<int32_t>(le16(header + header_x_max)) - le16(header + header_x_min) + 1;
-    height = static_cast<int32_t>(le16(header + header_y_max)) - le16(header + header_y_min) + 1;
+    width = static_cast<int32_t>(load_le16(header + header_x_max)) -
+            load_le16(header + header_x_min) + 1;
+    height = static_cast<int32_t>(load_le16(header + header_y_max)) -
+             load_le16(header + header_y_min) + 1;
     return width > 0 && height > 0 && static_cast<int64_t>(width) * height <= pcx_max_pixels;
 }
 
@@ -282,13 +275,13 @@ PcxStatus write_pcx_image(
     header[header_version] = pcx_version;
     header[header_encoding] = pcx_encoding_rle;
     header[header_bits_per_pixel] = pcx_bits_per_pixel;
-    put_le16(header + header_x_max, static_cast<uint16_t>(width - 1));
-    put_le16(header + header_y_max, static_cast<uint16_t>(height - 1));
-    put_le16(header + header_h_dpi, static_cast<uint16_t>(width));
-    put_le16(header + header_v_dpi, static_cast<uint16_t>(height));
+    store_le16(header + header_x_max, static_cast<uint16_t>(width - 1));
+    store_le16(header + header_y_max, static_cast<uint16_t>(height - 1));
+    store_le16(header + header_h_dpi, static_cast<uint16_t>(width));
+    store_le16(header + header_v_dpi, static_cast<uint16_t>(height));
     std::memcpy(header + header_ega_palette, color_map, header_ega_palette_size);
     header[header_planes] = pcx_single_plane;
-    put_le16(header + header_bytes_per_line, static_cast<uint16_t>(width));
+    store_le16(header + header_bytes_per_line, static_cast<uint16_t>(width));
     if (stream_write(stream, header, pcx_header_size) != pcx_header_size)
         return PcxStatus::write_failed;
     const uint8_t* row = pixels;
@@ -429,20 +422,20 @@ bool bmp_strip_writer_begin(
     if (!stream)
         return false;
     uint8_t file_header[bmp_file_header_size]{};
-    put_le16(file_header, bmp_signature);
-    put_le32(file_header + 10, static_cast<uint32_t>(bmp_pixel_offset));
+    store_le16(file_header, bmp_signature);
+    store_le32(file_header + 10, static_cast<uint32_t>(bmp_pixel_offset));
     if (stream_write(*stream, file_header, bmp_file_header_size) != bmp_file_header_size)
         return false;
     uint8_t info[bmp_info_header_size + bmp_color_table_size]{};
-    put_le32(info, bmp_info_header_size);
-    put_le32(info + 4, static_cast<uint32_t>(width));
-    put_le32(info + 8, static_cast<uint32_t>(height));
-    put_le16(info + 12, bmp_planes);
-    put_le16(info + 14, bmp_bits_per_pixel);
-    put_le32(info + 24, bmp_pixels_per_meter);
-    put_le32(info + 28, bmp_pixels_per_meter);
-    put_le32(info + 32, bmp_palette_colors);
-    put_le32(info + 36, bmp_palette_colors);
+    store_le32(info, bmp_info_header_size);
+    store_le32(info + 4, static_cast<uint32_t>(width));
+    store_le32(info + 8, static_cast<uint32_t>(height));
+    store_le16(info + 12, bmp_planes);
+    store_le16(info + 14, bmp_bits_per_pixel);
+    store_le32(info + 24, bmp_pixels_per_meter);
+    store_le32(info + 28, bmp_pixels_per_meter);
+    store_le32(info + 32, bmp_palette_colors);
+    store_le32(info + 36, bmp_palette_colors);
     uint8_t* quad = info + bmp_info_header_size;
     for (const PaletteEntry& entry : display.palette.entries) {
         quad[0] = entry.b;

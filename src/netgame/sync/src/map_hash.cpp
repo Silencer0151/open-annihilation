@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/sync/map_hash.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,7 @@ using data::campaign::CampaignFiles;
 using data::campaign::CampaignPath;
 
 namespace {
+using base::bytes::load_le32;
 
 void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
     const std::size_t length = ::strnlen(text, capacity - 1);
@@ -25,11 +27,6 @@ void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
 namespace {
 
 constexpr uint32_t kHashCacheGrowth = 16;
-
-uint32_t read_u32(const uint8_t* at) noexcept {
-    return static_cast<uint32_t>(at[0]) | (static_cast<uint32_t>(at[1]) << 8) |
-           (static_cast<uint32_t>(at[2]) << 16) | (static_cast<uint32_t>(at[3]) << 24);
-}
 
 bool path_equal(const char* left, const char* right) noexcept {
     return oa::formats::tdf::compare_nocase(left, right) == 0;
@@ -69,13 +66,13 @@ bool slice_hash(
 // the feature name records ("Raw Feature Data"). Offsets and sizes past the
 // end of the file are rejected rather than hashed.
 bool terrain_hash(const uint8_t* bytes, uint32_t size, uint32_t* hash) noexcept {
-    if (read_u32(bytes) != kTntHashVersion)
+    if (load_le32(bytes) != kTntHashVersion)
         return false;
-    const uint32_t width = read_u32(bytes + 0x04);
-    const uint32_t height = read_u32(bytes + 0x08);
-    const uint32_t attributes = read_u32(bytes + 0x10);
-    const auto feature_count = static_cast<int32_t>(read_u32(bytes + 0x1c));
-    const uint32_t features = read_u32(bytes + 0x20);
+    const uint32_t width = load_le32(bytes + 0x04);
+    const uint32_t height = load_le32(bytes + 0x08);
+    const uint32_t attributes = load_le32(bytes + 0x10);
+    const auto feature_count = static_cast<int32_t>(load_le32(bytes + 0x1c));
+    const uint32_t features = load_le32(bytes + 0x20);
     uint32_t term = 0;
     uint32_t result = oa::formats::tdf::buffer_hash(bytes, kTntHeaderBytes);
     if (!slice_hash(

@@ -3,6 +3,12 @@
 
 cmake_minimum_required(VERSION 3.24)
 project(open_annihilation VERSION 0.6.0 LANGUAGES C CXX)
+# A target that links one static library both directly and through
+# another library gets it once on its link line, in dependency order, rather
+# than once for each path that reaches it. The linker then has nothing to
+# ignore; a cycle between libraries is still repeated as it needs. CMake
+# releases before 3.31 do not read this and keep their default order.
+set(CMAKE_LINK_LIBRARIES_STRATEGY REORDER_FREELY)
 # The Check build type, the build the test suite is validated in
 # (cmake/OaBuildTypes.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaBuildTypes.cmake")
@@ -19,6 +25,11 @@ option(OA_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer
 option(OA_REQUIRE_GAME "Fail configuration when oa-game cannot be built" OFF)
 include(CTest)
 find_package(ZLIB REQUIRED)
+# SDL3, for the game, its shell and the tests that open a window; found here,
+# before the targets and tests below that ask whether it was.
+if(OA_BUILD_PLATFORM)
+  find_package(SDL3 3.2 CONFIG REQUIRED)
+endif()
 
 # OA_GAME_DIR, the installed game the game-data tests and native checks read,
 # and the helpers that register those tests (cmake/OaGameData.cmake).
@@ -26,6 +37,13 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaGameData.cmake")
 # OA_DEMO_INSTALLER, the installer of the Total Annihilation demo (1997) the
 # demo installer tests read (cmake/OaDemoInstaller.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaDemoInstaller.cmake")
+# oa-test-support, the headers test programs share: OA_CHECK, the check a
+# test makes in place of assert(), kept in every build type (oa/test/check.hpp),
+# and make_scratch_directory(), a temporary directory no other run shares
+# (oa/test/scratch_directory.hpp), in tests/support/include.
+add_library(oa-test-support INTERFACE)
+target_include_directories(oa-test-support INTERFACE "${CMAKE_CURRENT_LIST_DIR}/tests/support/include")
+target_compile_features(oa-test-support INTERFACE cxx_std_20)
 
 # oa-options, the compile options every target that compiles engine code
 # links (cmake/OaOptions.cmake).
@@ -80,6 +98,16 @@ if(OA_SANITIZERS)
   target_link_options(oa-options INTERFACE ${oa_sanitizer_link_flags})
 endif()
 
+# SDL3 is found here, before any module, so that every directory below links
+# the one imported target. A module that also finds it, to configure on its
+# own, then reuses that target instead of importing the library again, which
+# would put it on a program's link line once for each directory that
+# imported it.
+if(OA_BUILD_PLATFORM)
+  find_package(SDL3 3.2 CONFIG REQUIRED)
+endif()
+
+add_subdirectory(src/base/bytes)
 add_subdirectory(src/base/game-loop)
 add_subdirectory(src/platform/preferences)
 add_subdirectory(src/app/command-line)
@@ -96,6 +124,7 @@ add_subdirectory(src/platform/xp-runtime)
 add_subdirectory(src/platform/app-menu)
 add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/platform/sound-device)
+add_subdirectory(src/ui/decoded)
 add_subdirectory(src/ui/services)
 add_subdirectory(src/present)
 add_subdirectory(src/ui/frontend-state)
@@ -271,7 +300,8 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-presentation-interpolation-test PRIVATE oa-app-headers
     oa-present-model oa-sim-effect-particles oa-options)
   add_test(NAME app-presentation-interpolation COMMAND oa-app-presentation-interpolation-test)
-  # When the match clock steps: menus, the outcome and the pause bit.
+  # When the match clock steps: menus, the outcome, the pause bit, a frame
+  # behind the last step and frames across the turn of the clock's reading.
   add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
   target_link_libraries(oa-app-match-clock-test PRIVATE oa-base-game-loop oa-ui-console oa-options)
   add_test(NAME app-match-clock COMMAND oa-app-match-clock-test)
@@ -303,7 +333,10 @@ if(BUILD_TESTING)
       oa-options)
     add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
     # Alt+Enter: the key, the mode it asks for while the window is still
-    # switching, and a window of SDL's dummy video driver switched and back.
+    # switching, and a window of SDL's dummy video driver switched and back;
+    # the pointer held on the window in full screen with the focus and let go
+    # in a window or without the focus; a window that leaves full screen
+    # brought back onto its display.
     add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
     target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
     add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
@@ -364,7 +397,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
-  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool)
+  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-ui-decoded oa-base-bytes)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -656,10 +689,11 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-reclaim-cursor PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_reclaim_cursor_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # Both interface types' pointer buttons through SDL input: left clicks and
-      # right presses on open ground, units and the radar, shift clicks taking
-      # queued orders and a build site back, mouse look, and a factory build
-      # button's right click taking its type off the queue.
+      # The screen's edges scrolling the camera, in full screen and in a
+      # window, and both interface types' pointer buttons, through SDL input:
+      # left clicks and right presses on open ground, units and the radar,
+      # shift clicks taking queued orders and a build site back, mouse look,
+      # and a factory build button's right click taking its type off the queue.
       set(oa_pointer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/pointer-interfaces")
       file(MAKE_DIRECTORY "${oa_pointer_check_dir}")
       add_test(NAME native-pointer-interfaces COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -720,8 +754,11 @@ if(OA_BUILD_PLATFORM)
         # digest; at 120 the scrolled camera moves the same distance every
         # frame, each frame shows a quarter of a tick more, and a marching
         # unit drawn between ticks moves on nearly every frame, none carrying
-        # more than half the most it moves in a tick; and a camera tracking
-        # the unit keeps it at one place of the screen on every frame.
+        # more than half the most it moves in a tick; a camera tracking the
+        # unit keeps it at one place of the screen on every frame; and from a
+        # clock just before 2^32 milliseconds the match steps on through the
+        # turn of the clock's reading to 0, at 30 frames a second each frame
+        # running a tick but the first past it.
         add_test(NAME native-frame-rate COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_frame_rate.py"
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
@@ -844,10 +881,9 @@ if(OA_REQUIRE_GAME AND NOT TARGET oa-game)
   message(FATAL_ERROR "OA_REQUIRE_GAME is ON, but oa-game is not built: it needs OA_BUILD_PLATFORM=ON")
 endif()
 add_executable(oa-tool tools/oa-tool/main.cpp)
-target_link_libraries(oa-tool PRIVATE oa-formats-hpi oa-formats-png)
+target_link_libraries(oa-tool PRIVATE oa-formats-hpi oa-formats-png oa-ui-decoded)
 
 if(OA_BUILD_PLATFORM)
-  find_package(SDL3 3.2 CONFIG REQUIRED)
   add_executable(oa-platform tools/platform-probe/platform_probe.cpp)
   target_link_libraries(oa-platform PRIVATE SDL3::SDL3 oa-options)
 endif()

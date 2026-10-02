@@ -63,7 +63,7 @@ not a whole number gives the default, and a value out of range is clamped.
 | `open-annihilation.wheel-zoom` | 0 or 1 | 1 |
 | `open-annihilation.escape-opens-menu` | 0 or 1 | 1 on macOS with the player's own file, else 0 |
 | `open-annihilation.unit-limit` | units per player, 21 to 1500 | the game folder's `totala.ini` `[Preferences] UnitLimit`, clamped to 21 to 500, with the player's own file; else 250 |
-| `open-annihilation.max-fps` | frames a second, 40 to 120 | 120 |
+| `open-annihilation.max-fps` | frames a second, 30 to 120 | 120 |
 | `open-annihilation.anti-aliasing` | 1 (off), 2, 3, 4, 8 or 16 | 1 |
 | `open-annihilation.frame-stats` | 0 or 1 | 0 |
 

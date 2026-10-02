@@ -7,8 +7,8 @@
 #include "oa/present/surface.hpp"
 #include "oa/formats/tnt.hpp"
 #include "oa/test/game_assets.hpp"
+#include "oa/test/check.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -89,17 +89,17 @@ void wide_map_from_tiles() {
     SurfacePool pool;
     wr::RadarSurfaces surfaces;
     wr::radar_build_picture(*game, surfaces, source, make_host(pool));
-    assert(game->radar_width == 126 && game->radar_height == 63);
-    assert(game->radar_offset_x == 0 && game->radar_offset_y == 31);
-    assert(surfaces.picture != nullptr && surfaces.picture->width == 126);
-    assert(pool.freed == 1); // the temporary mosaic
+    OA_CHECK(game->radar_width == 126 && game->radar_height == 63);
+    OA_CHECK(game->radar_offset_x == 0 && game->radar_offset_y == 31);
+    OA_CHECK(surfaces.picture != nullptr && surfaces.picture->width == 126);
+    OA_CHECK(pool.freed == 1); // the temporary mosaic
     const auto* pixels = surfaces.picture->pixels;
     // Column c samples map x = 64 * 2c / 252: columns 0..62 land in tile 0.
-    assert(pixels[0] == 5);
-    assert(pixels[62] == 5);
-    assert(pixels[63] == 9);
-    assert(pixels[125] == 9);
-    assert(pixels[62 * 126 + 125] == 9);
+    OA_CHECK(pixels[0] == 5);
+    OA_CHECK(pixels[62] == 5);
+    OA_CHECK(pixels[63] == 9);
+    OA_CHECK(pixels[125] == 9);
+    OA_CHECK(pixels[62 * 126 + 125] == 9);
 }
 
 void tall_map_from_minimap() {
@@ -120,14 +120,14 @@ void tall_map_from_minimap() {
     SurfacePool pool;
     wr::RadarSurfaces surfaces;
     wr::radar_build_picture(*game, surfaces, source, make_host(pool));
-    assert(game->radar_width == 63 && game->radar_height == 126);
-    assert(game->radar_offset_x == 31 && game->radar_offset_y == 0);
-    assert(pool.freed == 0);
+    OA_CHECK(game->radar_width == 63 && game->radar_height == 126);
+    OA_CHECK(game->radar_offset_x == 31 && game->radar_offset_y == 0);
+    OA_CHECK(pool.freed == 0);
     const auto* pixels = surfaces.picture->pixels;
-    assert(pixels[0] == 0);
-    assert(pixels[10] == 10);
-    assert(pixels[1 * 63 + 10] == 11);
-    assert(pixels[2 * 63 + 62] == 62 + 2);
+    OA_CHECK(pixels[0] == 0);
+    OA_CHECK(pixels[10] == 10);
+    OA_CHECK(pixels[1 * 63 + 10] == 11);
+    OA_CHECK(pixels[2 * 63 + 62] == 62 + 2);
 }
 
 // The halving pass mixes each row pair first, then the two row results.
@@ -155,7 +155,7 @@ void halving_mixes_rows_then_columns() {
     SurfacePool pool;
     wr::RadarSurfaces surfaces;
     wr::radar_build_picture(*game, surfaces, source, make_host(pool));
-    assert(surfaces.picture->pixels[0] == 99);
+    OA_CHECK(surfaces.picture->pixels[0] == 99);
 }
 
 /// Ends the data run as failed unless a check holds; unlike assert it also
@@ -225,24 +225,24 @@ void blink_clock() {
     game->radar_blink_countdown = 3;
     game->radar_blink_flags = wr::radar_flag_mapped_dirty;
     wr::radar_step_blink(*game);
-    assert(
+    OA_CHECK(
         game->radar_blink_countdown == 2 && game->radar_blink_flags == wr::radar_flag_mapped_dirty
     );
     game->radar_blink_countdown = 0;
     wr::radar_step_blink(*game);
-    assert(game->radar_blink_countdown == wr::radar_blink_reload);
-    assert(game->radar_blink_flags == (wr::radar_flag_mapped_dirty | wr::radar_flag_blink));
+    OA_CHECK(game->radar_blink_countdown == wr::radar_blink_reload);
+    OA_CHECK(game->radar_blink_flags == (wr::radar_flag_mapped_dirty | wr::radar_flag_blink));
     for (int step = 0; step < wr::radar_blink_reload; ++step)
         wr::radar_step_blink(*game);
-    assert(
+    OA_CHECK(
         game->radar_blink_countdown == 0 && (game->radar_blink_flags & wr::radar_flag_blink) != 0
     );
     wr::radar_step_blink(*game);
-    assert((game->radar_blink_flags & wr::radar_flag_blink) == 0);
+    OA_CHECK((game->radar_blink_flags & wr::radar_flag_blink) == 0);
     // Negative countdowns reload as well.
     game->radar_blink_countdown = -1;
     wr::radar_step_blink(*game);
-    assert(game->radar_blink_countdown == wr::radar_blink_reload);
+    OA_CHECK(game->radar_blink_countdown == wr::radar_blink_reload);
 }
 
 // FX.GAF sequences of 1x1 raw frames in distinct colours; radlogo has
@@ -294,7 +294,7 @@ struct RadarScene {
         oa::WorldCapacity capacity{8, 3, 0};
         // Allocated outside the assert, which an optimised build compiles out.
         const auto allocated = oa::world_alloc_tables(world.get(), &capacity);
-        assert(allocated != 0);
+        OA_CHECK(allocated != 0);
         (void)allocated;
         auto& game = world->game;
         // A 1600x800 map drawn 100x50 on the radar: 16 map pixels per pixel.
@@ -365,31 +365,31 @@ void compose_units() {
     contact.flags = OA_UNIT_FLAG_RADAR_CONTACT;
     game.cursor_unit_id = 3;
     scene.compose(blips);
-    assert(scene.at(10, 19) == 0xa0);
-    assert(scene.at(20, 20) == mapped_fill);
-    assert(scene.at(30, 30) == 0xb0); // the cursor marker drawn over the contact blip
-    assert(scene.at(0, 0) == mapped_fill);
-    assert(scene.listed() == 2);
-    assert(scene.hot[0].unit_id == 1 && scene.hot[0].x == 10 && scene.hot[0].y == 13 + 19);
-    assert(scene.hot[1].unit_id == 3 && scene.hot[1].x == 30 && scene.hot[1].y == 13 + 30);
-    assert((game.radar_blink_flags & wr::radar_flag_redraw) != 0);
+    OA_CHECK(scene.at(10, 19) == 0xa0);
+    OA_CHECK(scene.at(20, 20) == mapped_fill);
+    OA_CHECK(scene.at(30, 30) == 0xb0); // the cursor marker drawn over the contact blip
+    OA_CHECK(scene.at(0, 0) == mapped_fill);
+    OA_CHECK(scene.listed() == 2);
+    OA_CHECK(scene.hot[0].unit_id == 1 && scene.hot[0].x == 10 && scene.hot[0].y == 13 + 19);
+    OA_CHECK(scene.hot[1].unit_id == 3 && scene.hot[1].x == 30 && scene.hot[1].y == 13 + 30);
+    OA_CHECK((game.radar_blink_flags & wr::radar_flag_redraw) != 0);
 
     // Mapping and line of sight both off: every unit shows.
     game.visibility_flags = 0;
     scene.compose(blips);
-    assert(scene.at(20, 20) == 0xa1 && scene.listed() == 3);
+    OA_CHECK(scene.at(20, 20) == 0xa1 && scene.listed() == 3);
 
     // The full-radar console bit shows every unit under limited sight too.
     game.visibility_flags = wr::visibility_flags_radar_limited;
     game.console_flags = wr::console_flag_full_radar;
     scene.compose(blips);
-    assert(scene.at(20, 20) == 0xa1 && scene.listed() == 3);
+    OA_CHECK(scene.at(20, 20) == 0xa1 && scene.listed() == 3);
 
     // Units past the end of the list are drawn but neither listed nor counted.
     scene.hot.resize(1);
     scene.compose(blips);
-    assert(scene.listed() == 1 && scene.hot[0].unit_id == 1);
-    assert(scene.at(20, 20) == 0xa1 && scene.at(30, 30) == 0xb0);
+    OA_CHECK(scene.listed() == 1 && scene.hot[0].unit_id == 1);
+    OA_CHECK(scene.at(20, 20) == 0xa1 && scene.at(30, 30) == 0xb0);
 }
 
 void compose_damage_blink() {
@@ -398,10 +398,10 @@ void compose_damage_blink() {
     auto& hit = scene.unit(1, 0, 160, 0, 160);
     hit.damage_countdown = 5;
     scene.compose(blips);
-    assert(scene.at(10, 10) == mapped_fill && scene.listed() == 1);
+    OA_CHECK(scene.at(10, 10) == mapped_fill && scene.listed() == 1);
     scene.world->game.radar_blink_flags = wr::radar_flag_blink;
     scene.compose(blips);
-    assert(scene.at(10, 10) == 0xa0);
+    OA_CHECK(scene.at(10, 10) == 0xa0);
 }
 
 void compose_rings() {
@@ -421,21 +421,21 @@ void compose_rings() {
     unit.weapons[1].def = oa::oa_ref_from_index(4);
     // Not selected: no rings.
     scene.compose(blips);
-    assert(scene.count(ui_sensor) == 0 && scene.count(ui_interceptor) == 0);
+    OA_CHECK(scene.count(ui_sensor) == 0 && scene.count(ui_interceptor) == 0);
     // Selected but switched off: an on/off unit shows only its interceptor ring.
     unit.flags = OA_UNIT_FLAG_SELECTED;
     scene.compose(blips);
-    assert(scene.count(ui_sensor) == 0 && scene.count(ui_jammer) == 0);
+    OA_CHECK(scene.count(ui_sensor) == 0 && scene.count(ui_jammer) == 0);
     const auto solid = scene.count(ui_interceptor);
-    assert(solid > 0);
+    OA_CHECK(solid > 0);
     unit.state_flags = OA_UNIT_STATE_ACTIVE;
     scene.compose(blips);
-    assert(scene.count(ui_sensor) > 0 && scene.count(ui_jammer) > 0);
+    OA_CHECK(scene.count(ui_sensor) > 0 && scene.count(ui_jammer) > 0);
     // A stockpiled interceptor draws the dashed ring, half its chords.
     unit.weapons[1].stockpile = 1;
     scene.compose(blips);
     const auto dashed = scene.count(ui_interceptor);
-    assert(dashed > 0 && dashed < solid);
+    OA_CHECK(dashed > 0 && dashed < solid);
 }
 
 void compose_projectiles() {
@@ -461,17 +461,17 @@ void compose_projectiles() {
     shot(3, 3, 1, 640); // enemy nuke from a unit the viewer owns: icon of owner 1
     game.projectile_count = 4;
     scene.compose(blips);
-    assert(scene.at(10, 20) == ui_marks);
-    assert(scene.at(20, 20) == mapped_fill);
-    assert(scene.at(30, 20) == mapped_fill);
-    assert(scene.at(40, 20) == 0xc3);
+    OA_CHECK(scene.at(10, 20) == ui_marks);
+    OA_CHECK(scene.at(20, 20) == mapped_fill);
+    OA_CHECK(scene.at(30, 20) == mapped_fill);
+    OA_CHECK(scene.at(40, 20) == 0xc3);
     launcher.owner_index = 1;
     scene.compose(blips);
-    assert(scene.at(40, 20) == mapped_fill);
+    OA_CHECK(scene.at(40, 20) == mapped_fill);
     scene.point_seen = true;
     scene.compose(blips);
-    assert(scene.at(20, 20) == ui_marks && scene.at(40, 20) == 0xc3);
-    assert(scene.at(30, 20) == mapped_fill);
+    OA_CHECK(scene.at(20, 20) == ui_marks && scene.at(40, 20) == 0xc3);
+    OA_CHECK(scene.at(30, 20) == mapped_fill);
 }
 
 void draw_final_image() {
@@ -484,15 +484,15 @@ void draw_final_image() {
     oa::Surface target{};
     oa::present::init_surface(target, 126, 126, 126, screen.data());
     wr::radar_draw(game, scene.surfaces, target);
-    assert((game.radar_blink_flags & wr::radar_flag_redraw) == 0);
-    assert(screen[12 * 126 + 50] == 0);           // above the picture
-    assert(screen[13 * 126 + 50] == mapped_fill); // first picture row
-    assert(screen[15 * 126 + 2] == ui_marks && screen[20 * 126 + 11] == ui_marks);
-    assert(screen[17 * 126 + 5] == mapped_fill); // inside the rectangle
+    OA_CHECK((game.radar_blink_flags & wr::radar_flag_redraw) == 0);
+    OA_CHECK(screen[12 * 126 + 50] == 0);           // above the picture
+    OA_CHECK(screen[13 * 126 + 50] == mapped_fill); // first picture row
+    OA_CHECK(screen[15 * 126 + 2] == ui_marks && screen[20 * 126 + 11] == ui_marks);
+    OA_CHECK(screen[17 * 126 + 5] == mapped_fill); // inside the rectangle
     // Nothing is drawn again until the redraw bit is set.
     screen[13 * 126 + 50] = 0;
     wr::radar_draw(game, scene.surfaces, target);
-    assert(screen[13 * 126 + 50] == 0);
+    OA_CHECK(screen[13 * 126 + 50] == 0);
 }
 
 } // namespace
@@ -503,7 +503,7 @@ int main(int argc, char** argv) {
             oa::test::require_game_assets("the installed Acid Foursome radar")
         );
         std::puts("installed Acid Foursome radar passed");
-        return 0;
+        return oa::test::check_exit_status();
     }
     wide_map_from_tiles();
     tall_map_from_minimap();
@@ -514,5 +514,5 @@ int main(int argc, char** argv) {
     compose_rings();
     compose_projectiles();
     draw_final_image();
-    return 0;
+    return oa::test::check_exit_status();
 }

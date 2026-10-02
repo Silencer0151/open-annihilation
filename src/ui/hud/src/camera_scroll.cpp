@@ -53,6 +53,22 @@ scroll_pointer_position(const ScrollPointer& pointer, int32_t width, int32_t hei
     return out;
 }
 
+EdgeScroll edge_scroll(int32_t x, int32_t y, int32_t width, int32_t height, int32_t edge) noexcept {
+    if (x < 0 || y < 0 || x >= width || y >= height)
+        return {};
+    const auto depth = edge < 1 ? 1 : edge;
+    EdgeScroll way{};
+    if (x < depth)
+        way.x = -1;
+    else if (x >= width - depth)
+        way.x = 1;
+    if (y < depth)
+        way.y = -1;
+    else if (y >= height - depth)
+        way.y = 1;
+    return way;
+}
+
 bool scroll_camera(
     Game& game, const ScrollPointer& pointer, const ScrollKeys& keys, const CameraMover& mover
 ) {

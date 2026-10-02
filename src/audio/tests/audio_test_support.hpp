@@ -297,7 +297,8 @@ inline void put16(std::vector<uint8_t>& out, uint16_t v) {
 }
 
 inline void put_tag(std::vector<uint8_t>& out, const char* tag) {
-    out.insert(out.end(), tag, tag + 4);
+    for (int index = 0; index < 4; ++index)
+        out.push_back(static_cast<uint8_t>(tag[index]));
 }
 
 // A canonical RIFF/WAVE file, optionally with an extra chunk before "data".

@@ -121,9 +121,9 @@ void kill(
     Check&& check
 ) {
     const auto bytes = assets.read(model_file).bytes;
-    auto model = std::make_shared<formats::objects3d::Model>(formats::objects3d::load_3do(
-        {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()}
-    ));
+    auto model = std::make_shared<formats::objects3d::Model>(
+        formats::objects3d::load_3do(std::as_bytes(std::span(bytes))).value.value()
+    );
     formats::tnt::Map map;
     map.attribute_width = map.attribute_height = 16;
     map.attributes.resize(256);

@@ -5,9 +5,9 @@
 #include "oa/present/world_renderer/world_display_modes.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
+#include "oa/test/check.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -63,27 +63,27 @@ void test_traffic_and_meter() {
     Log log;
     const auto raster = recorder(log);
     wr::overlay_traffic_bar(*game, raster, nullptr, {10, 20, 110, 25}, 250);
-    assert(log.calls.size() == 2);
-    assert(same(log.calls[0], outline, 10, 20, 110, 25, 0xaf));
-    assert(same(log.calls[1], fill, 10, 20, 110, 25, 0xaf));
+    OA_CHECK(log.calls.size() == 2);
+    OA_CHECK(same(log.calls[0], outline, 10, 20, 110, 25, 0xaf));
+    OA_CHECK(same(log.calls[1], fill, 10, 20, 110, 25, 0xaf));
     log.calls.clear();
     wr::overlay_traffic_bar(*game, raster, nullptr, {10, 20, 110, 25}, 37);
-    assert(same(log.calls[1], fill, 10, 20, 47, 25, 0xaf));
+    OA_CHECK(same(log.calls[1], fill, 10, 20, 47, 25, 0xaf));
     log.calls.clear();
     wr::overlay_traffic_bar(*game, raster, nullptr, {10, 20, 110, 25}, 0);
-    assert(log.calls.size() == 1);
+    OA_CHECK(log.calls.size() == 1);
 
     log.calls.clear();
     uint8_t colors[12]{};
     colors[4] = 7;
     colors[10] = 9;
     wr::overlay_meter_bar(raster, nullptr, 3, 4, {0, 0, 40, 5}, colors, 100);
-    assert(log.calls.size() == 2);
-    assert(same(log.calls[0], fill, 0, 100, 30, 105, 9));
-    assert(same(log.calls[1], fill, 31, 100, 40, 105, 7));
+    OA_CHECK(log.calls.size() == 2);
+    OA_CHECK(same(log.calls[0], fill, 0, 100, 30, 105, 9));
+    OA_CHECK(same(log.calls[1], fill, 31, 100, 40, 105, 7));
     log.calls.clear();
     wr::overlay_meter_bar(raster, nullptr, 9, 4, {0, 0, 40, 5}, colors, 0);
-    assert(log.calls.size() == 1 && same(log.calls[0], fill, 0, 0, 40, 5, 9));
+    OA_CHECK(log.calls.size() == 1 && same(log.calls[0], fill, 0, 0, 40, 5, 9));
 }
 
 void test_cell_outline() {
@@ -94,11 +94,11 @@ void test_cell_outline() {
     const auto raster = recorder(log);
     wr::overlay_cell_outline(*game, raster, nullptr, 10, 5, 2, 3, 20, 2);
     // x1 = (10 + 8) * 16 - 64 = 224; y1 = 80 - 32 - 10 + 32 = 70.
-    assert(log.calls.size() == 1);
-    assert(same(log.calls[0], outline, 224, 70, 256, 118, 0xa2));
+    OA_CHECK(log.calls.size() == 1);
+    OA_CHECK(same(log.calls[0], outline, 224, 70, 256, 118, 0xa2));
     log.calls.clear();
     wr::overlay_cell_outline(*game, raster, nullptr, 10, 5, 2, 3, 20, wr::cell_outline_inset_slot);
-    assert(same(log.calls[0], outline, 225, 71, 255, 117, 0xa4));
+    OA_CHECK(same(log.calls[0], outline, 225, 71, 255, 117, 0xa4));
 }
 
 void test_rotated_box() {
@@ -112,11 +112,11 @@ void test_rotated_box() {
         {-(8 << 16), 0, 4 << 16},
     };
     wr::overlay_rotated_box(*game, raster, nullptr, {100 << 16, 20 << 16, 50 << 16}, corners, {});
-    assert(log.calls.size() == 4);
+    OA_CHECK(log.calls.size() == 4);
     // Unrotated: x = 92/108 + 128, y = (50 -/+ 4) - 10 + 32 (z grows upward on screen).
-    assert(same(log.calls[0], line, 220, 76, 236, 76, 0xaa));
-    assert(same(log.calls[1], line, 236, 76, 236, 68, 0xaa));
-    assert(same(log.calls[3], line, 220, 68, 220, 76, 0xaa));
+    OA_CHECK(same(log.calls[0], line, 220, 76, 236, 76, 0xaa));
+    OA_CHECK(same(log.calls[1], line, 236, 76, 236, 68, 0xaa));
+    OA_CHECK(same(log.calls[3], line, 220, 68, 220, 76, 0xaa));
 }
 
 void test_selection_box() {
@@ -135,16 +135,16 @@ void test_selection_box() {
     Log log;
     const auto raster = recorder(log);
     wr::overlay_selection_box(*game, raster, nullptr, unit, root);
-    assert(log.calls.empty());
+    OA_CHECK(log.calls.empty());
     game->console_flags = wr::console_flag_selection_boxes;
     wr::overlay_selection_box(*game, raster, nullptr, unit, root);
     // Loaded X and Z are negated: x spans -10..0 and z 0..6 (the zero start).
     // Screen x = 200 - 64 + x + 128, y = 100 - 32 - z - 20 / 2 + 32.
-    assert(log.calls.size() == 4);
-    assert(same(log.calls[0], line, 254, 90, 264, 90, 0xaa));
-    assert(same(log.calls[1], line, 264, 90, 264, 84, 0xaa));
-    assert(same(log.calls[2], line, 264, 84, 254, 84, 0xaa));
-    assert(same(log.calls[3], line, 254, 84, 254, 90, 0xaa));
+    OA_CHECK(log.calls.size() == 4);
+    OA_CHECK(same(log.calls[0], line, 254, 90, 264, 90, 0xaa));
+    OA_CHECK(same(log.calls[1], line, 264, 90, 264, 84, 0xaa));
+    OA_CHECK(same(log.calls[2], line, 264, 84, 254, 84, 0xaa));
+    OA_CHECK(same(log.calls[3], line, 254, 84, 254, 90, 0xaa));
 
     // An offset root spanning both signs, turned a quarter by the heading word
     // (Unit.heading, the xz pair): the bounds are x -5..5, y -2..8, z -1..7, the
@@ -159,11 +159,11 @@ void test_selection_box() {
     unit.heading = 0x4000;
     wr::overlay_selection_box(*game, raster, nullptr, unit, root);
     // Screen x = 136 + x' + 128, y = 68 - z' - (20 - 2) / 2 + 32.
-    assert(log.calls.size() == 4);
-    assert(same(log.calls[0], line, 265, 96, 265, 86, 0xaa));
-    assert(same(log.calls[1], line, 265, 86, 257, 86, 0xaa));
-    assert(same(log.calls[2], line, 257, 86, 257, 96, 0xaa));
-    assert(same(log.calls[3], line, 257, 96, 265, 96, 0xaa));
+    OA_CHECK(log.calls.size() == 4);
+    OA_CHECK(same(log.calls[0], line, 265, 96, 265, 86, 0xaa));
+    OA_CHECK(same(log.calls[1], line, 265, 86, 257, 86, 0xaa));
+    OA_CHECK(same(log.calls[2], line, 257, 86, 257, 96, 0xaa));
+    OA_CHECK(same(log.calls[3], line, 257, 96, 265, 96, 0xaa));
 }
 
 void test_contours() {
@@ -174,29 +174,29 @@ void test_contours() {
         raster, nullptr, style, {0, 0, 0x5000}, {100, 0, 0x1000}, {0, 100, 0x3000}
     );
     // Sorted: A=(100,0,0x10), B=(0,100,0x30), C=(0,0,0x50); levels 0x50..0x20.
-    assert(log.calls.size() == 4);
+    OA_CHECK(log.calls.size() == 4);
     const auto ramp = [](int32_t level) { return wr::contour_ramp[(level - 0x20 + 0x100) >> 4]; };
-    assert(same(log.calls[0], line, 0, 0, 0, 0, ramp(0x50)));
-    assert(same(log.calls[1], line, 25, 0, 0, 50, ramp(0x40)));
-    assert(same(log.calls[2], line, 50, 0, 0, 100, ramp(0x30)));
-    assert(same(log.calls[3], line, 75, 0, 50, 50, ramp(0x20)));
+    OA_CHECK(same(log.calls[0], line, 0, 0, 0, 0, ramp(0x50)));
+    OA_CHECK(same(log.calls[1], line, 25, 0, 0, 50, ramp(0x40)));
+    OA_CHECK(same(log.calls[2], line, 50, 0, 0, 100, ramp(0x30)));
+    OA_CHECK(same(log.calls[3], line, 75, 0, 50, 50, ramp(0x20)));
 
     log.calls.clear();
     wr::overlay_contour_triangle(
         raster, nullptr, {0, 0, 0}, {0, 0, 0}, {1, 1, 0x100}, {2, 2, 0x200}
     );
-    assert(log.calls.empty());
+    OA_CHECK(log.calls.empty());
 
     const int32_t quad[8] = {0, 0, 32, 0, 32, 32, 0, 32};
     const uint8_t flat[4] = {5, 5, 5, 5};
     wr::overlay_contour_quad(raster, nullptr, style, quad, flat);
-    assert(log.calls.empty());
+    OA_CHECK(log.calls.empty());
     const uint8_t slope[4] = {0x00, 0x40, 0x40, 0x00};
     wr::overlay_contour_quad(raster, nullptr, style, quad, slope);
-    assert(!log.calls.empty());
+    OA_CHECK(!log.calls.empty());
     for (const auto& call : log.calls) {
-        assert(call.kind == line);
-        assert(call.x0 >= 0 && call.x0 <= 32 && call.x1 >= 0 && call.x1 <= 32);
+        OA_CHECK(call.kind == line);
+        OA_CHECK(call.x0 >= 0 && call.x0 <= 32 && call.x1 >= 0 && call.x1 <= 32);
     }
 }
 
@@ -211,19 +211,19 @@ void test_display_modes() {
         {1280, 1024, 8},
     };
     const auto count = wr::sort_display_modes(modes, 7);
-    assert(count == 5);
+    OA_CHECK(count == 5);
     const int32_t expected[5][2] = {{640, 480}, {800, 600}, {1024, 600}, {1024, 768}, {1280, 1024}};
     for (int i = 0; i < 5; ++i)
-        assert(modes[i].width == expected[i][0] && modes[i].height == expected[i][1]);
+        OA_CHECK(modes[i].width == expected[i][0] && modes[i].height == expected[i][1]);
 
     wr::DisplayMode list[] = {{800, 600, 8}, {640, 480, 8}, {1024, 768, 8}};
     wr::DisplayMode chosen{};
-    assert(wr::cycle_display_mode(list, 3, 1024, 768, false, chosen));
-    assert(chosen.width == 640 && chosen.height == 480);
+    OA_CHECK(wr::cycle_display_mode(list, 3, 1024, 768, false, chosen));
+    OA_CHECK(chosen.width == 640 && chosen.height == 480);
     wr::DisplayMode list2[] = {{800, 600, 8}, {640, 480, 8}, {1024, 768, 8}};
-    assert(wr::cycle_display_mode(list2, 3, 640, 480, true, chosen));
-    assert(chosen.width == 1024);
-    assert(!wr::cycle_display_mode(list2, 3, 1600, 1200, false, chosen));
+    OA_CHECK(wr::cycle_display_mode(list2, 3, 640, 480, true, chosen));
+    OA_CHECK(chosen.width == 1024);
+    OA_CHECK(!wr::cycle_display_mode(list2, 3, 1600, 1200, false, chosen));
 }
 
 void test_present_binding() {
@@ -238,11 +238,11 @@ void test_present_binding() {
     const auto raster = wr::present_overlay_raster();
     wr::overlay_traffic_bar(*game, raster, &surface, {2, 2, 61, 9}, 50);
     // Outline corners and the half-filled interior; right interior stays clear.
-    assert(pixels[2 * 64 + 2] == 0xaf && pixels[9 * 64 + 61] == 0xaf);
-    assert(pixels[5 * 64 + 20] == 0xaf);
-    assert(pixels[5 * 64 + 50] == 0);
+    OA_CHECK(pixels[2 * 64 + 2] == 0xaf && pixels[9 * 64 + 61] == 0xaf);
+    OA_CHECK(pixels[5 * 64 + 20] == 0xaf);
+    OA_CHECK(pixels[5 * 64 + 50] == 0);
     wr::overlay_traffic_bar(*game, raster, &surface, {-10, -4, 100, 40}, 100);
-    assert(pixels[0] == 0xaf && pixels[15 * 64 + 63] == 0xaf);
+    OA_CHECK(pixels[0] == 0xaf && pixels[15 * 64 + 63] == 0xaf);
 }
 
 // The terrain view drawn through the present raster: a plot's own colour and
@@ -274,15 +274,15 @@ void test_debug_grid_terrain() {
     wr::DebugGridSources sources;
     sources.plots = plots.data();
     wr::overlay_debug_grid(*game, wr::present_overlay_raster(), &surface, sources);
-    assert(pixels[40 * pitch + 136] == 0x33);
-    assert(pixels[40 * pitch + 152] == 0x08);
-    assert(pixels[48 * pitch + 136] == 0xad);
-    assert(pixels[38 * pitch + 168] == 0xaf);
+    OA_CHECK(pixels[40 * pitch + 136] == 0x33);
+    OA_CHECK(pixels[40 * pitch + 152] == 0x08);
+    OA_CHECK(pixels[48 * pitch + 136] == 0xad);
+    OA_CHECK(pixels[38 * pitch + 168] == 0xaf);
     // Off (and no contour spacing) draws nothing.
     std::fill(pixels.begin(), pixels.end(), 0);
     game->debug_overlay = wr::debug_view::off;
     wr::overlay_debug_grid(*game, wr::present_overlay_raster(), &surface, sources);
-    assert(std::count(pixels.begin(), pixels.end(), 0) == static_cast<long>(pixels.size()));
+    OA_CHECK(std::count(pixels.begin(), pixels.end(), 0) == static_cast<long>(pixels.size()));
 }
 
 // A category at 25% of the shown total: a 50-pixel bar in colour category + 1
@@ -303,10 +303,10 @@ void test_profile_bar() {
         *game, wr::present_overlay_raster(), &surface, pitch, font_height, "Logic", 2
     );
     const int y = font_height * 2 + 0x28 + 5;
-    assert(pixels[y * pitch + 500] == 3 && pixels[y * pitch + 550] == 3);
-    assert(pixels[y * pitch + 499] == 0 && pixels[y * pitch + 551] == 0);
-    assert(pixels[0x26 * pitch + 640 - 0x122] == 0xff);
-    assert(pixels[(font_height * 9 + 0x29) * pitch + 0x27f] == 0xff);
+    OA_CHECK(pixels[y * pitch + 500] == 3 && pixels[y * pitch + 550] == 3);
+    OA_CHECK(pixels[y * pitch + 499] == 0 && pixels[y * pitch + 551] == 0);
+    OA_CHECK(pixels[0x26 * pitch + 640 - 0x122] == 0xff);
+    OA_CHECK(pixels[(font_height * 9 + 0x29) * pitch + 0x27f] == 0xff);
 }
 
 } // namespace
@@ -321,5 +321,5 @@ int main() {
     test_rotated_box();
     test_selection_box();
     test_contours();
-    return 0;
+    return oa::test::check_exit_status();
 }

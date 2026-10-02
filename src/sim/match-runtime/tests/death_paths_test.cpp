@@ -75,10 +75,12 @@ struct BlastArt {
 };
 
 void arm_death_blasts(Fixture& f) {
-    const auto parsed = data::unit_definitions::parse_tdf(blast_tdf);
-    CHECK(parsed);
-    CHECK(sim::combat_state::install_weapon_tdf(f.weapons, parsed.value) == 2);
-    sim::weapon_execution::store_weapon_defs(f.weapons, f.match->state().game.weapon_defs);
+    CHECK(sim::combat_state::install_weapon_text(f.weapons, blast_tdf) == 2);
+    std::copy(
+        f.weapons.records().begin(),
+        f.weapons.records().end(),
+        std::begin(f.match->state().game.weapon_defs)
+    );
     f.def.explode_as = "TESTBLAST";
     f.def.self_destruct_as = "TESTSELFD";
 }
@@ -455,7 +457,8 @@ void detonation_sounds_where_the_viewer_sees() {
 // fired: each of player 0's shots once, none of player 1's.
 void weapon_start_sounds_at_the_muzzle() {
     Fixture f({.sight_cells = 3});
-    f.weapons.install_sounds(1, "cannon1", "", "");
+    const_cast<sim::combat_state::WeaponDefinition&>(f.weapons.definition(1)).soundstart =
+        "cannon1";
     HeardClips heard;
     listen(f, heard);
     auto& seen = f.spawn(0, 64, 64);

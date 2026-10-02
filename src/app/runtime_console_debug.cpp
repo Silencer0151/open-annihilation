@@ -371,6 +371,7 @@ void Runtime::run_console_crash_test(console::CrashTest test) {
         (void)SDL_SetWindowFullscreen(sdl_.window, false);
         SDL_Delay(kDebugBreakSettleMs);
     }
+    release_pointer(sdl_.window);
     oa::platform::break_into_debugger();
 }
 

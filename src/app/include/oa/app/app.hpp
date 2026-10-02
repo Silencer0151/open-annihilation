@@ -46,7 +46,6 @@ constexpr float kMaxBattlefieldZoom = 4.0F;
 constexpr float kDefaultBattlefieldZoom = 1.0F;
 constexpr float kZoomWheelFactor = 1.15F;
 constexpr float kZoomLerpHz = 12.0F;
-constexpr int kEdgeScrollLipSource = 8;  // 640×480 battlefield lip, scaled with chrome
 constexpr uint8_t kPaletteGreen = 250;   // PALETTE.PAL RGB(0,255,0)
 constexpr std::size_t kUiColorText = 15; // Game.ui_colors slot of message and clock text
 constexpr int kDefaultWindowWidth = 1920;
@@ -59,12 +58,14 @@ constexpr uint32_t kFixedRandomSeed = 1;
 // The most frames a second the application loop draws unless --max-fps says
 // otherwise; the simulation keeps its 30 ticks a second whatever the rate.
 constexpr uint32_t kDefaultMaxFramesPerSecond = 120;
-// The lowest limit --max-fps takes. Frames on time at this rate or above are
-// at most 25 ms apart, so that no frame's clock step at normal speed runs two
-// ticks, even as the match clock rounds to whole milliseconds: each tick is
-// drawn before the next runs. At 30 a second some frames would run none and
-// the next two.
-constexpr uint32_t kLowestMaxFramesPerSecond = 40;
+// The lowest limit --max-fps takes: the simulation's 30 ticks a second, so
+// that each tick is drawn before the next runs. Above it, frames on time are
+// less than a clock unit apart, and no frame's clock step at normal speed runs
+// two ticks, even as the match clock rounds to whole milliseconds. At it, each
+// frame is due at the middle of a clock unit (frame_pacing::end_paced_frame)
+// and runs exactly one tick at normal speed, which it shows whole. Below it,
+// some frames would run two.
+constexpr uint32_t kLowestMaxFramesPerSecond = 30;
 // The highest --max-fps and --frame-rate take.
 constexpr uint32_t kHighestFrameRate = 1000;
 constexpr uintptr_t kFrontendMenuHandle = 1;
@@ -307,6 +308,10 @@ struct Options {
     // --follow: that run's camera tracks the unit its frame log follows, as
     // the T key does.
     bool follow = false;
+    // --frame-clock MS: that run's clock starts MS milliseconds into the
+    // steady clock instead of at 0, so that a run can cross the moment the
+    // match clock's reading turns over (2^32 milliseconds); unset for 0.
+    std::optional<uint64_t> frame_clock_ms;
     // Set by the checks above: no wall-clock input reaches the match or the frame.
     bool fixed_clock = false;
     // Scripted runs (fixed clock, navigation and menu checks, benchmarks,

@@ -14,6 +14,13 @@
 #include <string_view>
 #include <vector>
 
+#include "oa/core/unit_def.h"
+#include "oa/core/weapon_def.h"
+#include "oa/data/defs/categories.hpp"
+#include "oa/data/defs/move_classes.hpp"
+#include "oa/data/defs/sound_categories.hpp"
+#include "oa/data/defs/unit_def_loader.hpp"
+
 namespace oa::data::unit_definitions {
 
 enum class ErrorCode { none, io, malformed, limit, missing_unitinfo, invalid_number };
@@ -71,19 +78,14 @@ inline constexpr std::size_t value_bytes = 1024U * 1024U;
 ///         exceeds a limit
 [[nodiscard]] Result<TdfDocument> parse_tdf(std::string_view source);
 
-// The values a UNITINFO section loads to, as 3.1c reads them. The *_fixed
-// members are signed 16.16 results: the parsed floating value times 65536,
-// truncated toward zero to 64 bits with the low 32 bits kept.
+// A unit type's typed fields, filled from the UnitDef record its FBI loaded
+// into (unit_definition_from). The *_fixed members are the record's signed
+// 16.16 values.
 struct UnitDefinition {
-    std::string source_name;
-    std::string unit_name, object_name, display_name, description, designation, side, ted_class;
-    std::string default_mission_type, movement_class, sound_category, corpse, yard_map;
+    std::string unit_name, object_name, display_name, description, side;
+    std::string movement_class, sound_category;
     std::string weapon1, weapon2, weapon3, explode_as, self_destruct_as;
-    std::string bad_target_category, wpri_bad_target_category;
-    std::string wsec_bad_target_category, wspe_bad_target_category, no_chase_category;
     std::vector<std::string> categories;
-    double version = 0.0;
-    std::string copyright;
 
     int32_t build_cost_energy = 0, build_cost_metal = 0, build_time = 0;
     int32_t max_damage = 0;
@@ -96,10 +98,11 @@ struct UnitDefinition {
     int16_t min_cloak_distance = 0, build_angle = 0, build_distance = 0;
     int16_t sort_bias = 0, cruise_altitude = 0, maneuver_leash_length = 0;
     int16_t attack_run_length = 0, kamikaze_distance = 0;
+    // The movement class's footprint, depths and slopes when the type names
+    // one, as UnitDef holds them.
     int16_t footprint_x = 0, footprint_z = 0;
     int16_t max_water_depth = 10000, min_water_depth = -10000;
-    uint8_t max_slope = 255, bad_slope = 127;
-    uint8_t max_water_slope = 255, bad_water_slope = 127;
+    uint8_t max_slope = 255, max_water_slope = 255;
     int8_t waterline = 0, transport_size = 0, transport_capacity = 0, bm_code = 0;
     int8_t makes_metal = 0;
     float energy_make = 0, energy_use = 0, metal_make = 0, extracts_metal = 0;
@@ -109,7 +112,7 @@ struct UnitDefinition {
     uint8_t self_destruct_countdown = 5;
 
     bool init_cloaked = false, downloadable = false, builder = false, stealth = false;
-    bool can_cloak = false; // derived by the loader from cloak_cost > 0
+    bool can_cloak = false; // cloak_cost > 0
     bool z_buffer = false, is_airbase = false, targeting_upgrade = false, teleporter = false;
     bool hide_damage = false, shoot_me = false, armored_state = false, activate_when_built = false;
     bool can_fly = false, can_hover = false, upright = false, floater = false, amphibious = false;
@@ -120,9 +123,6 @@ struct UnitDefinition {
     bool can_load = false, can_reclamate = false, can_resurrect = false, can_capture = false;
     bool can_dgun = false, kamikaze = false, no_restrict = false, show_player_name = false;
     bool commander = false, cant_be_transported = false;
-
-    // Unconsumed lower-case keys and their unmodified value text.
-    std::map<std::string, std::string, std::less<>> unknown_fields;
 };
 
 // Bits of UnitDef.flags that loading an FBI sets.
@@ -163,7 +163,7 @@ enum class UnitFlag : uint32_t {
 
 /// Packs the UnitDef.flags word.
 ///
-/// @param definition parsed FBI record
+/// @param definition the unit type's fields
 /// @return standing move orders in bits 0..1, fire orders in bits 2..3, and
 ///         each UnitFlag that is set
 [[nodiscard]] uint32_t pack_unit_flags(const UnitDefinition& definition) noexcept;
@@ -171,7 +171,7 @@ enum class UnitFlag : uint32_t {
 ///
 /// Bit 13 is cloakcost > 0 and bits 20..22 are the self-destruct countdown.
 ///
-/// @param definition parsed FBI record
+/// @param definition the unit type's fields
 /// @return the packed word
 /// @quirk Canreclamate also sets bit 9, as in 3.1c.
 [[nodiscard]] uint32_t pack_unit_abilities(const UnitDefinition& definition) noexcept;
@@ -194,33 +194,9 @@ struct SpawnDefinitionFields {
 /// Runtime-owned model, COB, player-limit and availability state is not
 /// manufactured here.
 ///
-/// @param definition parsed FBI record
+/// @param definition the unit type's fields
 /// @return the flag word and the spawn fields
 [[nodiscard]] SpawnDefinitionFields project_for_spawn(const UnitDefinition& definition) noexcept;
-
-struct MovementClassDefinition {
-    std::string name;
-    int16_t footprint_x = 0, footprint_z = 0;
-    int16_t max_water_depth = 10000, min_water_depth = -10000;
-    uint8_t max_slope = 255, bad_slope = 127;
-    uint8_t max_water_slope = 255, bad_water_slope = 127;
-};
-
-struct MovementClassTable {
-    // Slot n holds section CLASSn, and n is the movement_class_handle a unit
-    // type naming that class resolves to. Missing sections remain empty and
-    // are not compacted.
-    std::array<std::optional<MovementClassDefinition>, 32> slots;
-};
-
-/// Reads MOVEINFO.TDF into the 32 movement-class slots.
-///
-/// A missing bad slope defaults to half its maximum; the maximum slope is
-/// clamped to the maximum water slope and each bad slope to its maximum.
-///
-/// @param moveinfo_tdf the whole MOVEINFO.TDF text
-/// @return the table, or a parse or number error
-[[nodiscard]] Result<MovementClassTable> load_movement_classes(std::string_view moveinfo_tdf);
 
 struct RuntimeDefinitionMetadata {
     std::optional<uint8_t> movement_class_handle;
@@ -234,36 +210,44 @@ struct RuntimeDefinitionMetadata {
     int16_t radar_distance_jam = 0, sonar_distance_jam = 0;
 };
 
-/// Resolves a unit type's movement class, footprint, slope limits, yard and sensors.
-///
-/// A named movement class supplies the footprint, depth and slope limits;
-/// otherwise the FBI values are used. For a building (bmcode 0) the yard map
-/// is compiled to one cell code per footprint cell, repeating the last
-/// recognised character to fill a short map.
-///
-/// @param definition parsed FBI record
-/// @param movement_classes loaded MOVEINFO table
-/// @return the metadata, or an error for a negative footprint, an oversized
-///         yard or a yard map with no recognised cell
-[[nodiscard]] Result<RuntimeDefinitionMetadata> resolve_runtime_metadata(
-    const UnitDefinition& definition, const MovementClassTable& movement_classes
-);
+// The tables a loaded UnitDef's references point into.
+struct UnitDefinitionSources {
+    const defs::MoveClassTable* move_classes{};         // UnitDef.move_class
+    const WeaponDef* weapon_defs{};                     // UnitDef.weapon1..3, explode_as, ...
+    const defs::SoundCategoryTable* sound_categories{}; // UnitDef.sound_category
+    const defs::CategoryRegistry* categories{};         // the categories that hold the type
+};
 
-/// Parses the [UNITINFO] section of an FBI into typed fields.
+/// Fills the typed fields of a unit type from the record its FBI loaded into.
 ///
-/// Defaults, narrowing and derived values match 3.1c;
-/// unconsumed keys go to unknown_fields.
+/// Names come from the tables the record refers to: the movement class (empty
+/// for none), the sound category, each weapon's section name (empty for
+/// weapon 0, the stand-in for a missing or unknown name) and every category
+/// whose mask holds the type except ALL. Footprint, water depths and slopes
+/// are the record's, the movement class's when it names one.
 ///
-/// @param source the whole FBI text
-/// @param source_name name recorded in the result
-/// @return the definition, or a parse, number or missing_unitinfo error
-[[nodiscard]] Result<UnitDefinition>
-load_fbi(std::string_view source, std::string source_name = {});
-/// Reads and parses an FBI from a host file (see load_fbi).
+/// @param unit record data::defs::load_unit_def filled
+/// @param sources tables the record's references point into
+/// @return the typed fields
+[[nodiscard]] UnitDefinition
+unit_definition_from(const UnitDef& unit, const UnitDefinitionSources& sources);
+
+/// Resolves a loaded unit type's movement class, limits, yard and sensors.
 ///
-/// @param path host path of the file
-/// @return the definition, or an io, limit or parse error
-[[nodiscard]] Result<UnitDefinition> load_fbi_file(const std::filesystem::path& path);
+/// The record already holds its movement class's footprint, depth and
+/// maximum slopes; the class adds its bad slopes, and a type without one
+/// takes half of each maximum. A building's yard is the yard map block the
+/// FBI loader compiled.
+///
+/// @param unit record data::defs::load_unit_def filled
+/// @param movement_classes the classes UnitDef.move_class refers to
+/// @param blocks the blocks UnitDef.yard_map refers to
+/// @return the metadata, or an error for a building whose yard map did not load
+[[nodiscard]] Result<RuntimeDefinitionMetadata> resolve_runtime_metadata(
+    const UnitDef& unit,
+    const defs::MoveClassTable& movement_classes,
+    const defs::UnitDefBlocks& blocks
+);
 
 // 3.1c merges loose files and ordered archives before it lists units/*.FBI.
 // Implementations must therefore return one winning logical path per
@@ -286,36 +270,6 @@ class CatalogAssetReader {
     [[nodiscard]] virtual Result<std::string> read(std::string_view logical_path) const = 0;
 };
 
-struct CatalogOptions {
-    // A unit type's availability comes from build-version, copyright and
-    // runtime mode checks before unit types are filtered. The host supplies
-    // that verdict; omission keeps every successfully parsed FBI.
-    std::function<bool(const UnitDefinition&)> compatible;
-};
-
-struct CatalogEntry {
-    uint16_t type_id = 0; // one-based; slot zero is reserved
-    std::string logical_path;
-    UnitDefinition definition;
-};
-
-struct UnitCatalog {
-    std::vector<CatalogEntry> entries;
-};
-
-/// Loads every effective units/*.FBI and numbers the unit types.
-///
-/// Each winning file is parsed and checked by the compatibility verdict; the
-/// survivors are sorted by unitname ignoring ASCII case and given one-based
-/// type ids.
-///
-/// @param assets resource view listing and reading the FBIs
-/// @param options optional compatibility verdict
-/// @return the catalog, or the first listing, read or parse error, or a limit
-///         error when there are too many types for 16-bit ids
-[[nodiscard]] Result<UnitCatalog>
-load_unit_catalog(const CatalogAssetReader& assets, const CatalogOptions& options = {});
-
 inline constexpr std::size_t category_mask_words = 16; // a 64-byte mask, as in 3.1c
 inline constexpr std::size_t category_mask_bits = category_mask_words * 32;
 
@@ -335,52 +289,13 @@ struct UnitTargetCategoryMasks {
     UnitCategoryMask no_chase;      // resolved from UnitDef.no_chase_category
 };
 
-struct ResolvedCategoryRegistry {
-    // ASCII lower-case category names. Values are bitsets of sorted unit type
-    // IDs, 64 bytes each, as 3.1c keeps its categories.
-    std::map<std::string, UnitCategoryMask, std::less<>> categories;
-    std::vector<UnitTargetCategoryMasks> target_masks; // indexed by type_id
-};
-
-/// Builds the category registry and each unit's target-category masks.
+/// Copies a loaded unit type's target-category masks out of the category registry.
 ///
-/// Every category a unit lists gets that unit's type bit. Each weapon's bad
-/// target category and the no-chase category are then resolved; an unknown
-/// name resolves to an empty mask.
-///
-/// @param catalog numbered unit catalog
-/// @return the registry, or a limit error for a type id past the 512-bit mask
-[[nodiscard]] Result<ResolvedCategoryRegistry> resolve_unit_categories(const UnitCatalog& catalog);
-
-// One download-menu section, read before its download build ids are
-// appended. menu_unit_index is the UNITMENU unit's array index, which is also
-// written to UnitDef.type_id (one-based; slot zero stays reserved).
-// unit_name is the entry's UNITNAME, cut to its bound.
-struct DownloadMenuEntry {
-    uint16_t menu_unit_index = 0;
-    std::string unit_name;
-};
-
-// Appending refuses another id once UnitDef.build_id_count reaches this.
-inline constexpr std::size_t download_build_id_limit = 31;
-
-/// Appends download-menu build entries to the units' build lists.
-///
-/// For each unit, every menu entry naming it appends the type id of the
-/// entry's UNITNAME (first catalog unitname, ASCII case-insensitive; unknown
-/// names add nothing) while the list is below download_build_id_limit.
-/// Existing ids (from CANBUILD) are kept.
-///
-/// @param catalog numbered unit catalog
-/// @param[in,out] build_lists parallel to catalog.entries; a disengaged
-///        element is a type without a build list (UnitDef.build_ids 0) and is
-///        left untouched, since
-///        this function does not allocate lists
-/// @param menus download-menu sections
-void append_download_build_ids(
-    const UnitCatalog& catalog,
-    std::vector<std::optional<std::vector<uint16_t>>>& build_lists,
-    const std::vector<std::vector<DownloadMenuEntry>>& menus
-);
+/// @param unit record data::defs::load_unit_def filled
+/// @param categories the registry its category references point into, once
+///     every type is registered
+/// @return the type's three weapon bad-target masks and its no-chase mask
+[[nodiscard]] UnitTargetCategoryMasks
+target_category_masks(const UnitDef& unit, const defs::CategoryRegistry& categories);
 
 } // namespace oa::data::unit_definitions

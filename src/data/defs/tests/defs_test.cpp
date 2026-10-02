@@ -299,6 +299,52 @@ void weapon_lava_world_uses_lava_explosion_keys() {
     weapon_table_free(&table);
 }
 
+// A key that is present takes its text's value even with no number in it,
+// as the game reads it; only a missing key takes the default.
+void weapon_present_keys_without_numbers_read_zero() {
+    const char text[] = "[FAR]{ID=1;} [EMPTY]{ID=2; range=; reloadtime=;}"
+                        " [WORD]{ID=3; range=far; reloadtime=x; minbarrelangle=;}";
+    WeaponTable table;
+    weapon_table_init(&table);
+    CHECK(load_weapon_text(&table, text, sizeof text - 1, nullptr));
+    CHECK(table.defs[1].range == weapon_default_range);
+    CHECK(table.defs[2].range == 0 && table.defs[3].range == 0);
+    CHECK(table.defs[2].reload_time == 0 && table.defs[3].reload_time == 0);
+    CHECK(table.defs[3].min_barrel_angle == 0.0F);
+    CHECK(
+        table.defs[1].min_barrel_angle ==
+        static_cast<float>(weapon_default_min_barrel_angle * weapon_degrees_to_radians)
+    );
+    weapon_table_free(&table);
+}
+
+// The asset names a section gives are kept with the table whatever the
+// resolver made of them; a lava world keeps the lava pair in the water names.
+void weapon_table_keeps_asset_names() {
+    const char text[] = "[A]{ID=4; model=shell; explosiongaf=fx; explosionart=explode3;"
+                        " waterexplosiongaf=fx; waterexplosionart=h2o; lavaexplosiongaf=lfx;"
+                        " lavaexplosionart=lava; soundstart=pew; soundhit=boom; soundwater=;}"
+                        " [B]{ID=5; model=SHELL;}";
+    WeaponTable table;
+    weapon_table_init(&table);
+    CHECK(load_weapon_text(&table, text, sizeof text - 1, nullptr));
+    const WeaponAssetNames& a = table.assets[4];
+    CHECK(std::strcmp(a.model, "shell") == 0 && std::strcmp(a.explosion_art, "explode3") == 0);
+    CHECK(std::strcmp(a.water_explosion_gaf, "fx") == 0);
+    CHECK(std::strcmp(a.water_explosion_art, "h2o") == 0);
+    CHECK(std::strcmp(a.sound_start, "pew") == 0 && std::strcmp(a.sound_hit, "boom") == 0);
+    CHECK(a.sound_water[0] == '\0' && table.defs[4].sound_water == weapon_no_sound);
+    // Slot 5 shares slot 4's model but keeps the name it gave.
+    CHECK(std::strcmp(table.assets[5].model, "SHELL") == 0);
+    CHECK(weapon_model_name(&table.defs[5])[0] == '\0');
+    WeaponLoadOptions lava{nullptr, nullptr, true, false};
+    CHECK(load_weapon_text(&table, text, sizeof text - 1, &lava));
+    CHECK(std::strcmp(table.assets[4].water_explosion_gaf, "lfx") == 0);
+    CHECK(std::strcmp(table.assets[4].water_explosion_art, "lava") == 0);
+    CHECK(!load_weapon_text(&table, "[C]{name=no id;}", 16, nullptr));
+    weapon_table_free(&table);
+}
+
 void weapon_files_skip_loose_when_archive_only() {
     test::MemoryFiles memory;
     memory.files = {
@@ -1003,6 +1049,8 @@ int main() {
     weapon_load_converts_units_and_flags();
     weapon_same_id_keeps_damage_overrides_and_bit31();
     weapon_lava_world_uses_lava_explosion_keys();
+    weapon_present_keys_without_numbers_read_zero();
+    weapon_table_keeps_asset_names();
     weapon_files_skip_loose_when_archive_only();
     sides_load_hud_layout();
     sides_missing_rect_is_reported();

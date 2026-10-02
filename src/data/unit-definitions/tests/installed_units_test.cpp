@@ -1,19 +1,28 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The installed game's units/*.fbi and gamedata/moveinfo.tdf, read through
-// its archives: every definition loads, resolves its runtime metadata against
-// the movement classes, and belongs to each category it names.
+// The installed game's units/*.fbi, loaded the one way a match loads them:
+// every header, the catalog sorted by unit name, then each FBI into its
+// UnitDef record against the installed movement classes, weapons and sound
+// categories. Every type's typed fields and runtime metadata come from its
+// record, and a few stock units keep the values 3.1c gives them.
+#include "oa/data/defs/asset_files.hpp"
+#include "oa/data/defs/unit_catalog.hpp"
+#include "oa/data/defs/unit_header.hpp"
+#include "oa/data/defs/unit_records.hpp"
+#include "oa/data/defs/weapons.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/test/game_assets.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 using namespace oa::data::unit_definitions;
+namespace defs = oa::data::defs;
 
 namespace {
 
@@ -27,71 +36,185 @@ void fail(const std::string& what) {
     ++failures;
 }
 
-/// Views a file's bytes as text.
+/// Checks one condition and reports it when it fails.
 ///
-/// @param bytes the file
-/// @return the same bytes as characters
-std::string_view text_of(const std::vector<uint8_t>& bytes) {
-    return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+/// @param ok the condition
+/// @param what the failure, printed after "FAIL: "
+void check(bool ok, const std::string& what) {
+    if (!ok)
+        fail(what);
 }
 
-/// Lower-cases ASCII letters, as the category registry keys names.
+/// The tables the installed unit files load against.
+struct Tables {
+    defs::MoveClassTable classes{};
+    std::unique_ptr<defs::WeaponTable> weapons = std::make_unique<defs::WeaponTable>();
+    defs::WeaponTdfSet weapon_files{};
+    defs::SoundCategoryTable sounds{};
+    defs::UnitDefTables units{};
+
+    Tables() {
+        defs::weapon_tdf_set_init(&weapon_files);
+        defs::unit_def_tables_init(&units);
+        defs::weapon_table_init(weapons.get());
+    }
+
+    ~Tables() {
+        defs::weapon_table_free(weapons.get());
+        defs::weapon_tdf_set_free(&weapon_files);
+        defs::sound_category_table_free(&sounds);
+        defs::unit_def_tables_free(&units);
+    }
+
+    Tables(const Tables&) = delete;
+    Tables& operator=(const Tables&) = delete;
+};
+
+/// Finds a loaded unit's typed fields by name.
 ///
-/// @param text a category name
-/// @return the name in lower case
-std::string lower_ascii(std::string text) {
-    for (char& c : text)
-        if (c >= 'A' && c <= 'Z')
-            c = static_cast<char>(c + 'a' - 'A');
-    return text;
+/// @param records the catalog, slot 0 reserved
+/// @param definitions the typed fields, by type id
+/// @param name unit name
+/// @return the fields, or null
+const UnitDefinition* find(
+    const defs::UnitDefTables& records,
+    const std::vector<UnitDefinition>& definitions,
+    const char* name
+) {
+    const uint16_t type = defs::unit_defs_type_id(records.records, records.count, name);
+    return type != 0 && type < definitions.size() ? &definitions[type] : nullptr;
 }
 
-/// Loads every installed unit definition and checks its metadata and categories.
+/// Loads every installed unit and checks its fields, metadata and categories.
 ///
 /// @param assets the installed game's store
 void check_installed_units(const oa::AssetStore& assets) {
-    const auto movement_bytes = oa::test::read_game_file(assets, "gamedata/moveinfo.tdf");
-    auto classes = load_movement_classes(text_of(movement_bytes));
-    if (movement_bytes.empty() || !classes) {
-        fail("the install's gamedata/moveinfo.tdf is missing or does not load");
+    const auto files = defs::asset_store_files(&assets);
+    Tables tables;
+    if (!defs::load_move_classes(&files, &tables.classes, nullptr, nullptr) ||
+        defs::load_weapon_defs(&files, tables.weapons.get(), nullptr) == 0 ||
+        !defs::load_weapon_tdf_set(&files, nullptr, false, &tables.weapon_files) ||
+        !defs::load_sound_categories(&files, &tables.sounds, nullptr)) {
+        fail("the install's movement classes, weapons or sound categories do not load");
         return;
     }
-    UnitCatalog catalog;
-    std::size_t buildings = 0;
-    for (const auto& path : assets.list_effective("units", ".FBI")) {
-        auto definition = load_fbi(text_of(oa::test::read_game_file(assets, path)), path);
-        if (!definition) {
-            fail(path + ": " + definition.error.message);
-            continue;
-        }
-        auto runtime = resolve_runtime_metadata(definition.value, classes.value);
-        if (!runtime) {
-            fail(path + ": " + runtime.error.message);
-            continue;
-        }
-        if (definition.value.bm_code == 0)
-            ++buildings;
-        catalog.entries.push_back(
-            {static_cast<uint16_t>(catalog.entries.size() + 1), path, std::move(definition.value)}
-        );
-    }
-    if (catalog.entries.empty()) {
+    std::vector<std::string> names;
+    files.list(
+        files.context,
+        "units",
+        "FBI",
+        [](void* user, const char* name) {
+            static_cast<std::vector<std::string>*>(user)->emplace_back(name);
+        },
+        &names
+    );
+    if (names.empty() ||
+        !defs::unit_def_tables_allocate(&tables.units, static_cast<uint32_t>(names.size() + 1))) {
         fail("the install holds no units/*.fbi");
         return;
     }
-    auto registry = resolve_unit_categories(catalog);
-    if (!registry) {
-        fail("categories: " + registry.error.message);
-        return;
+    const defs::UnitHeaderSources header_sources{"", &tables.weapon_files, 3, 1, false, false};
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        char path[defs::path_capacity];
+        defs::build_variant_path(
+            &files, path, sizeof path, "units", names[index].c_str(), "FBI", nullptr
+        );
+        bool refused = false;
+        if (!defs::load_unit_header(
+                &files, path, tables.units.records[index + 1], header_sources, &refused
+            ))
+            fail(std::string(path) + ": the header does not load");
     }
-    for (const auto& unit : catalog.entries)
-        for (const auto& category : unit.definition.categories) {
-            const auto found = registry.value.categories.find(lower_ascii(category));
-            if (found == registry.value.categories.end() || !found->second.contains(unit.type_id))
-                fail(unit.logical_path + " is missing from its category " + category);
+    const auto loaded = static_cast<std::size_t>(tables.units.count);
+    tables.units.count = defs::unit_defs_finalize_catalog(tables.units.records, tables.units.count);
+    check(tables.units.count == loaded, "a stock unit is not available to 3.1");
+    const defs::UnitDefSources sources{
+        "",
+        &tables.classes,
+        tables.weapons->defs,
+        &tables.sounds,
+        &tables.units.categories,
+        &tables.units.blocks,
+        nullptr
+    };
+    std::vector<UnitDefinition> definitions(tables.units.count);
+    std::size_t buildings = 0;
+    for (uint32_t type = 1; type < tables.units.count; ++type) {
+        auto& record = tables.units.records[type];
+        const std::string unit(record.unit_name);
+        char path[defs::path_capacity];
+        defs::build_variant_path(
+            &files, path, sizeof path, "units", record.unit_name, "FBI", nullptr
+        );
+        if (!defs::load_unit_def(&files, path, record, sources)) {
+            fail(unit + ": the FBI does not load");
+            continue;
         }
-    std::cout << "resolved " << catalog.entries.size() << " installed FBI files (" << buildings
-              << " yard maps, " << registry.value.categories.size() << " categories)\n";
+        definitions[type] = unit_definition_from(
+            record,
+            {&tables.classes, tables.weapons->defs, &tables.sounds, &tables.units.categories}
+        );
+        const auto metadata = resolve_runtime_metadata(record, tables.classes, tables.units.blocks);
+        if (!metadata) {
+            fail(unit + ": " + metadata.error.message);
+            continue;
+        }
+        if (record.bm_code == 0)
+            ++buildings;
+        check(definitions[type].unit_name == unit, unit + " loses its name");
+        check(
+            metadata.value.footprint_x == definitions[type].footprint_x &&
+                metadata.value.footprint_z == definitions[type].footprint_z,
+            unit + ": the metadata and the fields disagree on the footprint"
+        );
+    }
+    for (uint32_t type = 1; type < tables.units.count; ++type)
+        for (const auto& category : definitions[type].categories) {
+            const auto* mask =
+                defs::category_registry_find(&tables.units.categories, category.c_str());
+            check(
+                mask != nullptr && defs::category_mask_contains(mask, static_cast<uint16_t>(type)),
+                definitions[type].unit_name + " is missing from its category " + category
+            );
+        }
+
+    // The commander: its weapons by section name, its movement class's
+    // footprint and its categories.
+    if (const auto* commander = find(tables.units, definitions, "ARMCOM")) {
+        check(
+            commander->weapon1 == "ARMCOMLASER" && commander->weapon3 == "ARM_DISINTEGRATOR",
+            "ARMCOM does not carry its laser and D-gun"
+        );
+        check(
+            oa::formats::tdf::compare_nocase(commander->movement_class.c_str(), "TANKDS2") == 0,
+            "ARMCOM is not of TANKDS2"
+        );
+        check(
+            commander->footprint_x == 2 && commander->footprint_z == 2,
+            "ARMCOM does not take its movement class's footprint"
+        );
+        check(
+            std::any_of(
+                commander->categories.begin(),
+                commander->categories.end(),
+                [](const std::string& name) {
+                    return oa::formats::tdf::compare_nocase(name.c_str(), "commander") == 0;
+                }
+            ),
+            "ARMCOM is not a commander"
+        );
+    } else {
+        fail("no ARMCOM");
+    }
+    // ARMSCORP.FBI's ItalianDescription=;Scorpione runs into the next line's
+    // key, so its canguard is never read, as in 3.1c.
+    if (const auto* scorpion = find(tables.units, definitions, "ARMSCORP"))
+        check(!scorpion->can_guard && scorpion->can_patrol, "ARMSCORP reads its canguard");
+    // A sound category SOUND.TDF lacks is read as a number: category 0.
+    if (const auto* freaker = find(tables.units, definitions, "CORFAST"))
+        check(freaker->sound_category == "ARM_KBOT", "CORFAST does not speak as category 0");
+    std::cout << "resolved " << tables.units.count - 1 << " installed FBI files (" << buildings
+              << " yard maps, " << tables.units.categories.count << " categories)\n";
 }
 
 } // namespace

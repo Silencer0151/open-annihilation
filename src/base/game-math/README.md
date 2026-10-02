@@ -43,6 +43,14 @@ every compiler, processor and maths library.
 `truncated_length` sums its squares as z^2 + y^2 before x^2 and truncates the
 root toward zero to 64 bits, keeping the low 32 bits.
 
+The game converts a float or a double to an integer by truncating it toward
+zero to 64 bits; where it keeps an `int`, it keeps the low 32 bits of that.
+`truncate_to_int64` and `truncate_low32` are those two conversions, shared by
+every module that makes them. A NaN, an infinity or a value outside
+[-2^63, 2^63) gives INT64_MIN, whose low 32 bits are 0. The `game-math` test
+checks both at the half, 2^31, 2^32 + 1 and 2^63 edges, and at NaN and the
+infinities.
+
 The `game-math-extended` test checks the 53-bit operations against IEEE 754
 doubles, the sine and cosine of every angle word and the rotation of points
 by every angle word, and pins the results over fixed samples of headings,

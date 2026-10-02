@@ -3,10 +3,11 @@
 
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,35 +66,35 @@ struct Model {
     std::vector<Object> objects;
 };
 
-class ThreeDoError : public std::runtime_error {
-  public:
-
-    using std::runtime_error::runtime_error;
-};
-
 /// Parses a 3DO model file into its object tree.
 ///
 /// Decoding is little-endian with bounded offsets and counts; the two
 /// primitive words after the texture name offset are kept as read and not
-/// interpreted. Throws ThreeDoError for truncated data, invalid indices,
-/// unterminated strings or cyclic object links.
+/// interpreted. A model holds at most 65,536 objects, and its links are
+/// followed without recursion, so neither a long sibling list nor a deep
+/// child chain can exhaust the stack.
 ///
 /// @param bytes the whole file
-/// @return the objects in preorder, root first, with stored (not negated) coordinates
-[[nodiscard]] Model load_3do(std::span<const std::byte> bytes);
+/// @return the objects in preorder, root first, with stored (not negated)
+///         coordinates; or the first error at its file offset: a truncated
+///         record, array or name, an out-of-range vertex index, a name over
+///         4,095 bytes, more than 65,536 objects, an object reached twice or
+///         a cycle
+[[nodiscard]] base::bytes::Decoded<Model> load_3do(std::span<const std::byte> bytes);
 
 /// Returns a model's height, the value of UnitDef.model_height.
 ///
 /// Walks sibling and child links from the root, taking vertex Y plus piece Y
 /// offsets. Its high 16 bits, which some code reads alone, are part of the
-/// same value, not a separate property. Throws ThreeDoError for an
-/// out-of-range link or a cycle.
+/// same value, not a separate property. A model load_3do returned always
+/// succeeds.
 ///
 /// @param model loaded model
-/// @return the highest Y in 16.16 fixed point, never below zero
-/// @quirk Each recursion level clamps at zero and sums with signed 32-bit wrap,
+/// @return the highest Y in 16.16 fixed point, never below zero; or, with
+///         the object index as its offset, an out-of-range link or a cycle
+/// @quirk Each child level clamps at zero and sums with signed 32-bit wrap,
 ///        as 3.1c does.
-[[nodiscard]] int32_t maximum_height_fixed(const Model& model);
+[[nodiscard]] base::bytes::Decoded<int32_t> maximum_height_fixed(const Model& model);
 
 // UNITINFO collision/visibility bounds are a combination of FBI footprint and
 // loaded-model height; 3.1c does not use 3DO X/Z vertex extrema here.
@@ -118,8 +119,9 @@ struct UnitTypeBounds {
 /// @param model the unit's loaded model
 /// @param footprint_x FBI footprintx, in footprint cells
 /// @param footprint_z FBI footprintz, in footprint cells
-/// @return minima, maxima and extents in 16.16 fixed point, with 32-bit wrap
-[[nodiscard]] UnitTypeBounds
+/// @return minima, maxima and extents in 16.16 fixed point, with 32-bit wrap;
+///         or maximum_height_fixed's error
+[[nodiscard]] base::bytes::Decoded<UnitTypeBounds>
 derive_unit_type_bounds(const Model& model, int16_t footprint_x, int16_t footprint_z);
 
 struct ObjectBounds {
@@ -178,11 +180,13 @@ struct RenderPrimitive {
 /// A convenience adapter, not the game's renderer: it accumulates piece
 /// offsets and negates X and Z, as loading a model does in 3.1c. It
 /// keeps primitive order and reports selection geometry instead of dropping
-/// it. Throws ThreeDoError for an invalid parent link or vertex index, or on
-/// coordinate overflow.
+/// it.
 ///
 /// @param model loaded model
-/// @return every primitive with its vertices in model space, 16.16 fixed point
-[[nodiscard]] std::vector<RenderPrimitive> flatten_for_render(const Model& model);
+/// @return every primitive with its vertices in model space, 16.16 fixed
+///         point; or, with the object index as its offset, an invalid parent
+///         link or vertex index, or a coordinate that overflows int32
+[[nodiscard]] base::bytes::Decoded<std::vector<RenderPrimitive>>
+flatten_for_render(const Model& model);
 
 } // namespace oa::formats::objects3d

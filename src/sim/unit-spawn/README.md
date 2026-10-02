@@ -61,7 +61,7 @@ this helper.
 
 ## Parsed asset adapter
 
-Target `oa-sim-unit-spawn-runtime`, header `oa/sim/unit_spawn/spawn_runtime.hpp`, connects parsed FBI
+Target `oa-sim-unit-spawn-runtime`, header `oa/sim/unit_spawn/spawn_runtime.hpp`, connects a unit type's
 fields to the spawn type. `load_runtime_type` loads the actual 3DO and optional
 COB, stores shared ownership of both parsed assets, and puts their stable native
 addresses in the model/COB handles. Preserve the returned `LoadedType` while
@@ -70,9 +70,9 @@ fabricated model instances or running VMs; constructor Hosts still perform that
 work.
 
 The caller supplies availability, per-player limit, resolved default-mission
-index and movement-class footprint. `resolve_movement_footprint` searches
-CLASS0..31 in the game's order and falls back to FBI dimensions when a named
-class is absent. GUI pages are counted from the nonempty GUI files present, as
+index and movement-class footprint, which it takes from the movement classes
+the game data loaded (the unit's runtime metadata); a named class that is
+absent leaves the FBI dimensions. GUI pages are counted from the nonempty GUI files present, as
 3.1c counts them; the count overwrites the FBI `makesmetal` byte that
 `UnitDef.gui_page_count` first holds.
 

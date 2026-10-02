@@ -59,6 +59,7 @@ inline constexpr int32_t weapon_default_range = 0x7fff;
 inline constexpr int16_t weapon_no_sound = -1;
 
 inline constexpr uint32_t weapon_damage_name_capacity = 32;
+inline constexpr uint32_t weapon_asset_name_capacity = 64;
 
 struct WeaponDamage {
     char unit[weapon_damage_name_capacity];
@@ -80,11 +81,28 @@ struct WeaponResolver {
     int16_t (*sound)(void* context, const char* name);
 };
 
+// The asset names one weapon section's keys gave, kept whatever the resolver
+// made of them; empty for a missing key. Longer names are cut at 63
+// characters.
+struct WeaponAssetNames {
+    char model[weapon_asset_name_capacity]{};         // model, even when the slot shares it
+    char explosion_gaf[weapon_asset_name_capacity]{}; // explosiongaf, an archive under anims/
+    char explosion_art[weapon_asset_name_capacity]{}; // explosionart, a sequence in it
+    // waterexplosiongaf and waterexplosionart, or on a lava world
+    // lavaexplosiongaf and lavaexplosionart (WeaponDef.water_explosion_art).
+    char water_explosion_gaf[weapon_asset_name_capacity]{};
+    char water_explosion_art[weapon_asset_name_capacity]{};
+    char sound_start[weapon_asset_name_capacity]{}; // soundstart, a sound played when it fires
+    char sound_hit[weapon_asset_name_capacity]{};   // soundhit, where it goes off on land
+    char sound_water[weapon_asset_name_capacity]{}; // soundwater, where it goes off in water
+};
+
 struct WeaponTable {
     WeaponDef defs[OA_WEAPON_DEF_COUNT];
     // DAMAGE overrides per slot; WeaponDef.damage_overrides holds index + 1 when set.
     WeaponDamageTable damage[OA_WEAPON_DEF_COUNT];
-    uint32_t rejected_ids; // sections whose ID is outside 0..255
+    WeaponAssetNames assets[OA_WEAPON_DEF_COUNT]; // the names each slot's section gave
+    uint32_t rejected_ids;                        // sections whose ID is outside 0..255
 };
 
 struct WeaponLoadOptions {
@@ -142,9 +160,15 @@ void weapon_table_free(WeaponTable* table) noexcept;
 /// units per tick and minbarrelangle radians (default -11.25 degrees). Flag
 /// bits are replaced one by one, so bit 31 survives. The model is shared with
 /// a lower slot that loaded the same name; explosion art uses the lava keys
-/// on a lava world. A DAMAGE block sets damage_default and adds each other key
-/// to the slot's override map, which a later section with the same ID extends.
-/// A section whose ID is outside the table is rejected.
+/// on a lava world. The asset names are also kept in the slot's
+/// WeaponTable.assets entry. A DAMAGE block sets damage_default and adds each
+/// other key to the slot's override map, which a later section with the same
+/// ID extends. A section whose ID is outside the table is rejected.
+///
+/// Numbers are read as the game reads them: a key that is present takes its
+/// text's value even when the text is empty or not a number (0), and only a
+/// missing key takes the default. `range=;` therefore gives a range of 0, not
+/// weapon_default_range.
 ///
 /// @param[in,out] table weapon table
 /// @param section weapon section of a WEAPONS\*.TDF file
@@ -153,6 +177,19 @@ void weapon_table_free(WeaponTable* table) noexcept;
 ///     DAMAGE override cannot be stored
 bool weapon_load(
     WeaponTable* table, const formats::tdf::Block* section, const WeaponLoadOptions* options
+) noexcept;
+
+/// Loads every section of one weapon TDF text into the table, in text order.
+///
+/// The table is not reset first, so the text adds to what it already holds.
+///
+/// @param[in,out] table weapon table, set up by weapon_table_init
+/// @param text TDF text; need not be NUL-terminated
+/// @param length bytes of text
+/// @param options asset resolver and world options; may be null
+/// @return false when the text does not parse or a section is rejected (see weapon_load)
+bool load_weapon_text(
+    WeaponTable* table, const char* text, uint32_t length, const WeaponLoadOptions* options
 ) noexcept;
 
 /// Resets the table and loads every section of every WEAPONS\*.TDF in VFS order.

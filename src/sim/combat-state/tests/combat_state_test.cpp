@@ -6,7 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
-#include <map>
+#include <string_view>
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         if (!(x))                                                                                  \
@@ -29,20 +29,6 @@ struct Geometry final : SpawnGeometryHost {
     }
 
     void set_max_reload_time(int32_t value) override { maximum = value; }
-};
-
-struct Section {
-    std::string name;
-    std::map<std::string, std::string> fields;
-
-    const std::string* find(std::string_view key) const {
-        auto i = fields.find(std::string(key));
-        return i == fields.end() ? nullptr : &i->second;
-    }
-};
-
-struct Document {
-    std::vector<Section> sections;
 };
 
 struct TargetFixture final : TargetSearchHost {
@@ -138,26 +124,19 @@ int main() {
     CHECK(overflow_result.maximum_reload_milliseconds == 2033);
     CHECK(u.slots[0].muzzle_offset == -1610612738);
     WeaponRegistry registry;
-    registry.install({5, "ARM_LASER", 1.0});
-    registry.install({9, "D_GUN", 2.05});
-    Document document{
-        {{"DEFAULT", {{"id", "0"}}},
-         {"PLASMA",
-          {{"id", " +17suffix"},
-           {"reloadtime", "1.5"},
-           {"range", "640"},
-           {"paralyzer", "1"},
-           {"ballistic", "1"},
-           {"explosiongaf", "FX"},
-           {"explosionart", "explode3"},
-           {"accuracy", "80"},
-           {"tolerance", "500"},
-           {"pitchtolerance", "40"},
-           {"burst", "3"},
-           {"burstrate", "0.5"}}}}
-    };
+    CHECK(install_weapon_text(registry, "[ARM_LASER]{id=5; reloadtime=1;}") == 1);
+    CHECK(install_weapon_text(registry, "[D_GUN]{id=9; reloadtime=2.05;}") == 1);
     WeaponRegistry parsed;
-    CHECK(install_weapon_tdf(parsed, document) == 2);
+    CHECK(
+        install_weapon_text(
+            parsed,
+            "[DEFAULT]{id=0;}"
+            "[PLASMA]{id= +17suffix; reloadtime=1.5; range=640; paralyzer=1; ballistic=1;"
+            " explosiongaf=FX; explosionart=explode3; accuracy=80; tolerance=500;"
+            " pitchtolerance=40; burst=3; burstrate=0.5;}"
+        ) == 2
+    );
+    CHECK(parsed.find("plasma")->registry_index == 17);
     CHECK(parsed.find("plasma")->reload_time_ticks == 45);
     CHECK(parsed.find("plasma")->range_world_units == 640);
     CHECK(parsed.find("plasma")->flags == (weapon_paralyzer_flag | weapon_ballistic_flag));
@@ -170,61 +149,65 @@ int main() {
     CHECK(parsed.find("plasma")->burst_rate_ticks == 15);
     CHECK(parsed.find("default")->burst == 0);
     CHECK(parsed.find("default")->burst_rate_ticks == 0);
-    Document smoky{
-        {{"SMOKY",
-          {{"id", "12"},
-           {"endsmoke", "1"},
-           {"smoketrail", "1"},
-           {"smokedelay", "0.1"},
-           {"waterexplosiongaf", "FX"},
-           {"waterexplosionart", "h2oboom1"},
-           {"lavaexplosiongaf", "FX"},
-           {"lavaexplosionart", "lavasplashsm"}}}}
-    };
+    // The record the slot was loaded into is kept for Game.weapon_defs.
+    CHECK(std::string_view(parsed.records()[17].key) == "PLASMA");
+    CHECK(parsed.records()[17].reload_time == 45 && parsed.records()[17].weapon_id == 17);
+    CHECK(parsed.records()[18].key[0] == '\0' && parsed.records()[18].weapon_id == 18);
+    // A missing range is 0x7fff; a range key with no number is 0, as the
+    // game reads it.
+    WeaponRegistry ranges;
+    CHECK(
+        install_weapon_text(ranges, "[FAR]{id=1;} [EMPTY]{id=2; range=;} [WORD]{id=3; range=x;}") ==
+        3
+    );
+    CHECK(ranges.find("far")->range_world_units == 0x7fff);
+    CHECK(ranges.find("empty")->range_world_units == 0);
+    CHECK(ranges.find("word")->range_world_units == 0);
+    const char* smoky = "[SMOKY]{id=12; endsmoke=1; smoketrail=1; smokedelay=0.1;"
+                        " waterexplosiongaf=FX; waterexplosionart=h2oboom1;"
+                        " lavaexplosiongaf=FX; lavaexplosionart=lavasplashsm;}";
     WeaponRegistry smoke_weapons;
-    CHECK(install_weapon_tdf(smoke_weapons, smoky) == 1);
+    CHECK(install_weapon_text(smoke_weapons, smoky) == 1);
     // endsmoke is flag bit 10, smokedelay seconds * 30 into smoke_delay_ticks.
     CHECK(smoke_weapons.find("smoky")->flags == (weapon_end_smoke_flag | weapon_smoke_trail_flag));
     CHECK(smoke_weapons.find("smoky")->smoke_delay_ticks == 3);
     CHECK(smoke_weapons.find("smoky")->water_explosion_art == "h2oboom1");
-    CHECK(smoke_weapons.find("smoky")->lava_explosion_art == "lavasplashsm");
-    Document impact{
-        {{"QUAKE",
-          {{"id", "13"},
-           {"soundhit", "xplolrg1"},
-           {"soundwater", "splslrg"},
-           {"shakemagnitude", "24"},
-           {"shakeduration", "2500"}}}}
-    };
+    // On a lava world the water explosion is the lava one.
+    WeaponRegistry lava_weapons;
+    CHECK(install_weapon_text(lava_weapons, smoky, true) == 1);
+    CHECK(lava_weapons.find("smoky")->water_explosion_art == "lavasplashsm");
     WeaponRegistry impact_weapons;
-    CHECK(install_weapon_tdf(impact_weapons, impact) == 1);
+    CHECK(
+        install_weapon_text(
+            impact_weapons,
+            "[QUAKE]{id=13; soundhit=xplolrg1; soundwater=splslrg; shakemagnitude=24;"
+            " shakeduration=2500; [DAMAGE]{default=50; ARMCOM=5; corcom=7;}}"
+        ) == 1
+    );
     // shakeduration seconds * 30 keeps all 32 truncated bits in
     // shake_duration_ticks (75000 overflows the word-sized tick fields).
     CHECK(impact_weapons.find("quake")->soundhit == "xplolrg1");
     CHECK(impact_weapons.find("quake")->soundwater == "splslrg");
     CHECK(impact_weapons.find("quake")->shake_magnitude == 24);
     CHECK(impact_weapons.find("quake")->shake_duration_ticks == 75000);
-    Document burst_edge{{{"EDGE", {{"id", "8"}, {"burst", "65537"}, {"burstrate", "0.04"}}}}};
+    CHECK(damage_against(*impact_weapons.find("quake"), "armcom") == 5);
+    CHECK(damage_against(*impact_weapons.find("quake"), "CORCOM") == 7);
+    CHECK(damage_against(*impact_weapons.find("quake"), "armpw") == 50);
     WeaponRegistry edge;
-    CHECK(install_weapon_tdf(edge, burst_edge) == 1);
+    CHECK(install_weapon_text(edge, "[EDGE]{id=8; burst=65537; burstrate=0.04;}") == 1);
     CHECK(edge.find("edge")->burst == 1);
     CHECK(edge.find("edge")->burst_rate_ticks == 1);
     // The D-gun's booleans, noexplode (bit 22) among them, and the two other
     // flags only some weapons set: shellweapon (bit 2) and noradar (bit 6).
-    Document disintegrator{
-        {{"ARM_DISINTEGRATOR",
-          {{"id", "22"},
-           {"lineofsight", "1"},
-           {"turret", "1"},
-           {"soundtrigger", "1"},
-           {"beamweapon", "1"},
-           {"noexplode", "1"},
-           {"commandfire", "1"},
-           {"startsmoke", "1"}}},
-         {"QUIET_SHELL", {{"id", "23"}, {"shellweapon", "1"}, {"noradar", "1"}}}}
-    };
     WeaponRegistry dgun_weapons;
-    CHECK(install_weapon_tdf(dgun_weapons, disintegrator) == 2);
+    CHECK(
+        install_weapon_text(
+            dgun_weapons,
+            "[ARM_DISINTEGRATOR]{id=22; lineofsight=1; turret=1; soundtrigger=1; beamweapon=1;"
+            " noexplode=1; commandfire=1; startsmoke=1;}"
+            "[QUIET_SHELL]{id=23; shellweapon=1; noradar=1;}"
+        ) == 2
+    );
     CHECK(
         dgun_weapons.find("arm_disintegrator")->flags ==
         (weapon_line_of_sight_flag | weapon_turret_flag | weapon_sound_trigger_flag |
@@ -233,8 +216,7 @@ int main() {
     );
     CHECK(dgun_weapons.find("quiet_shell")->flags == (weapon_shell_flag | weapon_no_radar_flag));
     // A later section with the same ID clears the bit its zero names.
-    Document replaced{{{"ARM_DISINTEGRATOR", {{"id", "22"}, {"noexplode", "0"}}}}};
-    CHECK(install_weapon_tdf(dgun_weapons, replaced) == 1);
+    CHECK(install_weapon_text(dgun_weapons, "[ARM_DISINTEGRATOR]{id=22; noexplode=0;}") == 1);
     CHECK((dgun_weapons.find("arm_disintegrator")->flags & weapon_no_explode_flag) == 0);
     CHECK(accuracy_spread(0, 100, 100, 0) == 0);
     CHECK(accuracy_spread(80, 100, 100, 0) == 80);

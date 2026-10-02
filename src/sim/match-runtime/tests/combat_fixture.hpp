@@ -162,6 +162,20 @@ struct Options {
     bool killed_script{};
 };
 
+/// Returns the fixture's TESTGUN section (slot 1): a 400-range turret gun
+/// doing 10 damage.
+///
+/// @param reload_time its reloadtime text, in seconds
+/// @param extra further keys, each with its ';', placed before the [DAMAGE] block
+/// @param damage its [DAMAGE] default
+/// @return the weapon TDF text
+inline std::string
+test_gun_tdf(std::string_view reload_time = "0.1", std::string_view extra = {}, int damage = 10) {
+    return "[TESTGUN]{id=1; reloadtime=" + std::string(reload_time) +
+           "; range=400; lineofsight=1; weaponvelocity=100; turret=1; " + std::string(extra) +
+           " [DAMAGE]{default=" + std::to_string(damage) + ";}}";
+}
+
 /// Returns the corpsetype Options::killed_script picks for a severity, which
 /// is also the flags it explodes the root piece with.
 ///
@@ -338,34 +352,16 @@ struct Fixture {
         fields[1].runtime_metadata = &metadata;
         fields[1].target_masks = &target_masks;
         fields[1].movement_class = 0;
-        weapons.install_tdf_section(1, "TESTGUN", options.gun_reload_time);
-        weapons.install_target_fields(1, "400", "1", "0", "0", "0", "0", "10", "100", "", "1");
+        (void)sim::combat_state::install_weapon_text(
+            weapons, test_gun_tdf(options.gun_reload_time)
+        );
         if (options.dgun) {
             def.weapon3 = "TESTDGUN";
             def.can_dgun = true;
-            weapons.install_tdf_section(2, "TESTDGUN", "1.2");
-            weapons.install_target_fields(
-                2,
-                "120",
-                "1",
-                "0",
-                "0",
-                "0",
-                "0",
-                "10",
-                "200",
-                "",
-                "1",
-                "",
-                "400",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "1"
+            (void)sim::combat_state::install_weapon_text(
+                weapons,
+                "[TESTDGUN]{id=2; reloadtime=1.2; range=120; lineofsight=1; weaponvelocity=200; "
+                "turret=1; energypershot=400; commandfire=1; [DAMAGE]{default=10;}}"
             );
         }
         scenario.lava_world = options.lava_world;

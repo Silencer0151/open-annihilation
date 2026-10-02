@@ -381,12 +381,12 @@ uint16_t unit_under_pointer(const World& world, const VisibleLists& lists, const
                 picked = unit->id;
             }
         }
-    } else if (contains(game.radar_picture_rect, pointer_x, pointer_y)) {
+    } else if (contains(lists.radar_picture, pointer_x, pointer_y)) {
         int32_t best = radar_pick_no_score;
         if (lists.radar == nullptr)
             return 0;
         for (int32_t i = 0;
-             i < game.hot_radar_unit_count && static_cast<uint32_t>(i) < lists.radar_capacity;
+             i < lists.radar_count && static_cast<uint32_t>(i) < lists.radar_capacity;
              ++i) {
             const RadarHotUnit& blip = lists.radar[i];
             const int32_t dx = blip.x - pointer_x;

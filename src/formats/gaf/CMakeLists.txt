@@ -11,7 +11,7 @@ add_library(oa::formats::gaf ALIAS oa-formats-gaf)
 target_include_directories(oa-formats-gaf PUBLIC include)
 target_compile_features(oa-formats-gaf PUBLIC cxx_std_20)
 if(TARGET oa-options)
-  target_link_libraries(oa-formats-gaf PUBLIC oa-options)
+  target_link_libraries(oa-formats-gaf PUBLIC oa-options PRIVATE oa-base-bytes)
 endif()
 
 if(BUILD_TESTING)

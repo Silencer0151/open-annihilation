@@ -16,7 +16,8 @@ target_include_directories(oa-ui-frontend-dialogs PUBLIC include)
 target_compile_features(oa-ui-frontend-dialogs PUBLIC cxx_std_20)
 target_link_libraries(oa-ui-frontend-dialogs
   PUBLIC oa-ui-frontend-renderer oa-ui-screen-registry oa-ui-gui-layout oa-options
-  PRIVATE oa-ui-gui-input oa-ui-gadget-render oa-present oa-formats-hpi oa-formats-tdf oa-formats-fnt oa-formats-gaf)
+  PRIVATE oa-ui-gui-input oa-ui-gadget-render oa-present oa-formats-hpi oa-formats-tdf oa-formats-fnt oa-formats-gaf
+    oa-ui-decoded)
 if(BUILD_TESTING)
   # The dialogs over the installed game's store, and drawn from its archives.
   add_executable(oa-frontend-dialogs-test tests/dialogs_test.cpp)

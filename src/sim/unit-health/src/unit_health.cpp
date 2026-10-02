@@ -2,28 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/unit_health.hpp"
+#include "oa/base/game_math.hpp"
 #include <bit>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 
 namespace oa::sim::unit_health {
+using base::game_math::truncate_low32;
+
 namespace {
 int32_t wrap_multiply(int32_t left, int32_t right) noexcept {
     return std::bit_cast<int32_t>(static_cast<uint32_t>(left) * static_cast<uint32_t>(right));
-}
-
-/// Truncates a double toward zero and keeps the low 32 bits of the result.
-///
-/// @param value value to truncate
-/// @return the low 32 bits of the truncated value; 0 for a NaN, an infinity or a
-///         value outside the signed 64-bit range
-int32_t truncate_low32(double value) noexcept {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    const auto wide = static_cast<int64_t>(std::trunc(value));
-    return static_cast<int32_t>(static_cast<uint32_t>(wide));
 }
 
 /// Tests whether a float counts as zero.

@@ -155,10 +155,11 @@ void lz77_streams_match_pins() {
     for (size_t index = 0; index < payload_count; ++index) {
         const auto kind = static_cast<Payload>(index);
         const Bytes input = payload(kind);
-        const Bytes encoded = oa::formats::sqsh::encode_lz77(input, input.size() * 2 + lz77_slack);
+        const Bytes encoded =
+            oa::formats::sqsh::encode_lz77(input, input.size() * 2 + lz77_slack).value.value();
         matches_pinned(std::string("LZ77 of ") + payload_name(kind), encoded, pinned_lz77[index]);
         check(
-            oa::formats::sqsh::decode_lz77(encoded, input.size()) == input,
+            oa::formats::sqsh::decode_lz77(encoded, input.size()).value == input,
             std::string("LZ77 of ") + payload_name(kind) + " decodes back"
         );
     }
@@ -203,7 +204,7 @@ void reads_back(
     const oa::HpiArchive reader(path);
     check(reader.entries().size() == files.size(), what + " lists every entry");
     for (const auto& file : files)
-        check(reader.read(file.path) == file.bytes, what + " reads back " + file.path);
+        check(reader.read(file.path).value == file.bytes, what + " reads back " + file.path);
 }
 
 /// Checks the two pinned archives, and reads them and a zlib archive back.

@@ -146,12 +146,18 @@ void allow_feature_damage(Fixture& f) {
 }
 
 void arm_gun(Fixture& f, uint16_t area_of_effect, uint16_t damage, bool fire) {
-    auto& gun =
-        const_cast<sim::combat_state::WeaponDefinition&>(f.weapons.definition(registry_gun));
-    gun.areaofeffect = area_of_effect;
-    gun.default_damage = damage;
-    sim::weapon_execution::store_weapon_defs(f.weapons, f.match->state().game.weapon_defs);
-    f.match->state().game.weapon_defs[registry_gun].fire_starter = fire ? 1 : 0;
+    const auto keys = "areaofeffect=" + std::to_string(area_of_effect) +
+                      "; firestarter=" + (fire ? "1" : "0") + ";";
+    CHECK(
+        sim::combat_state::install_weapon_text(
+            f.weapons, combat_fixture::test_gun_tdf("0.1", keys, damage)
+        ) == 1
+    );
+    std::copy(
+        f.weapons.records().begin(),
+        f.weapons.records().end(),
+        std::begin(f.match->state().game.weapon_defs)
+    );
 }
 
 // A blast of TESTGUN at a point, with no firing unit.

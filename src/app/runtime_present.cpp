@@ -55,7 +55,12 @@ void Runtime::apply_output_mode() {
         int width = kCanvasWidth, height = kCanvasHeight;
         if (sdl_.window != nullptr)
             SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+        const auto laid_out = match_layout_;
         match_layout_ = oa::ui::display_layout::make_match_layout(width, height);
+        // On a screen of another size the pointer's place is known again
+        // only once SDL reports it.
+        if (match_layout_.width != laid_out.width || match_layout_.height != laid_out.height)
+            match_pointer_known_ = false;
         if (!SDL_SetRenderLogicalPresentation(
                 sdl_.renderer,
                 match_layout_.width,
@@ -69,6 +74,7 @@ void Runtime::apply_output_mode() {
         // frame they are drawn over, and the end screen the match's size while
         // it darkens the match's last frame.
         match_layout_ = {};
+        match_pointer_known_ = false;
         int width = kCanvasWidth, height = kCanvasHeight;
         if (const auto* parent = panel_parent(); parent != nullptr) {
             width = static_cast<int>(parent->width);

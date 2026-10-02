@@ -20,7 +20,7 @@
 #include "oa/sim/model_runtime/instance.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/surface.hpp"
-#include "oa/ui/hud/sprite_placement.hpp"
+#include "oa/present/model/sprite_placement.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -100,7 +100,7 @@ struct FinerModel;
 // Draw state kept with a model instance; the pieces themselves live in
 // sim::model_runtime::Instance.
 struct ModelState {
-    ui::hud::UnitSpriteCache cache{}; // draw count and image presence
+    UnitSpriteCache cache{}; // draw count and image presence
     bool transforms_dirty{true};
     present::SpriteBuffer image{}; // cached model image
     // The cached image was built while the unit was unfinished, so it holds

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/unit_def_loader.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/data/defs/locale.hpp"
 #include "oa/data/mission_types.hpp"
@@ -274,9 +275,9 @@ bool load_unit_def(
     flags = with_bit(flags, OA_UNIT_DEF_FLAG_BUILDER, formats::tdf::get_int(block, "builder", 0));
     flags = with_bit(flags, OA_UNIT_DEF_FLAG_STEALTH, formats::tdf::get_int(block, "stealth", 0));
     unit.cloak_cost = static_cast<float>(formats::tdf::get_int(block, "cloakcost", 0));
-    const auto cloak_cost_whole = static_cast<int32_t>(
-        static_cast<uint64_t>(formats::tdf::truncate_to_int64(static_cast<double>(unit.cloak_cost)))
-    );
+    const auto cloak_cost_whole = static_cast<int32_t>(static_cast<uint64_t>(
+        base::game_math::truncate_to_int64(static_cast<double>(unit.cloak_cost))
+    ));
     unit.cloak_cost_moving =
         static_cast<float>(formats::tdf::get_int(block, "cloakcostmoving", cloak_cost_whole));
     unit.min_cloak_distance =

@@ -152,7 +152,7 @@ uint32_t TickHost::GroundMissions::building_build() {
     if (events & ground::cancel_event) {
         if (auto* frame = target()) {
             const auto& frame_def = def_of(frame->record);
-            const auto unbuilt = ground::truncate_word(
+            const auto unbuilt = truncate_low32(
                 (1.0 - static_cast<double>(frame->record.build_remaining)) *
                 static_cast<double>(frame_def.build_cost_metal)
             );

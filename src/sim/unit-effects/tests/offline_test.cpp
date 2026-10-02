@@ -133,8 +133,9 @@ int main() {
     features[0].dead_feature = 0xffff;
     def.explode_as = "UNITBLAST";
     sim::combat_state::WeaponRegistry weapons;
-    weapons.install_tdf_section(uint8_t{7}, "UNITBLAST", "");
-    weapons.install_explosion_sprites(7, "boom", "blast");
+    (void)sim::combat_state::install_weapon_text(
+        weapons, "[UNITBLAST]{id=7; explosiongaf=boom; explosionart=blast;}"
+    );
     // FX.GAF frame counts and holds of the stock entries this test reaches.
     auto smoke_1 = effect_sequence(12, 5);
     auto smoke_2 = effect_sequence(16, 3);

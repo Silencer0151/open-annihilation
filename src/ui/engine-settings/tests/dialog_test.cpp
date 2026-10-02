@@ -321,7 +321,7 @@ void every_stop_maps_to_its_value_and_back() {
     for (const Expected expected :
          {Expected{settings::Setting::path_search, 8},
           Expected{settings::Setting::unit_limit, 30},
-          Expected{settings::Setting::max_frame_rate, 17},
+          Expected{settings::Setting::max_frame_rate, 19},
           Expected{settings::Setting::screen_size, 5}}) {
         CHECK(geometry::slider_of(expected.setting).stops == expected.stops);
         const renderer::SourceRect track{100, 50, 189, geometry::slider_line_height};
@@ -346,9 +346,13 @@ void every_stop_maps_to_its_value_and_back() {
     CHECK(state.unit_limit == 250);
     geometry::set_stop(state, settings::Setting::unit_limit, 29);
     CHECK(state.unit_limit == 1500);
+    // The frame rate from 30, a frame for each tick, to 120 in steps of 5.
     geometry::set_stop(state, settings::Setting::max_frame_rate, 0);
+    CHECK(state.max_frame_rate == 30);
+    CHECK(geometry::value_text(settings::Setting::max_frame_rate, state) == "30 fps");
+    geometry::set_stop(state, settings::Setting::max_frame_rate, 2);
     CHECK(state.max_frame_rate == 40);
-    geometry::set_stop(state, settings::Setting::max_frame_rate, 16);
+    geometry::set_stop(state, settings::Setting::max_frame_rate, 18);
     CHECK(state.max_frame_rate == 120);
     // A limit off the slider's steps, such as an installation's 21, shows at
     // the nearest stop and keeps its value until moved.

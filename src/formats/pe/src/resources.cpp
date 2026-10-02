@@ -3,6 +3,7 @@
 
 // The PE headers, the section table and the resource directory walk.
 #include "oa/formats/pe.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,9 @@
 
 namespace oa::formats::pe {
 namespace {
+
+using base::bytes::load_le16;
+using base::bytes::load_le32;
 
 // The DOS header: "MZ" at +0 and, at +0x3c, the file offset of the PE
 // signature.
@@ -83,16 +87,6 @@ struct Section {
     uint32_t file_offset{};
 };
 
-[[nodiscard]] uint16_t read_le16(std::span<const uint8_t> bytes, uint64_t offset) noexcept {
-    return static_cast<uint16_t>(bytes[offset] | bytes[offset + 1] << 8);
-}
-
-[[nodiscard]] uint32_t read_le32(std::span<const uint8_t> bytes, uint64_t offset) noexcept {
-    return static_cast<uint32_t>(bytes[offset]) | static_cast<uint32_t>(bytes[offset + 1]) << 8 |
-           static_cast<uint32_t>(bytes[offset + 2]) << 16 |
-           static_cast<uint32_t>(bytes[offset + 3]) << 24;
-}
-
 // Tests whether `size` bytes from `offset` lie within `total` bytes.
 [[nodiscard]] bool fits(uint64_t total, uint64_t offset, uint64_t size) noexcept {
     return offset <= total && size <= total - offset;
@@ -127,7 +121,7 @@ struct Section {
     };
     for (size_t index = 0; index < name.size(); ++index) {
         const uint16_t unit =
-            read_le16(resources, string + name_length_size + index * name_unit_size);
+            load_le16(resources.data() + string + name_length_size + index * name_unit_size);
         const auto wanted = static_cast<uint16_t>(static_cast<unsigned char>(name[index]));
         if (unit >= ascii_limit || lower(unit) != lower(wanted))
             return false;
@@ -147,22 +141,23 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
     const uint64_t size = image.size();
     if (size < dos_header_size)
         return fail(Error::truncated_dos_header, 0);
-    if (read_le16(image, 0) != dos_signature)
+    if (load_le16(image.data()) != dos_signature)
         return fail(Error::missing_dos_signature, 0);
-    const uint64_t pe_header = read_le32(image, pe_header_offset_field);
+    const uint64_t pe_header = load_le32(image.data() + pe_header_offset_field);
     if (!fits(size, pe_header, pe_signature_size + file_header_size))
         return fail(Error::truncated_pe_header, pe_header_offset_field);
-    if (read_le32(image, pe_header) != pe_signature)
+    if (load_le32(image.data() + pe_header) != pe_signature)
         return fail(Error::missing_pe_signature, pe_header);
     const uint64_t file_header = pe_header + pe_signature_size;
-    const uint16_t section_count = read_le16(image, file_header + section_count_field);
+    const uint16_t section_count = load_le16(image.data() + file_header + section_count_field);
     if (section_count > limit::sections)
         return fail(Error::too_many_sections, file_header + section_count_field);
-    const uint64_t optional_size = read_le16(image, file_header + optional_header_size_field);
+    const uint64_t optional_size =
+        load_le16(image.data() + file_header + optional_header_size_field);
     const uint64_t optional_header = file_header + file_header_size;
     if (optional_size < optional_magic_size || !fits(size, optional_header, optional_size))
         return fail(Error::truncated_optional_header, optional_header);
-    const uint16_t magic = read_le16(image, optional_header);
+    const uint16_t magic = load_le16(image.data() + optional_header);
     uint64_t directory_count_field = 0;
     uint64_t data_directories = 0;
     if (magic == pe32_magic) {
@@ -176,14 +171,15 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
     }
     if (!fits(optional_size, directory_count_field, directory_count_size))
         return fail(Error::truncated_optional_header, optional_header);
-    if (read_le32(image, optional_header + directory_count_field) <= resource_directory_index)
+    if (load_le32(image.data() + optional_header + directory_count_field) <=
+        resource_directory_index)
         return fail(Error::no_resource_directory, optional_header + directory_count_field);
     const uint64_t resource_entry =
         data_directories + resource_directory_index * data_directory_size;
     if (!fits(optional_size, resource_entry, data_directory_size))
         return fail(Error::truncated_optional_header, optional_header);
-    const uint32_t resource_rva = read_le32(image, optional_header + resource_entry);
-    const uint32_t resource_size = read_le32(image, optional_header + resource_entry + 4);
+    const uint32_t resource_rva = load_le32(image.data() + optional_header + resource_entry);
+    const uint32_t resource_size = load_le32(image.data() + optional_header + resource_entry + 4);
 
     const uint64_t section_table = optional_header + optional_size;
     if (!fits(size, section_table, section_count * section_header_size))
@@ -191,12 +187,12 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
     std::array<Section, limit::sections> section_storage{};
     for (uint16_t index = 0; index < section_count; ++index) {
         const uint64_t header = section_table + index * section_header_size;
-        const uint32_t virtual_size = read_le32(image, header + section_virtual_size_field);
-        const uint32_t raw_size = read_le32(image, header + section_raw_size_field);
+        const uint32_t virtual_size = load_le32(image.data() + header + section_virtual_size_field);
+        const uint32_t raw_size = load_le32(image.data() + header + section_raw_size_field);
         auto& section = section_storage[index];
-        section.virtual_address = read_le32(image, header + section_virtual_address_field);
+        section.virtual_address = load_le32(image.data() + header + section_virtual_address_field);
         section.file_size = virtual_size == 0 ? raw_size : std::min(virtual_size, raw_size);
-        section.file_offset = read_le32(image, header + section_raw_offset_field);
+        section.file_offset = load_le32(image.data() + header + section_raw_offset_field);
     }
     const std::span<const Section> sections(section_storage.data(), section_count);
 
@@ -217,8 +213,8 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
         path[level] = table;
         if (!fits(resource_size, table, directory_table_size))
             return fail(Error::truncated_resource_directory, table_pointer);
-        const uint64_t named = read_le16(resources, table + named_count_field);
-        const uint64_t ids = read_le16(resources, table + id_count_field);
+        const uint64_t named = load_le16(resources.data() + table + named_count_field);
+        const uint64_t ids = load_le16(resources.data() + table + id_count_field);
         const uint64_t entries = table + directory_table_size;
         if (!fits(resource_size, entries, (named + ids) * directory_entry_size))
             return fail(Error::truncated_resource_directory, *resource_offset + table);
@@ -229,14 +225,14 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
         std::optional<uint64_t> found;
         for (uint64_t index = first; index < last && !found; ++index) {
             const uint64_t entry = entries + index * directory_entry_size;
-            const uint32_t name = read_le32(resources, entry);
+            const uint32_t name = load_le32(resources.data() + entry);
             if (level == 0) {
                 if ((name & name_is_string) == 0)
                     continue;
                 const uint64_t string = name & ~name_is_string;
                 if (!fits(resource_size, string, name_length_size))
                     return fail(Error::truncated_resource_name, *resource_offset + entry);
-                const uint16_t length = read_le16(resources, string);
+                const uint16_t length = load_le16(resources.data() + string);
                 if (!fits(resource_size, string + name_length_size, length * name_unit_size))
                     return fail(Error::truncated_resource_name, *resource_offset + string);
                 if (name_matches(resources, string, length, key.type_name))
@@ -254,7 +250,7 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
             return fail(missing[level], *resource_offset + table);
         }
         const uint64_t target_field = *found + entry_target_field;
-        const uint32_t target = read_le32(resources, target_field);
+        const uint32_t target = load_le32(resources.data() + target_field);
         const uint64_t next = target & ~target_is_directory;
         if (level + 1 < resource_levels) {
             if ((target & target_is_directory) == 0)
@@ -269,8 +265,8 @@ ResourceLookup find_resource(std::span<const uint8_t> image, const ResourceKey& 
             return fail(Error::unexpected_directory, *resource_offset + target_field);
         if (!fits(resource_size, next, data_entry_size))
             return fail(Error::truncated_data_entry, *resource_offset + target_field);
-        const uint32_t data_rva = read_le32(resources, next);
-        const uint32_t data_size = read_le32(resources, next + data_size_field);
+        const uint32_t data_rva = load_le32(resources.data() + next);
+        const uint32_t data_size = load_le32(resources.data() + next + data_size_field);
         const auto data_offset = file_offset_of(sections, size, data_rva, data_size);
         if (!data_offset)
             return fail(Error::data_outside_sections, *resource_offset + next);

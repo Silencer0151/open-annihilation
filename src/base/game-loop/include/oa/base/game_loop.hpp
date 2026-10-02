@@ -209,6 +209,34 @@ void reset_mode_timing(Timing& timing, bool multiplayer) noexcept;
 /// @quirk The product wraps at 32 bits before the division.
 uint32_t scaled_clock(uint32_t milliseconds, uint32_t scale) noexcept;
 
+/// The largest reading scaled_clock gives. Its product keeps 32 bits, so a
+/// clock read through it runs from 0 through this many units and then turns
+/// over to 0: about every 39.8 hours at 30 units a second, and again
+/// whenever the milliseconds themselves turn over at 2^32.
+inline constexpr uint32_t scaled_clock_turn = 4'294'967;
+
+/// Tells whether a scaled_clock reading lies before another.
+///
+/// A reading lies before another when it is the smaller by less than half
+/// a turn of the clock; one smaller by more has turned over to 0 since the
+/// other was read, and lies after it, as does a larger reading however far.
+/// The other may be a reading plus a wait, past scaled_clock_turn.
+///
+/// @param reading the reading
+/// @param other the reading, or reading plus a wait, it is compared with
+/// @return true when `reading` lies before `other`
+[[nodiscard]] bool scaled_clock_before(uint32_t reading, uint32_t other) noexcept;
+
+/// Returns the clock units from an earlier scaled_clock reading to a later one.
+///
+/// A later reading below the earlier one was read after the clock turned
+/// over to 0. Readings a whole turn or more apart count less than a turn.
+///
+/// @param later the later reading
+/// @param earlier the earlier reading, at most scaled_clock_turn
+/// @return the units between them, below scaled_clock_turn
+[[nodiscard]] uint32_t scaled_clock_elapsed(uint32_t later, uint32_t earlier) noexcept;
+
 // Per-mode tick handlers set_mode installs; the main loop runs them.
 enum class ModeCallback : uint32_t {
     enter_frontend = 1,

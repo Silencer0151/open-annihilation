@@ -1,31 +1,33 @@
 # Unit definitions
 
-`oa-data-unit-definitions` provides a bounded reusable TDF reader and converts a
-Total Annihilation `[UNITINFO]` FBI record into native typed fields used by the
-simulation, renderer, model loader, and script attachment code. Lookup is ASCII
-case-insensitive and unconsumed fields remain available in `unknown_fields`.
+A unit's FBI file is read the way 3.1c reads it, and only there: `src/data/defs`
+reads every `units/*.FBI` header (`load_unit_header`), drops the unavailable
+types and sorts the rest by unit name (`unit_defs_finalize_catalog`), then
+reads each kept type's whole `[UNITINFO]` section into its `UnitDef` record
+(`load_unit_def`). Its TDF reader and number getters are 3.1c's: a key that
+is present takes its text's value even with no number in it, and a value that
+opens with `;` ends at once, so the rest of that line runs into the next key's
+name.
 
-Field defaults, narrowing and derived values match 3.1c: `objectname` falls
-back to `unitname`; standing orders default to 2; the self-destruct countdown
-defaults to 5; `bankscale` and `damagemodifier` default to integer `0x10000`;
-both move-rate fields default to twice the already converted `maxvelocity`;
-bytes and words keep their low bits; and boolean fields use only bit zero.
-Fixed-point fields stay 16.16 integers (the parsed value times 65536,
-truncated toward zero with the low 32 bits kept) rather than native floats.
+`oa-data-unit-definitions` takes what the simulation, renderer, model loader
+and script attachment read from that record:
 
-`load_unit_catalog` builds the unit catalog. Its `CatalogAssetReader` asks the
-host resource layer for the effective merged `units/*.FBI` view, loads each
-winning file, applies the runtime compatibility verdict, sorts by `unitname`
-case-insensitively, and assigns one-based 16-bit type IDs. Slot zero remains
-reserved as in the game.
+- `unit_definition_from` fills the typed `UnitDefinition` fields from a loaded
+  `UnitDef`. Names come from the tables the record refers to: its movement
+  class, its sound category (a name SOUND.TDF lacks is read as a number, so it
+  gives category 0, as in 3.1c), each weapon's section name (empty for weapon
+  0, the stand-in for a missing or unknown name) and every category whose mask
+  holds the type. Footprint, water depths and slopes are the record's, its
+  movement class's when it names one. Fixed-point fields stay 16.16 integers.
+- `resolve_runtime_metadata` gives the movement handle, the footprint, slope
+  and water limits, the yard map the FBI loader compiled and the sensor
+  ranges.
+- `target_category_masks` copies each weapon's bad-target mask and the
+  no-chase mask out of the category registry once every type has joined its
+  categories.
 
-`load_movement_classes` and `resolve_runtime_metadata` turn MOVEINFO plus an
-FBI record into the movement handle, final footprint/slope/water constraints,
-compiled per-cell yard mask, and runtime sensor ranges.
-
-`resolve_unit_categories` builds the 512-type inverted category registry and
-resolves each unit's three weapon bad-target masks plus its no-chase mask for
-automatic targeting.
+The library also keeps a bounded TDF reader, `parse_tdf`, which other formats
+(scenario, side and feature files) are read with.
 
 Build and test independently:
 
@@ -35,6 +37,6 @@ cmake --build local/build-unit-definitions
 ctest --test-dir local/build-unit-definitions --output-on-failure
 ```
 
-Inside the engine's build, `unit-definitions-data` loads every unit
-definition of the installation `OA_GAME_DIR` names through its archives and
-resolves it against the installation's movement classes and categories.
+Inside the engine's build, `unit-definitions-data` loads every unit of the
+installation `OA_GAME_DIR` names as a match loads them, through its archives,
+and checks their fields, metadata and categories.

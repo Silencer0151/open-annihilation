@@ -23,6 +23,8 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/console/hotkeys.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/hud/game_clock.hpp"
+#include "oa/ui/hud/status_panel.hpp"
 #include "oa/ui/hud/share_panel.hpp"
 
 #include <SDL3/SDL.h>
@@ -44,9 +46,6 @@ namespace console = oa::ui::console;
 
 namespace {
 
-constexpr uint32_t kTicksPerSecond = 30;
-constexpr int kClockInset =
-    2; // source pixels between the game clock and the side column / bottom bar
 constexpr uint8_t kConsolePlacer = 10; // placing player "Feature" records: none
 constexpr uint32_t kCellShift = 20;    // 16.16 world units to 16-pixel map cells
 static_assert(console::kMessageNoSender == oa::sim::messages::sender_none);
@@ -703,34 +702,54 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
     return true;
 }
 
+const oa::formats::fnt::Font* Runtime::console_clock_font() {
+    if (!match_)
+        return nullptr;
+    if (oa::ui::hud::clock_font(match_->state().game) == oa::ui::hud::ClockFont::message_log)
+        return &message_font();
+    return match_label_font();
+}
+
 void Runtime::draw_console_clock() {
+    namespace hud = oa::ui::hud;
+    namespace layout = oa::ui::display_layout;
     if (!match_)
         return;
     const oa::Game& game = match_->state().game;
     if ((console::console_flags(game) & console::console_flag::clock) == 0)
         return;
-    const oa::formats::fnt::Font* font = match_label_font();
+    const oa::formats::fnt::Font* font = console_clock_font();
     if (font == nullptr)
         return;
-    const uint32_t seconds = match_timing_.tick / kTicksPerSecond;
-    char text[40];
-    std::snprintf(
+
+    struct Label {
+        Runtime* runtime;
+        std::string text;
+    } label{this, {}};
+
+    char text[64];
+    hud::format_game_time(
+        game,
+        [](void* context, const char* line) -> const char* {
+            auto& label = *static_cast<Label*>(context);
+            label.text = label.runtime->translate_ui(line);
+            return label.text.c_str();
+        },
+        &label,
         text,
-        sizeof text,
-        "Game Time : %02u:%02u:%02u",
-        seconds / 3600,
-        (seconds / 60) % 60,
-        seconds % 60
+        sizeof text
     );
     ensure_ui_colors();
     const auto scale = hud_text_scale();
-    const auto inset = kClockInset * scale;
+    const auto height = static_cast<uint8_t>(font->nominal_height);
+    // The pen's rows above the bottom bar, then the glyphs' lift above the pen.
+    const int pen_rise =
+        layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height);
     const auto at = canvas_paint(
-        match_layout_.left + inset,
-        match_layout_.bottom_bar_y() - inset -
-            static_cast<int>(oa::formats::fnt::line_height(*font)) * scale
+        match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale,
+        match_layout_.bottom_bar_y() - (pen_rise + oa::formats::fnt::row_lift(*font)) * scale
     );
-    draw_match_label(at.x, at.y, text, ui_colors_[kUiColorText], scale);
+    draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
 }
 
 void Runtime::check_console_commands() {

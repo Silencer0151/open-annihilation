@@ -195,10 +195,16 @@ void carried_unit_keeps_released_weapons() {
 // through the hit reaction).
 void direct_hit_marks_the_shooter() {
     Fixture f;
-    auto& gun = const_cast<sim::combat_state::WeaponDefinition&>(f.weapons.definition(1));
-    gun.default_damage = 50;
-    gun.areaofeffect = 16;
-    sim::weapon_execution::store_weapon_defs(f.weapons, f.match->state().game.weapon_defs);
+    CHECK(
+        sim::combat_state::install_weapon_text(
+            f.weapons, combat_fixture::test_gun_tdf("0.1", "areaofeffect=16;", 50)
+        ) == 1
+    );
+    std::copy(
+        f.weapons.records().begin(),
+        f.weapons.records().end(),
+        std::begin(f.match->state().game.weapon_defs)
+    );
     auto& shooter = f.spawn(0, 64, 64);
     auto& enemy = f.spawn(1, 160, 64);
     auto& friendly = f.spawn(0, 64, 160);

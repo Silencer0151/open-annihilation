@@ -7,7 +7,10 @@
 // shelf and land to put them on.
 #pragma once
 
-#include "oa/data/mission_types.hpp"
+#include "oa/data/defs/asset_files.hpp"
+#include "oa/data/defs/unit_catalog.hpp"
+#include "oa/data/defs/unit_def_loader.hpp"
+#include "oa/data/defs/unit_header.hpp"
 #include "oa/sim/map_runtime.hpp"
 #include "oa/sim/map_runtime/feature_defs.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -87,16 +90,65 @@ class InstalledFeatureReader final : public sim::map_runtime::FeatureAssetReader
 
 /// Named unit types of the installed game, as a Match's offline inputs take them.
 ///
-/// Type 0 is reserved; the named types follow in the order given. Weapons are
-/// every installed weapon, and the category masks are resolved over the named
-/// types alone, which the categories they name need.
+/// Each FBI loads as a match loads it: its header, then the whole file into
+/// a UnitDef record, from which the typed fields and the runtime metadata
+/// come. Type 0 is reserved; the named types follow in the order given.
+/// Weapons are every installed weapon, and the category masks are resolved
+/// over the named types alone, which the categories they name need.
 struct InstalledUnits {
+    // The tables the unit files load against, released once the types are built.
+    struct Tables {
+        data::defs::SoundCategoryTable sounds{};
+        data::defs::WeaponTdfSet weapon_files{};
+        data::defs::UnitDefTables units{};
+
+        /// Empties the tables.
+        Tables() {
+            data::defs::weapon_tdf_set_init(&weapon_files);
+            data::defs::unit_def_tables_init(&units);
+        }
+
+        /// Frees what the tables hold.
+        ~Tables() {
+            data::defs::sound_category_table_free(&sounds);
+            data::defs::weapon_tdf_set_free(&weapon_files);
+            data::defs::unit_def_tables_free(&units);
+        }
+
+        Tables(const Tables&) = delete;
+        Tables& operator=(const Tables&) = delete;
+    };
+
+    // Each unit's corpse, loaded into the feature table as the FBI names it.
+    struct Corpses {
+        sim::map_runtime::FeatureDefTable& features;
+        std::vector<data::unit_definitions::TdfDocument>& documents;
+        std::string error;
+
+        /// Finds or loads a corpse feature (UnitDefLoadHost::corpse).
+        ///
+        /// @param context the Corpses
+        /// @param name feature name
+        /// @return its FeatureDef index; -1 when it does not load
+        static int16_t load(void* context, const char* name) {
+            auto& self = *static_cast<Corpses*>(context);
+            const auto found = sim::map_runtime::find_or_load_feature(
+                self.features, self.documents, name, nullptr
+            );
+            if (!found.ok()) {
+                self.error = found.error->message;
+                return -1;
+            }
+            return static_cast<int16_t>(found.index);
+        }
+    };
+
     std::vector<sim::unit_spawn::LoadedType> loaded;
     std::vector<sim::unit_spawn::Type> types;
     std::vector<data::unit_definitions::UnitDefinition> definitions;
     std::vector<data::unit_definitions::RuntimeDefinitionMetadata> metadata;
     std::vector<sim::match_runtime::RuntimeTypeFields> fields;
-    data::unit_definitions::ResolvedCategoryRegistry categories;
+    std::vector<data::unit_definitions::UnitTargetCategoryMasks> target_masks;
     sim::combat_state::WeaponRegistry weapons;
     std::vector<data::unit_definitions::TdfDocument> feature_documents;
     sim::map_runtime::FeatureDefTable features;
@@ -108,93 +160,103 @@ struct InstalledUnits {
     /// @param store the installed game's store
     /// @param names unit names, the FBI file names without extension
     InstalledUnits(const AssetStore& store, std::initializer_list<std::string_view> names) {
-        const auto text = [&store](std::string_view path) {
-            const auto bytes = read_game_file(store, path);
-            if (bytes.empty())
-                throw std::runtime_error("the installed game has no " + std::string(path));
-            return std::string(bytes.begin(), bytes.end());
-        };
-        for (const auto& path : store.list_effective("weapons", ".tdf")) {
-            const auto document = data::unit_definitions::parse_tdf(text(path));
-            if (!document)
-                throw std::runtime_error(path + ": " + document.error.message);
-            (void)sim::combat_state::install_weapon_tdf(weapons, document.value);
-        }
+        const auto files = data::defs::asset_store_files(&store);
+        (void)sim::combat_state::install_weapon_files(weapons, files);
         auto documents = sim::map_runtime::load_feature_documents(InstalledFeatureReader(store));
         if (!documents)
             throw std::runtime_error("feature documents: " + documents.error.message);
         feature_documents = std::move(documents.value);
-        const auto movement =
-            data::unit_definitions::load_movement_classes(text("gamedata/moveinfo.tdf"));
-        if (!movement)
-            throw std::runtime_error("moveinfo.tdf: " + movement.error.message);
+        const auto movement = std::make_unique<data::defs::MoveClassTable>();
+        if (!data::defs::load_move_classes(&files, movement.get(), nullptr, nullptr))
+            throw std::runtime_error("moveinfo.tdf does not load");
+        Tables tables;
+        if (!data::defs::load_sound_categories(&files, &tables.sounds, nullptr))
+            throw std::runtime_error("sound.tdf does not load");
+        if (!data::defs::load_weapon_tdf_set(&files, nullptr, false, &tables.weapon_files))
+            throw std::runtime_error("the weapon files do not list");
         const auto count = names.size() + 1;
+        if (!data::defs::unit_def_tables_allocate(&tables.units, static_cast<uint32_t>(count)))
+            throw std::runtime_error("the unit table does not allocate");
         loaded.resize(count);
         types.resize(count);
         definitions.resize(count);
         metadata.resize(count);
         fields.resize(count);
+        target_masks.resize(count);
         InstalledReader reader(store);
-        data::unit_definitions::UnitCatalog catalog;
-        std::vector<int16_t> corpses(count, -1);
+        Corpses corpses{features, feature_documents, {}};
+        const data::defs::UnitDefLoadHost corpse_host{&corpses, Corpses::load};
+        const data::defs::UnitHeaderSources header_sources{
+            "", &tables.weapon_files, 3, 1, false, false
+        };
+        const data::defs::UnitDefSources unit_sources{
+            "",
+            movement.get(),
+            weapons.records().data(),
+            &tables.sounds,
+            &tables.units.categories,
+            &tables.units.blocks,
+            &corpse_host
+        };
+        const data::unit_definitions::UnitDefinitionSources definition_sources{
+            movement.get(), weapons.records().data(), &tables.sounds, &tables.units.categories
+        };
         uint16_t index = 0;
         for (const auto name : names) {
             ++index;
-            const auto fbi = "units/" + std::string(name) + ".fbi";
-            auto definition = data::unit_definitions::load_fbi(text(fbi), fbi);
-            if (!definition)
-                throw std::runtime_error(fbi + ": " + definition.error.message);
-            auto resolved =
-                data::unit_definitions::resolve_runtime_metadata(definition.value, movement.value);
+            auto& record = tables.units.records[index];
+            record.type_id = index;
+            char fbi[data::defs::path_capacity];
+            data::defs::build_variant_path(
+                &files, fbi, sizeof fbi, "units", std::string(name).c_str(), "FBI", nullptr
+            );
+            bool refused = false;
+            if (!data::defs::load_unit_header(&files, fbi, record, header_sources, &refused) ||
+                !data::defs::load_unit_def(&files, fbi, record, unit_sources))
+                throw std::runtime_error(std::string(fbi) + " does not load");
+            if (!corpses.error.empty())
+                throw std::runtime_error(std::string(fbi) + " corpse: " + corpses.error);
+            auto definition =
+                data::unit_definitions::unit_definition_from(record, definition_sources);
+            auto resolved = data::unit_definitions::resolve_runtime_metadata(
+                record, *movement, tables.units.blocks
+            );
             if (!resolved)
-                throw std::runtime_error(fbi + ": " + resolved.error.message);
+                throw std::runtime_error(std::string(fbi) + ": " + resolved.error.message);
             sim::unit_spawn::RuntimeBindings bindings;
             bindings.enabled = true;
             bindings.resolved_weapon_present =
                 sim::combat_state::bind_unit_weapons(
-                    weapons,
-                    {definition.value.weapon1, definition.value.weapon2, definition.value.weapon3}
+                    weapons, {definition.weapon1, definition.weapon2, definition.weapon3}
                 )
                     .resolved_nondefault_weapon;
-            bindings.default_mission =
-                data::mission_types::index_for_name(definition.value.default_mission_type);
+            bindings.default_mission = static_cast<uint8_t>(record.default_mission_type);
             bindings.movement_footprint =
                 std::array<int16_t, 2>{resolved.value.footprint_x, resolved.value.footprint_z};
-            loaded[index] = sim::unit_spawn::load_runtime_type(definition.value, bindings, reader);
+            loaded[index] = sim::unit_spawn::load_runtime_type(definition, bindings, reader);
             types[index] = loaded[index].type;
-            if (!definition.value.corpse.empty()) {
-                const auto found = sim::map_runtime::find_or_load_feature(
-                    features, feature_documents, definition.value.corpse, nullptr
-                );
-                if (!found.ok())
-                    throw std::runtime_error(fbi + " corpse: " + found.error->message);
-                corpses[index] = static_cast<int16_t>(found.index);
-            }
-            catalog.entries.push_back({index, fbi, definition.value});
-            definitions[index] = std::move(definition.value);
+            definitions[index] = std::move(definition);
             metadata[index] = std::move(resolved.value);
         }
         if (const auto error =
                 sim::map_runtime::load_feature_links(features, feature_documents, nullptr))
             throw std::runtime_error("feature links: " + error->message);
-        auto registry = data::unit_definitions::resolve_unit_categories(catalog);
-        if (!registry)
-            throw std::runtime_error("categories: " + registry.error.message);
-        categories = std::move(registry.value);
-        categories.target_masks.resize(count);
         for (std::size_t type = 1; type < count; ++type) {
+            target_masks[type] = data::unit_definitions::target_category_masks(
+                tables.units.records[type], tables.units.categories
+            );
             auto& field = fields[type];
             field.definition = &definitions[type];
             field.yard_mask = metadata[type].yard_cells;
             field.runtime_metadata = &metadata[type];
-            field.target_masks = &categories.target_masks[type];
+            field.target_masks = &target_masks[type];
             // A movement class's handle is its slot + 1; 0 means none.
             field.movement_class = metadata[type].movement_class_handle
                                        ? static_cast<sim::unit_spawn::AssetHandle>(
                                              *metadata[type].movement_class_handle
                                          ) + 1U
                                        : sim::unit_spawn::AssetHandle{0};
-            field.corpse_feature = corpses[type];
+            field.corpse_feature = tables.units.records[type].corpse;
         }
     }
 

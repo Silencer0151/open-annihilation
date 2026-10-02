@@ -45,7 +45,7 @@ struct RestrictPanel {
     int32_t saved[kMaxSyncUnits]{}; // limits when the panel opened
     uint8_t flags[kMaxSyncUnits]{};
     bool host{};
-    int32_t anim_tick{};
+    uint32_t anim_tick{};    // the tick the next row's picture loads after
     int32_t first_visible{}; // DESCLIST's first visible row
     // PICLIST rows visited and the pictures loaded for them.
     int32_t picture_rows{};

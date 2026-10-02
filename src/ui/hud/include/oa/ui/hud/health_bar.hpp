@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Health bar drawn under a unit on the battlefield, and whether the unit
-// panel shows a unit's damage bar.
+// Health bar and squad digit drawn under a unit on the battlefield, and
+// whether the unit panel shows a unit's damage bar.
 #pragma once
 
 #include "oa/ui/hud/boundary.hpp"
@@ -34,6 +34,27 @@ inline constexpr uint16_t kGraphicsDamageBars = 0x0001;
 /// @return true with damage bars on (kGraphicsDamageBars) for the viewpoint
 ///         player's own units only.
 [[nodiscard]] bool draws_health_bar(const World& world, const Unit& unit) noexcept;
+
+/// Tells whether the battlefield draws a unit's squad digit (the Ctrl+digit
+/// group it is in) below its health bar.
+///
+/// The digit follows the health bar's rule: another player's squads, an
+/// ally's or a computer player's, never show, and watching another player
+/// (Game.viewpoint_player) shows that player's squads instead.
+///
+/// @param world World holding the DamageBars option and the viewpoint player.
+/// @param unit Unit under consideration.
+/// @return true when the unit is in a squad (Unit.squad nonzero), damage bars
+///         are on (kGraphicsDamageBars) and the viewpoint player owns it.
+/// @quirk With damage bars off no squad digit shows either.
+[[nodiscard]] bool draws_squad_digit(const World& world, const Unit& unit) noexcept;
+
+/// Gives the character drawn as a unit's squad digit.
+///
+/// @param unit Unit in a squad.
+/// @return '0' plus the low byte of Unit.squad: '1'..'9' for the squads the
+///         keys make.
+[[nodiscard]] char squad_digit(const Unit& unit) noexcept;
 
 /// Tells whether the unit panel draws a unit's damage bar.
 ///

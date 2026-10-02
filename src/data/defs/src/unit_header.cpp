@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/unit_header.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/data/defs/locale.hpp"
 
@@ -58,7 +59,7 @@ uint32_t with_bit(uint32_t word, uint32_t bit, int32_t value) noexcept {
 // Low 32 bits of floor(value) truncated toward zero to 64 bits.
 int32_t floor_whole(double value) noexcept {
     return static_cast<int32_t>(
-        static_cast<uint64_t>(formats::tdf::truncate_to_int64(std::floor(value)))
+        static_cast<uint64_t>(base::game_math::truncate_to_int64(std::floor(value)))
     );
 }
 

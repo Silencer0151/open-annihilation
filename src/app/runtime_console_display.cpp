@@ -12,14 +12,20 @@
 #include "oa/sim/selection.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/hud/game_clock.hpp"
+#include "oa/ui/hud/game_fields.hpp"
+#include "oa/ui/hud/status_panel.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace oa::app {
 
@@ -396,29 +402,112 @@ void Runtime::check_console_display_commands(const std::function<void(const char
         (console::console_flags(game) & console::console_flag::clock) != 0 && saved("clock") == 1,
         "+clock did not set and save the clock"
     );
-    const auto with = frame();
-    int x0 = with.width, y0 = with.height, x1 = -1, y1 = -1;
-    for (int y = 0; y < static_cast<int>(with.height); ++y)
-        for (int x = 0; x < static_cast<int>(with.width); ++x) {
-            const auto at = (static_cast<std::size_t>(y) * with.width + x) * 3U;
-            if (std::equal(
-                    with.rgb.begin() + at, with.rgb.begin() + at + 3, without.rgb.begin() + at
-                ))
-                continue;
-            x0 = std::min(x0, x);
-            y0 = std::min(y0, y);
-            x1 = std::max(x1, x);
-            y1 = std::max(y1, y);
-        }
-    const oa::formats::fnt::Font* font = match_label_font();
+    // The clock is the only change between the frames. Its pixels are those
+    // of "Game Time : hh:mm:ss" written in the font the message log leaves
+    // (COMIX while the log shows lines, the side's font once it is off), its
+    // pen at screen column 0x82 and the font's height plus 0x22 rows above
+    // the screen's bottom, its glyph rows the font's lift above the pen, in
+    // UI colour 15.
+    namespace hud = oa::ui::hud;
+    namespace layout = oa::ui::display_layout;
     const int scale = hud_text_scale();
-    const int text_top = match_layout_.bottom_bar_y() - 2 * scale -
-                         static_cast<int>(oa::formats::fnt::line_height(*font)) * scale;
-    require(
-        x1 >= 0 && x0 >= match_layout_.left + 2 * scale && y0 >= text_top &&
-            y1 < match_layout_.bottom_bar_y() - scale && x0 < match_layout_.left + 8 * scale,
-        "+clock drew nothing, or not at the side column above the bottom bar"
-    );
+    const auto changed_box = [](const renderer::Surface& a, const renderer::Surface& b) {
+        std::array<int, 4> box{static_cast<int>(a.width), static_cast<int>(a.height), -1, -1};
+        for (int y = 0; y < static_cast<int>(a.height); ++y)
+            for (int x = 0; x < static_cast<int>(a.width); ++x) {
+                const auto at = (static_cast<std::size_t>(y) * a.width + x) * 3U;
+                if (std::equal(a.rgb.begin() + at, a.rgb.begin() + at + 3, b.rgb.begin() + at))
+                    continue;
+                box = {
+                    std::min(box[0], x),
+                    std::min(box[1], y),
+                    std::max(box[2], x),
+                    std::max(box[3], y)
+                };
+            }
+        return box;
+    };
+    const auto check_clock = [&](const oa::formats::fnt::Font* wanted, const char* font_name) {
+        const oa::formats::fnt::Font* font = console_clock_font();
+        require(
+            wanted != nullptr && font == wanted,
+            std::string("the clock is not written in ") + font_name
+        );
+        const auto with = frame();
+        const auto drawn = changed_box(with, without);
+        char text[64];
+        struct Label {
+            Runtime* runtime;
+            std::string text;
+        } label{this, {}};
+        hud::format_game_time(
+            game,
+            [](void* context, const char* line) -> const char* {
+                auto& label = *static_cast<Label*>(context);
+                label.text = label.runtime->translate_ui(line);
+                return label.text.c_str();
+            },
+            &label,
+            text,
+            sizeof text
+        );
+        const auto text_width = oa::formats::fnt::measure_text(*font, text);
+        const auto rows = static_cast<uint32_t>(font->nominal_height);
+        std::vector<uint8_t> ink(static_cast<std::size_t>(text_width) * rows);
+        std::vector<uint8_t> covered(ink.size());
+        (void)oa::formats::fnt::raster_text(
+            {text_width, rows, text_width, ink, covered}, *font, text, 0, 0
+        );
+        std::array<int, 4> glyphs{static_cast<int>(text_width), static_cast<int>(rows), -1, -1};
+        for (uint32_t row = 0; row < rows; ++row)
+            for (uint32_t column = 0; column < text_width; ++column)
+                if (covered[static_cast<std::size_t>(row) * text_width + column] != 0)
+                    glyphs = {
+                        std::min<int>(glyphs[0], static_cast<int>(column)),
+                        std::min<int>(glyphs[1], static_cast<int>(row)),
+                        std::max<int>(glyphs[2], static_cast<int>(column)),
+                        std::max<int>(glyphs[3], static_cast<int>(row))
+                    };
+        const auto height = static_cast<uint8_t>(font->nominal_height);
+        const int pen_x = match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale;
+        const int glyph_top =
+            match_layout_.bottom_bar_y() -
+            (layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height) +
+             oa::formats::fnt::row_lift(*font)) *
+                scale;
+        const std::array<int, 4> expected{
+            pen_x + glyphs[0] * scale,
+            glyph_top + glyphs[1] * scale,
+            pen_x + (glyphs[2] + 1) * scale - 1,
+            glyph_top + (glyphs[3] + 1) * scale - 1
+        };
+        require(
+            glyphs[2] >= 0 && drawn == expected,
+            std::string("+clock drew ") + text + " over " + std::to_string(drawn[0]) + "," +
+                std::to_string(drawn[1]) + "-" + std::to_string(drawn[2]) + "," +
+                std::to_string(drawn[3]) + ", not in " + font_name + " over " +
+                std::to_string(expected[0]) + "," + std::to_string(expected[1]) + "-" +
+                std::to_string(expected[2]) + "," + std::to_string(expected[3])
+        );
+        // Every pixel the clock changed holds UI colour 15.
+        const auto colour = palette_rgb(game.ui_colors[hud::kClockColorSlot]);
+        bool coloured = true;
+        for (int y = drawn[1]; coloured && y <= drawn[3]; ++y)
+            for (int x = drawn[0]; coloured && x <= drawn[2]; ++x) {
+                const auto at = (static_cast<std::size_t>(y) * with.width + x) * 3U;
+                const auto pixel = with.rgb.begin() + static_cast<std::ptrdiff_t>(at);
+                coloured = std::equal(pixel, pixel + 3, without.rgb.begin() + at) ||
+                           std::equal(colour.begin(), colour.end(), pixel);
+            }
+        require(coloured, "+clock is not in UI colour 15");
+    };
+    const auto lines_shown = oa::ui::hud::message_lines(game);
+    if (lines_shown == 0)
+        oa::ui::hud::set_message_lines(game, 1);
+    check_clock(&message_font(), "COMIX while the message log shows lines");
+    oa::ui::hud::set_message_lines(game, 0);
+    check_clock(match_label_font(), "the side's font while the message log is off");
+    oa::ui::hud::set_message_lines(game, lines_shown);
     // The chat formatter names the speaker by Player.second_name.
     char echo[64];
     std::snprintf(echo, sizeof echo, "<%.30s> +clock", game.players[local].second_name);

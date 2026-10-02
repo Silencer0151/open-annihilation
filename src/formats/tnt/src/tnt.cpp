@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/formats/tnt.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -11,19 +12,11 @@
 namespace oa::formats::tnt {
 namespace {
 
+using base::bytes::load_le16;
+using base::bytes::load_le32;
+
 [[nodiscard]] bool fits(std::size_t at, std::size_t count, std::size_t size) noexcept {
     return at <= size && count <= size - at;
-}
-
-[[nodiscard]] uint16_t le16(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    return static_cast<uint16_t>(bytes[at]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(bytes[at + 1]) << 8U);
-}
-
-[[nodiscard]] uint32_t le32(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    return static_cast<uint32_t>(bytes[at]) | (static_cast<uint32_t>(bytes[at + 1]) << 8U) |
-           (static_cast<uint32_t>(bytes[at + 2]) << 16U) |
-           (static_cast<uint32_t>(bytes[at + 3]) << 24U);
 }
 
 [[nodiscard]] ParseResult failure(ErrorCode code, std::size_t at, std::string message) {
@@ -40,31 +33,34 @@ namespace {
 /// Decodes the 64-byte file header; the caller has checked that it fits.
 [[nodiscard]] Header read_header(std::span<const uint8_t> bytes) noexcept {
     Header header;
-    header.id_version = le32(bytes, offsetof(Header, id_version));
-    header.width = le32(bytes, offsetof(Header, width));
-    header.height = le32(bytes, offsetof(Header, height));
-    header.tile_map_offset = le32(bytes, offsetof(Header, tile_map_offset));
-    header.attribute_offset = le32(bytes, offsetof(Header, attribute_offset));
-    header.tile_pixels_offset = le32(bytes, offsetof(Header, tile_pixels_offset));
-    header.tile_count = le32(bytes, offsetof(Header, tile_count));
-    header.feature_count = le32(bytes, offsetof(Header, feature_count));
-    header.feature_offset = le32(bytes, offsetof(Header, feature_offset));
-    header.sea_level = le32(bytes, offsetof(Header, sea_level));
-    header.minimap_offset = le32(bytes, offsetof(Header, minimap_offset));
-    header.minimap_presence_flags = le32(bytes, offsetof(Header, minimap_presence_flags));
+    header.id_version = load_le32(bytes.data() + offsetof(Header, id_version));
+    header.width = load_le32(bytes.data() + offsetof(Header, width));
+    header.height = load_le32(bytes.data() + offsetof(Header, height));
+    header.tile_map_offset = load_le32(bytes.data() + offsetof(Header, tile_map_offset));
+    header.attribute_offset = load_le32(bytes.data() + offsetof(Header, attribute_offset));
+    header.tile_pixels_offset = load_le32(bytes.data() + offsetof(Header, tile_pixels_offset));
+    header.tile_count = load_le32(bytes.data() + offsetof(Header, tile_count));
+    header.feature_count = load_le32(bytes.data() + offsetof(Header, feature_count));
+    header.feature_offset = load_le32(bytes.data() + offsetof(Header, feature_offset));
+    header.sea_level = load_le32(bytes.data() + offsetof(Header, sea_level));
+    header.minimap_offset = load_le32(bytes.data() + offsetof(Header, minimap_offset));
+    header.minimap_presence_flags =
+        load_le32(bytes.data() + offsetof(Header, minimap_presence_flags));
     header.reserved_after_presence_flags =
-        le32(bytes, offsetof(Header, reserved_after_presence_flags));
+        load_le32(bytes.data() + offsetof(Header, reserved_after_presence_flags));
     header.reserved_before_legacy_minimap =
-        le32(bytes, offsetof(Header, reserved_before_legacy_minimap));
-    header.legacy_minimap_offset = le32(bytes, offsetof(Header, legacy_minimap_offset));
-    header.legacy_presence_flags = le32(bytes, offsetof(Header, legacy_presence_flags));
+        load_le32(bytes.data() + offsetof(Header, reserved_before_legacy_minimap));
+    header.legacy_minimap_offset =
+        load_le32(bytes.data() + offsetof(Header, legacy_minimap_offset));
+    header.legacy_presence_flags =
+        load_le32(bytes.data() + offsetof(Header, legacy_presence_flags));
     return header;
 }
 
 [[nodiscard]] TileAttr read_tile_attr(std::span<const uint8_t> bytes, std::size_t at) noexcept {
     TileAttr record;
     record.height = bytes[at + offsetof(TileAttr, height)];
-    record.feature = le16(bytes, at + offsetof(TileAttr, feature));
+    record.feature = load_le16(bytes.data() + at + offsetof(TileAttr, feature));
     record.padding = bytes[at + offsetof(TileAttr, padding)];
     return record;
 }
@@ -145,7 +141,7 @@ ParseResult parse(std::span<const uint8_t> bytes) {
     }
     map.tile_indices.resize(tile_map_count);
     for (std::size_t index = 0; index < tile_map_count; ++index) {
-        map.tile_indices[index] = le16(bytes, tile_map_at + index * sizeof(uint16_t));
+        map.tile_indices[index] = load_le16(bytes.data() + tile_map_at + index * sizeof(uint16_t));
         if (map.tile_indices[index] >= map.tile_count) {
             return failure(
                 ErrorCode::invalid_tile_index,
@@ -213,7 +209,8 @@ ParseResult parse(std::span<const uint8_t> bytes) {
             static_cast<std::ptrdiff_t>(layout::feature_record_bytes),
             feature.raw.begin()
         );
-        feature.stored_index = le32(bytes, record_at + offsetof(FeatureDiskRecord, stored_index));
+        feature.stored_index =
+            load_le32(bytes.data() + record_at + offsetof(FeatureDiskRecord, stored_index));
         const auto name_at = record_at + offsetof(FeatureDiskRecord, name);
         const auto name_end = std::find(
             bytes.begin() + static_cast<std::ptrdiff_t>(name_at),
@@ -236,8 +233,8 @@ ParseResult parse(std::span<const uint8_t> bytes) {
             );
         }
         Minimap minimap;
-        minimap.width = le32(bytes, minimap_at + offsetof(MinimapHeader, width));
-        minimap.height = le32(bytes, minimap_at + offsetof(MinimapHeader, height));
+        minimap.width = load_le32(bytes.data() + minimap_at + offsetof(MinimapHeader, width));
+        minimap.height = load_le32(bytes.data() + minimap_at + offsetof(MinimapHeader, height));
         if (minimap.width > limit::minimap_dimension || minimap.height > limit::minimap_dimension) {
             return failure(
                 ErrorCode::dimension_limit, minimap_at, "TNT minimap dimensions exceed limit"
@@ -362,8 +359,8 @@ bool load_radar_picture(
     if ((header.minimap_presence_flags & layout::minimap_present_flag) != 0 &&
         file.read(file.context, header.minimap_offset, extent, sizeof extent)) {
         const MinimapHeader size{
-            le32(extent, offsetof(MinimapHeader, width)),
-            le32(extent, offsetof(MinimapHeader, height))
+            load_le32(extent + offsetof(MinimapHeader, width)),
+            load_le32(extent + offsetof(MinimapHeader, height))
         };
         if (size.width <= limit::minimap_dimension && size.height <= limit::minimap_dimension) {
             picture.width = static_cast<int32_t>(size.width);

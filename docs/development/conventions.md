@@ -392,7 +392,7 @@ uses depends on its layer (default; maintainer to confirm):
 | core | `src/core` | C11 records: plain C structs, no standard library containers, exceptions or virtual functions; layouts pinned |
 | base, sim | `src/base/game-math` and the geometry, timers and sine table in `src/ui/services`; `src/sim/*`, `src/sim/*`, `src/sim/*`, `src/sim/ai`, `src/sim/*`, `src/sim/ballistics`, `src/sim/scenario`, `src/sim/session`, and `src/sim/*` except the renderer and sprite animation | In code a simulation tick runs, and in the state it keeps: no exceptions, no virtual dispatch and no heap-allocating containers. `std::array`, `std::span`, `std::optional`, `<bit>` and `<algorithm>` are allowed. |
 | formats, data | `src/formats/*`, `src/data/defs`, `src/data/persist`, and the SQSH writer in `src/ui/services` | C++20; decoders take a byte span; errors are returned as values and no exception crosses the public interface; format libraries do not open files themselves |
-| platform, present, audio, media, ui, netgame, session, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/netgame`, `src/netgame/*`, `src/session/demo`, `src/app`, `src/app/netgame`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer and never cross the extension table |
+| platform, present, audio, media, ui, netgame, session, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/netgame`, `src/netgame/*`, `src/session/demo`, `src/app`, `src/app/netgame`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer. At the extension table a hook, or a check-host entry, reports an error by throwing `std::runtime_error`, which takes the engine's own error path from that call; a hook documented as one that must not throw does not throw |
 | tests and tools | every `tests/` directory, `tests`, `tools`, `tools/oa-tool/main.cpp` | C++20 and the standard library; see [Tests](#tests) |
 
 `src/ui/services` holds code of three layers until the layout pass
@@ -627,6 +627,8 @@ details; in short:
 - Every decoder has a test that feeds it malformed input.
 - Checks report the file, line and failed expression and make the test exit
   non-zero; no test relies on `assert()`, which Release builds remove.
+  `OA_CHECK` (`oa/test/check.hpp`, target `oa-test-support`) is such a
+  check.
 - Test code may use the whole C++20 standard library, since it runs outside
   the tick, and may throw, for example from a fixture's checks, as long as
   the test reports the failure with its file and line and exits non-zero.
@@ -635,7 +637,8 @@ details; in short:
 
 - **Why:** a test whose expected values anyone can check, and which says
   when it did not run, is one people can trust.
-- **Checked by:** review; ctest.
+- **Checked by:** review; ctest; `style-ratchet` (`assert()` and
+  `#undef NDEBUG` in tests).
 
 ## Application, extensions and run.sh
 
@@ -661,7 +664,10 @@ hook or a declared header, never with a new `Runtime` member or friend or
 another use of a private `Runtime` name. Network play's `Runtime` members
 and those an extension still adds are frozen and may only shrink. Raise
 `OA_EXTENSION_API_VERSION` with any change to the table's contract.
-[src/app/README.md](../../src/app/README.md) describes the table and the
+A hook reports an error by throwing `std::runtime_error`, as the engine
+code around it does: the paragraph on errors in `extension.hpp` says which
+paths catch it and what the player sees, and each hook says when it is
+reached on one of them or must not throw. [src/app/README.md](../../src/app/README.md) describes the table and the
 frozen members.
 
 - **Why:** an extension that is not part of the engine must be able to
@@ -708,7 +714,7 @@ ctest --test-dir build --output-on-failure \
 
 | Check | What it enforces | Script and baseline |
 |---|---|---|
-| `style-ratchet` | qualified fixed-width types; names built from offsets, addresses or generated placeholders; names that number what they do not know (`unknown_3`); raw masks on flag fields; missing `{}` initialisers; offset comments outside file-format code; functions declared in headers without a `///` block; exceptions, virtual functions and heap containers in the core, base and simulation directories | `check_style.py` and `style-baseline.json` in `tools/` |
+| `style-ratchet` | qualified fixed-width types; names built from offsets, addresses or generated placeholders; names that number what they do not know (`unknown_3`); raw masks on flag fields; missing `{}` initialisers; offset comments outside file-format code; functions declared in headers without a `///` block; exceptions, virtual functions and heap containers in the core, base and simulation directories; `assert()` and `#undef NDEBUG` in tests | `check_style.py` and `style-baseline.json` in `tools/` |
 | `doc-links` | relative links, anchors and repository paths in Markdown resolve | `tools/check_links.py` |
 | `runtime-surface-names` | the `Runtime` names an extension uses only shrink | `tools/check_runtime_surface.py`, `tools/runtime-surface-baseline.json` |
 | `format-check` | every C, C++ and Objective-C source is laid out as `.clang-format` says; skips where the pinned clang-format is not installed | `tools/format_sources.py`, `tools/format/requirements.txt` |

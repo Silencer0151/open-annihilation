@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 using namespace oa;
 using namespace oa::ui::hud;
@@ -148,11 +149,81 @@ void test_desktop_pointer() {
     CHECK(scroll_pointer_position(pointer, 640, 480).cursor_x == 10);
 }
 
+bool scrolls(const EdgeScroll& way, int32_t x, int32_t y) {
+    return way.x == x && way.y == y;
+}
+
+void test_edge_scroll() {
+    // Each edge of a 640x480 screen scrolls toward itself, the sidebar's and
+    // the bars' as much as the battlefield's, and each corner both ways.
+    CHECK(scrolls(edge_scroll(0, 240, 640, 480, 1), -1, 0));
+    CHECK(scrolls(edge_scroll(639, 240, 640, 480, 1), 1, 0));
+    CHECK(scrolls(edge_scroll(320, 0, 640, 480, 1), 0, -1));
+    CHECK(scrolls(edge_scroll(320, 479, 640, 480, 1), 0, 1));
+    CHECK(scrolls(edge_scroll(0, 0, 640, 480, 1), -1, -1));
+    CHECK(scrolls(edge_scroll(639, 0, 640, 480, 1), 1, -1));
+    CHECK(scrolls(edge_scroll(0, 479, 640, 480, 1), -1, 1));
+    CHECK(scrolls(edge_scroll(639, 479, 640, 480, 1), 1, 1));
+
+    // One pixel inside the edges, and the middle, do not scroll.
+    CHECK(scrolls(edge_scroll(1, 240, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(638, 240, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(320, 1, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(320, 478, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(1, 1, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(320, 240, 640, 480, 1), 0, 0));
+
+    // Edges two pixels deep, as a point of two pixels makes them.
+    CHECK(scrolls(edge_scroll(1, 959, 2880, 1800, 2), -1, 0));
+    CHECK(scrolls(edge_scroll(2878, 1798, 2880, 1800, 2), 1, 1));
+    CHECK(scrolls(edge_scroll(2, 1797, 2880, 1800, 2), 0, 0));
+    CHECK(scrolls(edge_scroll(2877, 2, 2880, 1800, 2), 0, 0));
+
+    // An edge less than a pixel deep is one pixel deep.
+    CHECK(scrolls(edge_scroll(0, 240, 640, 480, 0), -1, 0));
+    CHECK(scrolls(edge_scroll(1, 240, 640, 480, 0), 0, 0));
+
+    // A pointer off the screen does not scroll.
+    CHECK(scrolls(edge_scroll(-1, 240, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(640, 240, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(320, -1, 640, 480, 1), 0, 0));
+    CHECK(scrolls(edge_scroll(320, 480, 640, 480, 1), 0, 0));
+
+    // The edges agree with scroll_camera's on the outermost pixel.
+    hud_test::TestWorld match;
+    Game& game = match.game();
+    game.offscreen_width = 640;
+    game.offscreen_height = 480;
+    game.camera_x = 1000;
+    game.camera_y = 500;
+    game.scroll_speed = 10;
+    game.frame_elapsed = 1;
+    for (const auto& [x, y] :
+         {std::pair{0, 0},
+          std::pair{639, 0},
+          std::pair{0, 479},
+          std::pair{639, 479},
+          std::pair{0, 240},
+          std::pair{639, 240},
+          std::pair{320, 0},
+          std::pair{320, 479},
+          std::pair{1, 1},
+          std::pair{320, 240}}) {
+        Mover mover;
+        const auto moved = scroll_camera(game, at(x, y), {}, mover.mover());
+        const auto way = edge_scroll(x, y, 640, 480, 1);
+        CHECK(moved == (way.x != 0 || way.y != 0));
+        if (moved)
+            CHECK(mover.x == 1000 + way.x * 10 && mover.y == 500 + way.y * 10);
+    }
+}
+
 } // namespace
 
 int main() {
     test_step_and_edges();
     test_clock_pacing();
     test_desktop_pointer();
+    test_edge_scroll();
     return 0;
 }

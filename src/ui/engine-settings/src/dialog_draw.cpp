@@ -7,6 +7,7 @@
 // what is selected.
 
 #include "oa/ui/engine_settings/dialog.hpp"
+#include "oa/ui/decoded.hpp"
 
 #include "geometry.hpp"
 
@@ -734,10 +735,16 @@ DialogFonts load_dialog_fonts(oa::AssetStore& assets) {
         throw std::runtime_error("the game's palette is short: " + std::string(kGamePalettePath));
     std::copy_n(bytes.begin(), palette.size(), palette.begin());
     DialogFonts fonts;
-    fonts.regular =
-        renderer::text_font(oa::formats::fnt::load_gaf(assets, "anims/hattfont12.gaf"), palette);
-    fonts.small =
-        renderer::text_font(oa::formats::fnt::load_gaf(assets, "anims/hattfont11.gaf"), palette);
+    constexpr std::string_view regular_font = "anims/hattfont12.gaf";
+    constexpr std::string_view small_font = "anims/hattfont11.gaf";
+    fonts.regular = renderer::text_font(
+        oa::ui::decoded::require(oa::formats::fnt::load_gaf(assets, regular_font), regular_font),
+        palette
+    );
+    fonts.small = renderer::text_font(
+        oa::ui::decoded::require(oa::formats::fnt::load_gaf(assets, small_font), small_font),
+        palette
+    );
     return fonts;
 }
 

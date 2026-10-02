@@ -203,10 +203,9 @@ int main() {
             fields[i].movement_class = 0;
     }
     sim::combat_state::WeaponRegistry weapons;
-    weapons.install_tdf_section(1, "NUKE", "0.4");
-    auto& nuke = const_cast<sim::combat_state::WeaponDefinition&>(*weapons.find("NUKE"));
-    nuke.energy_per_shot = 120.0F;
-    nuke.metal_per_shot = 60.0F;
+    (void)sim::combat_state::install_weapon_text(
+        weapons, "[NUKE]{id=1; reloadtime=0.4; energypershot=120; metalpershot=60;}"
+    );
     std::vector<sim::spatial_state::Plot> collision_plots(map_cells * map_cells);
     place_features(collision_plots);
     const auto features = feature_table();

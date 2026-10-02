@@ -8,6 +8,7 @@
 #include "oa/audio/music_decoder.hpp"
 #include "oa/audio/resampler.hpp"
 #include "oa/test/game_data.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -41,9 +42,9 @@ constexpr float half_power = static_cast<float>(std::numbers::sqrt2 / 2.0);
 
 const std::filesystem::path fixtures = OA_AUDIO_TEST_DATA;
 
+// This run's own scratch directory, created on first use.
 std::filesystem::path scratch_directory() {
-    const auto directory = std::filesystem::temp_directory_path() / "oa-music-decoder-test";
-    std::filesystem::create_directories(directory);
+    static const auto directory = oa::test::make_scratch_directory("oa-music-decoder-test");
     return directory;
 }
 

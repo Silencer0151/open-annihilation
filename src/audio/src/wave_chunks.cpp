@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/audio/wave_chunks.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <cstdint>
 #include <cstring>
 
 namespace oa::audio {
 namespace {
+using base::bytes::load_le32;
+using base::bytes::load_le16;
 
 constexpr char tag_riff[4] = {'R', 'I', 'F', 'F'};
 constexpr char tag_wave[4] = {'W', 'A', 'V', 'E'};
@@ -28,19 +31,10 @@ bool same_tag(const char* a, const char* b) noexcept {
     return std::memcmp(a, b, 4) == 0;
 }
 
-uint32_t le32(const uint8_t* bytes) noexcept {
-    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8 |
-           static_cast<uint32_t>(bytes[2]) << 16 | static_cast<uint32_t>(bytes[3]) << 24;
-}
-
-uint16_t le16(const uint8_t* bytes) noexcept {
-    return static_cast<uint16_t>(bytes[0] | bytes[1] << 8);
-}
-
 uint32_t read_u32(WaveCursor& cursor) noexcept {
     uint8_t bytes[4]{};
     wave_read(cursor, bytes, 4);
-    return le32(bytes);
+    return load_le32(bytes);
 }
 
 } // namespace
@@ -139,7 +133,8 @@ bool describe_wave(WaveCursor& cursor, WaveLayout& layout) noexcept {
             return false;
         uint8_t format[riff_minimum_format_bytes]{};
         wave_read(cursor, format, sizeof(format));
-        layout.format = PcmFormat{le32(format + 4), le16(format + 14), le16(format + 2)};
+        layout.format =
+            PcmFormat{load_le32(format + 4), load_le16(format + 14), load_le16(format + 2)};
         const uint32_t data_bytes = find_wave_chunk(cursor, tag_data);
         if (static_cast<int32_t>(data_bytes) < 1)
             return false;

@@ -3,6 +3,7 @@
 
 #include "oa/formats/hpi.hpp"
 #include "oa/formats/png.hpp"
+#include "oa/ui/decoded.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -92,13 +93,16 @@ int main(int argc, char** argv) {
             std::cout << (asset.archived ? "archive: " : "loose: ") << asset.source.string() << " ("
                       << asset.bytes.size() << " bytes)\n";
         } else if ((command == "extract" || command == "preview") && argc == 5) {
-            const auto data = oa::HpiArchive(argv[2]).read(argv[3]);
+            const auto data =
+                oa::ui::decoded::require(oa::HpiArchive(argv[2]).read(argv[3]), argv[3]);
             if (command == "extract")
                 write_file(argv[4], data);
             else
-                write_image(argv[4], oa::decode_pcx(data));
+                write_image(argv[4], oa::ui::decoded::require(oa::decode_pcx(data), argv[3]));
         } else if (command == "decode-pcx" && argc == 4) {
-            write_image(argv[3], oa::decode_pcx(read_file(argv[2])));
+            write_image(
+                argv[3], oa::ui::decoded::require(oa::decode_pcx(read_file(argv[2])), argv[2])
+            );
         } else {
             usage();
             return 2;

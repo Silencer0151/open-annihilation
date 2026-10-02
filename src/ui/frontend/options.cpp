@@ -3,6 +3,7 @@
 
 // Options tab panel, SOUNDS/VISUALS/SPEEDS sub-panels and slider callbacks.
 #include "oa/ui/frontend/options.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
@@ -16,6 +17,7 @@
 #include <variant>
 
 namespace oa::ui::frontend {
+using base::game_math::truncate_to_int64;
 
 namespace {
 
@@ -42,14 +44,6 @@ constexpr uint8_t kSoundModeTest = 1;
 constexpr uint8_t kSoundModeSpatial = 2;
 constexpr uint8_t kCdModeTrackType = 4;
 constexpr uint8_t kSessionMultiplayer = 3;
-
-// Truncation toward zero to 64 bits: NaN and out-of-range values give INT64_MIN.
-int64_t truncate_to_int64(double value) noexcept {
-    constexpr double limit = 9223372036854775808.0; // 2^63
-    if (!(value > -limit && value < limit))
-        return std::numeric_limits<int64_t>::min();
-    return static_cast<int64_t>(value);
-}
 
 void play(OptionsContext& context, std::string_view name) {
     if (context.host.play_sound != nullptr)

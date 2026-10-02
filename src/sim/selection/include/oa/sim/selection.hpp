@@ -73,12 +73,15 @@ struct Hooks {
     void (*set_squad)(void* context, Unit& unit, int32_t squad){};
 };
 
-// Caller-owned id buffers that Game.hot_units / hot_radar_units refer to.
+// Caller-owned id buffers that Game.hot_units / hot_radar_units refer to,
+// and where the radar the presentation drew sits on screen.
 struct VisibleLists {
     uint16_t* units{}; // capacity >= World.unit_slot_count
     uint32_t unit_capacity{};
-    const RadarHotUnit* radar{}; // Game.hot_radar_unit_count entries
+    const RadarHotUnit* radar{}; // radar_count entries
     uint32_t radar_capacity{};
+    int32_t radar_count{};  // blips the radar listed (Game.hot_radar_unit_count)
+    Rect32 radar_picture{}; // the radar's map picture on screen (Game.radar_picture_rect)
 };
 
 /// Returns the game view rectangle in screen pixels (Game.battlefield_rect).
@@ -186,7 +189,7 @@ void select_cursor_unit(World& world, const VisibleLists& lists, bool toggle, co
 /// Returns the id of the unit under the pointer.
 ///
 /// The smallest visible unit whose model box is hit inside the game view, or the nearest
-/// radar blip over the minimap.
+/// radar blip over the minimap, as `lists` places the radar and lists its blips.
 ///
 /// @param world units and pointer position
 /// @param lists visible-unit and radar lists

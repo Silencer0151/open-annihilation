@@ -16,10 +16,11 @@
 #include "oa/present/raster.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/health_bar.hpp"
-#include "oa/ui/hud/sprite_placement.hpp"
+#include "oa/present/model/sprite_placement.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_draw_order.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
+#include "oa/ui/decoded.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -919,12 +921,17 @@ void Runtime::render_match_surface() {
         std::shared_ptr<const oa::formats::objects3d::Model> model;
         if (const auto name = weapon_model_names_.find(index); name != weapon_model_names_.end()) {
             try {
-                const auto bytes = assets_.read("objects3d/" + name->second + ".3do").bytes;
-                const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
-                model = std::make_shared<const oa::formats::objects3d::Model>(
-                    oa::formats::objects3d::load_3do({begin, bytes.size()})
-                );
-            } catch (const std::exception&) {
+                const auto path = "objects3d/" + name->second + ".3do";
+                const auto bytes = assets_.read(path).bytes;
+                model =
+                    std::make_shared<const oa::formats::objects3d::Model>(oa::ui::decoded::require(
+                        oa::formats::objects3d::load_3do(std::as_bytes(std::span(bytes))), path
+                    ));
+            } catch (const std::exception& error) {
+                // The slot keeps no model, so its shots draw without one and
+                // the load is not tried again.
+                std::cerr << "weapon model objects3d/" << name->second << ".3do: " << error.what()
+                          << '\n';
             }
         }
         return models.weapon_models.emplace(index, std::move(model)).first->second;
@@ -1141,7 +1148,7 @@ void Runtime::render_match_surface() {
                        )];
     };
     const auto plan_sprite_feature = [&](const MatchGafFeatureDraw& feature,
-                                         const oa::ui::hud::FeatureDraw& plan,
+                                         const oa::present::model::FeatureDraw& plan,
                                          const oa::present::world_renderer::ScreenPoint& screen) {
         plan_commit();
         const auto* plot = oa::world_plot(&world_record, feature.cell_x, feature.cell_z);
@@ -1152,7 +1159,7 @@ void Runtime::render_match_surface() {
         for (int32_t index = 0; index < plan.sprite_count; ++index) {
             const auto& sprite = plan.sprites[index];
             const oa::formats::gaf::RenderedFrame* image = nullptr;
-            if (sprite.frame == oa::ui::hud::FeatureFrame::placed) {
+            if (sprite.frame == oa::present::model::FeatureFrame::placed) {
                 if (record != nullptr) {
                     const auto& cursor =
                         sprite.shadow ? record->sprite.shadow : record->sprite.animation;
@@ -1164,7 +1171,7 @@ void Runtime::render_match_surface() {
             } else {
                 image = anim_frame(
                     sprite.shadow ? feature.shadow_anim : feature.anim,
-                    sprite.frame == oa::ui::hud::FeatureFrame::first
+                    sprite.frame == oa::present::model::FeatureFrame::first
                 );
             }
             if (image == nullptr)
@@ -1229,11 +1236,9 @@ void Runtime::render_match_surface() {
         // The movement state's speed: an idle mobile shows the first frame
         // of its animated textures.
         bool idle = false;
-        try {
+        if (unit_index < match_->world().slots.size())
             if (const auto* movement = match_->ground_runtime(unit_index))
                 idle = movement->movement.speed == 0;
-        } catch (const std::exception&) {
-        }
         // A unit of another machine's player draws from its copies on every
         // frame, whole ticks included: they stand on its playout, near its
         // simulated place and moved on ahead of it between records.
@@ -1422,7 +1427,7 @@ void Runtime::render_match_surface() {
     struct FeatureToDraw {
         MatchFeatureDraw* object{};
         const MatchGafFeatureDraw* sprite{};
-        oa::ui::hud::FeatureDraw plan{};
+        oa::present::model::FeatureDraw plan{};
         oa::present::world_renderer::ScreenPoint screen{};
     };
 
@@ -1461,7 +1466,7 @@ void Runtime::render_match_surface() {
             feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
             continue;
         const auto plan =
-            oa::ui::hud::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
+            oa::present::model::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
         if (plan.object)
             continue;
         features_to_draw.push_back({nullptr, &feature, plan, screen});
@@ -1719,10 +1724,12 @@ void Runtime::render_match_surface() {
                 fill(bar.fill, bar.fill_color);
             }
         }
-        if (slot.unit->squad != 0) {
-            // The squad digit (Unit.squad) of a unit in a squad, beside its bars.
-            draw_match_label(bar_x - 4, bar_y + 4, std::to_string(slot.unit->squad), 255);
-        }
+        // The squad digit of the viewpoint player's own unit in a squad,
+        // below its bar.
+        if (oa::ui::hud::draws_squad_digit(match_->state(), slot.record))
+            draw_match_label(
+                bar_x - 4, bar_y + 4, std::string(1, oa::ui::hud::squad_digit(slot.record)), 255
+            );
         if (const auto count = match_->self_destruct_remaining(slot.unit_index); count != 0)
             draw_match_label(bar_x - 4, bar_y - 12, std::to_string(count), 1);
     }

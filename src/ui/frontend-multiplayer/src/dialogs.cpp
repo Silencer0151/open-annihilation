@@ -4,6 +4,7 @@
 // Panels stacked over the battleroom or the match.
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
 
+#include "oa/base/game_loop.hpp"
 #include "oa/formats/tnt.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/surface.hpp"
@@ -25,7 +26,7 @@ constexpr uint8_t kGuiFlagLobbyLaunch = 0x10;
 constexpr uint8_t kRejectTimedOut = 6;
 constexpr uint8_t kRejectWatching = 9;
 constexpr uint32_t kTimeoutGraceSeconds = 0x78;
-constexpr int32_t kTimeoutRefreshTicks = 2;
+constexpr uint32_t kTimeoutRefreshTicks = 2;
 constexpr uint32_t kTicksPerSecond = 0x1e;
 // The minimap leaves out this many world pixels on a map's right and at its bottom.
 constexpr int32_t kMinimapRightMargin = 32;
@@ -180,8 +181,8 @@ bool timeout_open(Lobby& lobby, Panel& panel, uint32_t player_id) noexcept {
 
 bool timeout_tick(Lobby& lobby, Panel& panel) noexcept {
     auto& game = *lobby.game;
-    const auto tick = static_cast<int32_t>(now(lobby));
-    if (lobby.timeout_refresh_tick < tick) {
+    const auto tick = now(lobby);
+    if (lobby_clock_passed(tick, lobby.timeout_refresh_tick)) {
         lobby.timeout_refresh_tick = tick + kTimeoutRefreshTicks;
         panel.dirty = true;
     }
@@ -202,10 +203,8 @@ bool timeout_tick(Lobby& lobby, Panel& panel) noexcept {
     auto& player = slot_player(lobby, slot);
     if (player.in_use == 0 || player.status != kSlotRemote)
         return true;
-    const auto silent = static_cast<uint32_t>(
-        static_cast<int32_t>(now(lobby) - player.last_update_time) /
-        static_cast<int32_t>(kTicksPerSecond)
-    );
+    const auto silent = base::game_loop::scaled_clock_elapsed(now(lobby), player.last_update_time) /
+                        kTicksPerSecond;
     const auto limit = static_cast<uint32_t>(timeout_seconds(game)) + kTimeoutGraceSeconds;
     char text[200];
     std::snprintf(

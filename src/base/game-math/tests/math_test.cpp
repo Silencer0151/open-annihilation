@@ -4,9 +4,52 @@
 #include "oa/base/game_math.hpp"
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
+namespace {
+
+/// Checks truncate_to_int64 and truncate_low32 at zero, the halves, the
+/// 32-bit, 32-bit-plus-one and 64-bit edges, and NaN and the infinities.
+void truncation() {
+    using oa::base::game_math::truncate_low32;
+    using oa::base::game_math::truncate_to_int64;
+    constexpr double two_31 = 2147483648.0;
+    constexpr double two_32 = 4294967296.0;
+    constexpr double two_63 = 9223372036854775808.0;
+    constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+    constexpr double infinity = std::numeric_limits<double>::infinity();
+    static_assert(truncate_to_int64(0.5) == 0 && truncate_to_int64(-0.5) == 0);
+    static_assert(truncate_to_int64(1.75) == 1 && truncate_to_int64(-1.75) == -1);
+    static_assert(truncate_low32(0.5) == 0 && truncate_low32(-0.5) == 0);
+    // 2^31 wraps to INT32_MIN; -2^31 is INT32_MIN itself.
+    static_assert(truncate_to_int64(two_31) == 2147483648LL);
+    static_assert(truncate_low32(two_31) == INT32_MIN && truncate_low32(-two_31) == INT32_MIN);
+    // 2^32 + 1 keeps 1; its negation keeps -1.
+    static_assert(truncate_low32(two_32 + 1.0) == 1 && truncate_low32(-(two_32 + 1.0)) == -1);
+    // -2^63 is in range; 2^63 is not.
+    static_assert(truncate_to_int64(-two_63) == INT64_MIN && truncate_low32(-two_63) == 0);
+    static_assert(truncate_to_int64(two_63) == INT64_MIN && truncate_low32(two_63) == 0);
+    static_assert(truncate_to_int64(9223372036854774784.0) == 9223372036854774784LL);
+    static_assert(truncate_low32(9223372036854774784.0) == static_cast<int32_t>(0xFFFFFC00u));
+    static_assert(truncate_to_int64(nan) == INT64_MIN && truncate_low32(nan) == 0);
+    static_assert(truncate_to_int64(infinity) == INT64_MIN && truncate_low32(infinity) == 0);
+    static_assert(truncate_to_int64(-infinity) == INT64_MIN && truncate_low32(-infinity) == 0);
+    // The same at run time, where the compiler cannot fold the conversions.
+    volatile double runtime_nan = nan;
+    volatile double runtime_wrap = two_32 + 7.9;
+    if (truncate_low32(runtime_nan) != 0 || truncate_to_int64(runtime_nan) != INT64_MIN ||
+        truncate_low32(runtime_wrap) != 7)
+        throw std::runtime_error("run-time truncation differs");
+    // A float converts to double exactly.
+    if (truncate_low32(3.75F) != 3 || truncate_low32(-3.75F) != -3)
+        throw std::runtime_error("float truncation differs");
+}
+
+} // namespace
+
 int main() {
+    truncation();
     uint32_t rng_state = 1;
     if (oa::base::game_math::random_bounded(rng_state, 100) != 7 || rng_state != 16807)
         throw std::runtime_error("random first state and draw");

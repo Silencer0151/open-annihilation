@@ -4,12 +4,14 @@
 // Characterisation of HpiArchive::read_node, which reads a file record by
 // node index: a stored entry, LZ77 entries of exactly one chunk and of
 // several, a zlib entry just over one chunk, an empty entry, an encrypted
-// directory, the index checks and a chunk whose checksum no longer matches.
+// directory, the index checks, a chunk whose checksum no longer matches, and
+// entries whose claimed size the archive cannot hold.
 // Archives are written by the engine's own writer into a temporary
 // directory.
 
 #include "oa/formats/hpi.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -134,18 +136,16 @@ std::vector<oa::HpiWriteFile> sample_files() {
     };
 }
 
-/// Reports whether read_node rejects an index with std::invalid_argument.
+/// Reports whether read_node and read_node_range refuse an index as no file.
 ///
 /// @param archive archive to read
 /// @param index node index
-/// @return true when the read is refused
+/// @return true when both reads are refused
 bool refuses(const oa::HpiArchive& archive, uint32_t index) {
-    try {
-        (void)archive.read_node(index);
-    } catch (const std::invalid_argument&) {
-        return true;
-    }
-    return false;
+    Bytes range(1);
+    return archive.read_node(index).error.code == oa::base::bytes::DecodeCode::out_of_range &&
+           archive.read_node_range(index, 0, range).error.code ==
+               oa::base::bytes::DecodeCode::out_of_range;
 }
 
 /// Checks that every file record reads back as written and that other indices are refused.
@@ -161,10 +161,15 @@ void check_round_trip(const fs::path& path) {
         if (!index) {
             continue;
         }
-        const Bytes bytes = archive.read_node(*index);
+        const auto read = archive.read_node(*index);
+        CHECK(read.ok());
+        if (!read.ok()) {
+            continue;
+        }
+        const Bytes& bytes = *read.value;
         CHECK(bytes == file.bytes);
         CHECK(bytes.size() == archive.nodes()[*index].size);
-        CHECK(archive.read(file.path) == bytes);
+        CHECK(archive.read(file.path).value == bytes);
         ++files_read;
     }
     CHECK(files_read == static_cast<int32_t>(files.size()));
@@ -211,16 +216,163 @@ void test_corrupt_chunk(const TempDir& scratch) {
     if (!corrupted || !readme || !zlib) {
         return;
     }
-    bool failed = false;
-    try {
-        (void)archive.read_node(*corrupted);
-    } catch (const std::runtime_error&) {
-        failed = true;
-    }
-    CHECK(failed);
+    // The chunk's error carries its SQUASHERR_* name, its status and the
+    // chunk's offset in the archive.
+    const auto failed = archive.read_node(*corrupted);
+    CHECK(!failed.ok() && failed.error.code == oa::base::bytes::DecodeCode::malformed);
+    CHECK(std::string_view(failed.error.message) == "SQUASHERR_BADCHECKSUM");
+    CHECK(
+        failed.error.detail == static_cast<uint16_t>(oa::formats::hpi::SquashStatus::bad_checksum)
+    );
+    CHECK(failed.error.offset == marker);
     // Other entries still read.
-    CHECK(archive.read_node(*readme).size() == 5);
-    CHECK(archive.read_node(*zlib) == pattern_bytes(just_over_one_chunk));
+    CHECK(archive.read_node(*readme).value.value_or(Bytes{}).size() == 5);
+    CHECK(archive.read_node(*zlib).value == pattern_bytes(just_over_one_chunk));
+}
+
+/// Returns where an entry's 9-byte file record lies in an archive written
+/// without a header key: the entry's data offset, size and compression byte.
+///
+/// @param bytes the archive
+/// @param node the entry as the reader resolved it
+/// @return the record's offset, or bytes.size() when it is not found
+std::size_t file_record_at(const Bytes& bytes, const oa::ArchiveNode& node) {
+    const Bytes record{
+        static_cast<uint8_t>(node.data_offset),
+        static_cast<uint8_t>(node.data_offset >> 8),
+        static_cast<uint8_t>(node.data_offset >> 16),
+        static_cast<uint8_t>(node.data_offset >> 24),
+        static_cast<uint8_t>(node.size),
+        static_cast<uint8_t>(node.size >> 8),
+        static_cast<uint8_t>(node.size >> 16),
+        static_cast<uint8_t>(node.size >> 24),
+        node.compression,
+    };
+    const auto found = std::search(bytes.begin(), bytes.end(), record.begin(), record.end());
+    return static_cast<std::size_t>(found - bytes.begin());
+}
+
+/// Writes a 32-bit little-endian value into a byte buffer.
+///
+/// @param[in,out] bytes buffer written
+/// @param at offset of the first byte
+/// @param value value written
+void put32(Bytes& bytes, std::size_t at, uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i)
+        bytes[at + i] = static_cast<uint8_t>(value >> (8U * i));
+}
+
+/// Reports whether read_node fails with a code and a message containing `containing`.
+///
+/// @param archive archive to read
+/// @param index node index
+/// @param code the error code expected
+/// @param containing text the error's message holds
+/// @return true when the read fails so
+bool fails_with(
+    const oa::HpiArchive& archive,
+    uint32_t index,
+    oa::base::bytes::DecodeCode code,
+    std::string_view containing
+) {
+    const auto read = archive.read_node(index);
+    return !read.ok() && read.error.code == code &&
+           std::string_view(read.error.message).find(containing) != std::string_view::npos;
+}
+
+/// Offset of the size field in a 9-byte file record.
+constexpr std::size_t record_size_field = 4;
+/// Size a damaged record may claim: 4 GiB less one byte.
+constexpr uint32_t largest_claimed_size = 0xFFFF'FFFFu;
+/// A compressed size under the entry limit whose chunks cannot fit in a
+/// small archive: 16,368 chunks need at least 376,464 bytes.
+constexpr uint32_t unfitting_compressed_size = 0x3FF0'0000u;
+/// A stored entry larger than any buffer a file stream keeps.
+constexpr std::size_t large_stored_entry = 4 << 20;
+
+/// Checks that an entry claiming more than the archive holds fails before
+/// its buffer is allocated, while ranged reads keep returning what is there.
+///
+/// @param scratch directory the archives are written into
+void test_claimed_sizes(const TempDir& scratch) {
+    const Bytes original = oa::write_hpi(sample_files());
+    const oa::HpiArchive plain(scratch.write("sizes.hpi", original));
+    const auto readme = plain.lookup("readme.txt");
+    const auto lz77 = plain.lookup("data/lz77.bin");
+    CHECK(readme.has_value() && lz77.has_value());
+    if (!readme || !lz77) {
+        return;
+    }
+    const oa::ArchiveNode stored = plain.nodes()[*readme];
+    const oa::ArchiveNode chunked = plain.nodes()[*lz77];
+    const std::size_t stored_record = file_record_at(original, stored);
+    const std::size_t chunked_record = file_record_at(original, chunked);
+    CHECK(stored_record < original.size() && chunked_record < original.size());
+    if (stored_record >= original.size() || chunked_record >= original.size()) {
+        return;
+    }
+
+    // A stored entry claiming 4 GiB is refused by the entry limit.
+    Bytes huge = original;
+    put32(huge, stored_record + record_size_field, largest_claimed_size);
+    const oa::HpiArchive huge_archive(scratch.write("huge.hpi", huge));
+    CHECK(fails_with(
+        huge_archive, *readme, oa::base::bytes::DecodeCode::limit_exceeded, "entry size limit"
+    ));
+
+    // A stored entry one byte longer than the rest of the archive is refused
+    // as a whole, but a ranged read returns the bytes that are there.
+    Bytes past_end = original;
+    const auto rest = static_cast<uint32_t>(original.size() - stored.data_offset);
+    put32(past_end, stored_record + record_size_field, rest + 1);
+    const oa::HpiArchive past_end_archive(scratch.write("past-end.hpi", past_end));
+    CHECK(fails_with(
+        past_end_archive,
+        *readme,
+        oa::base::bytes::DecodeCode::truncated,
+        "past the end of the archive"
+    ));
+    Bytes range(rest + 1);
+    CHECK(past_end_archive.read_node_range(*readme, 0, range).value == rest);
+
+    // A compressed entry whose chunks cannot all fit is refused too.
+    Bytes unfitting = original;
+    put32(unfitting, chunked_record + record_size_field, unfitting_compressed_size);
+    const oa::HpiArchive unfitting_archive(scratch.write("unfitting.hpi", unfitting));
+    CHECK(fails_with(
+        unfitting_archive,
+        *lz77,
+        oa::base::bytes::DecodeCode::truncated,
+        "past the end of the archive"
+    ));
+
+    // An archive cut short after it was opened: a large stored entry now
+    // reads short, which a whole read reports and a ranged read returns. The
+    // entry is large so that its bytes are read from the file, not from what
+    // the stream kept from opening the archive.
+    const Bytes large = pattern_bytes(large_stored_entry);
+    const std::vector<oa::HpiWriteFile> large_files{
+        {"large.bin", large, static_cast<uint8_t>(oa::formats::hpi::CompressionNone)}
+    };
+    const auto cut_path = scratch.write("cut.hpi", oa::write_hpi(large_files));
+    const oa::HpiArchive cut(cut_path);
+    const auto entry = cut.lookup("large.bin");
+    CHECK(entry.has_value());
+    if (!entry) {
+        return;
+    }
+    const uint32_t data_offset = cut.nodes()[*entry].data_offset;
+    std::error_code resize_error;
+    fs::resize_file(cut_path, data_offset + large_stored_entry / 2, resize_error);
+    if (!resize_error) {
+        CHECK(
+            fails_with(cut, *entry, oa::base::bytes::DecodeCode::truncated, "truncated HPI entry")
+        );
+        Bytes partial(large_stored_entry);
+        const uint32_t got = cut.read_node_range(*entry, 0, partial).value.value_or(0);
+        CHECK(got > 0 && got < large_stored_entry);
+        CHECK(got > 0 && std::equal(large.begin(), large.begin() + got, partial.begin()));
+    }
 }
 
 } // namespace
@@ -229,6 +381,7 @@ int main() {
     const TempDir scratch;
     test_round_trips(scratch);
     test_corrupt_chunk(scratch);
+    test_claimed_sizes(scratch);
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

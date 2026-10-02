@@ -280,7 +280,8 @@ void test_split_records() {
     require(!tad::decode_payload(Bytes{0x05, 0x06}).ok(), "unknown payload marker");
     const Bytes oversized(tad::limit::decoded_payload_bytes + 1, 0);
     Bytes compressed_oversized{tad::compressed_payload_marker};
-    const auto packed = oa::formats::sqsh::encode_lz77(oversized, oversized.size() * 2);
+    const auto packed =
+        oa::formats::sqsh::encode_lz77(oversized, oversized.size() * 2).value.value();
     compressed_oversized.insert(compressed_oversized.end(), packed.begin(), packed.end());
     require(!tad::decode_payload(compressed_oversized).ok(), "expanded receive limit");
 

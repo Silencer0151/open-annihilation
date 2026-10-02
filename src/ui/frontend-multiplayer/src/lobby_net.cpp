@@ -234,7 +234,7 @@ void remove_player(void* context, uint32_t id) {
 } // namespace
 
 void loopback_reset(LoopbackNet& loopback) noexcept {
-    std::memset(&loopback, 0, sizeof(loopback));
+    std::memset(static_cast<void*>(&loopback), 0, sizeof(loopback));
     add_provider(loopback, "IPX Connection For DirectPlay", kProviderGuidIpx, ProviderKind::ipx);
     add_provider(
         loopback,

@@ -44,7 +44,11 @@ Parsing is allocation-bounded: directories are limited to 256 MiB and one
 million file-or-directory entries, individual stored chunks to 1 MiB,
 individual extracted files to 1 GiB, paths to 4096 bytes, and directory nesting
 to 128 levels. Every range is checked against the actual archive before it is
-read or allocated.
+read or allocated: reading a whole entry first checks that a stored entry lies
+inside the archive and that a compressed one has room for each chunk's size
+slot and header, and a stored entry that reads short is an error rather than
+zero-padded. Reads return `oa::base::bytes::Decoded` values: the bytes, or the
+error's code, archive offset and message; opening an archive still throws.
 
 ## PCX
 
@@ -58,8 +62,9 @@ by the asset tooling:
 
 `BytesPerLine` padding is decoded but omitted from the RGB result. Coordinate
 underflow, short rows, RLE runs crossing a plane boundary, missing indexed
-palettes, unsupported layouts, and trailing pixel data are rejected. Output is
-limited to 64 megapixels and checked for integer overflow before allocation.
+palettes, unsupported layouts, and trailing pixel data are rejected, as a
+`Decoded` error with its code and file offset. Output is limited to 64
+megapixels and checked for integer overflow before allocation.
 
 The API intentionally does not embed Total Annihilation's shared palette. An
 indexed PCX without its own 256-color palette cannot be converted to accurate

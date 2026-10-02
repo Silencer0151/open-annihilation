@@ -240,10 +240,8 @@ int main() {
         CHECK(unit_under_pointer(*w, lists, h) == 2);
         w->game.pointer_state[0] = 5;
         w->game.pointer_state[1] = 5;
-        w->game.radar_picture_rect = Rect32{0, 0, 100, 100};
         const RadarHotUnit blips[2] = {{4, 6, 6}, {5, 5, 6}};
-        w->game.hot_radar_unit_count = 2;
-        VisibleLists radar{ids, 8, blips, 2};
+        VisibleLists radar{ids, 8, blips, 2, 2, Rect32{0, 0, 100, 100}};
         CHECK(unit_under_pointer(*w, radar, h) == 5);
         world_destroy(w);
     }

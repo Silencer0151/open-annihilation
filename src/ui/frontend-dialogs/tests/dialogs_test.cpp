@@ -633,7 +633,7 @@ void test_packed(oa::AssetStore& assets, Host& host) {
     if (dialogs::dialog_kind() == dialogs::DialogKind::help) {
         dialogs::dialog_draw(&ctx);
         const auto& panel = root().common;
-        const auto backdrop = oa::decode_pcx(assets.read("bitmaps/dhelp.pcx").bytes);
+        const auto backdrop = oa::decode_pcx(assets.read("bitmaps/dhelp.pcx").bytes).value.value();
         std::vector<Area> drawn_over;
         for (std::size_t index = 1; index < record_count(); ++index) {
             const auto& gadget = record(index).common;

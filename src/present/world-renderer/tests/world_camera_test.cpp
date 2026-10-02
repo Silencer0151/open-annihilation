@@ -3,8 +3,8 @@
 
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
+#include "oa/test/check.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -64,23 +64,23 @@ int32_t next_value(void* user) {
 void test_clamp_and_radar_rect() {
     auto game = make_game();
     wr::camera_set_position(*game, -40, 5000, 0);
-    assert(cam_x(*game) == 0);
-    assert(cam_y(*game) == 1536 - 416);
-    assert(game->camera_target_x == 0);
-    assert(game->camera_target_y == 1120);
-    assert((game->radar_blink_flags & wr::radar_flag_redraw) != 0);
+    OA_CHECK(cam_x(*game) == 0);
+    OA_CHECK(cam_y(*game) == 1536 - 416);
+    OA_CHECK(game->camera_target_x == 0);
+    OA_CHECK(game->camera_target_y == 1120);
+    OA_CHECK((game->radar_blink_flags & wr::radar_flag_redraw) != 0);
     const oa::Rect32 rect = game->radar_view_rect;
-    assert(rect.x1 == 4);
-    assert(rect.y1 == 94 * 1120 / 1536 + 20);
-    assert(rect.x2 == 126 * 32 * 16 / 2048 - 1 + 4);
-    assert(rect.y2 == 94 * 26 * 16 / 1536 - 1 + rect.y1);
+    OA_CHECK(rect.x1 == 4);
+    OA_CHECK(rect.y1 == 94 * 1120 / 1536 + 20);
+    OA_CHECK(rect.x2 == 126 * 32 * 16 / 2048 - 1 + 4);
+    OA_CHECK(rect.y2 == 94 * 26 * 16 / 1536 - 1 + rect.y1);
 
     game->visibility_flags = 0xff;
     wr::camera_set_position(*game, 3000, -7, 1);
-    assert(game->camera_target_x == 2048 - 512);
-    assert(game->camera_target_y == 0);
-    assert(cam_y(*game) == 1120);
-    assert(game->visibility_flags == 0xf7);
+    OA_CHECK(game->camera_target_x == 2048 - 512);
+    OA_CHECK(game->camera_target_y == 0);
+    OA_CHECK(cam_y(*game) == 1120);
+    OA_CHECK(game->visibility_flags == 0xf7);
 }
 
 void test_glide() {
@@ -88,16 +88,16 @@ void test_glide() {
     wr::camera_set_position(*game, 0, 0, 0);
     wr::camera_set_position(*game, 1000, 11, 1);
     wr::camera_tick(*game, {}, {});
-    assert(cam_x(*game) == 320);
-    assert(cam_y(*game) == 5); // 0 - (-11 / 2)
+    OA_CHECK(cam_x(*game) == 320);
+    OA_CHECK(cam_y(*game) == 5); // 0 - (-11 / 2)
     wr::camera_tick(*game, {}, {});
     wr::camera_tick(*game, {}, {});
-    assert(cam_x(*game) == 960);
+    OA_CHECK(cam_x(*game) == 960);
     wr::camera_tick(*game, {}, {});
-    assert(cam_x(*game) == 980);
+    OA_CHECK(cam_x(*game) == 980);
     wr::camera_set_position(*game, 100, 8, 1);
     wr::camera_tick(*game, {}, {});
-    assert(cam_x(*game) == 660);
+    OA_CHECK(cam_x(*game) == 660);
 }
 
 void test_follow() {
@@ -108,24 +108,24 @@ void test_follow() {
     game->follow_unit = 1;
     wr::camera_tick(*game, {&unit, nullptr}, {});
     // Target = (1200 - 256, 900 - 20 - 208); first glide step caps at 320.
-    assert(game->camera_target_x == 944);
-    assert(game->camera_target_y == 672);
-    assert(cam_x(*game) == 320);
-    assert(cam_y(*game) == 320);
+    OA_CHECK(game->camera_target_x == 944);
+    OA_CHECK(game->camera_target_y == 672);
+    OA_CHECK(cam_x(*game) == 320);
+    OA_CHECK(cam_y(*game) == 320);
 
     unit.flags = 0;
     game->follow_point_ticks = 0;
     game->follow_target = 0;
     wr::camera_tick(*game, {&unit, nullptr}, {});
-    assert(game->follow_unit == 0);
+    OA_CHECK(game->follow_unit == 0);
 
     const oa::FixedVec3 point{600 << 16, 0, 700 << 16};
     game->follow_point = point;
     game->follow_point_ticks = 2;
     wr::camera_tick(*game, {}, {});
-    assert(game->follow_point_ticks == 1);
-    assert(game->camera_target_x == 344);
-    assert(game->camera_target_y == 492);
+    OA_CHECK(game->follow_point_ticks == 1);
+    OA_CHECK(game->camera_target_x == 344);
+    OA_CHECK(game->camera_target_y == 492);
 
     // camera_stop_follow zeroes follow_point_ticks, follow_unit and
     // follow_target, and leaves the camera slots and the follow point alone.
@@ -133,12 +133,12 @@ void test_follow() {
     game->follow_target = 6;
     game->camera_slot_x[0] = 7;
     wr::camera_stop_follow(*game);
-    assert(game->follow_point_ticks == 0);
-    assert(game->follow_unit == 0);
-    assert(game->follow_target == 0);
-    assert(game->camera_slot_x[0] == 7);
+    OA_CHECK(game->follow_point_ticks == 0);
+    OA_CHECK(game->follow_unit == 0);
+    OA_CHECK(game->follow_target == 0);
+    OA_CHECK(game->camera_slot_x[0] == 7);
     const oa::FixedVec3 kept = game->follow_point;
-    assert(kept.x == point.x && kept.y == point.y && kept.z == point.z);
+    OA_CHECK(kept.x == point.x && kept.y == point.y && kept.z == point.z);
 }
 
 void test_shake() {
@@ -152,31 +152,31 @@ void test_shake() {
     Sequence rng{{0x7fff, 0}};
     wr::camera_shake(*game, {&rng, next_value});
     // span_x = 20: 0x7fff*20/0x8000 = 19 -> +9; span_y = 10: 0 - 5 -> -5.
-    assert(cam_x(*game) == 509);
-    assert(cam_y(*game) == 495);
-    assert(game->shake_remaining == 4);
+    OA_CHECK(cam_x(*game) == 509);
+    OA_CHECK(cam_y(*game) == 495);
+    OA_CHECK(game->shake_remaining == 4);
     game->shake_remaining = 0;
     wr::camera_shake(*game, {&rng, next_value});
-    assert(game->camera_flags == 0);
-    assert(rng.next == 2);
+    OA_CHECK(game->camera_flags == 0);
+    OA_CHECK(rng.next == 2);
 }
 
 void test_slots_and_start() {
     auto game = make_game();
     wr::camera_set_position(*game, 300, 200, 0);
     wr::camera_store_slot(*game, 2);
-    assert(game->camera_slot_valid[2] == 1);
+    OA_CHECK(game->camera_slot_valid[2] == 1);
     wr::camera_set_position(*game, 0, 0, 0);
     game->follow_unit = 9;
     wr::camera_recall_slot(*game, 2);
-    assert(cam_x(*game) == 300 && cam_y(*game) == 200);
-    assert(game->follow_unit == 0);
+    OA_CHECK(cam_x(*game) == 300 && cam_y(*game) == 200);
+    OA_CHECK(game->follow_unit == 0);
 
     const wr::StartEntry entries[] = {{1, 1, 50, 60}, {0, 0, 70, 80}, {1, 0, 900, 800}};
     wr::camera_to_start_entry(*game, entries, 3);
-    assert(cam_x(*game) == 900 - 256 && cam_y(*game) == 800 - 208);
+    OA_CHECK(cam_x(*game) == 900 - 256 && cam_y(*game) == 800 - 208);
     wr::camera_to_start_entry(*game, entries, 2);
-    assert(cam_x(*game) == 644);
+    OA_CHECK(cam_x(*game) == 644);
 }
 
 struct CursorLog {
@@ -200,22 +200,22 @@ void test_mouse_look() {
     const int32_t pointer[6] = {100, 90, 2, 0, 0, 0};
     set_pointer_state(*game, pointer);
     wr::mouse_look_begin(*game, sink);
-    assert(log.polls == 1 && log.x == 320 && log.y == 240);
-    assert(game->mouse_look_active == 1);
-    assert(game->mouse_look_cell_x == 20);
+    OA_CHECK(log.polls == 1 && log.x == 320 && log.y == 240);
+    OA_CHECK(game->mouse_look_active == 1);
+    OA_CHECK(game->mouse_look_cell_x == 20);
 
     const int32_t moved[6] = {341, 229, 2, 0, 0, 0};
     set_pointer_state(*game, moved);
     wr::mouse_look_update(*game, sink);
     // (21/4 + 20) * 16 = 400; (-11/4 + 10) * 16 = 128.
-    assert(cam_x(*game) == 400 && cam_y(*game) == 128);
-    assert(log.x == 320 && log.y == 240 && log.draws == 0);
+    OA_CHECK(cam_x(*game) == 400 && cam_y(*game) == 128);
+    OA_CHECK(log.x == 320 && log.y == 240 && log.draws == 0);
 
     const int32_t released[6] = {320, 240, 0, 0, 0, 0};
     set_pointer_state(*game, released);
     wr::mouse_look_update(*game, sink);
-    assert(game->mouse_look_active == 0);
-    assert(log.x == 100 && log.y == 90 && log.draws == 1);
+    OA_CHECK(game->mouse_look_active == 0);
+    OA_CHECK(log.x == 100 && log.y == 90 && log.draws == 1);
 }
 
 void test_projection() {
@@ -224,8 +224,8 @@ void test_projection() {
     game->camera_y = 50;
     int32_t x = 0, y = 0;
     wr::project_unit_to_screen(*game, {300 << 16, 21 << 16, 200 << 16}, x, y);
-    assert(x == 300 - 0x100 + 128);
-    assert(y == 200 - 50 - 10 + 32);
+    OA_CHECK(x == 300 - 0x100 + 128);
+    OA_CHECK(y == 200 - 50 - 10 + 32);
 }
 
 struct SurfacePool {
@@ -274,13 +274,13 @@ void test_radar() {
     host.free_surface = [](void* u, oa::Surface*) { ++static_cast<SurfacePool*>(u)->freed; };
     wr::radar_init_surfaces(*game, surfaces, host);
     surfaces.picture = &picture;
-    assert(pool.names.size() == 2);
-    assert(std::strcmp(pool.names[0], "radar composed image") == 0);
-    assert(std::strcmp(pool.names[1], "radar mapped layer") == 0);
+    OA_CHECK(pool.names.size() == 2);
+    OA_CHECK(std::strcmp(pool.names[0], "radar composed image") == 0);
+    OA_CHECK(std::strcmp(pool.names[1], "radar mapped layer") == 0);
     const oa::Rect32 rect = game->radar_picture_rect;
-    assert(rect.x1 == 4 && rect.y1 == 20 && rect.x2 == 7 && rect.y2 == 22);
-    assert(game->radar_blink_countdown == 7);
-    assert(game->radar_blink_flags == wr::radar_flag_mapped_dirty);
+    OA_CHECK(rect.x1 == 4 && rect.y1 == 20 && rect.x2 == 7 && rect.y2 == 22);
+    OA_CHECK(game->radar_blink_countdown == 7);
+    OA_CHECK(game->radar_blink_flags == wr::radar_flag_mapped_dirty);
 
     uint16_t sight[12]{};
     uint8_t coverage[12]{};
@@ -293,16 +293,16 @@ void test_radar() {
     sight[5] = 0x1;  // explored only by player 0
     wr::radar_fill_mapped(*game, surfaces, {sight, coverage, gray});
     const auto* mapped = surfaces.mapped->pixels;
-    assert(mapped[0] == (0x40 ^ 0x80));
-    assert(mapped[1] == 0x41);
-    assert(mapped[2] == 0x11 && mapped[5] == 0x11);
-    assert(game->radar_blink_flags == wr::radar_flag_redraw);
+    OA_CHECK(mapped[0] == (0x40 ^ 0x80));
+    OA_CHECK(mapped[1] == 0x41);
+    OA_CHECK(mapped[2] == 0x11 && mapped[5] == 0x11);
+    OA_CHECK(game->radar_blink_flags == wr::radar_flag_redraw);
     surfaces.mapped->pixels[0] = 0;
     wr::radar_fill_mapped(*game, surfaces, {sight, coverage, gray});
-    assert(surfaces.mapped->pixels[0] == 0); // clean: no rebuild
+    OA_CHECK(surfaces.mapped->pixels[0] == 0); // clean: no rebuild
 
     wr::radar_free_surfaces(surfaces, host);
-    assert(pool.freed == 3 && surfaces.mapped == nullptr && surfaces.picture == nullptr);
+    OA_CHECK(pool.freed == 3 && surfaces.mapped == nullptr && surfaces.picture == nullptr);
 }
 
 } // namespace
@@ -316,5 +316,5 @@ int main() {
     test_mouse_look();
     test_projection();
     test_radar();
-    return 0;
+    return oa::test::check_exit_status();
 }

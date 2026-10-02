@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -25,15 +27,16 @@ inline constexpr std::size_t terminator_offset = 0;
 /// Each flag byte selects, bit 0 first, a literal byte or a two-byte token of
 /// a 12-bit window offset and a 4-bit length (plus 2); offset 0 ends the
 /// stream. Overlapping copies read each byte after the preceding write.
-/// Throws std::runtime_error on truncated input or when output_limit is
-/// exceeded, and std::invalid_argument for a dictionary of the wrong size.
 ///
 /// @param input compressed bytes
 /// @param output_limit most bytes the output may hold
 /// @param initial_dictionary empty for the game's fresh zero-filled window,
 ///        otherwise exactly 4096 bytes to seed it
-/// @return the decompressed bytes
-std::vector<uint8_t> decode_lz77(
+/// @return the decompressed bytes; or truncated at the end of an input that
+///         stops before its end marker, limit_exceeded at the input byte
+///         whose output passes output_limit, or out_of_range for a
+///         dictionary of the wrong size
+[[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>> decode_lz77(
     std::span<const uint8_t> input,
     std::size_t output_limit,
     std::span<const uint8_t> initial_dictionary = {}
@@ -51,6 +54,7 @@ enum class Lz77Status : uint8_t {
 struct Lz77Decoded {
     std::size_t written{}; ///< bytes written to the start of the output
     Lz77Status status{};
+    std::size_t consumed{}; ///< input bytes read before the stream ended or stopped
 };
 
 /// Decompresses one LZ77 stream, as decode_lz77 does, into a buffer the caller owns.
@@ -72,16 +76,18 @@ struct Lz77Decoded {
 
 /// Compresses bytes with the game's LZ77 encoder, starting from a fresh tree.
 ///
-/// The output decodes with decode_lz77. Throws std::runtime_error when
-/// output_limit is exceeded. The byte after the end marker is the last
-/// literal an earlier flag group held in the token position that follows the
-/// marker's, or 0 when none did.
+/// The output decodes with decode_lz77. The byte after the end marker is the
+/// last literal an earlier flag group held in the token position that
+/// follows the marker's, or 0 when none did.
 ///
 /// @param input bytes to compress
 /// @param output_limit most bytes the output may hold
-/// @return the compressed stream, byte for byte as 3.1c produces it
+/// @return the compressed stream, byte for byte as 3.1c produces it, or
+///         limit_exceeded, at the input bytes consumed, when it would pass
+///         output_limit
 /// @quirk Like 3.1c, the encoder emits one trailing byte after the end marker.
-std::vector<uint8_t> encode_lz77(std::span<const uint8_t> input, std::size_t output_limit);
+[[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>>
+encode_lz77(std::span<const uint8_t> input, std::size_t output_limit);
 
 /// Undoes the SQSH index scramble in place: (byte - index) ^ index.
 ///

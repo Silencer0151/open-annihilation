@@ -14,9 +14,14 @@ namespace {
 constexpr char kMapsDirectory[] = "Maps";
 constexpr char kOtaExtension[] = "OTA";
 
+// Copies at most capacity - 1 characters of text into out and fills the rest
+// of out with zero bytes, so out always ends in one.
 void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
-    std::strncpy(out, text, capacity - 1);
-    out[capacity - 1] = '\0';
+    std::size_t length = 0;
+    while (length + 1 < capacity && text[length] != '\0')
+        ++length;
+    std::memcpy(out, text, length);
+    std::memset(out + length, 0, capacity - length);
 }
 
 struct ScanState {

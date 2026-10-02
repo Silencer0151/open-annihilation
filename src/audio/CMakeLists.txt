@@ -15,7 +15,8 @@ add_library(oa-audio
 )
 add_library(oa::audio ALIAS oa-audio)
 target_include_directories(oa-audio PUBLIC include)
-target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-data-unit-definitions oa-options oa-core-types)
+target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-data-unit-definitions oa-options oa-core-types
+  PRIVATE oa-base-bytes)
 
 # The offline mix of the game's sound effects that director renders take
 # their sound from: integer decoding, resampling and mixing, with no sound
@@ -45,7 +46,7 @@ add_library(oa-audio-music-decoder src/music_decoder.cpp src/resampler.cpp src/m
 add_library(oa::audio::music_decoder ALIAS oa-audio-music-decoder)
 target_include_directories(oa-audio-music-decoder PUBLIC include)
 target_include_directories(oa-audio-music-decoder SYSTEM PRIVATE ${oa_music_codec_dirs})
-target_link_libraries(oa-audio-music-decoder PRIVATE oa-options)
+target_link_libraries(oa-audio-music-decoder PRIVATE oa-base-bytes oa-options)
 target_compile_features(oa-audio-music-decoder PUBLIC cxx_std_20)
 if(MSVC)
   # The decoders build their tables from constant floating-point expressions,
@@ -66,7 +67,7 @@ if(BUILD_TESTING)
   # The resampler, the stereo mix, every encoding against the samples it
   # was made from, malformed files, and with --data the installed music.
   add_executable(oa-audio-music-decoder-test tests/music_decoder_test.cpp)
-  target_link_libraries(oa-audio-music-decoder-test PRIVATE oa-audio-music-decoder
+  target_link_libraries(oa-audio-music-decoder-test PRIVATE oa-audio-music-decoder oa-test-support
     oa-test-game-data oa-options)
   target_compile_definitions(oa-audio-music-decoder-test PRIVATE
     OA_AUDIO_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
@@ -128,6 +129,7 @@ if(BUILD_TESTING)
   endforeach()
   # Every WAV the installed game provides.
   target_link_libraries(oa-audio-wave-chunks-test PRIVATE oa-test-game-data)
+  target_link_libraries(oa-audio-music-session-test PRIVATE oa-test-support)
   oa_add_game_data_test(audio-wave-chunks-data oa-audio-wave-chunks-test --data)
   if(OA_BUILD_PLATFORM)
     add_executable(oa-audio-sdl-sink-test tests/sdl_sink_test.cpp)
@@ -137,12 +139,12 @@ if(BUILD_TESTING)
     # The WAV player's one stream: its delay, one playing, stopping at once
     # and replacement, on the dummy device, which plays in real time.
     add_executable(oa-audio-sdl-player-test tests/sdl_player_test.cpp)
-    target_link_libraries(oa-audio-sdl-player-test PRIVATE oa-audio-sdl)
+    target_link_libraries(oa-audio-sdl-player-test PRIVATE oa-audio-sdl oa-test-support)
     add_test(NAME audio-sdl-player COMMAND oa-audio-sdl-player-test)
     set_tests_properties(audio-sdl-player PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_AUDIO_DRIVER=dummy")
     add_executable(oa-audio-sdl-music-test tests/sdl_music_test.cpp)
-    target_link_libraries(oa-audio-sdl-music-test PRIVATE oa-audio-sdl oa-test-game-data)
+    target_link_libraries(oa-audio-sdl-music-test PRIVATE oa-audio-sdl oa-test-game-data oa-test-support)
     add_test(NAME audio-sdl-music COMMAND oa-audio-sdl-music-test)
     add_test(NAME audio-sdl-music-data COMMAND oa-audio-sdl-music-test --data)
     set_tests_properties(audio-sdl-music audio-sdl-music-data PROPERTIES TIMEOUT 60

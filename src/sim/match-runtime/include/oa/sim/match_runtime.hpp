@@ -172,7 +172,7 @@ struct OfflineInputs {
         feature_sequence_frame{};
     // UnitDef records the FBI loader filled, indexed like types.
     // Without them each record is assembled from the runtime type and its
-    // parsed definition.
+    // typed fields.
     std::span<const oa::UnitDef> unit_defs{};
     // The mission schema's [features] placements (placed after the map's own
     // when no save is loading). Their FeatureDefs must already be in
@@ -1818,7 +1818,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// decisions).
     std::shared_ptr<void>& computer_player_state() noexcept { return computer_player_state_; }
 
-    /// Returns a type's parsed FBI definition.
+    /// Returns a type's typed fields, taken from its loaded UnitDef.
     ///
     /// @param type Type index.
     /// @return The definition, or null past the table or without one.

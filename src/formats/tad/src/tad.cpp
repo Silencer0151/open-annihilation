@@ -3,6 +3,7 @@
 
 #include "oa/formats/tad.hpp"
 #include "oa/formats/sqsh.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,17 +13,10 @@
 namespace oa::formats::tad {
 namespace {
 
+using base::bytes::load_le16;
+using base::bytes::load_le32;
+
 using Bytes = std::span<const uint8_t>;
-
-uint16_t read16(Bytes bytes, std::size_t at) noexcept {
-    return static_cast<uint16_t>(bytes[at] | (bytes[at + 1] << 8U));
-}
-
-uint32_t read32(Bytes bytes, std::size_t at) noexcept {
-    return static_cast<uint32_t>(bytes[at]) | (static_cast<uint32_t>(bytes[at + 1]) << 8U) |
-           (static_cast<uint32_t>(bytes[at + 2]) << 16U) |
-           (static_cast<uint32_t>(bytes[at + 3]) << 24U);
-}
 
 void append16(std::vector<uint8_t>& out, uint16_t value) {
     out.push_back(static_cast<uint8_t>(value));
@@ -64,11 +58,11 @@ std::size_t recorder_record_length(Bytes bytes) noexcept {
     case RecordType::tick_base:
         return 5;
     case RecordType::recorder_message:
-        return bytes.size() < 3 ? 0 : 3U + read16(bytes, 1);
+        return bytes.size() < 3 ? 0 : 3U + load_le16(bytes.data() + 1);
     case RecordType::elided_unit_state: {
         if (bytes.size() < 3)
             return 0;
-        const std::size_t full = read16(bytes, 1);
+        const std::size_t full = load_le16(bytes.data() + 1);
         return full < layout::unit_state_header_bytes ? 0 : full - layout::elided_tick_bytes;
     }
     default:
@@ -93,7 +87,7 @@ class Reader {
             );
             return std::nullopt;
         }
-        const std::size_t length = read16(bytes_, offset_);
+        const std::size_t length = load_le16(bytes_.data() + offset_);
         if (length < layout::chunk_length_bytes) {
             error = make_error(
                 ErrorCode::malformed, offset_, std::string(what) + ": chunk length below 2"
@@ -154,7 +148,7 @@ ParseResult parse(Bytes bytes) {
         error = make_error(ErrorCode::bad_magic, header_at, "not a TA Demo recording");
         return result;
     }
-    demo.version = read16(*header, layout::magic_bytes);
+    demo.version = load_le16((*header).data() + layout::magic_bytes);
     if (demo.version != supported_version) {
         error = make_error(
             ErrorCode::unsupported_version,
@@ -164,7 +158,7 @@ ParseResult parse(Bytes bytes) {
         return result;
     }
     const std::size_t player_count = (*header)[layout::magic_bytes + 2];
-    demo.max_units = read16(*header, layout::magic_bytes + 3);
+    demo.max_units = load_le16((*header).data() + layout::magic_bytes + 3);
     demo.map_name = text_of(header->subspan(layout::header_fixed_bytes));
     if (player_count > limit::players) {
         error = make_error(ErrorCode::count_limit, header_at, "player count exceeds limit");
@@ -179,7 +173,7 @@ ParseResult parse(Bytes bytes) {
         error = make_error(ErrorCode::malformed, count_at, "sector count chunk is not 4 bytes");
         return result;
     }
-    const uint32_t sector_count = read32(*count, 0);
+    const uint32_t sector_count = load_le32((*count).data() + 0);
     if (sector_count > limit::sectors) {
         error = make_error(ErrorCode::count_limit, count_at, "sector count exceeds limit");
         return result;
@@ -194,7 +188,7 @@ ParseResult parse(Bytes bytes) {
             return result;
         }
         demo.sectors.push_back(
-            Sector{read32(*sector, 0), sector->subspan(layout::sector_type_bytes)}
+            Sector{load_le32((*sector).data() + 0), sector->subspan(layout::sector_type_bytes)}
         );
     }
 
@@ -267,7 +261,7 @@ ParseResult parse(Bytes bytes) {
             error = make_error(ErrorCode::malformed, at, "packet chunk shorter than 3 bytes");
             return result;
         }
-        const uint16_t delay = read16(*packet, 0);
+        const uint16_t delay = load_le16((*packet).data() + 0);
         time_ms += delay;
         demo.packets.push_back(
             Packet{at, delay, time_ms, (*packet)[2], packet->subspan(layout::packet_fixed_bytes)}
@@ -359,7 +353,7 @@ std::size_t record_length(Bytes bytes) noexcept {
     const uint8_t type = bytes[0];
     std::size_t length = 0;
     if (type == last_game_record_type) {
-        length = bytes.size() < 3 ? 0 : read16(bytes, 1);
+        length = bytes.size() < 3 ? 0 : load_le16(bytes.data() + 1);
         if (length < layout::unit_state_header_bytes)
             length = 0;
     } else if (type < game_record_lengths.size())
@@ -376,15 +370,15 @@ DecodedPayload decode_payload(Bytes payload) {
     } else if (payload[0] == payload_marker) {
         decoded.bytes.assign(payload.begin(), payload.end());
     } else if (payload[0] == compressed_payload_marker) {
-        try {
-            auto records =
-                formats::sqsh::decode_lz77(payload.subspan(1), limit::decoded_payload_bytes);
-            decoded.bytes.reserve(records.size() + 1);
+        const auto records =
+            formats::sqsh::decode_lz77(payload.subspan(1), limit::decoded_payload_bytes);
+        if (records.ok()) {
+            decoded.bytes.reserve(records.value->size() + 1);
             decoded.bytes.push_back(payload_marker);
-            decoded.bytes.insert(decoded.bytes.end(), records.begin(), records.end());
-        } catch (const std::exception& error) {
+            decoded.bytes.insert(decoded.bytes.end(), records.value->begin(), records.value->end());
+        } else {
             decoded.error = make_error(
-                ErrorCode::malformed, 1, std::string("compressed packet: ") + error.what()
+                ErrorCode::malformed, 1, std::string("compressed packet: ") + records.error.message
             );
         }
     } else {
@@ -417,7 +411,7 @@ RecordSplit split_records(Bytes payload) {
         Record record{rest[0], rest.first(length), std::nullopt};
         switch (static_cast<RecordType>(record.type)) {
         case RecordType::tick_base:
-            tick = read32(rest, 1);
+            tick = load_le32(rest.data() + 1);
             record.tick = tick;
             break;
         case RecordType::elided_unit_state:
@@ -427,7 +421,7 @@ RecordSplit split_records(Bytes payload) {
                 ++*tick;
             break;
         case RecordType::unit_state:
-            record.tick = read32(rest, layout::unit_state_tick_offset);
+            record.tick = load_le32(rest.data() + layout::unit_state_tick_offset);
             break;
         default:
             break;
@@ -443,7 +437,7 @@ std::vector<uint8_t> expand_unit_state(const Record& record) {
     if (record.type != static_cast<uint8_t>(RecordType::elided_unit_state) || !record.tick ||
         record.bytes.size() < 3)
         return out;
-    const std::size_t full = read16(record.bytes, 1);
+    const std::size_t full = load_le16(record.bytes.data() + 1);
     if (full != record.bytes.size() + layout::elided_tick_bytes)
         return out;
     // The full record: its type, length and tick, then the body the elided

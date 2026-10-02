@@ -141,16 +141,29 @@ and `app-window-icon` that the embedded one decodes.
   pause bit of `Game.sim_run_flags`, which the Pause key
   flips (and another player's machine may set), holds any match inside the
   clock, whose time moves on so that nothing is caught up on resuming; a
-  save stores the bit as the match holds it. `app-match-clock` tests both.
+  save stores the bit as the match holds it. A frame whose clock reading
+  lies behind the clock's last step (a load, a screenshot or a film frame
+  set the clock past the frame's time) holds its step; the reading turns
+  over to 0 about every 39.8 hours, and a reading more than half a turn
+  behind has turned over: the frame steps and runs no tick, and the frames
+  after it step as before, as in 3.1c. `app-match-clock` tests all of
+  these, with frames across the turn from a clock just before 2^32
+  milliseconds.
 - `frame_pacing.hpp`, `frame_pacing.cpp`, `frame_stats_panel.hpp`,
   `frame_stats_panel.cpp`, `runtime_frame_stats.cpp`: the
   application loop's frames, apart from the simulation's 30 ticks a second.
   The loop draws up to `--max-fps` frames a second (120 unless it says
-  otherwise; 0 for no limit, and never fewer than 40, so that a frame on
+  otherwise; 0 for no limit, and never fewer than 30, so that a frame on
   time never runs two ticks at normal speed), each frame standing for its
   time on an evenly spaced run of frames (`FramePacer`), with a precise wait
   between them; a frame that ends late starts the next at once and the run
-  goes on from it, never with frames bunched to catch up. While nothing
+  goes on from it, never with frames bunched to catch up. At 30 a second,
+  the tick rate, each frame is due at the middle of the match clock unit
+  after the last one's (`next_clock_unit_middle`), so that each frame on
+  time steps the clock by one unit, runs one tick at normal speed and shows
+  it whole; frames evenly spaced at that rate from any start would, from
+  some starts, run none and then two, as the clock's whole milliseconds turn
+  its units over. While nothing
   moves on its own (no stepping match, no camera motion, no input for half
   a second), a paused multiplayer match among them, it draws 30 a second,
   and an event ends the wait at once. The match clock steps to each
@@ -160,9 +173,13 @@ and `app-window-icon` that the embedded one decodes.
   past the current tick, whole ticks while the match is paused, waits on
   another machine or catches up, on a check's fixed clock and for a film
   frame, and 1 again once the frame is drawn, so that every other drawing
-  shows whole ticks. The unit drawing adds what it drew to `frame_draws_`
-  (`FrameDrawCounts`). The camera scrolls and the zoom eases for each
-  frame's real time (`scroll_distance`), so they move a steady amount every
+  shows whole ticks. At 30 a second a frame counts its clock unit whole: at
+  normal speed and above it shows the state its ticks reached, and below
+  normal speed the progress the clock makes by the unit's end, so that
+  frames still move evenly between the ticks. The unit drawing adds what it
+  drew to `frame_draws_` (`FrameDrawCounts`). The camera scrolls and the
+  zoom eases for each frame's real time (`scroll_distance`), so they move a
+  steady amount every
   frame, and a camera tracking a unit is centred, after the clock step,
   where the frame shows the unit (`place_tracking_camera`), so that the
   unit holds still on the screen, and the pointer, clicks and the build box
@@ -208,7 +225,9 @@ and `app-window-icon` that the embedded one decodes.
   "[Release]" and "MODE DEBUG INFO ON" or "OFF", which
   `draw_debug_status_line` draws as 3.1c does and the console check
   checks. `app-frame-pacing` tests the pacing, the fraction, the figures,
-  the history and the grades over a fake clock, and
+  the history and the grades over a fake clock, among them a frame for each
+  tick at 30 a second from any start, each shown whole, and how faster and
+  slower game speeds show at that rate, and
   `app-frame-stats-panel` the panel's rows, columns, notes and graph, its
   place and scale, the bars and lines and each grade's colour. `--frame-rate FPS` with `--match-ticks` plays
   the headless skirmish frame by frame on a clock of its own, moving the
@@ -216,13 +235,19 @@ and `app-window-icon` that the embedded one decodes.
   the loop does; `--frame-log FILE` writes each frame's time, tick,
   fraction, camera and a unit it follows, where the simulation holds it and
   where the frame drew it, `--scroll-camera` sweeps the camera's scroll
-  right and back over the army, `--march` sends the local army south and
-  `--follow` tracks the unit the log follows. `native-frame-rate` checks
-  that 30, 60, 120 and 144 frames a second write one trace stream and reach
-  one world digest; that at 120 the camera moves evenly, each frame shows a
+  right and back over the army, `--march` sends the local army south,
+  `--follow` tracks the unit the log follows and `--frame-clock MS` starts
+  the run's clock MS milliseconds in instead of at 0. `native-frame-rate`
+  checks that 30, 60, 120 and 144 frames a second write one trace stream
+  and reach one world digest; that at 30 each tick has one frame, which
+  shows it whole; that at 120 the camera moves evenly, each frame shows a
   quarter of a tick more, and the unit drawn moves on nearly every frame,
-  none carrying more than half the most it moves in a tick; and that a
-  tracked unit is drawn at one place of the screen on every frame. The run
+  none carrying more than half the most it moves in a tick; that a
+  tracked unit is drawn at one place of the screen on every frame; and
+  that runs at 30 and 120 from 2 seconds before 2^32 milliseconds, where
+  the match clock's reading turns over to 0, step on through the turn to
+  the same trace and digest, at 30 each frame running a tick but the first
+  past the turn. The run
   ends with a line giving the world digest, a frames digest of every
   frame's drawn battlefield, the drawing threads it drew on and the most
   bands a frame's battlefield was drawn in. `--busy-combat` adds missile
@@ -262,9 +287,54 @@ and `app-window-icon` that the embedded one decodes.
   is let go. While macOS, X11 or Wayland is
   still switching the window, a second press switches from the mode last
   asked for. The window opens with `game_window_flags`: full screen on
-  Windows unless `-d` is given. `app-full-screen` tests them, and
-  `--check-frontend-controls` presses Alt+Enter on a menu, over a message
-  box and in a match.
+  Windows unless `-d` is given. In full screen, whether on the desktop's
+  display mode or on the one the Screen size setting picks, and while the
+  window has the input focus, the pointer is kept on the game's screen, as
+  in 3.1c (`keeps_pointer_on_screen`, `keep_pointer_on_screen`): it stops at
+  the screen's edges, can rest on their last row or column of pixels, and
+  never strays onto another monitor. Windows clips the cursor to the window,
+  macOS confines it to the window's content, X11 grabs it inside the window
+  and Wayland confines it there, each following the window's size and
+  display. Switching to another program (Alt+Tab, Command+Tab), a dialog of
+  the system's taking the focus, or Alt+Enter to a window lets the pointer
+  go, and coming back to full screen with the focus holds it again; a window
+  never holds it. The window events that may change this
+  (`changes_pointer_bounds`) settle it in every event loop that takes
+  Alt+Enter (the movies, a match loading and the game), and the window's own
+  state settles it after the game drops pending input. The game lets the
+  pointer go (`release_pointer`) before it shows an error or information
+  box, before breaking into a debugger and on exit. A window that leaves
+  full screen, by Alt+Enter, by the window system's own control or before a
+  debugger break, comes back onto the display it was full screen on
+  (`window_on_display`, `bring_window_on_display`): each side of its frame
+  (the title bar and borders included where the window system reports them,
+  as Windows and X11 do) that lies outside the display's usable area
+  (without the menu bar, the dock or the taskbar, so that the title bar can
+  be reached) moves 5% of that area's width or height inside it, and a
+  window with no side outside stays where it is. A window too wide or too
+  tall to fit between two margins keeps the left or top margin, so that its
+  title bar and controls are on the display, and shrinks to fit between the
+  margins; the screen is laid out again at its new size as after any resize.
+  Displays left of or above the primary one, at negative coordinates, are
+  handled alike. The window is checked once the window system has given it
+  its place as a window, on the window's own events, for at most two
+  seconds after it left: Windows places it as it leaves, macOS as it leaves
+  its full-screen space, and an X11 window manager once it has put the
+  window's decorations back (a window manager that reports no decorations
+  leaves the window where it puts it). Wayland places windows itself and
+  refuses to move them, so there the window stays where the compositor puts
+  it. A maximised window is left as the window system fits it, and a window
+  the player moves off the display later stays there. `app-full-screen` tests
+  the keys, the modes, when the pointer is held and where a window goes on
+  its display (each side out, corners, windows too large, displays at
+  negative coordinates, edges exactly on the display's), over windows of
+  SDL's dummy video driver that switch modes, lose and regain the focus and
+  come back onto the display from off it, also with a usable area smaller
+  than the display, and `--check-frontend-controls` presses Alt+Enter on a
+  menu, over a message box and in a match, and checks that full screen
+  holds the pointer and a window lets it go, and that the window comes back
+  at its own size, or onto its display when it started off it (the dummy
+  driver's display is smaller than the game's first window).
 - `runtime_hud.cpp`, `runtime_match_hud.cpp`: the HUD.
 - `runtime_messages.cpp`: the in-game message log (`Game.chat_lines`) drawn
   over the battlefield, and the speed and message part of `--check-navigation`.

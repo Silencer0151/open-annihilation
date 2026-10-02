@@ -17,7 +17,6 @@
 namespace oa {
 namespace {
 
-constexpr uint64_t kMaxEntrySize = 1ULL << 30;
 constexpr std::size_t kMaxPathLength = 4096;
 constexpr uint32_t kSeekToEnd = 0xFFFFFFFFU;
 // Search spec rewritten to "*" when a find names it as its basename.
@@ -35,6 +34,25 @@ constexpr uint8_t kShadowedByLoose = 0x02;
 
 [[noreturn]] void fail(const std::string& message) {
     throw std::runtime_error(message);
+}
+
+/// Throws the error of a read from a mounted archive, naming the entry and
+/// the archive.
+///
+/// @param error the archive's error
+/// @param archive the archive read
+/// @param node the entry read
+[[noreturn]] void fail_entry_read(
+    const base::bytes::DecodeError& error, const HpiArchive& archive, const ArchiveNode& node
+) {
+    // A chunk that fails to decode carries its SQUASHERR_* name.
+    const std::string what = error.detail != 0
+                                 ? "HPI decompression error " + std::string(error.message)
+                                 : std::string(error.message);
+    fail(
+        what + " (" + node.name + ", length " + std::to_string(node.size) + ", at byte " +
+        std::to_string(error.offset) + " of " + archive.path().filename().string() + ")"
+    );
 }
 
 char ascii_lower(char value) noexcept {
@@ -93,7 +111,7 @@ std::string full_path_key(const std::filesystem::path& path) {
 
 std::vector<uint8_t> read_loose(const std::filesystem::path& path) {
     const auto size = std::filesystem::file_size(path);
-    if (size > kMaxEntrySize)
+    if (size > formats::hpi::EntryByteLimit)
         fail("loose asset exceeds entry size limit");
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
@@ -440,7 +458,10 @@ AssetStore::read_skipping(std::string_view resource, const std::filesystem::path
         return {read_loose(*loose), *loose, false};
     if (const auto found = archived_node(resource, skipped)) {
         const auto& mounted = mounts_[found->mount];
-        return {mounted.archive.read_node(found->node), mounted.path, true};
+        auto bytes = mounted.archive.read_node(found->node);
+        if (!bytes.ok())
+            fail_entry_read(bytes.error, mounted.archive, mounted.archive.nodes()[found->node]);
+        return {std::move(*bytes.value), mounted.path, true};
     }
     fail("asset not found: " + normalized_path(resource));
 }
@@ -717,18 +738,24 @@ int32_t AssetStore::read(ResourceFile* file, std::span<uint8_t> output) {
     if (node.compression == 0) {
         const auto count =
             file->archive->read_node_range(file->node, file->position, output.first(wanted));
-        if (count > 0)
-            file->position += static_cast<uint32_t>(count);
-        return static_cast<int32_t>(count);
+        if (!count.ok())
+            fail_entry_read(count.error, *file->archive, node);
+        file->position += *count.value;
+        return static_cast<int32_t>(*count.value);
     }
     std::size_t copied = 0;
     while (copied < wanted) {
         const uint32_t base = file->position & ~(formats::hpi::BlockBytes - 1U);
         if (file->block.empty()) {
             file->block.assign(std::min<uint32_t>(formats::hpi::BlockBytes, file->size - base), 0);
-            if (file->archive->read_node_range(file->node, base, file->block) < 0) {
+            const auto read = file->archive->read_node_range(file->node, base, file->block);
+            if (!read.ok()) {
                 file->block.clear();
-                return -1;
+                // A chunk that cannot be read ends the read; one that fails
+                // to decode is fatal, as in 3.1c.
+                if (read.error.code == base::bytes::DecodeCode::truncated)
+                    return -1;
+                fail_entry_read(read.error, *file->archive, node);
             }
         }
         const uint32_t offset = file->position - base;

@@ -10,6 +10,8 @@
 #include <cmath>
 
 namespace oa::sim::effect_particles {
+using base::game_math::truncate_low32;
+
 namespace {
 constexpr double flash_scale = 32.0;
 constexpr double flash_row_weight = 1.33;
@@ -69,19 +71,6 @@ int32_t truncate_to_int(double value) noexcept {
     if (!(value > -2147483649.0 && value < 2147483648.0))
         return std::bit_cast<int32_t>(0x80000000U);
     return static_cast<int32_t>(value);
-}
-
-/// Truncates a double toward zero and keeps the low 32 bits of the result.
-///
-/// @param value value to truncate
-/// @return the low 32 bits of the truncated value; 0 for a NaN or a value outside
-///         the signed 64-bit range
-int32_t truncate_low(double value) noexcept {
-    if (!(value > -9223372036854775808.0 && value < 9223372036854775808.0))
-        return 0;
-    return static_cast<int32_t>(
-        static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(value)))
-    );
 }
 
 int16_t add_angle(int16_t angle, int32_t rate) noexcept {
@@ -473,16 +462,18 @@ void shatter_piece(
             )
         );
         const auto lean = [](float component) {
-            return static_cast<int16_t>(truncate_low(static_cast<double>(component) * lean_scale));
+            return static_cast<int16_t>(
+                truncate_low32(static_cast<double>(component) * lean_scale)
+            );
         };
         const auto lean_x = static_cast<int32_t>(synced(host, lean_range));
         record.velocity.x = wrap_add(record.velocity.x, wrap_mul(lean_x, lean(normal.x)));
         const auto lean_z = static_cast<int32_t>(synced(host, lean_range));
         record.velocity.z = wrap_sub(record.velocity.z, wrap_mul(lean_z, lean(normal.z)));
         const FixedVec3 depth{
-            wrap_mul(truncate_low(static_cast<double>(normal.x) * thickness_scale), thickness),
-            wrap_mul(truncate_low(static_cast<double>(normal.y) * thickness_scale), thickness),
-            wrap_mul(truncate_low(static_cast<double>(normal.z) * thickness_scale), thickness)
+            wrap_mul(truncate_low32(static_cast<double>(normal.x) * thickness_scale), thickness),
+            wrap_mul(truncate_low32(static_cast<double>(normal.y) * thickness_scale), thickness),
+            wrap_mul(truncate_low32(static_cast<double>(normal.z) * thickness_scale), thickness)
         };
         for (uint32_t back = fragment_face_corners; back < fragment_point_count; ++back) {
             auto& point = fragment.points[back];

@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "tick_internal.hpp"
+#include "oa/base/game_math.hpp"
 
 namespace oa::sim::match_runtime {
+using base::game_math::truncate_low32;
+
 namespace {
 
 constexpr uint8_t air_evade_kind = 48;      // VTOL_Evade
@@ -127,19 +130,6 @@ AttackPoint backward(const AttackPoint& from, uint16_t angle, int32_t magnitude)
 int32_t square_high(uint32_t delta) {
     const auto value = static_cast<int64_t>(signed_bits(delta));
     return static_cast<int32_t>(static_cast<uint64_t>(value * value) >> 32);
-}
-
-/// Converts a product to an integer: truncated toward zero at 64 bits, with
-/// the low 32 bits kept.
-///
-/// @param value The product.
-/// @return The low 32 bits; zero outside the signed 64-bit range or when not
-///     finite.
-int32_t truncate_low(double value) {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    return static_cast<int32_t>(static_cast<uint32_t>(static_cast<int64_t>(std::trunc(value))));
 }
 
 } // namespace
@@ -632,7 +622,7 @@ uint32_t TickHost::AirAttackMissions::air_strike(uint32_t events) {
             ) *
             static_cast<double>(ticks_per_second);
         const auto speed = static_cast<int16_t>(speed_high());
-        const auto lead = truncate_low(static_cast<double>(speed) * fall_ticks);
+        const auto lead = truncate_low32(static_cast<double>(speed) * fall_ticks);
         const auto arrival = static_cast<int16_t>(
             lead + static_cast<int32_t>(static_cast<uint16_t>(def().attack_run_length)) + 1
         );

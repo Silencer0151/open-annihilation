@@ -166,7 +166,10 @@ void Runtime::capture_film_frame() {
         return;
     char path[sizeof game.capture_path + 1] = {};
     std::memcpy(path, game.capture_path, sizeof game.capture_path);
-    (void)save_numbered_frame(path, kFilmFramePrefix);
+    if (!save_numbered_frame(path, kFilmFramePrefix)) {
+        stop_film_capture(path);
+        return;
+    }
     game.next_capture_tick += static_cast<uint32_t>(kFilmTicksPerSecond / game.capture_rate);
     match_timing_.previous_clock =
         oa::base::game_loop::scaled_clock(clock_milliseconds(), match_clock_scale());
@@ -174,7 +177,15 @@ void Runtime::capture_film_frame() {
 
 void Runtime::begin_film_capture(const char* path) {
     render();
-    (void)save_numbered_frame(path, kFilmFramePrefix);
+    if (!save_numbered_frame(path, kFilmFramePrefix))
+        stop_film_capture(path);
+}
+
+void Runtime::stop_film_capture(const char* path) {
+    if (match_)
+        match_->state().game.capture_enabled = 0;
+    status_ = std::string("Film capture stopped: a frame could not be saved in ") + path;
+    std::cerr << "open-annihilation: " << status_ << '\n';
 }
 
 Runtime::PosterScene Runtime::enter_poster_scene() {

@@ -8,6 +8,7 @@ include(CTest)
 
 add_library(oa-formats-tdf src/tdf.cpp)
 add_library(oa::formats::tdf ALIAS oa-formats-tdf)
+target_link_libraries(oa-formats-tdf PRIVATE oa-base-game-math)
 target_include_directories(oa-formats-tdf PUBLIC include)
 target_compile_features(oa-formats-tdf PUBLIC cxx_std_20)
 if(TARGET oa-options)

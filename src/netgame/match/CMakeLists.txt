@@ -55,7 +55,7 @@ if(BUILD_TESTING)
   # names: no wreck on either machine, and a received 0x0c applied as sent.
   add_executable(oa-netgame-match-dgun-test tests/dgun_kill_test.cpp)
   target_link_libraries(oa-netgame-match-dgun-test PRIVATE oa-netgame-match-runtime oa-netgame-test-installs
-    oa-data-unit-definitions oa-data-mission-types oa-sim-map-runtime)
+    oa-data-unit-definitions oa-data-defs-assets oa-data-mission-types oa-sim-map-runtime)
   add_test(NAME net-match-dgun-data COMMAND oa-netgame-match-dgun-test)
   set_tests_properties(net-match-dgun-data PROPERTIES TIMEOUT 300)
   oa_game_data_tests(net-match-dgun-data)

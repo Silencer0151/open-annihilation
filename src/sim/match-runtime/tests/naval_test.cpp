@@ -280,8 +280,7 @@ struct Fixture {
         fields[shipyard].yard_mask = yard_cells;
         for (size_t i = 1; i < type_count; ++i)
             loaded[i].type = types[i];
-        const auto blast = data::unit_definitions::parse_tdf(blast_tdf);
-        CHECK(blast && sim::combat_state::install_weapon_tdf(weapons, blast.value) == 1);
+        CHECK(sim::combat_state::install_weapon_text(weapons, blast_tdf) == 1);
 
         sim::match_runtime::OfflineInputs input{map,       loaded,
                                                 types,     fields,

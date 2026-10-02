@@ -294,7 +294,7 @@ installed_model(const AssetStore& assets, const std::string& path) {
     const auto bytes = test::read_game_file(assets, path);
     CHECK(!bytes.empty());
     return std::make_shared<formats::objects3d::Model>(
-        formats::objects3d::load_3do(std::as_bytes(std::span(bytes)))
+        formats::objects3d::load_3do(std::as_bytes(std::span(bytes))).value.value()
     );
 }
 
@@ -463,10 +463,16 @@ struct Fixture {
         // the class footprint, which the class's types share.
         metadata.footprint_x = metadata.footprint_z = 2;
         // A ground gun and an anti-air gun, both reaching 300.
-        weapons.install_tdf_section(1, "TESTGUN", "1");
-        weapons.install_target_fields(1, "300", "1", "0", "0", "0", "0", "10", "100", "");
-        weapons.install_tdf_section(2, "TESTFLAK", "1");
-        weapons.install_target_fields(2, "300", "1", "0", "0", "0", "1", "10", "100", "");
+        (void)sim::combat_state::install_weapon_text(
+            weapons,
+            "[TESTGUN]{id=1; reloadtime=1; range=300; lineofsight=1; weaponvelocity=100; "
+            "[DAMAGE]{default=10;}}"
+        );
+        (void)sim::combat_state::install_weapon_text(
+            weapons,
+            "[TESTFLAK]{id=2; reloadtime=1; range=300; lineofsight=1; toairweapon=1; "
+            "weaponvelocity=100; [DAMAGE]{default=10;}}"
+        );
         loaded[pad_type].model = deck;
         loaded[pad_type].script = pad;
         types[pad_type].model = reinterpret_cast<uintptr_t>(deck.get());

@@ -4,6 +4,7 @@
 // Bounded checks of the stacked frontend dialogs: headless over a frontend
 // screen, and over a live match through the SDL presenter.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
@@ -1400,7 +1401,9 @@ void Runtime::check_match_dialogs() {
 
 void Runtime::check_in_game_briefing(const fs::path& report_directory) {
     const std::string what = "match briefing check: BRIEFING.GUI";
-    const auto bitmap = oa::decode_pcx(assets_.read(kBriefingBitmap).bytes);
+    const auto bitmap = oa::ui::decoded::require(
+        oa::decode_pcx(assets_.read(kBriefingBitmap).bytes), kBriefingBitmap
+    );
     const auto require = [&what](bool ok, const std::string& failure) {
         if (!ok)
             throw std::runtime_error(what + ' ' + failure);
@@ -2075,8 +2078,10 @@ void Runtime::check_load_save() {
     }
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
-    const auto load_bitmap = oa::decode_pcx(assets_.read(kLoadBitmap).bytes);
-    const auto save_bitmap = oa::decode_pcx(assets_.read(kSaveBitmap).bytes);
+    const auto load_bitmap =
+        oa::ui::decoded::require(oa::decode_pcx(assets_.read(kLoadBitmap).bytes), kLoadBitmap);
+    const auto save_bitmap =
+        oa::ui::decoded::require(oa::decode_pcx(assets_.read(kSaveBitmap).bytes), kSaveBitmap);
     const auto authored_layout = oa::ui::gui_layout::parse(assets_.read("guis/loadgame.gui").bytes);
     if (!authored_layout.ok() || authored_layout.layout->gadgets.empty())
         throw std::runtime_error("load/save check: LOADGAME.GUI does not parse");

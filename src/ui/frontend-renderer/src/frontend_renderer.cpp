@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/decoded.hpp"
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
@@ -833,7 +834,8 @@ ScreenResources load_screen_with_layout(
 ) {
     ScreenResources result;
     if (!names.background.empty())
-        result.background = decode_pcx(assets.read(names.background).bytes);
+        result.background =
+            ui::decoded::require(decode_pcx(assets.read(names.background).bytes), names.background);
 
     const auto palette = assets.read(names.palette).bytes;
     if (palette.size() != result.gui_palette.size()) {
@@ -868,8 +870,10 @@ ScreenResources load_screen_with_layout(
         }
         result.shared_sprites = std::move(*parsed_shared.archive);
     }
-    result.font = formats::fnt::load_gaf(assets, default_gui_font);
-    result.label_font = formats::fnt::load_gaf(assets, label_gui_font);
+    result.font =
+        ui::decoded::require(formats::fnt::load_gaf(assets, default_gui_font), default_gui_font);
+    result.label_font =
+        ui::decoded::require(formats::fnt::load_gaf(assets, label_gui_font), label_gui_font);
     auto parsed_global = formats::gaf::parse(assets.read(global_logo_sprites).bytes);
     if (!parsed_global.ok())
         throw std::runtime_error(
@@ -967,7 +971,7 @@ main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archi
         const auto node = mounted.lookup(main_menu_layout);
         if (!node || mounted.nodes()[*node].directory())
             return std::nullopt;
-        return mounted.read_node(*node);
+        return ui::decoded::require(mounted.read_node(*node), main_menu_layout);
     }
     return std::nullopt;
 }

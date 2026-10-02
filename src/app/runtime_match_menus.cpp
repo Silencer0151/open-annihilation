@@ -3,6 +3,7 @@
 
 // In-match HUD layout, pause, outcome and options menus.
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/frontend/end_mission.hpp"
@@ -467,7 +468,10 @@ void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
         if (!parsed.ok())
             return;
         overlay.layout = std::move(*parsed.layout);
-        overlay.font = oa::formats::fnt::load_gaf(*ctx->assets, "anims/hattfont12.gaf");
+        constexpr std::string_view overlay_font = "anims/hattfont12.gaf";
+        overlay.font = oa::ui::decoded::require(
+            oa::formats::fnt::load_gaf(*ctx->assets, overlay_font), overlay_font
+        );
     } catch (const std::exception& error) {
         screen_status(ctx, error.what());
         return;
@@ -1298,7 +1302,10 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
     }
     try {
         // SIDEDATA.TDF font=console for in-game metal/energy numerals.
-        match_small_font_ = oa::formats::fnt::load_fnt(assets_, "fonts/CONSOLE.FNT");
+        constexpr std::string_view console_font = "fonts/CONSOLE.FNT";
+        match_small_font_ = oa::ui::decoded::require(
+            oa::formats::fnt::load_fnt(assets_, console_font), console_font
+        );
     } catch (const std::exception& error) {
         std::cerr << "match CONSOLE.FNT unavailable: " << error.what() << '\n';
         match_small_font_ = small_font_;
@@ -2666,7 +2673,9 @@ void Runtime::open_restart_dialog() {
         draw_panel_backdrop(
             match_hud_->background,
             match_hud_->layout.gadgets.front(),
-            oa::decode_pcx(assets_.read(kRestartBackdrop).bytes)
+            oa::ui::decoded::require(
+                oa::decode_pcx(assets_.read(kRestartBackdrop).bytes), kRestartBackdrop
+            )
         );
     } catch (const std::exception& error) {
         std::cerr << "RESTART backdrop unavailable: " << error.what() << '\n';
@@ -2697,7 +2706,9 @@ void Runtime::open_game_settings_sheet() {
         draw_panel_backdrop(
             match_hud_->background,
             layout.gadgets.front(),
-            oa::decode_pcx(assets_.read(kGameSettingsBackdrop).bytes)
+            oa::ui::decoded::require(
+                oa::decode_pcx(assets_.read(kGameSettingsBackdrop).bytes), kGameSettingsBackdrop
+            )
         );
     } catch (const std::exception& error) {
         std::cerr << "GAMEOPTIONS backdrop unavailable: " << error.what() << '\n';

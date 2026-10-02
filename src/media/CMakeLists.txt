@@ -18,7 +18,7 @@ if(OA_BUILD_INTRO_PLAYER)
     target_compile_features(oa-media-intro-player PUBLIC cxx_std_20)
     if(BUILD_TESTING)
       add_executable(oa-intro-player-test tests/intro_player_test.cpp)
-      target_link_libraries(oa-intro-player-test PRIVATE oa-media-intro-player
+      target_link_libraries(oa-intro-player-test PRIVATE oa-media-intro-player oa-test-support
         oa-formats-smacker-test-movie oa-audio-output oa-options)
       add_test(NAME intro-player COMMAND oa-intro-player-test
         ${CMAKE_CURRENT_BINARY_DIR}/intro-player)

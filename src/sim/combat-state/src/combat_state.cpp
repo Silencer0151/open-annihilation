@@ -2,30 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/combat_state.hpp"
+#include "oa/base/game_math.hpp"
 #include "oa/core/weapon_def.h"
 #include <algorithm>
 #include <cmath>
 #include <bit>
 #include <limits>
-#include <cerrno>
+#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
 namespace oa::sim::combat_state {
+using base::game_math::truncate_low32;
+
 namespace {
 constexpr uint8_t preserved_flag_bits = 0xf0;
 constexpr uint8_t initialized_flag = 0x10;
 constexpr uint8_t nondefault_definition_flag = 0x02;
 constexpr unsigned slot_index_shift = 2;
-
-int32_t truncate_low32(double value) noexcept {
-    constexpr double signed64_limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= signed64_limit || value < -signed64_limit)
-        return 0;
-    const auto wide = static_cast<int64_t>(std::trunc(value));
-    return static_cast<int32_t>(static_cast<uint32_t>(wide));
-}
 
 /// Arms one slot: its definition, a cleared stockpile, its flags and its muzzle offset.
 void initialize_slot(
@@ -71,270 +66,64 @@ InitializationResult initialize_weapon_slots(
 }
 
 WeaponRegistry::WeaponRegistry() {
-    for (size_t i = 0; i < weapon_registry_capacity; ++i)
+    for (size_t i = 0; i < weapon_registry_capacity; ++i) {
         definitions_[i].registry_index = static_cast<uint8_t>(i);
-}
-
-void WeaponRegistry::install(const WeaponRecord& record) {
-    if (record.name.empty() || record.name.size() >= 32 ||
-        record.name.find('\0') != std::string::npos)
-        throw std::invalid_argument("weapon internal name must be 1..31 bytes");
-    if (!std::isfinite(record.reload_time_seconds))
-        throw std::invalid_argument("weapon reloadtime must be finite");
-    const double ticks =
-        record.reload_time_seconds * static_cast<double>(simulation_ticks_per_second);
-    constexpr double signed64_limit = 9223372036854775808.0;
-    const auto wide = (ticks >= signed64_limit || ticks < -signed64_limit)
-                          ? std::numeric_limits<int64_t>::min()
-                          : static_cast<int64_t>(std::trunc(ticks));
-    definitions_[record.index].reload_time_ticks =
-        static_cast<uint16_t>(static_cast<uint64_t>(wide));
-    names_[record.index] = record.name;
-}
-
-void WeaponRegistry::install_tdf_section(
-    uint8_t index, std::string_view section_name, std::string_view reload_time_text
-) {
-    double value = 0.0;
-    if (!reload_time_text.empty()) {
-        std::string text(reload_time_text);
-        char* end = nullptr;
-        errno = 0;
-        value = std::strtod(text.c_str(), &end);
-        if (end == text.c_str() || errno == ERANGE || !std::isfinite(value))
-            throw std::invalid_argument("invalid weapon reloadtime");
+        records_[i].weapon_id = static_cast<uint8_t>(i);
     }
-    install({index, std::string(section_name), value});
 }
 
-void WeaponRegistry::install_tdf_section(
-    std::string_view id_text, std::string_view section_name, std::string_view reload_time_text
-) {
-    std::string text(id_text);
-    char* end = nullptr;
-    errno = 0;
-    const long value = std::strtol(text.c_str(), &end, 10);
-    if (end == text.c_str() || errno == ERANGE || value < 0 ||
-        value >= static_cast<long>(weapon_registry_capacity))
-        throw std::invalid_argument("weapon TDF ID is outside 0..255");
-    install_tdf_section(static_cast<uint8_t>(value), section_name, reload_time_text);
-}
-
-void WeaponRegistry::install_target_fields(
-    uint8_t index,
-    std::string_view range_text,
-    std::string_view line_of_sight,
-    std::string_view ballistic,
-    std::string_view paralyzer,
-    std::string_view water_weapon,
-    std::string_view to_air_weapon,
-    std::string_view default_damage,
-    std::string_view projectile_velocity,
-    std::string_view minimum_barrel_angle,
-    std::string_view turret,
-    std::string_view vlaunch,
-    std::string_view energy_per_shot,
-    std::string_view metal_per_shot,
-    std::string_view weapontimer,
-    std::string_view rendertype,
-    std::string_view color,
-    std::string_view color2,
-    std::string_view areaofeffect,
-    std::string_view noautorange,
-    std::string_view commandfire,
-    std::string_view unitsonly,
-    std::string_view groundbounce,
-    std::string_view interceptor,
-    std::string_view accuracy,
-    std::string_view tolerance,
-    std::string_view pitch_tolerance,
-    std::string_view start_velocity,
-    std::string_view acceleration,
-    std::string_view turn_rate,
-    std::string_view selfprop,
-    std::string_view guidance,
-    std::string_view burnblow,
-    std::string_view burst,
-    std::string_view burstrate
-) {
-    const auto integer = [](std::string_view text, long fallback) {
-        if (text.empty())
-            return fallback;
-        std::string copy(text);
-        char* end = nullptr;
-        errno = 0;
-        const auto value = std::strtol(copy.c_str(), &end, 10);
-        return end == copy.c_str() || errno == ERANGE ? fallback : value;
-    };
+void WeaponRegistry::install(const WeaponDef& weapon, const data::defs::WeaponAssetNames& assets) {
+    const uint8_t index = weapon.weapon_id;
+    records_[index] = weapon;
     auto& definition = definitions_[index];
-    definition.range_world_units = static_cast<int32_t>(integer(range_text, 0x7fff));
-    definition.default_damage = static_cast<uint16_t>(integer(default_damage, 0));
-    const auto floating = [](std::string_view text, double fallback) {
-        if (text.empty())
-            return fallback;
-        std::string copy(text);
-        char* end = nullptr;
-        errno = 0;
-        const auto value = std::strtod(copy.c_str(), &end);
-        return end == copy.c_str() || errno == ERANGE ? fallback : value;
-    };
-    definition.projectile_velocity =
-        truncate_low32(floating(projectile_velocity, 0.0) * weapon_velocity_tdf_to_fixed);
-    constexpr double radians_per_degree = 0.017453292519943278;
-    definition.minimum_barrel_angle_radians =
-        static_cast<float>(floating(minimum_barrel_angle, -11.25) * radians_per_degree);
-    const auto flag = [&](std::string_view text, uint32_t bit) {
-        if ((static_cast<uint32_t>(integer(text, 0)) & 1U) != 0)
-            definition.flags |= bit;
-        else
-            definition.flags &= ~bit;
-    };
-    flag(line_of_sight, weapon_line_of_sight_flag);
-    flag(ballistic, weapon_ballistic_flag);
-    flag(paralyzer, weapon_paralyzer_flag);
-    flag(water_weapon, weapon_water_flag);
-    flag(to_air_weapon, weapon_to_air_flag);
-    flag(turret, weapon_turret_flag);
-    flag(vlaunch, weapon_vlaunch_flag);
-    flag(noautorange, weapon_noautorange_flag);
-    flag(commandfire, weapon_commandfire_flag);
-    flag(unitsonly, weapon_ground_skip_flag);
-    flag(groundbounce, weapon_ground_bounce_flag);
-    flag(interceptor, OA_WEAPON_FLAG_INTERCEPTOR);
-    flag(selfprop, weapon_selfprop_flag);
-    flag(guidance, weapon_guidance_flag);
-    flag(burnblow, weapon_burnblow_flag);
-    definition.energy_per_shot = static_cast<float>(floating(energy_per_shot, 0.0));
-    definition.metal_per_shot = static_cast<float>(floating(metal_per_shot, 0.0));
-    definition.weapontimer_ticks = static_cast<uint16_t>(
-        truncate_low32(floating(weapontimer, 0.0) * simulation_ticks_per_second)
-    );
-    definition.rendertype = static_cast<uint8_t>(integer(rendertype, 0));
-    definition.color = static_cast<uint8_t>(integer(color, 0));
-    definition.color2 = static_cast<uint8_t>(integer(color2, 0));
-    definition.areaofeffect = static_cast<uint16_t>(integer(areaofeffect, 0));
-    definition.accuracy = static_cast<int16_t>(integer(accuracy, 0));
-    definition.tolerance = static_cast<uint16_t>(integer(tolerance, 0));
-    definition.pitch_tolerance = static_cast<uint16_t>(integer(pitch_tolerance, 0));
-    definition.start_velocity =
-        truncate_low32(floating(start_velocity, 0.0) * weapon_velocity_tdf_to_fixed);
-    definition.acceleration =
-        truncate_low32(floating(acceleration, 0.0) * weapon_acceleration_tdf_to_fixed);
-    definition.turn_rate = static_cast<uint16_t>(
-        truncate_low32(floating(turn_rate, 0.0) * weapon_turn_rate_tdf_to_tick)
-    );
-    // burst is read as an integer (WeaponDef.burst); burstrate seconds times
-    // 30, truncated, is WeaponDef.burst_rate.
-    definition.burst = static_cast<uint16_t>(integer(burst, 0));
-    definition.burst_rate_ticks = static_cast<uint16_t>(
-        truncate_low32(floating(burstrate, 0.0) * simulation_ticks_per_second)
-    );
-}
-
-void WeaponRegistry::install_explosion_sprites(
-    uint8_t index,
-    std::string_view explosion_gaf,
-    std::string_view explosion_art,
-    std::string_view water_explosion_gaf,
-    std::string_view water_explosion_art,
-    std::string_view lava_explosion_gaf,
-    std::string_view lava_explosion_art
-) {
-    auto& definition = definitions_[index];
-    definition.explosion_gaf.assign(explosion_gaf);
-    definition.explosion_art.assign(explosion_art);
-    definition.water_explosion_gaf.assign(water_explosion_gaf);
-    definition.water_explosion_art.assign(water_explosion_art);
-    definition.lava_explosion_gaf.assign(lava_explosion_gaf);
-    definition.lava_explosion_art.assign(lava_explosion_art);
-}
-
-void WeaponRegistry::install_sounds(
-    uint8_t index,
-    std::string_view soundstart,
-    std::string_view soundhit,
-    std::string_view soundwater
-) {
-    auto& definition = definitions_[index];
-    definition.soundstart.assign(soundstart);
-    definition.soundhit.assign(soundhit);
-    definition.soundwater.assign(soundwater);
-}
-
-namespace {
-double tdf_double(std::string_view text, double fallback) {
-    if (text.empty())
-        return fallback;
-    std::string copy(text);
-    char* end = nullptr;
-    errno = 0;
-    const auto value = std::strtod(copy.c_str(), &end);
-    return end == copy.c_str() || errno == ERANGE ? fallback : value;
-}
-
-long tdf_integer(std::string_view text, long fallback) {
-    if (text.empty())
-        return fallback;
-    std::string copy(text);
-    char* end = nullptr;
-    errno = 0;
-    const auto value = std::strtol(copy.c_str(), &end, 10);
-    return end == copy.c_str() || errno == ERANGE ? fallback : value;
-}
-
-uint16_t tdf_ticks(std::string_view seconds) {
-    return static_cast<uint16_t>(
-        truncate_low32(tdf_double(seconds, 0.0) * simulation_ticks_per_second)
-    );
-}
-} // namespace
-
-void WeaponRegistry::install_flight_fields(uint8_t index, const WeaponFlightFields& fields) {
-    auto& definition = definitions_[index];
-    definition.edge_effectiveness = static_cast<float>(tdf_double(fields.edge_effectiveness, 0.0));
-    definition.spray_angle = static_cast<uint16_t>(tdf_integer(fields.spray_angle, 0));
-    definition.duration_ticks = tdf_ticks(fields.duration);
-    definition.random_decay_ticks = tdf_ticks(fields.random_decay);
-    definition.flight_time_ticks = tdf_ticks(fields.flight_time);
-    definition.smoke_delay_ticks = tdf_ticks(fields.smoke_delay);
-    definition.coverage = static_cast<int32_t>(tdf_integer(fields.coverage, 0));
-    definition.shake_magnitude = static_cast<int32_t>(tdf_integer(fields.shake_magnitude, 0));
-    // The whole 32-bit truncated result, unlike the word-sized tick fields.
-    definition.shake_duration_ticks =
-        truncate_low32(tdf_double(fields.shake_duration, 0.0) * simulation_ticks_per_second);
-    const auto flag = [&](std::string_view text, uint32_t bit) {
-        if ((static_cast<uint32_t>(tdf_integer(text, 0)) & 1U) != 0)
-            definition.flags |= bit;
-        else
-            definition.flags &= ~bit;
-    };
-    flag(fields.beam_weapon, weapon_beam_flag);
-    flag(fields.meteor, weapon_meteor_flag);
-    flag(fields.dropped, weapon_dropped_flag);
-    flag(fields.start_smoke, weapon_start_smoke_flag);
-    flag(fields.end_smoke, weapon_end_smoke_flag);
-    flag(fields.sound_trigger, weapon_sound_trigger_flag);
-    flag(fields.tracks, weapon_tracks_flag);
-    flag(fields.smoke_trail, weapon_smoke_trail_flag);
-    flag(fields.propeller, weapon_propeller_flag);
-    flag(fields.two_phase, weapon_two_phase_flag);
-    flag(fields.cruise, weapon_cruise_flag);
-    flag(fields.stockpile, weapon_stockpile_flag);
-    flag(fields.targetable, weapon_targetable_flag);
-    flag(fields.no_explode, weapon_no_explode_flag);
-    flag(fields.shell_weapon, weapon_shell_flag);
-    flag(fields.no_radar, weapon_no_radar_flag);
+    definition.reload_time_ticks = static_cast<uint16_t>(weapon.reload_time);
+    definition.default_damage = static_cast<uint16_t>(weapon.damage_default);
+    definition.projectile_velocity = weapon.weapon_velocity;
+    definition.minimum_barrel_angle_radians = weapon.min_barrel_angle;
+    definition.range_world_units = weapon.range;
+    definition.flags = weapon.flags;
+    definition.energy_per_shot = weapon.energy_per_shot;
+    definition.metal_per_shot = weapon.metal_per_shot;
+    definition.weapontimer_ticks = static_cast<uint16_t>(weapon.weapon_timer);
+    definition.areaofeffect = static_cast<uint16_t>(weapon.area_of_effect);
+    definition.accuracy = weapon.accuracy;
+    definition.tolerance = static_cast<uint16_t>(weapon.tolerance);
+    definition.pitch_tolerance = static_cast<uint16_t>(weapon.pitch_tolerance);
+    definition.start_velocity = weapon.start_velocity;
+    definition.acceleration = weapon.weapon_acceleration;
+    definition.turn_rate = static_cast<uint16_t>(weapon.turn_rate);
+    definition.burst = static_cast<uint16_t>(weapon.burst);
+    definition.burst_rate_ticks = static_cast<uint16_t>(weapon.burst_rate);
+    definition.rendertype = static_cast<uint8_t>(weapon.render_type);
+    definition.color = static_cast<uint8_t>(weapon.color);
+    definition.color2 = static_cast<uint8_t>(weapon.color2);
+    definition.explosion_gaf = assets.explosion_gaf;
+    definition.explosion_art = assets.explosion_art;
+    definition.water_explosion_gaf = assets.water_explosion_gaf;
+    definition.water_explosion_art = assets.water_explosion_art;
+    definition.soundstart = assets.sound_start;
+    definition.soundhit = assets.sound_hit;
+    definition.soundwater = assets.sound_water;
+    definition.shake_magnitude = weapon.shake_magnitude;
+    definition.shake_duration_ticks = weapon.shake_duration;
+    definition.edge_effectiveness = weapon.edge_effectiveness;
+    definition.spray_angle = static_cast<uint16_t>(weapon.spray_angle);
+    definition.duration_ticks = static_cast<uint16_t>(weapon.duration);
+    definition.random_decay_ticks = static_cast<uint16_t>(weapon.random_decay);
+    definition.flight_time_ticks = static_cast<uint16_t>(weapon.flight_time);
+    definition.smoke_delay_ticks = static_cast<uint16_t>(weapon.smoke_delay);
+    definition.coverage = weapon.coverage;
+    names_[index] = weapon.key;
 }
 
 void WeaponRegistry::install_damage_override(
-    uint8_t index, std::string_view unit_name, std::string_view amount_text
+    uint8_t index, std::string_view unit_name, int32_t amount
 ) {
     auto& overrides = definitions_[index].damage_overrides;
     std::string name(unit_name);
     for (auto& c : name)
         if (c >= 'A' && c <= 'Z')
             c = static_cast<char>(c + ('a' - 'A'));
-    const auto amount = static_cast<int32_t>(tdf_integer(amount_text, 0));
     for (auto& entry : overrides)
         if (entry.unit_name == name) {
             entry.amount = amount;
@@ -382,6 +171,48 @@ const WeaponDefinition* WeaponRegistry::find(std::string_view name) const noexce
         if (!names_[i].empty() && equal_name(names_[i], name))
             return &definitions_[i];
     return nullptr;
+}
+
+size_t install_weapon_table(WeaponRegistry& registry, const data::defs::WeaponTable& table) {
+    size_t installed = 0;
+    for (size_t slot = 0; slot < weapon_registry_capacity; ++slot) {
+        const WeaponDef& weapon = table.defs[slot];
+        if (weapon.key[0] == '\0')
+            continue;
+        registry.install(weapon, table.assets[slot]);
+        // The table keeps a name's entries newest first and a hit takes the
+        // first that matches, so the oldest is installed first and the newest
+        // replaces it.
+        const data::defs::WeaponDamageTable& damage = table.damage[slot];
+        for (uint32_t entry = damage.count; entry-- > 0;)
+            registry.install_damage_override(
+                weapon.weapon_id, damage.entries[entry].unit, damage.entries[entry].damage
+            );
+        ++installed;
+    }
+    return installed;
+}
+
+size_t
+install_weapon_files(WeaponRegistry& registry, const data::defs::Files& files, bool lava_world) {
+    const auto table = std::make_unique<data::defs::WeaponTable>();
+    const data::defs::WeaponLoadOptions options{nullptr, nullptr, lava_world, false};
+    data::defs::load_weapon_defs(&files, table.get(), &options);
+    const size_t installed = install_weapon_table(registry, *table);
+    data::defs::weapon_table_free(table.get());
+    return installed;
+}
+
+size_t install_weapon_text(WeaponRegistry& registry, std::string_view text, bool lava_world) {
+    const auto table = std::make_unique<data::defs::WeaponTable>();
+    data::defs::weapon_table_init(table.get());
+    const data::defs::WeaponLoadOptions options{nullptr, nullptr, lava_world, false};
+    (void)data::defs::load_weapon_text(
+        table.get(), text.data(), static_cast<uint32_t>(text.size()), &options
+    );
+    const size_t installed = install_weapon_table(registry, *table);
+    data::defs::weapon_table_free(table.get());
+    return installed;
 }
 
 WeaponBinding bind_unit_weapons(

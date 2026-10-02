@@ -62,6 +62,13 @@ struct ScrollKeys {
     bool talk_open;
 };
 
+/// The way the screen's edges scroll the camera along each axis: -1 toward
+/// the left or the top, 1 toward the right or the bottom, 0 not at all.
+struct EdgeScroll {
+    int32_t x{};
+    int32_t y{};
+};
+
 /// Moves the camera (the renderer clamps it); called when the position changed.
 struct CameraMover {
     void* user;
@@ -81,6 +88,25 @@ struct CameraMover {
 /// @return `pointer` with cursor_x/cursor_y replaced by the position to test.
 [[nodiscard]] ScrollPointer
 scroll_pointer_position(const ScrollPointer& pointer, int32_t width, int32_t height) noexcept;
+
+/// Finds the way the screen's edges scroll the camera for a pointer on the screen.
+///
+/// The edges are the screen's outermost `edge` columns and rows of pixels,
+/// whatever panel is drawn on them, as scroll_camera's edges are its
+/// outermost pixel: a pointer on an edge scrolls toward it, and one in a
+/// corner toward both of its edges at once, so the camera moves diagonally.
+/// Where the pointer moves a point of several pixels at a time, an edge as
+/// deep as that point keeps the outermost place it can rest on.
+///
+/// @param x pointer column, pixels from the screen's left
+/// @param y pointer row, pixels from the screen's top
+/// @param width screen width in pixels
+/// @param height screen height in pixels
+/// @param edge depth of each edge in pixels; less than 1 counts as 1
+/// @return the way to scroll along each axis; 0 along both for a pointer
+///         inside the edges or off the screen
+[[nodiscard]] EdgeScroll
+edge_scroll(int32_t x, int32_t y, int32_t width, int32_t height, int32_t edge) noexcept;
 
 /// Scrolls the camera for one frame toward a held arrow key or a screen edge the pointer touches.
 ///

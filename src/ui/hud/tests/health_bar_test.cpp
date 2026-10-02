@@ -101,6 +101,44 @@ void health_bars_follow_ownership() {
     CHECK(draws_health_bar(*w.world, enemy));
 }
 
+// A squad digit shows only under the viewpoint player's own units in a
+// squad, and only with damage bars on: a computer player's squads (the ones
+// it sorts its units into) and an ally's never show, and watching another
+// player shows that player's squads instead of the local player's.
+void squad_digits_follow_ownership() {
+    hud_test::TestWorld w;
+    w.add_player(0, OA_PLAYER_STATUS_LOCAL);
+    w.add_player(1, OA_PLAYER_STATUS_COMPUTER);
+    w.add_player(2, OA_PLAYER_STATUS_MIRRORED);
+    w.give_range(0, 1, 4);
+    w.give_range(1, 5, 8);
+    w.give_range(2, 9, 12);
+    // Player 2 is the local player's ally both ways.
+    w.player(0).allied_by[2] = 1;
+    w.player(2).allied_by[0] = 1;
+    auto& own = w.spawn(1, 1);
+    auto& own_loose = w.spawn(2, 1);
+    auto& computer = w.spawn(5, 1);
+    auto& ally = w.spawn(9, 1);
+    own.squad = 3;
+    computer.squad = 5;
+    ally.squad = 2;
+    w.game().local_player_index = 0;
+    w.game().viewpoint_player = 0;
+    w.game().graphics_flags = kGraphicsDamageBars;
+    CHECK(draws_squad_digit(*w.world, own) && squad_digit(own) == '3');
+    CHECK(!draws_squad_digit(*w.world, own_loose));
+    CHECK(!draws_squad_digit(*w.world, computer));
+    CHECK(!draws_squad_digit(*w.world, ally));
+    w.game().graphics_flags = 0;
+    CHECK(!draws_squad_digit(*w.world, own));
+    w.game().graphics_flags = kGraphicsDamageBars;
+    w.game().viewpoint_player = 1;
+    CHECK(!draws_squad_digit(*w.world, own));
+    CHECK(draws_squad_digit(*w.world, computer) && squad_digit(computer) == '5');
+    CHECK(!draws_squad_digit(*w.world, ally));
+}
+
 // The unit panel draws its damage bar for the viewpoint player's
 // own units and for other players' units unless their type sets HideDamage
 // (UnitDef.flags, OA_UNIT_DEF_FLAG_HIDE_DAMAGE).
@@ -129,6 +167,7 @@ int main() {
     colour_by_thirds();
     no_bar_without_health();
     health_bars_follow_ownership();
+    squad_digits_follow_ownership();
     panel_damage_follows_hide_damage();
     return 0;
 }

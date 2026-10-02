@@ -8,7 +8,9 @@ The same seeded skirmish, its local army marching south, played through the
 match clock and drawn every frame at 30, 60, 120 and 144 frames a second
 must write the same trace stream, tick for tick, and reach the same world
 digest: how many frames are drawn, and how far between two ticks each is
-drawn, never changes the match.
+drawn, never changes the match. At 30 frames a second, the tick rate, there
+must be a frame for each tick, each showing its tick whole; at the higher
+rates at least half the frames are drawn between two ticks.
 
 A run at 120 frames a second that sweeps the camera's scroll over the
 marching army writes a frame log, in which the camera must move the same
@@ -28,6 +30,13 @@ shows the unit, after the frame's clock step, so the ground moves under it
 and the unit never jumps by a tick's step. The check prints the spread the
 unit had on the screen when the camera was centred before the clock step on
 the tick's place and the view moved by the unit's step since.
+
+Runs at 30 and 120 frames a second whose clock starts 2 seconds before
+2^32 milliseconds (--frame-clock), where the match clock's reading turns over
+to 0, must write the same trace stream and reach the same world digest as
+the runs from 0, the match stepping on through the turn: at 30 frames a
+second every frame runs a tick but the first past the turn, which runs none,
+and at 120 no more than one tick's frames are added.
 """
 import argparse
 import csv
@@ -68,6 +77,13 @@ MOST_DRAWN_STEP_SHARE = 0.5
 
 # The whole pixels of the screen a tracked unit may be drawn at: one.
 FOLLOW_SCREEN_PIXELS = 1
+
+# The millisecond at which the steady clock's low 32 bits, and with them the
+# match clock's reading, turn over to 0; and how long before it the runs
+# across the turn start.
+CLOCK_TURN_MS = 1 << 32
+TURN_LEAD_MS = 2000
+TURN_RATES = (30, 120)
 
 RUN_LINE = re.compile(
     r"frame run: (\d+) frames a second, (\d+) frames, (\d+) ticks, (\d+) frames between ticks, "
@@ -220,6 +236,26 @@ def check_follow_log(path):
                          f"screen: {sorted(screen)}")
 
 
+def check_turn_log(path):
+    """Checks that each frame across the turn runs a tick but the first past it."""
+    rows = list(csv.DictReader(path.open()))
+    first = next(index for index, row in enumerate(rows) if int(row["tick"]) > 0)
+    ticks = [int(row["tick"]) for row in rows[first:]]
+    times = [float(row["time_ms"]) for row in rows[first:]]
+    if times[0] >= CLOCK_TURN_MS or times[-1] < CLOCK_TURN_MS:
+        raise SystemExit(f"{path}: the frames do not cross the turn at {CLOCK_TURN_MS} ms")
+    ran = steps(ticks)
+    if any(step not in (0, 1) for step in ran):
+        raise SystemExit(f"{path}: frames ran {sorted(set(ran))} ticks, not 1")
+    idle = [time for time, step in zip(times[1:], ran) if step == 0]
+    turn = next(time for time in times if time >= CLOCK_TURN_MS)
+    if idle != [turn]:
+        raise SystemExit(f"{path}: the frames at {idle} ms ran no tick, not the first past "
+                         f"the turn alone, at {turn} ms")
+    print(f"frames across the turn at {TICKS_PER_SECOND} frames a second: each ran a tick but "
+          f"the first past it, at {turn:.3f} ms")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", type=Path, required=True)
@@ -238,7 +274,11 @@ def main():
             expected_frames = TICKS * rate // TICKS_PER_SECOND
             if ticks != TICKS or abs(frames - expected_frames) > 1:
                 raise SystemExit(f"{rate} frames a second: {frames} frames for {ticks} ticks")
-            if between * 2 < frames:
+            if rate == TICKS_PER_SECOND:
+                if between != 0:
+                    raise SystemExit(f"{rate} frames a second: {between} of {frames} frames "
+                                     "between ticks, not a whole tick each")
+            elif between * 2 < frames:
                 raise SystemExit(f"{rate} frames a second: {between} of {frames} frames between ticks")
             if digest != reference[3]:
                 raise SystemExit(f"{rate} frames a second reached digest {digest}, "
@@ -253,9 +293,27 @@ def main():
         run(native, game_dir, workdir, "follow", LOG_RATE, LOG_TICKS, "--follow",
             "--frame-log", follow_log)
         check_follow_log(follow_log)
+        for rate in TURN_RATES:
+            turn_log = workdir / f"turn-{rate}.csv"
+            frames, ticks, _, digest, trace = run(
+                native, game_dir, workdir, f"turn-{rate}", rate, TICKS, "--frame-clock",
+                CLOCK_TURN_MS - TURN_LEAD_MS, "--frame-log", turn_log)
+            added = frames - results[rate][0]
+            if ticks != TICKS or added < 0 or added > rate // TICKS_PER_SECOND:
+                raise SystemExit(f"{rate} frames a second across the turn: {frames} frames for "
+                                 f"{ticks} ticks, against {results[rate][0]} from 0")
+            if digest != reference[3]:
+                raise SystemExit(f"{rate} frames a second across the turn reached digest "
+                                 f"{digest}, not {reference[3]}")
+            if trace != reference[4]:
+                raise SystemExit(f"{rate} frames a second across the turn wrote another "
+                                 "trace stream")
+            if rate == TICKS_PER_SECOND:
+                check_turn_log(turn_log)
         print(f"native frame rate: {TICKS} ticks drawn at "
-              f"{', '.join(str(rate) for rate in RATES)} frames a second write one trace "
-              f"and reach digest {reference[3]}")
+              f"{', '.join(str(rate) for rate in RATES)} frames a second, and at "
+              f"{' and '.join(str(rate) for rate in TURN_RATES)} across the clock's turn, "
+              f"write one trace and reach digest {reference[3]}")
 
 
 if __name__ == "__main__":

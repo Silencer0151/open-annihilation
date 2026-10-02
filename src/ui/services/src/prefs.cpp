@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/services/prefs.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -9,6 +10,7 @@
 
 namespace oa::ui::services {
 namespace {
+using base::bytes::load_le32;
 
 constexpr uint32_t dword_size = 4;
 constexpr char hex_digits[] = "0123456789abcdef";
@@ -27,14 +29,6 @@ void store_le32(uint8_t* bytes, uint32_t value) noexcept {
     for (uint32_t i = 0; i < dword_size; ++i) {
         bytes[i] = static_cast<uint8_t>(value >> (8 * i));
     }
-}
-
-uint32_t load_le32(const uint8_t* bytes) noexcept {
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < dword_size; ++i) {
-        value |= static_cast<uint32_t>(bytes[i]) << (8 * i);
-    }
-    return value;
 }
 
 int hex_value(char c) noexcept {

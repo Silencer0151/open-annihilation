@@ -467,8 +467,8 @@ void check_installed_shaded_text(
 }
 
 void installed_fonts_draw_as_the_game_draws_them(oa::AssetStore& assets) {
-    const auto regular = fnt::load_gaf(assets, "anims/hattfont12.gaf");
-    const auto small = fnt::load_gaf(assets, "anims/hattfont11.gaf");
+    const auto regular = fnt::load_gaf(assets, "anims/hattfont12.gaf").value.value();
+    const auto small = fnt::load_gaf(assets, "anims/hattfont11.gaf").value.value();
     const auto palette_file = assets.read("palettes/palette.pal").bytes;
     CHECK(palette_file.size() >= std::tuple_size_v<oa::PaletteBytes>);
     if (palette_file.size() < std::tuple_size_v<oa::PaletteBytes>)

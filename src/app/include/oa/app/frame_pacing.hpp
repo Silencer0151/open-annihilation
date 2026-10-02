@@ -39,7 +39,9 @@ inline constexpr uint32_t kTicksPerSecond = 30;
 
 /// The schedule of the loop's frames: a run of frames due one period apart
 /// from a start, which begins again whenever a frame starts early or ends
-/// late, or the rate changes.
+/// late, or the rate changes. At the tick rate (kTicksPerSecond) every frame
+/// is due at the middle of a match clock unit instead, as the first of a run
+/// of its own (end_paced_frame).
 struct FramePacer {
     uint64_t run_start_ns{};      ///< when the run of evenly spaced frames began
     uint64_t frames_in_run{};     ///< frames of the run started since run_start_ns
@@ -72,6 +74,14 @@ struct FramePacer {
 /// by frames closer together to catch up. A change of rate begins a new run
 /// from the start of the frame that ends.
 ///
+/// At the tick rate (kTicksPerSecond) the next frame is due at the middle of
+/// the match clock unit after the one the ending frame's time lies in
+/// (next_clock_unit_middle), so frames on time stand a clock unit apart, each
+/// at the middle of its unit, and each steps the match clock by exactly one
+/// unit, one tick at normal speed, wherever the clock's whole milliseconds
+/// turn its units over. Frames spaced evenly at that rate from any start
+/// instead would, from some starts, step it by none and then two.
+///
 /// @param[in,out] pacer the loop's schedule
 /// @param now_ns the frame's end, nanoseconds on the same clock
 /// @param frames_per_second the rate to keep; 0 waits for nothing
@@ -88,6 +98,22 @@ end_paced_frame(FramePacer& pacer, uint64_t now_ns, uint32_t frames_per_second) 
 ///     seconds after the start, rounded down to a nanosecond
 [[nodiscard]] uint64_t
 paced_frame_due(uint64_t run_start_ns, uint64_t frame, uint32_t frames_per_second) noexcept;
+
+/// Returns the middle of the match clock unit after the one a time lies in.
+///
+/// The match clock reads the time's whole milliseconds, wrapped to 32 bits,
+/// as scaled_clock reads them at kTicksPerSecond units a second (the product
+/// wrapping at 32 bits). The result lies half a unit into the next unit, at
+/// least 16 ms from either end of it as the clock reads whole milliseconds,
+/// so the clock reads exactly one unit more there than at the time, and the
+/// clock's fraction of that unit (next_presentation_alpha) is a half. A unit
+/// the clock's wrap-around cuts short is not allowed for.
+///
+/// @param time_ns the time, nanoseconds on the clock whose milliseconds the
+///     match clock reads
+/// @return the time of the next unit's middle, nanoseconds on the same
+///     clock; from about half a unit to a unit and a half after time_ns
+[[nodiscard]] uint64_t next_clock_unit_middle(uint64_t time_ns) noexcept;
 
 /// What moved, or may move, on the screen in the frame just drawn, which
 /// decides the rate the loop keeps.
@@ -132,6 +158,9 @@ struct FrameTicks {
     bool whole{};
     int32_t owed{}; ///< steps the clock offered this frame (Timing::pending_steps)
     uint32_t ran{}; ///< ticks the match advanced this frame
+    /// Frames are drawn one a clock unit: the loop paces them at the tick
+    /// rate (kTicksPerSecond), or a run draws them at that rate.
+    bool unit_frames{};
 };
 
 /// Returns the presentation fraction of the frame about to be drawn.
@@ -152,6 +181,14 @@ struct FrameTicks {
 /// toward the next tick, to the units since times the speed. Between batches
 /// the fraction never goes back, even when the clock's time is set back (a
 /// screenshot or film frame resets it); a batch starts it again.
+///
+/// When frames are drawn one a clock unit (`ticks.unit_frames`), a frame
+/// counts the current unit whole, as the next frame is due at the next unit:
+/// at normal speed and above it shows the state its batch of ticks reached
+/// whole, so that at normal speed each frame draws one tick and the next
+/// frame the next, and below normal speed it shows the progress the clock
+/// makes by the unit's end, so that frames still move evenly between the
+/// ticks.
 ///
 /// Frames hold the current state whole (fraction 1) while `ticks.whole`
 /// says so, and from a frame that owed steps none of which ran (the match

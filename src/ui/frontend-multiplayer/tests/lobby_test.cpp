@@ -33,6 +33,12 @@ void expect(bool condition, const char* what) {
 }
 
 uint32_t clock_ticks = 1000;
+// The lobby's clock reads 30 ticks a second from 0 through 4,294,967 and
+// then turns over to 0, about every 39.8 hours.
+constexpr uint32_t kLargestReading = 4'294'967;
+// Ticks ahead of the clock a status block is set to keep it out of a test:
+// about nine hours, past the test's last tick.
+constexpr uint32_t kNoStatusTicks = 1'000'000;
 /// The installed game's SLIDERS art, which the lounge's sliders are bound
 /// with; none without --data.
 oa::ui::gui_input::ScrollArtFrames slider_art;
@@ -4268,7 +4274,7 @@ void test_player_timeout() {
     Room room(true);
     auto& lobby = room.lobby;
     auto& game = *room.game;
-    lobby.next_stats_tick = 0xffffffffU; // no periodic block
+    lobby.next_stats_tick = clock_ticks + kNoStatusTicks; // no periodic block
     expect(
         game.player_timeout_seconds == mp::kDefaultPlayerTimeoutSeconds &&
             mp::kDefaultPlayerTimeoutSeconds == 30,
@@ -4403,7 +4409,7 @@ void test_player_timeout() {
     mp::lobby_reset(fresh, *named);
     expect(named->player_timeout_seconds == 120, "a timeout already set is kept");
     Room slow(true);
-    slow.lobby.next_stats_tick = 0xffffffffU;
+    slow.lobby.next_stats_tick = clock_ticks + kNoStatusTicks;
     slow.game->player_timeout_seconds = 120;
     heard = mp::slot_player(slow.lobby, 1).last_update_time;
     clock_ticks = heard + 120U * 30U;
@@ -4412,6 +4418,215 @@ void test_player_timeout() {
     clock_ticks = heard + 120U * 30U + 1;
     (void)mp::lobby_tick(slow.lobby, slow.panel);
     expect(slow.lobby.stalled_player == kRoomGuest, "past it the player is named");
+}
+
+/// Steps the test's clock one tick, over to 0 past its largest reading.
+void step_clock() {
+    clock_ticks = clock_ticks == kLargestReading ? 0 : clock_ticks + 1;
+}
+
+// Across the turn of the lobby's clock the status block goes on: one due
+// past the turn runs at the first reading after it, and the next sixty
+// ticks after that.
+void test_status_across_the_clock_turn() {
+    using oa::netgame::RecordType;
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 30;
+    Room room(false);
+    room.lobby.next_stats_tick = 0;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(room.sent(RecordType::ping).size() == 2, "the block runs 30 ticks before the turn");
+    room.loopback.sent_count = 0;
+    clock_ticks = kLargestReading;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(room.sent(RecordType::ping).empty(), "and not again before the turn");
+    clock_ticks = 5;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(
+        room.sent(RecordType::ping).size() == 2 && room.sent(RecordType::player_info).size() == 2,
+        "the block runs again after the turn"
+    );
+    room.loopback.sent_count = 0;
+    clock_ticks = 65;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(room.sent(RecordType::ping).empty(), "not within sixty ticks of that");
+    clock_ticks = 66;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(room.sent(RecordType::ping).size() == 2, "and again sixty ticks on");
+    clock_ticks = saved_clock;
+}
+
+// A player heard from just before the clock turns over is silent only from
+// then: the stall scan names it once the timeout has passed across the turn.
+void test_stall_scan_across_the_clock_turn() {
+    constexpr uint16_t kPaused = 0x01; // Game.sim_run_flags: the game is paused
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 100;
+    Room room(true);
+    auto& lobby = room.lobby;
+    auto& game = *room.game;
+    auto& guest = mp::slot_player(lobby, mp::slot_for_player_id(lobby, kRoomGuest));
+    game.sim_run_flags |= kPaused;
+    (void)mp::lobby_tick(lobby, room.panel);
+    game.sim_run_flags &= static_cast<uint16_t>(~kPaused);
+    expect(lobby.timeout_baseline == clock_ticks, "the game pauses 100 ticks before the turn");
+    clock_ticks = kLargestReading - 10;
+    inject_probe(room.loopback, kRoomGuest);
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        guest.last_update_time == clock_ticks && lobby.stalled_player == 0,
+        "the guest is heard 10 ticks before the turn"
+    );
+    clock_ticks = 20;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "30 ticks later, across the turn, it is not silent");
+    clock_ticks = 890;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "silence for the timeout across the turn is not yet a stall");
+    clock_ticks = 891;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == kRoomGuest, "past it the player is named");
+    clock_ticks = saved_clock;
+}
+
+// The doors over START open a frame every four ticks across the turn of the
+// clock, as before it, to their last frame.
+void test_start_doors_across_the_clock_turn() {
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 40;
+    Fixture f(doors_layout());
+    auto* doors = mp::panel_control(f.panel, "battlestart");
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, mp::option::ready, 1);
+    mp::lobby_player_count(*f.game) = 2;
+    expect(f.press("READY0"), "READY0 clickable");
+    clock_ticks = kLargestReading - 6;
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(doors->stage == 1, "the doors start to open 6 ticks before the turn");
+    std::vector<uint32_t> steps; // the readings the doors stepped at
+    for (int frame = 0; frame < 30; ++frame) {
+        const auto stage = doors->stage;
+        step_clock();
+        (void)mp::lobby_tick(f.lobby, f.panel);
+        if (doors->stage != stage)
+            steps.push_back(clock_ticks);
+    }
+    const std::vector<uint32_t> expected{kLargestReading - 5, kLargestReading - 1, 0, 5, 9, 13, 17};
+    expect(steps == expected, "a step every four ticks, and at the first reading after the turn");
+    expect(doors->stage == 8, "the doors open to their last frame across the turn");
+    clock_ticks = saved_clock;
+}
+
+// A computer player seated just before the clock turns over still takes no
+// click for 31 ticks, counted across the turn.
+void test_computer_guard_across_the_clock_turn() {
+    namespace gui = oa::ui::gui_layout;
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 40;
+    auto layout = doors_layout();
+    gui::Gadget player;
+    player.common.type = gui::GadgetType::button;
+    player.common.name = "PLAYERx";
+    player.common.x = 20;
+    player.common.y = 71;
+    player.common.width = 150;
+    player.common.height = 16;
+    player.common.active = 1;
+    player.fields = gui::ButtonFields{};
+    layout.gadgets.push_back(player);
+    Fixture f(layout);
+    f.loopback.next_player_id = 0x101; // fixture manually seated the host at 0x100
+    auto& slot = mp::slot_player(f.lobby, 2);
+    clock_ticks = kLargestReading - 5;
+    expect(f.press("PLAYER2") && f.press("PLAYER2"), "PLAYER2 blocks, then adds a computer");
+    mp::LobbyEvent arrival{};
+    expect(
+        f.lobby.net.receive(f.lobby.net.context, &arrival) &&
+            mp::lobby_apply_event(f.lobby, arrival),
+        "computer session arrival"
+    );
+    expect(
+        slot.status == mp::kSlotComputer && slot.in_use != 0,
+        "a computer player is seated 5 ticks before the turn"
+    );
+    clock_ticks = 25;
+    expect(f.press("PLAYER2"), "PLAYER2 clickable as computer");
+    expect(
+        slot.status == mp::kSlotComputer && slot.in_use != 0,
+        "30 ticks later, across the turn, a click keeps it"
+    );
+    clock_ticks = 26;
+    expect(f.press("PLAYER2"), "PLAYER2 clickable as computer again");
+    expect(slot.status == mp::kSlotOpen && slot.in_use == 0, "31 ticks later the click rejects it");
+    clock_ticks = saved_clock;
+}
+
+// TIMEOUT.GUI's countdown runs across the turn of the clock: it is redrawn
+// every two ticks, and rejects the player at the timeout plus 120 s counted
+// from its last word before the turn.
+void test_timeout_dialog_across_the_clock_turn() {
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 10;
+    Room room(true);
+    auto& lobby = room.lobby;
+    auto& guest = mp::slot_player(lobby, mp::slot_for_player_id(lobby, kRoomGuest));
+    guest.last_update_time = clock_ticks;
+    mp::Panel dialog;
+    expect(mp::timeout_open(lobby, dialog, kRoomGuest), "TIMEOUT opens for the silent player");
+    clock_ticks = kLargestReading - 1;
+    (void)mp::timeout_tick(lobby, dialog);
+    dialog.dirty = false;
+    clock_ticks = kLargestReading;
+    expect(
+        !mp::timeout_tick(lobby, dialog) && !dialog.dirty,
+        "the countdown is not redrawn within two ticks"
+    );
+    clock_ticks = 20;
+    expect(
+        !mp::timeout_tick(lobby, dialog) && room.rejects().empty(),
+        "30 ticks after the guest was heard, across the turn, no one is rejected"
+    );
+    expect(dialog.dirty, "and the countdown is redrawn after the turn");
+    const uint32_t drop = (30U + 120U) * 30U;
+    clock_ticks = drop - 11;
+    expect(
+        !mp::timeout_tick(lobby, dialog) && room.rejects().empty(),
+        "short of the timeout plus 120 s across the turn, no one is rejected"
+    );
+    clock_ticks = drop - 10;
+    const auto rejects_at_drop = mp::timeout_tick(lobby, dialog);
+    const auto rejects = room.rejects();
+    expect(
+        rejects_at_drop && rejects.size() == 1 && rejects[0].player_id == kRoomGuest &&
+            rejects[0].reason == 6,
+        "at the timeout plus 120 s across the turn the player is rejected"
+    );
+    clock_ticks = saved_clock;
+}
+
+// RESTRICT2.GUI loads a row's picture every two ticks across the turn of the clock.
+void test_restrict_pictures_across_the_clock_turn() {
+    const auto saved_clock = clock_ticks;
+    clock_ticks = kLargestReading - 1;
+    Room room(true);
+    auto restrict = std::make_unique<mp::RestrictPanel>();
+    mp::Panel panel;
+    mp::restrict_tick(room.lobby, * restrict, panel);
+    expect(restrict->picture_rows == 1, "a row's picture loads a tick before the turn");
+    clock_ticks = kLargestReading;
+    mp::restrict_tick(room.lobby, * restrict, panel);
+    expect(restrict->picture_rows == 1, "none the next tick");
+    clock_ticks = 0;
+    mp::restrict_tick(room.lobby, * restrict, panel);
+    expect(restrict->picture_rows == 2, "the next at the first reading after the turn");
+    clock_ticks = 2;
+    mp::restrict_tick(room.lobby, * restrict, panel);
+    expect(restrict->picture_rows == 2, "none within two ticks of that");
+    clock_ticks = 3;
+    mp::restrict_tick(room.lobby, * restrict, panel);
+    expect(restrict->picture_rows == 3, "and the next after two");
+    clock_ticks = saved_clock;
 }
 
 int main(int argc, char** argv) {
@@ -4437,6 +4652,12 @@ int main(int argc, char** argv) {
         test_rejection_order();
         test_refused_joiner();
         test_player_timeout();
+        test_status_across_the_clock_turn();
+        test_stall_scan_across_the_clock_turn();
+        test_start_doors_across_the_clock_turn();
+        test_computer_guard_across_the_clock_turn();
+        test_timeout_dialog_across_the_clock_turn();
+        test_restrict_pictures_across_the_clock_turn();
         test_session_description();
         test_hot_surfaces();
         test_slider_binding();

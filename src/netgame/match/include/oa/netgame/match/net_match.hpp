@@ -146,6 +146,7 @@ struct NetMatch {
     NetMatchHooks hooks{};
     NetPhase phase{NetPhase::loading};
     LoadBarrier barrier{};
+    uint32_t frames_since_barrier{};       // loading frames due since the barrier passed
     uint32_t timeout_baseline{};           // time the stall scan counts from
     uint32_t timeout_player{no_player_id}; // player named by the timeout dialog
     uint32_t keepalive_time{};             // next paused probe
@@ -222,6 +223,24 @@ inline constexpr uint8_t load_progress_complete = 100;
 /// each frame.
 inline constexpr uint32_t loading_frame_ticks = 6;
 
+/// Loading frames that come due after the one in which the load barrier
+/// passed before the commanders are placed and announced (0x09).
+///
+/// Another machine passes its own barrier at the first loading frame of its
+/// own that reads this machine's 0x15, and a machine still on its loading
+/// screen refuses a 0x09, as 3.1c does. A 0x09 that reaches it together with
+/// the 0x15 is lost there: it makes its copy of the commander from the first
+/// unit state record (0x2c) that names the commander, where its empty slot
+/// stands, and puts it on the start position only when the commander's full
+/// record comes round, units_per_player ticks later. Two loading frames
+/// (400 ms) outlast a loading frame of the other machine (200 ms and its
+/// drawing), so the 0x09 arrives after its barrier has passed and the
+/// commander stands on its start position from its first record. The
+/// records are those 3.1c sends, in its order, in one flush: the last load
+/// progress (0x2a), the commanders' 0x09 and 0x11, the setup blocks and
+/// teams.
+inline constexpr uint32_t commander_wait_frames = 2;
+
 /// When the loading screen's work last ran.
 struct LoadingPace {
     bool ran{};      // it has run at least once
@@ -266,12 +285,16 @@ void net_match_send_load_progress(NetMatch* match, const uint8_t rows[load_progr
 ///
 /// When loading_frame_due says so: net_match_loading_frame (probes, pump,
 /// barrier, flush), then net_match_send_load_progress, whose records the
-/// next frame's flush sends. Otherwise nothing is sent or read.
+/// next frame's flush sends. Otherwise nothing is sent or read. Once the
+/// barrier has passed, a frame that comes due only services the transport
+/// and counts toward commander_wait_frames: nothing is sent, and what
+/// arrives stays queued for the match's pump.
 ///
 /// @param[in,out] match Running match.
 /// @param[in,out] pace When the loading screen's work last ran.
 /// @param rows The six loading-screen category percentages, 0..100 each.
-/// @return True once the barrier has passed; the start positions are then final.
+/// @return True once the barrier has passed and commander_wait_frames more frames have come due: the
+///         start positions are final and the commanders can be placed.
 bool net_match_paced_loading_frame(
     NetMatch* match, LoadingPace* pace, const uint8_t rows[load_progress_rows]
 ) noexcept;

@@ -6,6 +6,7 @@
 // SSE2 and memory, and reading this machine's.
 
 #include "oa/platform/machine.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -67,8 +68,7 @@ void other_boards_are_not() {
 
 void model_files_are_read_up_to_their_limit() {
     std::error_code error;
-    const fs::path folder = fs::temp_directory_path(error) / "oa-platform-machine-test";
-    fs::create_directories(folder, error);
+    const fs::path folder = oa::test::make_scratch_directory("oa-platform-machine-test");
     const fs::path model = folder / "model";
 
     write_file(model, "Raspberry Pi 4 Model B Rev 1.4\0"s);

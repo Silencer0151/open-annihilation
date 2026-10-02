@@ -53,19 +53,25 @@ bool status_panel_step(Game& game, uint32_t& next_step_ms, uint32_t now_ms, bool
     return true;
 }
 
-void format_status_panel(
-    const Game& game, TranslateText translate, void* context, StatusPanelText& out
+void format_game_time(
+    const Game& game, TranslateText translate, void* context, char* out, std::size_t bytes
 ) noexcept {
     const uint32_t within_hour = game.tick % ticks_per_hour;
     std::snprintf(
-        out.time,
-        sizeof out.time,
+        out,
+        bytes,
         "%s : %02d:%02d:%02d",
         label(translate, context, "Game Time"),
         static_cast<int>(game.tick / ticks_per_hour),
         static_cast<int>(within_hour / ticks_per_minute),
         static_cast<int>(within_hour % ticks_per_minute / ticks_per_second)
     );
+}
+
+void format_status_panel(
+    const Game& game, TranslateText translate, void* context, StatusPanelText& out
+) noexcept {
+    format_game_time(game, translate, context, out.time, sizeof out.time);
     const uint16_t units = game.local_player_index < OA_PLAYER_COUNT
                                ? game.players[game.local_player_index].unit_count
                                : uint16_t{0};

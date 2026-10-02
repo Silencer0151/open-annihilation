@@ -8,6 +8,7 @@
 #include "audio_test_support.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/formats/hpi.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -57,8 +58,7 @@ bool wait_for(Done done, uint64_t timeout_ms) {
 int main() {
     SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
     require(SDL_Init(SDL_INIT_AUDIO), "SDL audio init");
-    const auto root = std::filesystem::temp_directory_path() / "oa-sdl-player-test";
-    std::filesystem::remove_all(root);
+    const auto root = oa::test::make_scratch_directory("oa-sdl-player-test");
     std::filesystem::create_directories(root / "sounds");
     write_tone(root / "sounds" / "long.wav", 5000);
     write_tone(root / "sounds" / "short.wav", 100);
@@ -80,9 +80,12 @@ int main() {
             wait_for([&] { return !player.stream_busy(); }, 3000), "a stream plays once and ends"
         );
 
-        require(player.play_stream("sounds/short.wav", 1000, error), "a delayed stream starts");
-        SDL_Delay(500);
+        // The delay is far longer than the test could stall, so the stream is
+        // still waiting it out at both checks, however slowly the test runs.
+        require(player.play_stream("sounds/short.wav", 60000, error), "a delayed stream starts");
         require(player.stream_busy(), "a stream waiting out its delay is busy");
+        SDL_Delay(50);
+        require(player.stream_busy(), "a stream is still busy while its delay lasts");
         player.stop_stream();
         require(!player.stream_busy(), "a stream stopped during its delay never plays");
 

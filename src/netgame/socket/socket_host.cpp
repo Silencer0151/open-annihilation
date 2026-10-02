@@ -139,8 +139,10 @@ bool socket_valid(intptr_t fd) {
 // What wait_for_sockets watches a socket for, and what it found ready.
 constexpr unsigned socket_readable = 1u << 0;
 constexpr unsigned socket_writable = 1u << 1;
-constexpr unsigned socket_failed = 1u << 2;  // an error or a hang-up
-constexpr unsigned socket_invalid = 1u << 3; // not an open socket
+constexpr unsigned socket_failed = 1u << 2; // an error or a hang-up
+// Not an open socket. Only poll reports it; select on Windows has no such
+// result.
+[[maybe_unused]] constexpr unsigned socket_invalid = 1u << 3;
 
 // One socket host_pump waits on.
 struct SocketWait {

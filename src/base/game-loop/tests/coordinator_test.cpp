@@ -213,6 +213,35 @@ void test_timing() {
     require(scaled_clock(0xffffffffu, 1000) == 4294966u, "clock product wraps before divide");
 }
 
+void test_clock_turn() {
+    // At 30 units a second the reading turns over to 0 past 2^32 / 30
+    // milliseconds, and again with the milliseconds at 2^32.
+    require(scaled_clock(0xffffffffu, 1) == scaled_clock_turn, "the largest reading");
+    require(scaled_clock(143'165'576u, 30) == scaled_clock_turn, "the reading before a turn");
+    require(scaled_clock(143'165'577u, 30) == 0, "the reading after a turn");
+    require(scaled_clock(0xffffffffu, 30) > scaled_clock_turn - 2, "the reading before 2^32 ms");
+    // Before, at and after another reading; a reading turned over to 0 lies after.
+    require(scaled_clock_before(1000, 1003), "a smaller reading lies before");
+    require(!scaled_clock_before(1003, 1003), "an equal reading does not");
+    require(!scaled_clock_before(1004, 1003), "a larger reading lies after");
+    require(!scaled_clock_before(5, scaled_clock_turn - 2), "a turned reading lies after");
+    require(!scaled_clock_before(scaled_clock_turn, 4), "a larger reading lies after, however far");
+    // A wait past the largest reading is due after the turn.
+    require(scaled_clock_before(scaled_clock_turn, scaled_clock_turn + 6), "before a wait");
+    require(!scaled_clock_before(3, scaled_clock_turn + 6), "after a wait across the turn");
+    // Half a turn is as far as a reading lies before another.
+    require(scaled_clock_before(0, scaled_clock_turn / 2 - 1), "within half a turn");
+    require(!scaled_clock_before(0, scaled_clock_turn / 2), "half a turn back has turned");
+    // Units between readings, across the turn as well.
+    require(scaled_clock_elapsed(1030, 1000) == 30, "units between readings");
+    require(scaled_clock_elapsed(7, 7) == 0, "no units");
+    require(scaled_clock_elapsed(20, scaled_clock_turn - 10) == 30, "units across the turn");
+    require(
+        scaled_clock_elapsed(scaled_clock(1000u, 30), scaled_clock(0xffffffffu - 1000u, 30)) == 60,
+        "two seconds across 2^32 ms"
+    );
+}
+
 void test_ticks() {
     State s;
     s.timing.pending_steps = 1;
@@ -435,6 +464,7 @@ int main() {
     try {
         test_mode_timing_reset();
         test_timing();
+        test_clock_turn();
         test_ticks();
         test_frames();
         test_modes();

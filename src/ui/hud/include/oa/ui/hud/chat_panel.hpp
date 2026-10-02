@@ -128,12 +128,18 @@ ChatClick chat_panel_click(
 /// Drawing services for the message log.
 struct MessageLogSink {
     void* user{};
+    /// The step between lines: COMIX's header height (14).
     int32_t (*font_height)(void* user){};
+    /// The label colour of the next line's text. It shows only when no GUI
+    /// font is loaded: the GUI font's glyphs carry their own colours.
     void (*set_color)(void* user, uint8_t color){};
     /// Player logo scaled into the square [x0, x1) x [y0, y1).
     void (*logo)(
         void* user, const Player& player, int32_t x0, int32_t y0, int32_t x1, int32_t y1
     ){};
+    /// A line's text with its pen at (x, y), written as the GUI writes gadget
+    /// text: in the GUI's font (hattfont12.gaf), or as a COMIX label in the
+    /// set colour when the GUI has no font.
     void (*text)(void* user, const char* text, int32_t x, int32_t y){};
 };
 
@@ -147,8 +153,8 @@ inline constexpr uint8_t kMessageHighlight = 0x20;
 ///
 /// Lines run down from kMessageLogTop, one font height apart, oldest first.
 /// Filter 2 hides kind 8; filter 3 shows kinds 1, 4 and 8, or every kind when
-/// the show-all option is on. Highlighted lines use UI colour 10, the rest
-/// UI colour 15. A line with a sender starts with that player's logo, 0.8 of a
+/// the show-all option is on. Highlighted lines set UI colour 10, the rest
+/// UI colour 15, which the text shows only without a GUI font. A line with a sender starts with that player's logo, 0.8 of a
 /// line high, and its text 1.5 logo widths past kMessageLogLeft. Under
 /// filter 1 the lines before the first line whose kind is not 2 always show;
 /// in 3.1c they may be hidden as well.

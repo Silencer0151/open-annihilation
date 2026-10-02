@@ -48,14 +48,12 @@ SqshWriteStatus sqsh_write_chunk(
             : 0;
     uint32_t stored = input_size;
     if (compression == formats::hpi::CompressionLZ77) {
-        try {
-            const auto encoded =
-                formats::sqsh::encode_lz77(std::span(input, input_size), payload_room);
-            std::memcpy(payload, encoded.data(), encoded.size());
-            stored = static_cast<uint32_t>(encoded.size());
-        } catch (...) {
+        const auto encoded = formats::sqsh::encode_lz77(std::span(input, input_size), payload_room);
+        if (!encoded.ok()) {
             return SqshWriteStatus::output_too_small;
         }
+        std::memcpy(payload, encoded.value->data(), encoded.value->size());
+        stored = static_cast<uint32_t>(encoded.value->size());
     } else if (compression == formats::hpi::CompressionZLib) {
         // A failed compression leaves the length at the whole output size,
         // which the size check below rejects.

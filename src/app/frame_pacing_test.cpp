@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The application loop's pacing over a fake clock: frames evenly spaced at
-// the rate asked for, never bunched after a late frame; the match clock
-// running 30 ticks a second at any frame rate; the presentation fraction in
-// [0, 1], rising evenly between ticks, holding while the match waits or
-// catches up; the camera's scroll for a frame's real time; and the "+stats"
-// overlay's figures, its frame history, its grades of each time and its
-// table.
+// the rate asked for, never bunched after a late frame; at the tick rate a
+// frame at the middle of each clock unit, one tick a frame at normal speed,
+// shown whole; the match clock running 30 ticks a second at any frame rate;
+// the presentation fraction in [0, 1], rising evenly between ticks, holding
+// while the match waits or catches up; frames paced across the turn of the
+// clock's reading to 0 at 2^32 milliseconds; the camera's scroll for a
+// frame's real time; and the "+stats" overlay's figures, its frame
+// history, its grades of each time and its table.
 #include "oa/app/frame_pacing.hpp"
 
 #include "oa/base/game_loop.hpp"
@@ -55,6 +57,17 @@ uint32_t clock_units(uint64_t now_ns) {
     );
 }
 
+/// Returns how far into its unit the match clock stands at a fake clock
+/// time, as next_presentation_alpha reads it: 0 at a unit's start, up to 1.
+double clock_unit_fraction(uint64_t now_ns) {
+    constexpr uint32_t kThousandths = 1000;
+    const auto milliseconds = static_cast<uint32_t>(now_ns / kNanosecondsPerMillisecond);
+    const uint32_t into = milliseconds * kUnits % kThousandths;
+    const double within_ms = static_cast<double>(now_ns % kNanosecondsPerMillisecond) /
+                             static_cast<double>(kNanosecondsPerMillisecond);
+    return (static_cast<double>(into) + within_ms * kUnits) / kThousandths;
+}
+
 /// Returns a match clock at a speed, stepped once at a time.
 Timing started_timing(uint16_t speed, uint64_t now_ns) {
     Timing timing{};
@@ -71,12 +84,19 @@ struct LoopRun {
     // Time and clock units between the first frame's time and the last's.
     uint64_t time_spanned_ns = 0;
     uint64_t clock_units_spanned = 0;
+    // The time between the first frame and the second, and the shortest and
+    // longest between two frames after it.
+    uint64_t first_interval_ns = 0;
     uint64_t shortest_interval_ns = UINT64_MAX;
     uint64_t longest_interval_ns = 0;
     bool alpha_in_range = true;
     bool alpha_steady_between_ticks = true;
     // The shown time, in ticks (tick - 1 + fraction), from frame to frame.
     std::vector<double> shown;
+    // Each frame's clock units stepped, ticks run and fraction.
+    std::vector<uint32_t> units_stepped;
+    std::vector<uint32_t> ticks_run;
+    std::vector<float> alphas;
 };
 
 /// Returns a wait's oversleep for a frame: up to 0.9 ms, varying from frame
@@ -85,46 +105,55 @@ uint64_t oversleep_ns(uint64_t frame) {
     return (frame * 7919 % 10) * 90'000;
 }
 
-/// Runs the loop's frame cycle over a fake clock for kRunSeconds: each frame
-/// takes its time from the pacer, steps the match clock to it as idle_tick
-/// does and takes the presentation fraction for it, works for `work_ns`
-/// (`slow_work_ns` on a frame that runs ticks), then waits as the pacer says
-/// and oversleeps by up to 0.9 ms when `oversleep` is set.
+/// Runs the loop's frame cycle over a fake clock for kRunSeconds from
+/// `start_ns`: each frame takes its time from the pacer, steps the match
+/// clock to it as idle_tick does and takes the presentation fraction for it,
+/// drawn one a clock unit when the pacer keeps the tick rate, works for
+/// `work_ns` (`slow_work_ns` on a frame that runs ticks), then waits as the
+/// pacer says and oversleeps by up to 0.9 ms when `oversleep` is set.
 LoopRun run_loop(
     uint32_t frames_per_second,
     uint16_t speed,
     uint64_t work_ns,
     uint64_t slow_work_ns,
-    bool oversleep = false
+    bool oversleep = false,
+    uint64_t start_ns = kClockStart
 ) {
     LoopRun run;
     oa::app::frame_pacing::FramePacer pacer{};
     TickPresentation presentation{};
-    uint64_t now = kClockStart;
+    uint64_t now = start_ns;
     Timing timing = started_timing(speed, now);
     uint64_t previous_time = 0;
     uint64_t first_time = 0;
     uint64_t last_time = 0;
-    const uint64_t end = kClockStart + kRunSeconds * kNanosecondsPerSecond;
+    const uint64_t end = start_ns + kRunSeconds * kNanosecondsPerSecond;
     float previous_alpha = 1.0F;
     while (now < end) {
         const uint64_t time = oa::app::frame_pacing::begin_paced_frame(pacer, now);
-        if (previous_time != 0) {
+        if (previous_time == 0) {
+            first_time = time;
+        } else if (run.frames == 1) {
+            run.first_interval_ns = time - previous_time;
+        } else {
             const uint64_t interval = time - previous_time;
             run.shortest_interval_ns = std::min(run.shortest_interval_ns, interval);
             run.longest_interval_ns = std::max(run.longest_interval_ns, interval);
-        } else {
-            first_time = time;
         }
         previous_time = time;
         last_time = time;
+        const uint32_t units_before = timing.previous_clock;
         oa::base::game_loop::update_timing(timing, clock_units(time));
         const auto owed = timing.pending_steps;
         timing.tick += static_cast<uint32_t>(owed);
         run.ticks += static_cast<uint64_t>(owed);
-        const float alpha = oa::app::frame_pacing::next_presentation_alpha(
-            presentation, timing, FrameTicks{false, owed, static_cast<uint32_t>(owed)}, time
-        );
+        FrameTicks ticks{false, owed, static_cast<uint32_t>(owed)};
+        ticks.unit_frames = pacer.frames_per_second == kUnits;
+        const float alpha =
+            oa::app::frame_pacing::next_presentation_alpha(presentation, timing, ticks, time);
+        run.units_stepped.push_back(timing.previous_clock - units_before);
+        run.ticks_run.push_back(static_cast<uint32_t>(owed));
+        run.alphas.push_back(alpha);
         if (!(alpha >= 0.0F && alpha <= 1.0F))
             run.alpha_in_range = false;
         if (owed == 0 && alpha < previous_alpha)
@@ -167,6 +196,16 @@ void test_frames_keep_their_rate() {
             // never further than a period and a nanosecond of rounding.
             CHECK(run.shortest_interval_ns + 1 >= period);
             CHECK(run.longest_interval_ns <= period + 1);
+            // The second frame is due a period after the first; at the tick
+            // rate, at the middle of the next clock unit, which lies from
+            // about half a period to a period and a half later.
+            if (rate == kUnits)
+                CHECK(
+                    run.first_interval_ns + kNanosecondsPerMillisecond >= period / 2 &&
+                    run.first_interval_ns <= period * 3 / 2
+                );
+            else
+                CHECK(run.first_interval_ns + 1 >= period && run.first_interval_ns <= period + 1);
         }
     }
 }
@@ -253,6 +292,176 @@ void test_frames_show_even_motion() {
     CHECK(largest_step_error(uneven, 0.25, 120) <= kMillisecondOfTicks);
 }
 
+void test_clock_unit_middles() {
+    using oa::app::frame_pacing::next_clock_unit_middle;
+    constexpr uint64_t kUnitNs = kNanosecondsPerSecond / kUnits;
+    // From any time through three units, the next unit's middle: the clock
+    // reads one unit more there, half of it gone, from about half a unit to
+    // a unit and a half later.
+    for (uint64_t offset = 0; offset < 3 * kUnitNs; offset += 250'000) {
+        const uint64_t time = kClockStart + offset;
+        const uint64_t middle = next_clock_unit_middle(time);
+        CHECK(clock_units(middle) == clock_units(time) + 1);
+        CHECK(std::abs(clock_unit_fraction(middle) - 0.5) < 1e-6);
+        CHECK(middle + kNanosecondsPerMillisecond >= time + kUnitNs / 2);
+        CHECK(middle <= time + kUnitNs * 3 / 2);
+    }
+    // Middle after middle lie a unit apart, to the nanosecond's rounding,
+    // without drift: 3000 units take 100 seconds.
+    const uint64_t first = next_clock_unit_middle(kClockStart);
+    uint64_t middle = first;
+    for (uint32_t unit = 0; unit < 3000; ++unit) {
+        const uint64_t next = next_clock_unit_middle(middle);
+        CHECK(next - middle + 1 >= kUnitNs && next - middle <= kUnitNs + 1);
+        CHECK(clock_units(next) == clock_units(middle) + 1);
+        middle = next;
+    }
+    CHECK(middle - first + 1 >= 100 * kNanosecondsPerSecond);
+    CHECK(middle - first <= 100 * kNanosecondsPerSecond + 1);
+    // Past the clock's wrap-around (its milliseconds times 30 past 32
+    // bits), middles follow the units the clock reads from there.
+    const uint64_t wrap = (uint64_t{UINT32_MAX} / kUnits + 1) * kNanosecondsPerMillisecond;
+    middle = next_clock_unit_middle(wrap);
+    CHECK(clock_units(middle) == clock_units(wrap) + 1);
+    for (uint32_t unit = 0; unit < 100; ++unit) {
+        const uint64_t next = next_clock_unit_middle(middle);
+        CHECK(clock_units(next) == clock_units(middle) + 1);
+        CHECK(std::abs(clock_unit_fraction(next) - 0.5) < 1e-6);
+        middle = next;
+    }
+}
+
+/// Tells whether every frame of a run after the first stepped the match
+/// clock by one unit, ran `ticks` ticks and showed the state they reached
+/// whole.
+///
+/// @param run the run
+/// @param ticks the ticks each frame ran
+/// @return true when each did
+bool whole_tick_frames(const LoopRun& run, uint32_t ticks) {
+    for (std::size_t frame = 1; frame < run.alphas.size(); ++frame)
+        if (run.units_stepped[frame] != 1 || run.ticks_run[frame] != ticks ||
+            run.alphas[frame] != 1.0F)
+            return false;
+    return true;
+}
+
+void test_thirty_frames_draw_each_tick_once() {
+    constexpr uint64_t kUnitNs = kNanosecondsPerSecond / kUnits;
+    constexpr uint16_t kNormal = oa::base::game_loop::normal_game_speed;
+    // Frames a period apart from the fake clock's start, at the tick rate,
+    // step the clock by none and then two: they fall within a millisecond
+    // of where the clock's whole milliseconds turn its units over.
+    uint32_t none = 0;
+    uint32_t two = 0;
+    for (uint64_t frame = 1; frame <= kUnits; ++frame) {
+        const uint32_t step =
+            clock_units(oa::app::frame_pacing::paced_frame_due(kClockStart, frame, kUnits)) -
+            clock_units(oa::app::frame_pacing::paced_frame_due(kClockStart, frame - 1, kUnits));
+        none += step == 0 ? 1 : 0;
+        two += step == 2 ? 1 : 0;
+    }
+    CHECK(none > 0 && two > 0);
+    // Paced at the tick rate from any start through a clock unit, each
+    // frame after the first steps the clock by one unit, runs one tick at
+    // normal speed and shows it whole: the shown time steps a whole tick a
+    // frame. Oversleeping, and with frames that take most of their period.
+    for (uint64_t offset = 0; offset <= kUnitNs + kNanosecondsPerMillisecond; offset += 250'000)
+        for (const bool oversleep : {false, true})
+            for (const uint64_t work :
+                 {kNanosecondsPerMillisecond, 30 * kNanosecondsPerMillisecond}) {
+                const auto run =
+                    run_loop(kUnits, kNormal, work, work, oversleep, kClockStart + offset);
+                CHECK(run.frames >= kUnits * kRunSeconds - 1);
+                CHECK(run.frames <= kUnits * kRunSeconds + 1);
+                CHECK(whole_tick_frames(run, 1));
+                CHECK(run.ticks + 1 == run.frames);
+                CHECK(largest_step_error(run, 1.0, 1) == 0.0);
+            }
+    // Double speed: two ticks a frame, the later shown whole.
+    const auto fast =
+        run_loop(kUnits, 2 * kNormal, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond);
+    CHECK(whole_tick_frames(fast, 2));
+    // One and a half times normal speed: one tick and two by turns, the
+    // state each frame's ticks reached shown whole.
+    const auto faster =
+        run_loop(kUnits, kNormal * 3 / 2, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond);
+    bool by_turns = true;
+    for (std::size_t frame = 2; frame < faster.alphas.size(); ++frame)
+        by_turns = by_turns && faster.units_stepped[frame] == 1 &&
+                   faster.ticks_run[frame] + faster.ticks_run[frame - 1] == 3 &&
+                   faster.alphas[frame] == 1.0F;
+    CHECK(by_turns);
+    // Half speed: a tick every other frame, and each frame half a tick more
+    // than the one before, so that motion stays even and each tick is
+    // shown whole on one frame.
+    const auto slow =
+        run_loop(kUnits, kNormal / 2, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond);
+    CHECK(largest_step_error(slow, 0.5, 1) < 1e-6);
+    uint64_t whole = 0;
+    for (std::size_t frame = 1; frame < slow.alphas.size(); ++frame)
+        whole += slow.alphas[frame] == 1.0F ? 1 : 0;
+    CHECK(whole + 1 >= slow.ticks && whole <= slow.ticks + 1);
+}
+
+void test_paced_frames_across_the_clock_turn() {
+    constexpr uint64_t kUnitNs = kNanosecondsPerSecond / kUnits;
+    constexpr uint16_t kNormal = oa::base::game_loop::normal_game_speed;
+    // From 2 seconds before 2^32 milliseconds, where the clock's
+    // milliseconds, and its reading with them, turn over to 0.
+    constexpr uint64_t kTurn = (uint64_t{1} << 32U) * kNanosecondsPerMillisecond;
+    constexpr uint64_t kStart = kTurn - 2 * kNanosecondsPerSecond;
+    // At the tick rate the frames keep to the middles of the units through
+    // the turn, but for the first past it, which stands early in its unit
+    // and runs no tick; every other frame runs one and shows it whole.
+    const auto tick_rate = run_loop(
+        kUnits, kNormal, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond, false, kStart
+    );
+    uint32_t idle = 0;
+    bool whole = true;
+    for (std::size_t frame = 1; frame < tick_rate.alphas.size(); ++frame) {
+        idle += tick_rate.ticks_run[frame] == 0 ? 1 : 0;
+        whole = whole && tick_rate.ticks_run[frame] <= 1 && tick_rate.alphas[frame] == 1.0F;
+    }
+    CHECK(idle == 1);
+    CHECK(whole);
+    CHECK(tick_rate.ticks + 2 == tick_rate.frames);
+    CHECK(tick_rate.longest_interval_ns < 2 * kUnitNs);
+    // At 120 frames a second the clock keeps 30 ticks a second through the
+    // turn, short by a tick at most, the fraction in [0, 1] and never
+    // falling between ticks.
+    const auto quick = run_loop(
+        120, kNormal, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond, false, kStart
+    );
+    const auto away =
+        run_loop(120, kNormal, kNanosecondsPerMillisecond, kNanosecondsPerMillisecond);
+    CHECK(quick.alpha_in_range && quick.alpha_steady_between_ticks);
+    CHECK(quick.ticks + 1 >= away.ticks && quick.ticks <= away.ticks);
+}
+
+void test_late_frame_at_the_tick_rate() {
+    // A frame at the tick rate that takes a unit and a half: the next starts
+    // at once and stands for its start, stepping the clock by one unit or
+    // two; the frames after it stand at the middles of their units again,
+    // a unit each.
+    oa::app::frame_pacing::FramePacer pacer{};
+    uint64_t now = kClockStart;
+    uint32_t units = 0;
+    for (uint32_t frame = 0; frame < 40; ++frame) {
+        const uint64_t time = oa::app::frame_pacing::begin_paced_frame(pacer, now);
+        const uint32_t step = clock_units(time) - units;
+        units = clock_units(time);
+        if (frame == 11)
+            CHECK(step == 1 || step == 2);
+        else if (frame > 0)
+            CHECK(step == 1);
+        if (frame > 0 && frame != 11)
+            CHECK(std::abs(clock_unit_fraction(time) - 0.5) < 1e-6);
+        now += frame == 10 ? 50 * kNanosecondsPerMillisecond : kNanosecondsPerMillisecond;
+        now += oa::app::frame_pacing::end_paced_frame(pacer, now, kUnits);
+    }
+}
+
 void test_late_frame_is_not_followed_by_a_burst() {
     oa::app::frame_pacing::FramePacer pacer{};
     constexpr uint32_t rate = 120;
@@ -278,11 +487,13 @@ void test_pacer_edges() {
     // No limit: never waits.
     (void)oa::app::frame_pacing::begin_paced_frame(pacer, kClockStart);
     CHECK(oa::app::frame_pacing::end_paced_frame(pacer, kClockStart + 1000, 0) == 0);
-    // A frame woken early by input begins a new run from its start.
+    // A frame woken early by input begins a new run from its start. At the
+    // idle rate, the tick rate, the frame before waits for the middle of
+    // the next clock unit.
     pacer = {};
     (void)oa::app::frame_pacing::begin_paced_frame(pacer, kClockStart);
     const auto wait = oa::app::frame_pacing::end_paced_frame(pacer, kClockStart + 1000, 30);
-    CHECK(wait == kNanosecondsPerSecond / 30 - 1000);
+    CHECK(wait == oa::app::frame_pacing::next_clock_unit_middle(kClockStart) - kClockStart - 1000);
     const uint64_t woken = kClockStart + 5 * kNanosecondsPerMillisecond;
     (void)oa::app::frame_pacing::begin_paced_frame(pacer, woken);
     CHECK(pacer.run_start_ns == woken && pacer.frames_in_run == 0);
@@ -724,6 +935,10 @@ int main() {
     test_frames_keep_their_rate();
     test_ticks_stay_at_thirty_a_second();
     test_frames_show_even_motion();
+    test_clock_unit_middles();
+    test_thirty_frames_draw_each_tick_once();
+    test_paced_frames_across_the_clock_turn();
+    test_late_frame_at_the_tick_rate();
     test_late_frame_is_not_followed_by_a_burst();
     test_pacer_edges();
     test_frame_rate_choice();

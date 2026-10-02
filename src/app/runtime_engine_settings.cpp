@@ -122,7 +122,8 @@ std::optional<std::string> Runtime::EngineSettingsState::flush(Runtime& runtime)
 void Runtime::EngineSettingsState::save_frame_stats(Runtime& runtime, bool shown) {
     runtime.show_frame_stats(shown);
     runtime.engine_settings_state().current.frame_stats = shown;
-    runtime.preference_values_[std::string(settings::key::frame_stats)] = shown ? "1" : "0";
+    runtime.preference_values_[std::string(settings::key::frame_stats)] =
+        std::string(shown ? "1" : "0");
     runtime.preferences_dirty_ = true;
     if (const auto failure = flush(runtime))
         report_failed_save(runtime, *failure);

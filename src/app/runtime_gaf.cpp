@@ -190,11 +190,16 @@ void Runtime::load_game_cursors() {
         std::cerr << "CURSORS.GAF unavailable: " << error.what() << '\n';
         cursors_loaded_ = false;
     }
+    // Without the game's palette the match keeps the one it had.
     try {
         const auto palette_data = assets_.read("palettes/palette.pal").bytes;
         if (palette_data.size() == match_palette_.size())
             std::copy(palette_data.begin(), palette_data.end(), match_palette_.begin());
-    } catch (const std::exception&) {
+        else
+            std::cerr << "palettes/palette.pal holds " << palette_data.size()
+                      << " bytes, not a palette's " << match_palette_.size() << '\n';
+    } catch (const std::exception& error) {
+        std::cerr << "palettes/palette.pal unavailable: " << error.what() << '\n';
     }
     // Session start resets the GUI context's cursor to the first
     // frame of the normal cursor.

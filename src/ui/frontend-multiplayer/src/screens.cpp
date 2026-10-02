@@ -3,7 +3,9 @@
 
 // Multiplayer screens: resources, input routing, dialogs and drawing.
 #include "oa/ui/frontend_multiplayer/screens.hpp"
+#include "oa/ui/decoded.hpp"
 
+#include "oa/base/game_loop.hpp"
 #include "oa/data/campaign/campaign_assets.hpp"
 #include "oa/data/defs/unit_header.hpp"
 #include "oa/ui/frontend_renderer.hpp"
@@ -193,7 +195,7 @@ void service_message(void*, const char* text) {
 }
 
 uint32_t service_tick(void*) {
-    return elapsed_ms() * kTicksPerSecond / 1000U;
+    return base::game_loop::scaled_clock(elapsed_ms(), kTicksPerSecond);
 }
 
 uint32_t service_milliseconds(void*) {
@@ -227,7 +229,9 @@ oa_ref32 service_load_picture(void*, const char* path, int32_t* width, int32_t* 
         return 0;
     std::unique_ptr<Image> image;
     try {
-        image = std::make_unique<Image>(decode_pcx(state.ctx->assets->read(path).bytes));
+        image = std::make_unique<Image>(
+            ui::decoded::require(decode_pcx(state.ctx->assets->read(path).bytes), path)
+        );
     } catch (const std::exception&) {
         return 0;
     }
@@ -428,28 +432,22 @@ void load_units(const oa::AssetStore& assets) {
     std::vector<Loaded> loaded;
     for (const auto& path : assets.list_effective("units", ".fbi")) {
         try {
-            const auto bytes = assets.read(path).bytes;
-            const auto parsed = oa::data::unit_definitions::load_fbi(
-                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path
-            );
-            if (!parsed)
-                continue;
             auto header = std::make_unique<oa::UnitDef>();
             bool refused = false;
             if (!oa::data::defs::load_unit_header(
                     &files, path.c_str(), *header, header_sources, &refused
                 ))
                 continue;
-            const auto& unit = parsed.value;
+            const auto text = [](const auto& field) {
+                return std::string(field, ::strnlen(field, sizeof field));
+            };
             loaded.push_back(
-                {unit.display_name,
-                 unit.side,
-                 std::string(
-                     header->unit_name, ::strnlen(header->unit_name, sizeof header->unit_name)
-                 ),
-                 static_cast<float>(unit.build_cost_metal),
-                 static_cast<float>(unit.build_cost_energy),
-                 oa::data::unit_definitions::pack_unit_abilities(unit),
+                {text(header->name),
+                 text(header->side),
+                 text(header->unit_name),
+                 header->build_cost_metal,
+                 header->build_cost_energy,
+                 header->abilities,
                  header->fbi_hash,
                  header->weapon_checksum}
             );

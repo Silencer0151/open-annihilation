@@ -106,10 +106,12 @@ void leave_corpses(Fixture& f) {
 }
 
 void arm_death_blasts(Fixture& f) {
-    const auto parsed = data::unit_definitions::parse_tdf(blast_tdf);
-    CHECK(parsed);
-    CHECK(sim::combat_state::install_weapon_tdf(f.weapons, parsed.value) == 2);
-    sim::weapon_execution::store_weapon_defs(f.weapons, f.match->state().game.weapon_defs);
+    CHECK(sim::combat_state::install_weapon_text(f.weapons, blast_tdf) == 2);
+    std::copy(
+        f.weapons.records().begin(),
+        f.weapons.records().end(),
+        std::begin(f.match->state().game.weapon_defs)
+    );
     f.def.explode_as = "TESTBLAST";
     f.def.self_destruct_as = "TESTSELFD";
 }

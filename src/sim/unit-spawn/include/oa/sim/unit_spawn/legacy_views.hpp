@@ -577,7 +577,7 @@ struct Slot {
     uint32_t& squad;                       // Unit.squad
     uint32_t& flags2;                      // Unit.flags2
     uint32_t& cleared_on_unfinished_spawn; // Unit.cleared_on_unfinished_spawn
-    uint32_t& build_remaining_bits;        // Unit.build_remaining bits; read-only for src/app
+    const float& build_remaining;          // Unit.build_remaining; read by src/app
     uint32_t& decloak_until_tick;          // Unit.decloak_until_tick
     uint32_t& last_attacker_id;            // Unit.last_attacker_id
     uint16_t& bank;                        // Unit.bank

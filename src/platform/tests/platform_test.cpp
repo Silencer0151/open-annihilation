@@ -9,6 +9,7 @@
 #include "oa/platform/memory_status.hpp"
 #include "oa/platform/perf.hpp"
 #include "oa/platform/system.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -136,7 +137,7 @@ void test_error_sink() {
 
 void test_files() {
     using namespace oa::platform;
-    const auto path = std::filesystem::temp_directory_path() / "oa-platform-files-test.bin";
+    const auto path = oa::test::make_scratch_directory("oa-platform-files-test") / "files.bin";
     const Files files = stdio_files();
     FileHandle* out = files.open(files.context, path.string().c_str(), "wb");
     check(out != nullptr, "open for write");
@@ -160,7 +161,7 @@ void test_files() {
         files.open(files.context, (path.string() + ".missing").c_str(), "rb") == nullptr,
         "missing file"
     );
-    std::filesystem::remove(path);
+    std::filesystem::remove_all(path.parent_path());
     check(log_message("platform-shims log %d\n", 1) > 0, "log writes");
 }
 
@@ -293,9 +294,7 @@ void test_app_loop() {
 
 void test_error_log() {
     using namespace oa::platform;
-    const auto directory = std::filesystem::temp_directory_path() / "oa-platform-error-log";
-    std::filesystem::remove_all(directory);
-    std::filesystem::create_directories(directory);
+    const auto directory = oa::test::make_scratch_directory("oa-platform-error-log");
     const std::string prefix = (directory / "").string();
     check(append_error_log(prefix.c_str(), out_of_memory_message), "first report");
     check(append_error_log(prefix.c_str(), out_of_memory_message), "second report appends");

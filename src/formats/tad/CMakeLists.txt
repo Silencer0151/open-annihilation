@@ -7,7 +7,7 @@ add_library(oa-formats-tad src/tad.cpp)
 add_library(oa::formats::tad ALIAS oa-formats-tad)
 target_include_directories(oa-formats-tad PUBLIC include)
 target_compile_features(oa-formats-tad PUBLIC cxx_std_20)
-target_link_libraries(oa-formats-tad PUBLIC oa-formats-sqsh oa-options)
+target_link_libraries(oa-formats-tad PUBLIC oa-formats-sqsh oa-options PRIVATE oa-base-bytes)
 
 add_executable(oa-formats-tad-dump tools/tad_dump.cpp)
 target_link_libraries(oa-formats-tad-dump PRIVATE oa-formats-tad)

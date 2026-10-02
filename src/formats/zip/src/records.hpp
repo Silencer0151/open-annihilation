@@ -6,12 +6,17 @@
 // field is little-endian.
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
 namespace oa::formats::zip::detail {
+
+using base::bytes::load_le16;
+using base::bytes::load_le32;
 
 /// The four bytes that open a record: 'P', 'K' and two record bytes.
 using Signature = std::array<uint8_t, 4>;
@@ -93,26 +98,6 @@ inline constexpr uint16_t flag_encrypted_directory = 1u << 13;
 /// Every flag that marks some form of encryption.
 inline constexpr uint16_t encryption_flags =
     flag_encrypted | flag_strong_encryption | flag_encrypted_directory;
-
-/// Reads a little-endian 16-bit field.
-///
-/// @param bytes the bytes the field lies in
-/// @param offset the field's offset in `bytes`; two bytes must follow it
-/// @return the field's value
-[[nodiscard]] inline uint16_t read_le16(std::span<const uint8_t> bytes, size_t offset) noexcept {
-    return static_cast<uint16_t>(bytes[offset] | (bytes[offset + 1] << 8));
-}
-
-/// Reads a little-endian 32-bit field.
-///
-/// @param bytes the bytes the field lies in
-/// @param offset the field's offset in `bytes`; four bytes must follow it
-/// @return the field's value
-[[nodiscard]] inline uint32_t read_le32(std::span<const uint8_t> bytes, size_t offset) noexcept {
-    return static_cast<uint32_t>(bytes[offset]) | (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<uint32_t>(bytes[offset + 3]) << 24);
-}
 
 /// Tells whether a record signature starts at an offset.
 ///

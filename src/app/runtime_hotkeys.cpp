@@ -3,6 +3,7 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "engine_settings_state.hpp"
 #include "match_models.hpp"
 #include "oa/sim/speed.hpp"
@@ -635,7 +636,8 @@ bool Runtime::open_unit_info() {
         auto path = panel.picture_path;
         std::replace(path.begin(), path.end(), '\\', '/');
         try {
-            const auto picture = oa::decode_pcx(assets_.read(path).bytes);
+            const auto picture =
+                oa::ui::decoded::require(oa::decode_pcx(assets_.read(path).bytes), path);
             const auto& palette = panel.screen->background.palette;
             for (uint32_t row = 0; row < picture.height; ++row)
                 for (uint32_t column = 0; column < picture.width; ++column) {

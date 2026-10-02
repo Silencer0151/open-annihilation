@@ -2292,38 +2292,14 @@ class Runtime final : public menu::Host,
     /// @param[out] record session rules record
     void campaign_session_rules(int32_t (&record)[4]);
 
-    /// Keeps only the unit types the mission's use-only file lists as available.
+    /// Marks available only the unit types the mission's use-only file lists.
     ///
     /// Mission start marks those types before the unit definitions compact the
-    /// table to them. With no use-only file every type stays.
+    /// table to them. With no use-only file the headers keep their marks.
     ///
-    /// @param[in,out] catalog unit catalog, compacted and renumbered
-    void restrict_campaign_catalog(oa::data::unit_definitions::UnitCatalog& catalog);
-    // The unit table a session that agreed on one plays
-    // (runtime_skirmish_start.cpp).
-
-    /// Keeps only the unit types a session agreed on.
-    ///
-    /// Every agreed type is marked before the unit definitions compact the table
-    /// to the marked ones. The marking reads only the FBI hash the header load
-    /// gave each type.
-    ///
-    /// @param[in,out] catalog unit catalog, compacted and renumbered
-    /// @param filter the session's marking hook
-    void restrict_marked_catalog(
-        oa::data::unit_definitions::UnitCatalog& catalog, const UnitFilter& filter
-    );
-
-    /// Drops the catalog entries whose header lost its available bit.
-    ///
-    /// The catalog is already in its name order, so the kept entries only
-    /// renumber (type ids from 1).
-    ///
-    /// @param[in,out] catalog unit catalog
-    /// @param headers unit headers indexed by type id, entry i at i + 1
-    static void keep_available_units(
-        oa::data::unit_definitions::UnitCatalog& catalog, std::span<const oa::UnitDef> headers
-    );
+    /// @param[in,out] headers unit headers, slot 0 reserved
+    /// @param count slots, slot 0 included
+    void mark_campaign_units(oa::UnitDef* headers, uint32_t count);
 
     /// Collects the session object's schema features and loads their definitions.
     ///
@@ -2396,7 +2372,8 @@ class Runtime final : public menu::Host,
     void configure_computer_players();
 
     /// Reloads the computer players' profile (ReloadAIProfiles): it is read again and reapplied
-    /// over reset tables.
+    /// over reset tables. A profile that cannot be stored is reported on the status line and
+    /// standard error, and the match runs on.
     void reload_computer_profiles();
 
     /// Loads a campaign file and lists its missions and their files; a missing file is reported on
@@ -4178,7 +4155,8 @@ class Runtime final : public menu::Host,
     [[nodiscard]] oa::ui::display_layout::Point game_screen_canvas(int32_t x, int32_t y) const;
 
     /// Returns the on-screen unit list (on_screen_units_) and the radar's hot units as the
-    /// selection module reads them.
+    /// selection module reads them, with the radar's blip count and picture rectangle as
+    /// the radar renderer last stored them in the running match's Game.
     ///
     /// @return the buffers Game.hot_unit_count and hot_radar_unit_count count into
     [[nodiscard]] oa::sim::selection::VisibleLists on_screen_lists();
@@ -4378,8 +4356,30 @@ class Runtime final : public menu::Host,
     /// campaign mission has none.
     void draw_match_kill_board();
 
-    /// Loads hattfont12.gaf for the kills board once; a failure is reported on stderr.
+    /// Loads the GUI's two fonts once: hattfont12.gaf, which gadget text,
+    /// the kills board and the message log are written in, and hattfont11.gaf,
+    /// the status strip's. A failure is reported on stderr and leaves that
+    /// font empty.
     void ensure_gui_font();
+
+    /// Writes a line of text in a GUI font over the paint target.
+    ///
+    /// The glyphs are placed as gadget text places them, each lowered by the
+    /// height of the font's 'I' and drawn in its own colours; a source pixel
+    /// is a hud_text_scale() block from `pen`. Nothing is drawn for an empty
+    /// font.
+    ///
+    /// @param font GUI font (gui_font_ or gui_label_font_)
+    /// @param pen paint point of the pen
+    /// @param text the line
+    /// @param rows_below_pen source rows from the pen row down that may be
+    ///        drawn; the rest are cut off
+    void overlay_gui_text(
+        const oa::present::GafSprites& font,
+        oa::ui::display_layout::Point pen,
+        std::string_view text,
+        int rows_below_pen
+    );
 
     /// Converts a point of the kills board's 640x480 screen to the canvas.
     ///
@@ -4806,9 +4806,23 @@ class Runtime final : public menu::Host,
     /// the default order (move, guard on an own unit) with the same shift cancel,
     /// the left button scrolls with the radar. A right click on a factory build
     /// button takes that unit type off the queue even when another type was
-    /// queued after it. The on-screen list and the pick follow
-    /// (check_pointer_picks). Throws std::runtime_error on a failure.
+    /// queued after it. The screen's edges scroll first (check_edge_scroll),
+    /// and the on-screen list and the pick follow (check_pointer_picks).
+    /// Throws std::runtime_error on a failure.
     void check_pointer_interfaces();
+
+    /// Checks the screen's edges scrolling the camera through SDL input, on
+    /// the skirmish check_pointer_interfaces() starts.
+    ///
+    /// The pointer on each edge's outermost window point scrolls toward that
+    /// edge, over the side column and the bars as over the battlefield, and in
+    /// each corner toward both edges; a point further in and the middle do
+    /// not. The pointer before it first moves, after it leaves the window and,
+    /// until it moves, on a screen Alt+Enter laid out at another size scrolls
+    /// nothing. The edges are checked in full screen and in a window. Leaves
+    /// the pointer in the middle of the screen and the camera where it was.
+    /// Throws std::runtime_error on a failure.
+    void check_edge_scroll();
 
     /// Checks the on-screen unit list, the pointer's pick and what they drive, over the skirmish
     /// check_pointer_interfaces() leaves.
@@ -5133,20 +5147,30 @@ class Runtime final : public menu::Host,
     /// @param directory folder under the save root
     /// @param prefix file name prefix (SHOT, FRAM)
     /// @return false when there is no frame or it cannot be saved
-    bool save_numbered_frame(const char* directory, const char* prefix);
+    [[nodiscard]] bool save_numbered_frame(const char* directory, const char* prefix);
 
     /// Runs the film step at the end of each game frame.
     ///
     /// While a capture runs, a frame whose tick has come goes to the next
     /// FRAMnnnn.pcx of the capture folder and the next is due FilmSpeed frames a
-    /// second later.
+    /// second later. A frame that cannot be saved stops the capture
+    /// (stop_film_capture).
     void capture_film_frame();
 
     /// Saves Ctrl+F10's first frame: the HUD is drawn and the frame saved before the capture tick
-    /// is set.
+    /// is set. A frame that cannot be saved stops the capture (stop_film_capture).
     ///
     /// @param path capture folder
     void begin_film_capture(const char* path);
+
+    /// Stops a film capture whose frame could not be saved.
+    ///
+    /// Clears the running match's Game.capture_enabled, as Ctrl+F10 does to
+    /// stop it, and reports the folder on the status line and standard error
+    /// once, rather than retrying every frame.
+    ///
+    /// @param path capture folder
+    void stop_film_capture(const char* path);
 
     /// Opens the unit info panel (UNITINFOx.GUI) for F1, as open_unit_info_panel() fills it.
     ///
@@ -5712,7 +5736,9 @@ class Runtime final : public menu::Host,
     ///
     /// The log draws down from screen (0x8a, 0x34), just inside the
     /// battlefield's top-left corner. The corner scales with the chrome and the
-    /// lines grow with the HUD text scale. A line with a sender starts with the
+    /// lines grow with the HUD text scale. A line's text is written in the
+    /// GUI's font, hattfont12.gaf, in the font's own colours; without it, in
+    /// COMIX in the line's UI colour. A line with a sender starts with the
     /// logo of the sender's colour: the whole frame of the logo sequence
     /// stretched over the square the log sets aside for it.
     void draw_match_message_log();
@@ -5740,9 +5766,18 @@ class Runtime final : public menu::Host,
 
     /// Draws "Game Time : hh:mm:ss" while the console's Clock is on.
     ///
-    /// In UI colour 15, two pixels right of the side column and two above the
-    /// bottom bar (screen x 0x82, y height-0x22-font), scaled with the chrome.
+    /// A label in UI colour 15 with no background, in the font
+    /// oa::ui::hud::clock_font picks: COMIX while the message log shows lines,
+    /// the side's font otherwise. Its pen is two pixels right of the side
+    /// column and the font's height plus two above the bottom bar (screen x
+    /// 0x82, y height-0x22-font), and its glyph rows start the font's row
+    /// lift above the pen; all scaled with the chrome.
     void draw_console_clock();
+
+    /// Returns the font the console's clock is written in (oa::ui::hud::clock_font).
+    ///
+    /// @return COMIX or the side's font; null when neither is loaded
+    const oa::formats::fnt::Font* console_clock_font();
 
     /// Checks the chat line and console commands with synthetic key events.
     ///
@@ -6426,7 +6461,13 @@ class Runtime final : public menu::Host,
     /// @param pointer_y canvas row of the pointer
     void handle_match_zoom(float wheel_y, float pointer_x, float pointer_y);
 
-    /// Scrolls the camera with the arrow and WASD keys and at the battlefield's edges.
+    /// Scrolls the camera with the arrow and WASD keys and at the screen's edges.
+    ///
+    /// The pointer on the screen's outermost pixels (its outermost window
+    /// point on a high-density display) scrolls toward that edge, and in a
+    /// corner toward both, whatever panel lies under it, as in 3.1c; in full
+    /// screen and in a window alike, while the pointer is in the window and
+    /// its place on the screen is known (match_pointer_known_).
     ///
     /// The map pixels moved in a frame are the scroll speed, pixels per 30 Hz
     /// clock unit as in 3.1c, times the clock units the frame's real time is
@@ -7906,7 +7947,8 @@ class Runtime final : public menu::Host,
     // The 3DO model each weapon registry slot draws its shots with (TDF
     // `model`), read with the weapon definitions as the match starts.
     std::map<uint8_t, std::string> weapon_model_names_;
-    oa::data::unit_definitions::ResolvedCategoryRegistry category_registry_;
+    // Each unit type's target-category masks, by type id.
+    std::vector<oa::data::unit_definitions::UnitTargetCategoryMasks> unit_target_masks_;
     map_modal::ModalState map_modal_{};
     std::vector<std::string> bound_map_names_;
     std::string pending_parent_map_name_;
@@ -8256,7 +8298,9 @@ class Runtime final : public menu::Host,
     ///
     /// Whole ticks (1) when the clock did not step, the match is paused, a
     /// check's fixed clock runs, or a film frame is due; else
-    /// next_presentation_alpha over the clock step, at the frame's time.
+    /// next_presentation_alpha over the clock step, at the frame's time, as
+    /// a frame a clock unit when the loop is paced at the tick rate or a
+    /// --frame-rate run draws at it.
     ///
     /// @param stepped the match clock stepped this frame
     /// @param ticks_before match_timing_.tick before the step
@@ -8348,7 +8392,8 @@ class Runtime final : public menu::Host,
     /// frame on a clock that advances 1 / frame_rate seconds a frame, each
     /// frame presenting at most one unit announcement, taking the steps the
     /// match clock owes and drawn between two ticks as the application loop
-    /// does it, until `ticks` ticks have run.
+    /// does it (at the tick rate, a whole tick a frame), until `ticks` ticks
+    /// have run.
     /// Prints the frames drawn, the ticks run and the world's digest (the
     /// camera and the clock's frame-counting adaptation left out), which do
     /// not depend on the frame rate; writes the frame log when asked.
@@ -8391,6 +8436,8 @@ class Runtime final : public menu::Host,
     /// The scroll a --frame-rate run holds (Options::scroll_camera): 1 to the
     /// right, -1 to the left, as the arrow keys; 0 for none.
     int32_t frame_run_scroll_{};
+    /// A --frame-rate run's frames a second; 0 outside one.
+    uint32_t frame_run_frames_per_second_{};
 
     struct {
         int x = 0;
@@ -8408,6 +8455,12 @@ class Runtime final : public menu::Host,
     uint16_t hovered_match_unit_ = 0;
     float match_pointer_x_ = 0;
     float match_pointer_y_ = 0;
+    /// SDL has reported where the pointer is on the match's screen
+    /// (match_pointer_x_, match_pointer_y_): a pointer event came while the
+    /// match showed, and since then the pointer has not left the window, no
+    /// other screen has shown and the match's screen has kept its size.
+    /// Until then the screen's edges do not scroll the camera.
+    bool match_pointer_known_ = false;
     float pointer_x_ = 0;
     float pointer_y_ = 0;
     oa::formats::gaf::Archive cursor_gaf_{};
@@ -8466,6 +8519,8 @@ class Runtime final : public menu::Host,
     IndexedOutput indexed_output_{};
     oa::present::SurfaceBuffer loading_background_{}; // Loadgame2bg.pcx
     oa::present::GafSprites gui_font_{};              // hattfont12.gaf, the GUI context's font
+    oa::present::GafSprites gui_label_font_{};        // hattfont11.gaf, its second font
+    bool gui_fonts_loaded_ = false;                   // ensure_gui_font has run
     oa::present::GafSprites loading_gui_{};           // commongui.gaf
     oa::Sprite* loading_lightbar_ = nullptr;          // LIGHTBAR in loading_gui_
     oa::PaletteBytes loading_palette_{}; // PALETTE.PAL: the display palette while loading

@@ -95,7 +95,17 @@ struct Art {
 
 // Weapon impacts (detonation): land art with the small flash and a smoke
 // column, endsmoke puffs, water and lava art, and nosealeveltrigger seas.
-void weapon_explosions(sim::match_runtime::Match& match, const Art& art) {
+// The test gun: a smoking turret shot (smokedelay 2 ticks) with land,
+// water and lava explosions.
+constexpr std::string_view test_gun_tdf =
+    "[TESTGUN]{id=1; reloadtime=0.1; range=400; lineofsight=1; weaponvelocity=100;"
+    " minbarrelangle=-60; turret=1; startsmoke=1; smoketrail=1; smokedelay=0.07;"
+    " explosiongaf=boom; explosionart=blast; waterexplosiongaf=boom; waterexplosionart=splash;"
+    " lavaexplosiongaf=boom; lavaexplosionart=lava; [DAMAGE]{default=10;}}";
+
+void weapon_explosions(
+    sim::match_runtime::Match& match, const Art& art, sim::combat_state::WeaponRegistry& weapons
+) {
     auto& weapon = match.state().game.weapon_defs[1];
     const auto flags = weapon.flags;
     auto& world = match.effects();
@@ -123,9 +133,12 @@ void weapon_explosions(sim::match_runtime::Match& match, const Art& art) {
     CHECK(world.explosion_count == 3 && world.explosions[2].sprite.sequence == &art.blast);
     CHECK(smoke_layer(match).count == layered + 2);
 
+    // A lava world loads its weapons with the lava explosion in the water slot.
     world.lava_world = true;
+    CHECK(sim::combat_state::install_weapon_text(weapons, test_gun_tdf, true) == 1);
     CHECK(match.spawn_weapon_explosion(weapon, in_water, false));
     CHECK(world.explosion_count == 4 && world.explosions[3].sprite.sequence == &art.lava);
+    CHECK(sim::combat_state::install_weapon_text(weapons, test_gun_tdf) == 1);
     world.lava_world = false;
 
     world.no_sea_level_trigger = true;
@@ -332,13 +345,7 @@ int main() {
     features[0].height = 11;
     features[0].dead_feature = 0xffff;
     sim::combat_state::WeaponRegistry weapons;
-    weapons.install_tdf_section(1, "TESTGUN", "0.1");
-    weapons.install_target_fields(1, "400", "1", "0", "0", "0", "0", "10", "100", "-60", "1");
-    weapons.install_explosion_sprites(1, "boom", "blast", "boom", "splash", "boom", "lava");
-    auto& gun = const_cast<sim::combat_state::WeaponDefinition&>(*weapons.find("TESTGUN"));
-    gun.flags |=
-        sim::combat_state::weapon_start_smoke_flag | sim::combat_state::weapon_smoke_trail_flag;
-    gun.smoke_delay_ticks = 2;
+    CHECK(sim::combat_state::install_weapon_text(weapons, test_gun_tdf) == 1);
     Art art;
     Services services;
     Scenario scenario;
@@ -385,7 +392,7 @@ int main() {
     match.simulation().tick = 1;
     match.tick();
 
-    weapon_explosions(match, art);
+    weapon_explosions(match, art, weapons);
     wreck_smoke(match);
     feature_sprays(match, features[0]);
     fired_shots(match, art);

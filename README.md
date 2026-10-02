@@ -112,7 +112,7 @@ they are open; a multiplayer game keeps running.
 - **Gameplay:** Unit limit, 50 to 1500 units per player, from the next game.
   It starts at the unit limit your Total Annihilation installation sets, or
   250. A saved game keeps the limit it was saved with.
-- **Graphics:** Maximum frame rate, 40 to 120 frames a second. Enhanced
+- **Graphics:** Maximum frame rate, 30 to 120 frames a second. Enhanced
   anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
   and scaled down for smoother edges; 8× and 16× need a fast CPU. Screen
   size, from the next start: Desktop, the default, leaves the screen at the

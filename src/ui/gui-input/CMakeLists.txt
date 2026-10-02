@@ -14,6 +14,7 @@ add_library(oa-ui-gui-input
   src/gadget_cursor.cpp
   src/scroll_bar.cpp)
 add_library(oa::ui::gui_input ALIAS oa-ui-gui-input)
+target_link_libraries(oa-ui-gui-input PRIVATE oa-base-game-math)
 target_include_directories(oa-ui-gui-input PUBLIC include)
 target_link_libraries(oa-ui-gui-input PUBLIC oa-ui-gui-layout)
 target_compile_features(oa-ui-gui-input PUBLIC cxx_std_20)
@@ -30,7 +31,7 @@ if(BUILD_TESTING)
   oa_add_game_data_test(gui-input-data oa-gui-input-test --data)
 
   add_executable(oa-gui-gadget-panel-test tests/gadget_panel_test.cpp)
-  target_link_libraries(oa-gui-gadget-panel-test PRIVATE oa-ui-gui-input)
+  target_link_libraries(oa-gui-gadget-panel-test PRIVATE oa-ui-gui-input oa-base-game-math)
   add_test(NAME gui-gadget-panel COMMAND oa-gui-gadget-panel-test)
 
   add_executable(oa-gui-scroll-bar-test tests/scroll_bar_test.cpp)

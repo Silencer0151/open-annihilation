@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "oa/ui/hud/sprite_placement.hpp"
-
-#include "oa/ui/hud/order_overlays.hpp"
+#include "oa/present/model/sprite_placement.hpp"
 
 #include "oa/sim/feature_runtime.hpp"
 
-namespace oa::ui::hud {
+namespace oa::present::model {
 namespace {
 
 constexpr int32_t kCellPixels = 16;
+/// Screen-space offset of the battlefield inside the 640x480 HUD frame (the
+/// order panel on the left, the resource bar on top).
+constexpr int32_t kBattlefieldLeft = 0x80;
+constexpr int32_t kBattlefieldTop = 0x20;
 /// HUD frame pieces sit right of the 129-pixel order panel; the bottom bar
 /// hangs 32 pixels above the screen bottom.
 constexpr int32_t kFrameLeft = 0x81;
@@ -189,4 +191,4 @@ hud_frame_placement(const SpriteFrame (&pieces)[3], int32_t screen_height) noexc
     };
 }
 
-} // namespace oa::ui::hud
+} // namespace oa::present::model

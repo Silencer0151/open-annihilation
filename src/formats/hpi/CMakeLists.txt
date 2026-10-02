@@ -6,7 +6,7 @@
 add_library(oa-formats-hpi assets.cpp archive.cpp asset_store.cpp hpi_writer.cpp)
 add_library(oa::formats::hpi ALIAS oa-formats-hpi)
 target_include_directories(oa-formats-hpi PUBLIC include)
-target_link_libraries(oa-formats-hpi PUBLIC oa-formats-sqsh ZLIB::ZLIB oa-options)
+target_link_libraries(oa-formats-hpi PUBLIC oa-base-bytes oa-formats-sqsh ZLIB::ZLIB oa-options)
 target_link_libraries(oa-formats-hpi PRIVATE oa-base-threads)
 
 add_executable(oa-hpi-inspect tools/inspect.cpp)

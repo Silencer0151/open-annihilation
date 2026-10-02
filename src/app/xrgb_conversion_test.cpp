@@ -101,7 +101,7 @@ void conversion_is_the_same_on_every_pool() {
     for (const uint32_t threads : pool_sizes)
         pools.push_back(std::make_unique<job_pool::Pool>(threads));
     // Frames of one band, of a part band and of many.
-    for (const auto [width, height] : {std::pair{640U, 32U}, {1664U, 952U}, {333U, 101U}}) {
+    for (const auto& [width, height] : {std::pair{640U, 32U}, {1664U, 952U}, {333U, 101U}}) {
         std::vector<uint8_t> rgb(static_cast<std::size_t>(width) * height * 3U);
         for (auto& byte : rgb)
             byte = static_cast<uint8_t>(random());
@@ -136,7 +136,7 @@ void rgb565_is_what_sdl_makes_of_xrgb() {
     std::vector<std::unique_ptr<job_pool::Pool>> pools;
     for (const uint32_t threads : pool_sizes)
         pools.push_back(std::make_unique<job_pool::Pool>(threads));
-    for (const auto [width, height] : {std::pair{1U, 5U}, {7U, 33U}, {640U, 77U}, {1001U, 65U}}) {
+    for (const auto& [width, height] : {std::pair{1U, 5U}, {7U, 33U}, {640U, 77U}, {1001U, 65U}}) {
         std::vector<uint8_t> rgb(static_cast<std::size_t>(width) * height * 3U);
         for (auto& byte : rgb)
             byte = static_cast<uint8_t>(random());

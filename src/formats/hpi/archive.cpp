@@ -49,10 +49,10 @@ constexpr const char* kSquashNames[] = {
     throw std::runtime_error(message);
 }
 
-uint32_t le32(const uint8_t* bytes) noexcept {
-    return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8U) |
-           (static_cast<uint32_t>(bytes[2]) << 16U) | (static_cast<uint32_t>(bytes[3]) << 24U);
-}
+using base::bytes::DecodeCode;
+using base::bytes::DecodeError;
+using base::bytes::Decoded;
+using base::bytes::load_le32;
 
 char ascii_upper(char value) noexcept {
     return value >= 'a' && value <= 'z' ? static_cast<char>(value - ('a' - 'A')) : value;
@@ -140,18 +140,18 @@ formats::hpi::SquashStatus
 unsquash_archive_block(std::span<uint8_t> output, std::span<uint8_t> block) noexcept {
     using formats::hpi::SquashStatus;
     if (block.size() < formats::hpi::SQSHHeaderSize ||
-        le32(block.data()) != formats::hpi::ChunkMarker)
+        load_le32(block.data()) != formats::hpi::ChunkMarker)
         return SquashStatus::bad_header;
     const uint8_t type = block[squash_field::type];
     if (type >= kSquashTypeLimit)
         return SquashStatus::bad_unpack_type;
-    const uint32_t packed = le32(block.data() + squash_field::packed_size);
-    const uint32_t unpacked = le32(block.data() + squash_field::unpacked_size);
+    const uint32_t packed = load_le32(block.data() + squash_field::packed_size);
+    const uint32_t unpacked = load_le32(block.data() + squash_field::unpacked_size);
     // A packed size past the chunk is reported as a checksum failure.
     if (packed > block.size() - formats::hpi::SQSHHeaderSize)
         return SquashStatus::bad_checksum;
     const auto payload = block.subspan(formats::hpi::SQSHHeaderSize, packed);
-    if (formats::sqsh::chunk_checksum(payload) != le32(block.data() + squash_field::checksum))
+    if (formats::sqsh::chunk_checksum(payload) != load_le32(block.data() + squash_field::checksum))
         return SquashStatus::bad_checksum;
     if (block[squash_field::scrambled] != 0)
         formats::sqsh::decrypt_chunk(payload);
@@ -240,15 +240,15 @@ struct HpiArchive::Impl {
         stream = open_stream(path);
         std::array<uint8_t, formats::hpi::HeaderSize> header{};
         if (read_at(stream, 0, header) != header.size() ||
-            le32(header.data()) != formats::hpi::HeaderMarker)
+            load_le32(header.data()) != formats::hpi::HeaderMarker)
             fail("invalid HPI marker");
-        if (le32(header.data() + offsetof(formats::hpi::Header, version)) !=
+        if (load_le32(header.data() + offsetof(formats::hpi::Header, version)) !=
             formats::hpi::VersionV1)
             fail("unsupported HPI version");
         check_trailer(stream);
 
         const uint32_t block_size =
-            le32(header.data() + offsetof(formats::hpi::Header, directory_size));
+            load_le32(header.data() + offsetof(formats::hpi::Header, directory_size));
         if (block_size < formats::hpi::HeaderSize || block_size > archive_size)
             fail("invalid HPI directory bounds");
         if (block_size > kMaxDirectorySize)
@@ -261,7 +261,7 @@ struct HpiArchive::Impl {
             std::span(block).subspan(formats::hpi::HeaderSize), key, formats::hpi::HeaderSize
         );
 
-        const uint32_t root = le32(header.data() + offsetof(formats::hpi::Header, offset));
+        const uint32_t root = load_le32(header.data() + offsetof(formats::hpi::Header, offset));
         if (root < formats::hpi::HeaderSize)
             fail("HPI root directory overlaps the header");
         nodes.push_back(ArchiveNode{"", formats::hpi::EntryFlagDirectory});
@@ -322,8 +322,8 @@ struct HpiArchive::Impl {
             fail("HPI directory contains a cycle or reused node");
         if (offset > block.size() || block.size() - offset < sizeof(formats::hpi::DirectoryNode))
             fail("HPI directory node lies outside the directory");
-        const auto raw_count = static_cast<int32_t>(le32(block.data() + offset));
-        const uint32_t list = le32(block.data() + offset + 4);
+        const auto raw_count = static_cast<int32_t>(load_le32(block.data() + offset));
+        const uint32_t list = load_le32(block.data() + offset + 4);
         // A negative count is an empty directory.
         const uint32_t count = raw_count > 0 ? static_cast<uint32_t>(raw_count) : 0;
         if (count > kMaxEntries - nodes.size())
@@ -339,17 +339,18 @@ struct HpiArchive::Impl {
         for (uint32_t i = 0; i < count; ++i) {
             const uint8_t* entry = block.data() + list + i * formats::hpi::DirectoryEntrySize;
             ArchiveNode& node = nodes[first + i];
-            node.name = name_at(block, le32(entry));
+            node.name = name_at(block, load_le32(entry));
             node.flags = entry[offsetof(formats::hpi::DirectoryEntry, type)];
-            const uint32_t data = le32(entry + offsetof(formats::hpi::DirectoryEntry, data_offset));
+            const uint32_t data =
+                load_le32(entry + offsetof(formats::hpi::DirectoryEntry, data_offset));
             if (node.directory()) {
                 node.data_offset = data;
                 continue;
             }
             if (data > block.size() || block.size() - data < formats::hpi::FileEntrySize)
                 fail("HPI file record lies outside the directory");
-            node.data_offset = le32(block.data() + data);
-            node.size = le32(block.data() + data + offsetof(formats::hpi::FileEntry, size));
+            node.data_offset = load_le32(block.data() + data);
+            node.size = load_le32(block.data() + data + offsetof(formats::hpi::FileEntry, size));
             node.compression = block[data + offsetof(formats::hpi::FileEntry, compression)];
         }
         for (uint32_t i = 0; i < count; ++i)
@@ -399,26 +400,34 @@ struct HpiArchive::Impl {
     }
 
     /// Copies file node `index`'s decoded bytes from `position` into `output`.
-    [[nodiscard]] int64_t
+    ///
+    /// @return the count copied, short when a stored entry runs past the end
+    ///         of the archive; or the error, at its archive offset, of a
+    ///         chunk that cannot be read or decoded
+    [[nodiscard]] Decoded<uint32_t>
     read_range(uint32_t index, uint32_t position, std::span<uint8_t> output) const {
         if (index >= nodes.size() || nodes[index].directory())
-            throw std::invalid_argument("HPI node is not a file");
+            return DecodeError{DecodeCode::out_of_range, 0, "HPI node is not a file"};
         const ArchiveNode& node = nodes[index];
         if (position >= node.size || output.empty())
-            return 0;
+            return 0u;
         const std::size_t wanted = std::min<std::size_t>(output.size(), node.size - position);
         if (node.compression == 0) {
             const uint64_t at = static_cast<uint64_t>(node.data_offset) + position;
             const std::size_t got = read_stored(at, output.first(wanted));
             decrypt_at(output.first(got), key, at);
-            return static_cast<int64_t>(got);
+            return static_cast<uint32_t>(got);
         }
 
         const uint32_t chunks =
             node.size / formats::hpi::BlockBytes + (node.size % formats::hpi::BlockBytes != 0);
         std::vector<uint8_t> table(static_cast<std::size_t>(chunks) * 4U);
         if (read_stored(node.data_offset, table) != table.size())
-            return -1;
+            return DecodeError{
+                DecodeCode::truncated,
+                node.data_offset,
+                "HPI chunk size table lies past the end of the archive"
+            };
         decrypt_at(table, key, node.data_offset);
 
         // Every byte of these buffers is written before it is read, so they
@@ -432,30 +441,38 @@ struct HpiArchive::Impl {
         while (copied < wanted) {
             const uint32_t block_index = cursor / formats::hpi::BlockBytes;
             if (block_index != loaded) {
-                uint32_t at = node.data_offset + static_cast<uint32_t>(table.size());
+                // Summed at 64 bits, so stored sizes cannot wrap the offset
+                // back into the archive; a chunk past its end reads short.
+                uint64_t at = static_cast<uint64_t>(node.data_offset) + table.size();
                 for (uint32_t i = 0; i < block_index; ++i)
-                    at += le32(table.data() + i * 4U);
-                const uint32_t stored = le32(table.data() + block_index * 4U);
+                    at += load_le32(table.data() + i * 4U);
+                const uint32_t stored = load_le32(table.data() + block_index * 4U);
                 if (stored > kMaxStoredChunkSize)
-                    fail("stored HPI chunk exceeds the 1 MiB safety limit");
+                    return DecodeError{
+                        DecodeCode::limit_exceeded,
+                        at,
+                        "stored HPI chunk exceeds the 1 MiB safety limit"
+                    };
                 // Each chunk gets a buffer of exactly its size, so a read past
                 // the chunk is a read past the allocation, which the sanitizer
                 // build reports.
                 const auto chunk_bytes = std::make_unique_for_overwrite<uint8_t[]>(stored);
                 const std::span<uint8_t> chunk(chunk_bytes.get(), stored);
                 if (read_stored(at, chunk) != chunk.size())
-                    return -1;
+                    return DecodeError{
+                        DecodeCode::truncated, at, "HPI chunk lies past the end of the archive"
+                    };
                 decrypt_at(chunk, key, at);
                 // Bytes a short chunk leaves unwritten read as zero.
                 std::memset(decoded.data(), 0, decoded.size());
                 const auto status = unsquash_archive_block(decoded, chunk);
                 if (status != formats::hpi::SquashStatus::ok)
-                    fail(
-                        "HPI decompression error " + std::string(squash_status_name(status)) +
-                        " in block " + std::to_string(block_index) + " of " +
-                        std::to_string(chunks) + " (" + node.name + ", length " +
-                        std::to_string(node.size) + ", " + path.filename().string() + ")"
-                    );
+                    return DecodeError{
+                        DecodeCode::malformed,
+                        at,
+                        squash_status_name(status),
+                        static_cast<uint16_t>(status)
+                    };
                 loaded = block_index;
             }
             const uint32_t offset = cursor % formats::hpi::BlockBytes;
@@ -465,7 +482,7 @@ struct HpiArchive::Impl {
             copied += take;
             cursor += static_cast<uint32_t>(take);
         }
-        return static_cast<int64_t>(copied);
+        return static_cast<uint32_t>(copied);
     }
 };
 
@@ -511,24 +528,49 @@ std::optional<uint32_t> HpiArchive::lookup_directory(std::string_view path) cons
     return impl_->walk(path, true);
 }
 
-int64_t
+Decoded<uint32_t>
 HpiArchive::read_node_range(uint32_t index, uint32_t position, std::span<uint8_t> output) const {
     return impl_->read_range(index, position, output);
 }
 
-std::vector<uint8_t> HpiArchive::read_node(uint32_t index) const {
+Decoded<std::vector<uint8_t>> HpiArchive::read_node(uint32_t index) const {
     if (index >= impl_->nodes.size() || impl_->nodes[index].directory())
-        throw std::invalid_argument("HPI node is not a file");
-    std::vector<uint8_t> bytes(impl_->nodes[index].size);
-    if (impl_->read_range(index, 0, bytes) < 0)
-        fail("truncated HPI entry: " + impl_->nodes[index].name);
+        return DecodeError{DecodeCode::out_of_range, 0, "HPI node is not a file"};
+    const ArchiveNode& node = impl_->nodes[index];
+    // The size an entry claims is checked against the archive before any
+    // buffer is allocated: stored bytes must lie inside it, and every chunk
+    // of a compressed entry needs at least its size-table slot and header.
+    if (node.size > formats::hpi::EntryByteLimit)
+        return DecodeError{
+            DecodeCode::limit_exceeded, node.data_offset, "HPI entry exceeds the entry size limit"
+        };
+    const uint64_t chunks =
+        node.size / formats::hpi::BlockBytes + (node.size % formats::hpi::BlockBytes != 0);
+    const uint64_t least_stored = node.compression == 0
+                                      ? node.size
+                                      : chunks * (sizeof(uint32_t) + formats::hpi::SQSHHeaderSize);
+    if (node.data_offset > impl_->archive_size ||
+        least_stored > impl_->archive_size - node.data_offset)
+        return DecodeError{
+            DecodeCode::truncated, node.data_offset, "HPI entry lies past the end of the archive"
+        };
+    std::vector<uint8_t> bytes(node.size);
+    const auto read = impl_->read_range(index, 0, bytes);
+    if (!read.ok())
+        return read.error;
+    if (*read.value != bytes.size())
+        return DecodeError{
+            DecodeCode::truncated,
+            static_cast<uint64_t>(node.data_offset) + *read.value,
+            "truncated HPI entry"
+        };
     return bytes;
 }
 
-std::vector<uint8_t> HpiArchive::read(std::string_view path) const {
+Decoded<std::vector<uint8_t>> HpiArchive::read(std::string_view path) const {
     const auto index = lookup(path);
     if (!index || impl_->nodes[*index].directory())
-        throw std::invalid_argument("HPI entry not found: " + std::string(path));
+        return DecodeError{DecodeCode::not_found, 0, "HPI entry not found"};
     return read_node(*index);
 }
 

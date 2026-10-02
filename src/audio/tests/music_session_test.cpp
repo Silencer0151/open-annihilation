@@ -4,6 +4,7 @@
 #include "audio_test_support.hpp"
 #include "oa/audio/music_disc.hpp"
 #include "oa/audio/music_session.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -246,8 +247,7 @@ void selected_mode_panel() {
 }
 
 void disc_scan() {
-    const auto root = std::filesystem::temp_directory_path() / "oa-music-disc-test";
-    std::filesystem::remove_all(root);
+    const auto root = oa::test::make_scratch_directory("oa-music-disc-test");
     std::filesystem::create_directories(root / "Music");
     for (const char* name : {"0.mp3", "1.mp3", "2.mp3", "3.OGG", "4.wav", "6.mp3", "readme.txt"})
         std::ofstream(root / "Music" / name) << name;

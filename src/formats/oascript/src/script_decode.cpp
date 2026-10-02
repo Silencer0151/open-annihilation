@@ -474,7 +474,9 @@ class Decoder {
         }
         shots.clear();
         shots.reserve(node.children.size());
-        std::optional<uint32_t> previous_tick{};
+        // The tick of the shot before, when it had one.
+        uint32_t previous_tick{};
+        bool has_previous_tick{};
         bool ticks_valid{true};
         for (size_t index{}; index < node.children.size(); ++index) {
             const std::string shot_path{path + "[" + std::to_string(index) + "]"};
@@ -483,9 +485,9 @@ class Decoder {
             decode_shot(node.children[index], shot_path, index == 0, shot, tick);
             if (!tick.has_value()) {
                 ticks_valid = false;
-                previous_tick.reset();
+                has_previous_tick = false;
             } else {
-                if (previous_tick.has_value() && *tick <= *previous_tick) {
+                if (has_previous_tick && *tick <= previous_tick) {
                     const Node* tick_node{find_entry(node.children[index], "tick")};
                     error(
                         shot_path + ".tick",
@@ -493,7 +495,8 @@ class Decoder {
                         "must be greater than the previous shot's tick"
                     );
                 }
-                previous_tick = tick;
+                previous_tick = *tick;
+                has_previous_tick = true;
             }
             shots.push_back(std::move(shot));
         }

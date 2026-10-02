@@ -23,9 +23,10 @@ add_library(oa-data-defs
   src/version.cpp
   src/weapons.cpp)
 add_library(oa::data::defs ALIAS oa-data-defs)
+target_link_libraries(oa-data-defs PRIVATE oa-base-game-math)
 target_include_directories(oa-data-defs PUBLIC include)
 target_compile_features(oa-data-defs PUBLIC cxx_std_20)
-target_link_libraries(oa-data-defs PUBLIC oa-formats-tdf oa-data-unit-definitions oa-core-types PRIVATE oa-data-mission-types)
+target_link_libraries(oa-data-defs PUBLIC oa-formats-tdf oa-core-types PRIVATE oa-data-mission-types)
 if(TARGET oa-options)
   target_link_libraries(oa-data-defs PUBLIC oa-options)
 endif()

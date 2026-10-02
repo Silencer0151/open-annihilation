@@ -3,6 +3,7 @@
 
 // Unit, feature, debris and projectile model drawing.
 #include "oa/present/model/model_draw.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/blit.hpp"
@@ -20,6 +21,8 @@
 #include <utility>
 
 namespace oa::present::model {
+using base::game_math::truncate_low32;
+
 namespace {
 
 using formats::objects3d::FixedVector3;
@@ -61,16 +64,6 @@ int32_t wrap_add(int32_t a, int32_t b) noexcept {
 
 int32_t wrap_sub(int32_t a, int32_t b) noexcept {
     return static_cast<int32_t>(static_cast<uint32_t>(a) - static_cast<uint32_t>(b));
-}
-
-// Low word of a 64-bit truncation toward zero; values without a 64-bit
-// representation give INT64_MIN (low word 0).
-int32_t truncate_low(double value) noexcept {
-    if (!std::isfinite(value) || value >= 9223372036854775808.0 || value < -9223372036854775808.0)
-        return 0;
-    return static_cast<int32_t>(
-        static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(value)))
-    );
 }
 
 uint32_t def_flags(const ModelRef& model) noexcept {
@@ -449,7 +442,7 @@ struct ComposeContext {
     const ModelDrawPlan* planned{};
 };
 
-bool compose_bounds(void* user, const Unit& unit, ui::hud::SpriteBounds& out) {
+bool compose_bounds(void* user, const Unit& unit, SpriteBounds& out) {
     auto* context = static_cast<ComposeContext*>(user);
     ModelRef model = *context->model;
     if (&unit != context->model->unit) {
@@ -475,7 +468,7 @@ bool compose_bounds(void* user, const Unit& unit, ui::hud::SpriteBounds& out) {
     return true;
 }
 
-void set_composite_frame(ModelRenderer& renderer, const ui::hud::SpriteFrame& frame, uint8_t key) {
+void set_composite_frame(ModelRenderer& renderer, const SpriteFrame& frame, uint8_t key) {
     ensure_composite(renderer, static_cast<int64_t>(frame.width) * frame.height);
     Sprite& composite = renderer.composite.sprite;
     composite.width = frame.width;
@@ -485,7 +478,7 @@ void set_composite_frame(ModelRenderer& renderer, const ui::hud::SpriteFrame& fr
     composite.key = key;
 }
 
-void compose_copy(void* user, const ui::hud::SpriteFrame& frame) {
+void compose_copy(void* user, const SpriteFrame& frame) {
     auto* context = static_cast<ComposeContext*>(user);
     const Sprite& source = *context->source;
     set_composite_frame(*context->renderer, frame, source.key);
@@ -500,7 +493,7 @@ void compose_copy(void* user, const ui::hud::SpriteFrame& frame) {
 
 // Clears the composite and draws the source's colour plane, then its depth
 // plane (as a keyed sprite), at (x, y).
-void compose_redraw(void* user, const ui::hud::SpriteFrame& frame, int32_t x, int32_t y) {
+void compose_redraw(void* user, const SpriteFrame& frame, int32_t x, int32_t y) {
     auto* context = static_cast<ComposeContext*>(user);
     Sprite source = *context->source;
     set_composite_frame(*context->renderer, frame, source.key);
@@ -522,7 +515,7 @@ void compose_redraw(void* user, const ui::hud::SpriteFrame& frame, int32_t x, in
 }
 
 // The build effect runs at the end of the composition.
-void compose_finish(void* user, const ui::hud::SpriteFrame&) {
+void compose_finish(void* user, const SpriteFrame&) {
     auto* context = static_cast<ComposeContext*>(user);
     apply_build_effect(*context->renderer, context->renderer->composite.sprite, *context->model);
 }
@@ -556,31 +549,29 @@ void draw_silhouette_blended(Surface& target, const Sprite& image, int32_t x, in
 }
 
 // Grows sprite bounds to hold a part.
-void include_part(ui::hud::SpriteBounds& into, const ui::hud::SpriteBounds& part) noexcept {
+void include_part(SpriteBounds& into, const SpriteBounds& part) noexcept {
     into.left = std::min(into.left, part.left);
     into.right = std::max(into.right, part.right);
     into.top = std::min(into.top, part.top);
     into.bottom = std::max(into.bottom, part.bottom);
 }
 
-// Composes a unit's sprite as ui::hud::compose_unit_sprite does, with every
+// Composes a unit's sprite as compose_unit_sprite does, with every
 // extent and offset counted in samples (ModelRenderer::samples): the frame
 // that holds the image and the models of the unit and the units it carries,
 // the image copied or redrawn into it, then the build effect.
-void compose_finer_sprite(
-    ComposeContext& context, const Unit& unit, const ui::hud::SpriteFrame& source
-) {
+void compose_finer_sprite(ComposeContext& context, const Unit& unit, const SpriteFrame& source) {
     const uint32_t samples = context.renderer->samples;
     World& world = *context.renderer->world;
-    ui::hud::SpriteBounds bounds{0, 0, 0, 0};
-    ui::hud::SpriteBounds extent{};
+    SpriteBounds bounds{0, 0, 0, 0};
+    SpriteBounds extent{};
     if (compose_bounds(&context, unit, extent))
         include_part(bounds, extent);
     for (const Unit* child = world_unit(&world, unit.attach_first_child); child != nullptr;
          child = world_unit(&world, child->attach_next)) {
         if ((child->flags & unit_flag_attached_without_piece) != 0)
             continue;
-        ui::hud::SpriteBounds part{0, 0, 0, 0};
+        SpriteBounds part{0, 0, 0, 0};
         if (compose_bounds(&context, *child, extent))
             include_part(part, extent);
         const int32_t across = hi_at(wrap_sub(child->position.x, unit.position.x), samples);
@@ -591,7 +582,7 @@ void compose_finer_sprite(
             {part.left + across, part.right + across, part.top + lifted, part.bottom + lifted}
         );
     }
-    const ui::hud::SpriteFrame frame = ui::hud::unit_sprite_frame(source, &bounds, 1);
+    const SpriteFrame frame = unit_sprite_frame(source, &bounds, 1);
     if (frame.width == source.width && frame.height == source.height)
         compose_copy(&context, frame);
     else
@@ -854,7 +845,7 @@ bool apply_build_effect(const ModelRenderer& renderer, Sprite& image, const Mode
     const int32_t color_a = ramp(wave_a);
     const int32_t color_b = ramp(wave_b);
     const int32_t progress =
-        truncate_low(static_cast<double>(unit.build_remaining) * progress_scale);
+        truncate_low32(static_cast<double>(unit.build_remaining) * progress_scale);
     if (progress > 0xeb) {
         remap_depth_bands(
             image,
@@ -1080,17 +1071,15 @@ void unit_model_pass(
     Sprite& composite = renderer.composite.sprite;
     if (draws) {
         ComposeContext context{&renderer, &model, &image, planned};
-        ui::hud::SpriteComposer composer{};
+        SpriteComposer composer{};
         composer.user = &context;
         composer.model_bounds = compose_bounds;
         composer.copy = compose_copy;
         composer.redraw = compose_redraw;
         composer.finish = compose_finish;
-        const ui::hud::SpriteFrame source_frame{
-            image.width, image.height, image.origin_x, image.origin_y
-        };
+        const SpriteFrame source_frame{image.width, image.height, image.origin_x, image.origin_y};
         if (samples == 1)
-            ui::hud::compose_unit_sprite(*renderer.world, unit, source_frame, composer);
+            compose_unit_sprite(*renderer.world, unit, source_frame, composer);
         else
             compose_finer_sprite(context, unit, source_frame);
         if (!is_building(unit) || unit.build_remaining == 0.0F)
@@ -1363,7 +1352,7 @@ void build_shaded_model_image(
                                         static_cast<double>(renderer.light[1]) * normal.y) +
                                        static_cast<double>(renderer.light[0]) * normal.x;
                     shade = static_cast<int32_t>(
-                        static_cast<uint32_t>(truncate_low(dot * renderer.light_scale)) &
+                        static_cast<uint32_t>(truncate_low32(dot * renderer.light_scale)) &
                         shade_row_mask
                     );
                 }
@@ -1533,8 +1522,7 @@ LinkedDraw prepare_linked_draw(ModelRenderer& renderer, const ModelRef& model, b
     }
     state.cache.has_image = has_image(state);
     state.cache.image_has_mask = state.image.sprite.aux != nullptr;
-    const ui::hud::UnitSpriteDraw draw =
-        ui::hud::prepare_unit_sprite(unit, state.cache, movement_idle);
+    const UnitSpriteDraw draw = prepare_unit_sprite(unit, state.cache, movement_idle);
     if (!state.cache.has_image || draw.rebuild)
         state.shadow = {};
     if (draw.rebuild)

@@ -3,6 +3,7 @@
 
 // Match chrome, side HUD, resource readout, fog and minimap.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
@@ -24,6 +25,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -116,7 +118,8 @@ void Runtime::load_match_chrome() {
     match_hud_.reset();
     const auto prefix = match_side_prefix();
     try {
-        match_chrome_ = oa::decode_pcx(assets_.read("bitmaps/" + prefix + "guisidetile.pcx").bytes);
+        const auto path = "bitmaps/" + prefix + "guisidetile.pcx";
+        match_chrome_ = oa::ui::decoded::require(oa::decode_pcx(assets_.read(path).bytes), path);
     } catch (const std::exception& error) {
         std::cerr << "match chrome tile unavailable: " << error.what() << '\n';
     }
@@ -864,29 +867,25 @@ oa::present::world_renderer::OverlayRaster Runtime::source_overlay_raster() {
 void Runtime::absorb_radar_exploration() {
     if (!match_ || !match_mapping_on())
         return;
-    try {
-        const auto& sight = match_->sight();
-        const auto cells = static_cast<std::size_t>(std::max(0, sight.width)) *
-                           static_cast<std::size_t>(std::max(0, sight.height));
-        if (cells == 0)
-            return;
-        if (radar_explored_.size() != cells)
-            radar_explored_.assign(cells, 0);
-        const auto bit = static_cast<uint16_t>(1u << (match_view_player() & 0x1fu));
-        std::span<const uint8_t> coverage;
-        try {
-            coverage = match_->player_coverage(static_cast<uint8_t>(match_view_player()));
-        } catch (const std::exception&) {
-        }
-        for (std::size_t i = 0; i < cells; ++i) {
-            if (radar_explored_[i] != 0)
-                continue;
-            const bool mapped = i < sight.player_bits.size() && (sight.player_bits[i] & bit) != 0;
-            const bool live = i < coverage.size() && coverage[i] != 0;
-            if (mapped || live)
-                radar_explored_[i] = 1;
-        }
-    } catch (const std::exception&) {
+    const auto& sight = match_->sight();
+    const auto cells = static_cast<std::size_t>(std::max(0, sight.width)) *
+                       static_cast<std::size_t>(std::max(0, sight.height));
+    if (cells == 0)
+        return;
+    if (radar_explored_.size() != cells)
+        radar_explored_.assign(cells, 0);
+    const uint8_t viewer = match_view_player();
+    const auto bit = static_cast<uint16_t>(1u << (viewer & 0x1fu));
+    // A viewer outside the player table has no live coverage.
+    const std::span<const uint8_t> coverage =
+        viewer < OA_PLAYER_COUNT ? match_->player_coverage(viewer) : std::span<const uint8_t>{};
+    for (std::size_t i = 0; i < cells; ++i) {
+        if (radar_explored_[i] != 0)
+            continue;
+        const bool mapped = i < sight.player_bits.size() && (sight.player_bits[i] & bit) != 0;
+        const bool live = i < coverage.size() && coverage[i] != 0;
+        if (mapped || live)
+            radar_explored_[i] = 1;
     }
 }
 
@@ -983,12 +982,7 @@ void Runtime::draw_status_panel() {
             }
         }
     }
-    const oa::formats::fnt::Font* font =
-        match_small_font_ ? &*match_small_font_ : (match_hud_ ? &match_hud_->font : nullptr);
     const int text_y = top + hud::kStatusPanelTextDrop;
-    if (font == nullptr ||
-        text_y + static_cast<int>(oa::formats::fnt::line_height(*font)) > kViewBottom + 1)
-        return;
     const auto translate = [](void* context, const char* text) -> const char* {
         auto& runtime = *static_cast<Runtime*>(context);
         runtime.status_label_ = runtime.translate_ui(text);
@@ -996,6 +990,24 @@ void Runtime::draw_status_panel() {
     };
     hud::StatusPanelText text{};
     hud::format_status_panel(game, translate, this, text);
+    // The readouts are gadget text in the GUI's second font, cut off at the
+    // view's bottom row as the strip is.
+    ensure_gui_font();
+    if (!gui_label_font_.sequences.empty()) {
+        for (const auto& [x, line] :
+             {std::pair{hud::kStatusPanelTimeX, text.time},
+              std::pair{hud::kStatusPanelUnitsX, text.units},
+              std::pair{hud::kStatusPanelSpeedX, text.speed}})
+            overlay_gui_text(
+                gui_label_font_, hud_canvas(kViewLeft + x, text_y), line, kViewBottom + 1 - text_y
+            );
+        return;
+    }
+    const oa::formats::fnt::Font* font =
+        match_small_font_ ? &*match_small_font_ : (match_hud_ ? &match_hud_->font : nullptr);
+    if (font == nullptr ||
+        text_y + static_cast<int>(oa::formats::fnt::line_height(*font)) > kViewBottom + 1)
+        return;
     draw_hud_label(kViewLeft + hud::kStatusPanelTimeX, text_y, text.time, hud::kPaletteWhite);
     draw_hud_label(kViewLeft + hud::kStatusPanelUnitsX, text_y, text.units, hud::kPaletteWhite);
     draw_hud_label(kViewLeft + hud::kStatusPanelSpeedX, text_y, text.speed, hud::kPaletteWhite);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/map_runtime/feature_defs.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/formats/tdf.hpp"
 
@@ -122,7 +123,7 @@ std::string_view bounded(const char* text, std::size_t capacity) {
 ///         finite, gives 0
 int16_t spark_time_from(double seconds) {
     const double ticks = seconds * spark_ticks_per_second;
-    return static_cast<int16_t>(formats::tdf::truncate_to_int64(ticks));
+    return static_cast<int16_t>(base::game_math::truncate_to_int64(ticks));
 }
 
 void store_u32(uint8_t* bytes, uint32_t value) noexcept {

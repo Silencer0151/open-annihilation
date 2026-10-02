@@ -5,6 +5,7 @@
 
 #include "oa/netgame/player_slots.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -1071,13 +1072,20 @@ bool net_match_loading_frame(NetMatch* m) noexcept {
 bool net_match_paced_loading_frame(
     NetMatch* m, LoadingPace* pace, const uint8_t rows[load_progress_rows]
 ) noexcept {
-    if ((m->world->game.load_flags & load_flag_barrier_passed) != 0)
-        return true;
+    if ((m->world->game.load_flags & load_flag_barrier_passed) != 0) {
+        if (m->frames_since_barrier < commander_wait_frames &&
+            loading_frame_due(pace, now_time(m))) {
+            if (m->connection->host != nullptr)
+                sock::host_pump(m->connection->host, 0);
+            ++m->frames_since_barrier;
+        }
+        return m->frames_since_barrier >= commander_wait_frames;
+    }
     if (!loading_frame_due(pace, now_time(m)))
         return false;
     const bool ready = net_match_loading_frame(m);
     net_match_send_load_progress(m, rows);
-    return ready;
+    return ready && m->frames_since_barrier >= commander_wait_frames;
 }
 
 void net_match_end_loading(NetMatch* m) noexcept {
@@ -1449,7 +1457,10 @@ void net_match_paused_frame(NetMatch* m) noexcept {
     packet_layer_flush(m->connection->packets, now_time(m), false);
     (void)net_match_pump(m);
     const auto now = now_time(m);
-    if (static_cast<int32_t>(m->keepalive_time) < static_cast<int32_t>(now)) {
+    // The next probe is due once the clock passes keepalive_time, which is
+    // never set more than keepalive_interval ahead of it: a reading further
+    // from it has passed it, or turned over to 0 since it was set.
+    if (m->keepalive_time - now > keepalive_interval) {
         m->keepalive_time = now + keepalive_interval;
         const uint8_t probe = static_cast<uint8_t>(RecordType::probe);
         net_match_send(m, primary_id(m->world), broadcast_destination_id, &probe, 1);
@@ -1467,10 +1478,14 @@ uint32_t net_match_check_timeouts(NetMatch* m) noexcept {
         return no_player_id;
     }
     const auto limit = game.player_timeout_seconds * 30u;
+    // Silent since the player was last heard from, or since the baseline
+    // when that is later, counting a turn of the clock to 0 between.
     const auto stalled = [&](const Player& p) {
-        const auto last =
-            p.last_update_time > m->timeout_baseline ? p.last_update_time : m->timeout_baseline;
-        return is_remote(p) && now - last > limit;
+        const auto silent = std::min(
+            base::game_loop::scaled_clock_elapsed(now, p.last_update_time),
+            base::game_loop::scaled_clock_elapsed(now, m->timeout_baseline)
+        );
+        return is_remote(p) && silent > limit;
     };
     int64_t group = -1;
     bool several = false;
@@ -1508,7 +1523,8 @@ bool net_match_timeout_expired(NetMatch* m, uint32_t player_id) noexcept {
     auto* p = player_of(m->world, player_id);
     if (p == nullptr || !is_remote(*p))
         return false;
-    const auto seconds = (now_time(m) - p->last_update_time) / 30u;
+    const auto seconds =
+        base::game_loop::scaled_clock_elapsed(now_time(m), p->last_update_time) / 30u;
     if (seconds < m->world->game.player_timeout_seconds + timeout_drop_extra_seconds)
         return false;
     reject_player(m, player_id, reject_connection_lost);

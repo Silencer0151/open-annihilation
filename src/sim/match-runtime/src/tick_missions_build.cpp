@@ -152,9 +152,8 @@ uint32_t TickHost::GroundMissions::help_build() {
             return ground::mission_invalid;
         const auto& frame_def = def_of(frame->record);
         const double x = frame_def.footprint_x, z = frame_def.footprint_z;
-        const auto spread = ground::truncate_word(
-            base::game_math::square_root(x * x + z + z) * build::help_ring_scale
-        );
+        const auto spread =
+            truncate_low32(base::game_math::square_root(x * x + z + z) * build::help_ring_scale);
         ring_goal(
             ground::position_of(frame->record),
             static_cast<int32_t>(static_cast<uint16_t>(def().build_distance)) + spread / 2,
@@ -217,7 +216,7 @@ uint32_t TickHost::GroundMissions::capture() {
         }
         announce("Capturing");
         const double scale = build::capture_cost_scale;
-        const auto costs = ground::truncate_word(
+        const auto costs = truncate_low32(
             static_cast<double>(prize_def.build_cost_energy) * scale *
                 build::capture_energy_weight +
             static_cast<double>(prize_def.build_cost_metal) * scale * build::capture_metal_weight +

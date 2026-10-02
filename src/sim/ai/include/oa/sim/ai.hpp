@@ -440,7 +440,7 @@ ComputerHost match_computer_host(sim::match_runtime::Match& match) noexcept;
 /// @param campaign_session true in a campaign, where computer players never build a
 ///        downloadable type
 /// @return false when the texts cannot be stored
-bool configure_match_computer_players(
+[[nodiscard]] bool configure_match_computer_players(
     sim::match_runtime::Match& match,
     std::string_view profile,
     std::string_view build_lists,
@@ -451,7 +451,8 @@ bool configure_match_computer_players(
 /// @param match match that owns the state
 /// @param profile new ai/<profile>.txt text
 /// @return false when the profile cannot be stored
-bool reload_match_computer_profiles(sim::match_runtime::Match& match, std::string_view profile);
+[[nodiscard]] bool
+reload_match_computer_profiles(sim::match_runtime::Match& match, std::string_view profile);
 /// Loads the types and initialises a match's computer players before their first tick.
 ///
 /// The game does it as the game starts.

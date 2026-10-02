@@ -106,7 +106,7 @@ bool output_captured();
 /// @param limits the folder's limits
 /// @return false, leaving both streams as they were, when the folder or the
 ///     file cannot be opened
-bool begin(const std::filesystem::path& folder, const Limits& limits = {});
+[[nodiscard]] bool begin(const std::filesystem::path& folder, const Limits& limits = {});
 
 /// Moves the streams to a new file when the current one must roll at `now`.
 ///

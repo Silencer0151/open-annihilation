@@ -155,6 +155,9 @@ module src/world/world-environment src/sim/world-environment -
 # ---- present, audio, media ---------------------------------------------------
 module src/present src/present - group-level module; unchanged
 module src/present/model src/present/model -
+file src/ui/hud/include/oa/ui/hud/sprite_placement.hpp src/present/model/include/oa/present/model/sprite_placement.hpp - unit and feature sprite placement, the model renderer's work
+file src/ui/hud/src/sprite_placement.cpp src/present/model/src/sprite_placement.cpp -
+file src/ui/hud/tests/sprite_placement_test.cpp src/present/model/tests/sprite_placement_test.cpp -
 module src/world/world-renderer src/present/world-renderer -
 module src/audio src/audio - group-level module
 module src/media src/media - group-level module
@@ -510,12 +513,10 @@ include oa/gadget_panel.hpp oa/ui/gui_input/gadget_panel.hpp -
 include oa/gui_input.hpp oa/ui/gui_input.hpp -
 include oa/gui_gadget.hpp oa/ui/gui_layout/gui_gadget.hpp -
 include oa/gui_layout.hpp oa/ui/gui_layout.hpp -
-include oa/air/attack.hpp oa/sim/air/attack.hpp -
 include oa/air/driver.hpp oa/sim/air/driver.hpp -
 include oa/air/flight.hpp oa/sim/air/flight.hpp -
 include oa/air/goal.hpp oa/sim/air/goal.hpp -
 include oa/air/host.hpp oa/sim/air/host.hpp -
-include oa/air/orders.hpp oa/sim/air/orders.hpp -
 include oa/goals.hpp oa/sim/ground_orders/goals.hpp -
 include oa/ground_runtime.hpp oa/sim/ground_orders/ground_runtime.hpp -
 include oa/movement_map.hpp oa/sim/ground_orders/movement_map.hpp -
@@ -600,7 +601,7 @@ include oa/ui/hud/order_panel.hpp oa/ui/hud/order_panel.hpp - unchanged
 include oa/ui/hud/player_records.hpp oa/ui/hud/player_records.hpp - unchanged
 include oa/ui/hud/resource_bar.hpp oa/ui/hud/resource_bar.hpp - unchanged
 include oa/ui/hud/share_panel.hpp oa/ui/hud/share_panel.hpp - unchanged
-include oa/ui/hud/sprite_placement.hpp oa/ui/hud/sprite_placement.hpp - unchanged
+include oa/ui/hud/sprite_placement.hpp oa/present/model/sprite_placement.hpp - placing unit and feature sprites is the model renderer's work
 include oa/ui/hud/status_panel.hpp oa/ui/hud/status_panel.hpp - unchanged
 include oa/ui/hud/unit_info.hpp oa/ui/hud/unit_info.hpp - unchanged
 include oa/ui/hud/unit_labels.hpp oa/ui/hud/unit_labels.hpp - unchanged

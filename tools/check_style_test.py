@@ -332,6 +332,37 @@ def test_tiers(scratch):
     }, {"tier-virtual", "tier-throw", "tier-heap-container"})
 
 
+def test_test_asserts(scratch):
+    """Finds assert() and #undef NDEBUG in tests, and only there."""
+    source = "\n".join([
+        "#undef NDEBUG",
+        "#include <cassert>",
+        "void run() { assert(1 + 1 == 2); }",
+        "static_assert(sizeof(int) == 4);",
+        "void same() { OA_CHECK(true); runner.assert(true); checks::assert (true); }",
+        "// assert(false) in a comment",
+        "const char* text = \"assert(false)\";",
+        "  #  undef   NDEBUG",
+        "void spaced() { assert (true); }",
+    ]) + "\n"
+    files = {
+        "src/sim/m/tests/a_test.cpp": source,
+        "src/app/b_test.cpp": source,
+        "tests/content/c.cpp": source,
+        "src/sim/m/src/d.cpp": source,
+        "src/app/e_testing.cpp": source,
+    }
+    expected = set()
+    for name in ("src/sim/m/tests/a_test.cpp", "src/app/b_test.cpp", "tests/content/c.cpp"):
+        expected |= {
+            (name, 1, "test-assert", "#undef NDEBUG"),
+            (name, 3, "test-assert", "assert("),
+            (name, 8, "test-assert", "#undef NDEBUG"),
+            (name, 9, "test-assert", "assert("),
+        }
+    expect_findings(scratch, "test-asserts", files, expected, {"test-assert"})
+
+
 def test_lexer(scratch):
     """Separates code from comments, literals and directives."""
     source = "\n".join([
@@ -443,6 +474,7 @@ def main():
         test_offset_comments(scratch)
         test_doc_blocks(scratch)
         test_tiers(scratch)
+        test_test_asserts(scratch)
         test_lexer(scratch)
         test_nested_projects(scratch)
         test_directories()

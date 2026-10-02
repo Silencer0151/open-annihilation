@@ -134,17 +134,18 @@ int main() {
     expect(parse({"--max-fps", "0"}).max_frames_per_second == 0, "--max-fps 0 is no limit");
     expect(
         rejection({"--max-fps", "1001"}) ==
-            "--max-fps expects 0 for no limit, or frames a second from 40 through 1000",
+            "--max-fps expects 0 for no limit, or frames a second from 30 through 1000",
         "--max-fps refuses a rate above 1000"
     );
     expect(
-        rejection({"--max-fps", "39"}) ==
-            "--max-fps expects 0 for no limit, or frames a second from 40 through 1000",
+        rejection({"--max-fps", "29"}) ==
+            "--max-fps expects 0 for no limit, or frames a second from 30 through 1000",
         "--max-fps refuses a rate at which a frame may run two ticks"
     );
+    expect(oa::app::kLowestMaxFramesPerSecond == 30, "the lowest rate is the tick rate");
     expect(
-        parse({"--max-fps", "40"}).max_frames_per_second == oa::app::kLowestMaxFramesPerSecond,
-        "--max-fps takes its lowest rate"
+        parse({"--max-fps", "30"}).max_frames_per_second == oa::app::kLowestMaxFramesPerSecond,
+        "--max-fps takes its lowest rate, a frame a tick"
     );
     const auto framed = parse(
         {"--headless-check",
@@ -156,17 +157,38 @@ int main() {
          "run.frames",
          "--scroll-camera",
          "--march",
-         "--follow"}
+         "--follow",
+         "--frame-clock",
+         "4294965296"}
     );
     expect(framed.frame_rate && *framed.frame_rate == 120, "--frame-rate takes its rate");
     expect(
-        framed.frame_log == "run.frames" && framed.scroll_camera && framed.march && framed.follow,
-        "--frame-log, --scroll-camera, --march and --follow go with --frame-rate"
+        framed.frame_log == "run.frames" && framed.scroll_camera && framed.march && framed.follow &&
+            framed.frame_clock_ms == 4294965296U,
+        "--frame-log, --scroll-camera, --march, --follow and --frame-clock go with --frame-rate"
     );
     expect(
         !plain.frame_rate && plain.frame_log.empty() && !plain.scroll_camera && !plain.march &&
-            !plain.follow,
+            !plain.follow && !plain.frame_clock_ms,
         "no frame-by-frame run without the flags"
+    );
+    expect(
+        rejection(
+            {"--headless-check", "--match-ticks", "60", "--frame-rate", "30", "--frame-clock", "-1"}
+        ) == "--frame-clock expects milliseconds from 0 through 1000000000000",
+        "--frame-clock refuses a negative time"
+    );
+    expect(
+        rejection(
+            {"--headless-check",
+             "--match-ticks",
+             "60",
+             "--frame-rate",
+             "30",
+             "--frame-clock",
+             "1000000000001"}
+        ) == "--frame-clock expects milliseconds from 0 through 1000000000000",
+        "--frame-clock refuses a time past its latest"
     );
     expect(
         rejection({"--headless-check", "--match-ticks", "60", "--frame-rate", "0"}) ==
@@ -191,13 +213,18 @@ int main() {
     );
     expect(
         rejection({"--headless-check", "--match-ticks", "60", "--march"}) ==
-            "--frame-log, --scroll-camera, --march and --follow need --frame-rate",
+            "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate",
         "--march needs --frame-rate"
     );
     expect(
         rejection({"--headless-check", "--match-ticks", "60", "--follow"}) ==
-            "--frame-log, --scroll-camera, --march and --follow need --frame-rate",
+            "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate",
         "--follow needs --frame-rate"
+    );
+    expect(
+        rejection({"--headless-check", "--match-ticks", "60", "--frame-clock", "0"}) ==
+            "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate",
+        "--frame-clock needs --frame-rate"
     );
 
     // Without an extension the engine knows none of an extension's options.

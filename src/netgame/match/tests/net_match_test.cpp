@@ -2181,11 +2181,16 @@ void two_machines_lobby_to_match() {
     // at most every six connection time ticks (200 ms), so the host's player
     // sends at most one probe and one load-progress record in each, and the
     // barrier still passes.
+    //
+    // Each machine then places its commander as the runtime does, once its
+    // loading screen says the commanders can be placed: it enters the game,
+    // stands its commander on its start position, announces it (0x09) and
+    // ends its loading. That comes commander_wait_frames loading frames
+    // after its barrier passed, so the 0x09 reaches the other machine after
+    // its own barrier has passed, and it takes it.
     net_match_loader_waiting(host->match.get());
     net_match_loader_waiting(client->match.get());
     const uint8_t loaded_rows[load_progress_rows] = {100, 100, 100, 100, 100, 100};
-    LoadingPace host_pace{};
-    LoadingPace client_pace{};
     const auto sent_count = [](Machine& m, RecordType type) {
         return m.connection.packets->traffic
             .record_count[static_cast<uint8_t>(type)][static_cast<uint8_t>(TrafficChannel::sent)];
@@ -2193,32 +2198,99 @@ void two_machines_lobby_to_match() {
     const auto probes_before = sent_count(*host, RecordType::probe);
     const auto progress_before = sent_count(*host, RecordType::load_progress);
     const auto loading_from = net_connection_time(&host->connection);
+    // The host's machine is first, the client's second.
+    Machine* const loading[2] = {host.get(), client.get()};
+    LoadingPace paces[2]{};
+    bool passed[2]{};
+    bool placed[2]{};
+    uint32_t passed_time[2]{};
+    uint32_t placed_time[2]{};
+    uint32_t probes_at_pass = 0;
+    uint32_t progress_at_pass = 0;
+    uint32_t frames_allowed = 0;
+    // Set before the host's loading ends, which publishes the player count.
+    host->world->game.player_count = 2;
+    const auto place_commander = [](Machine& m) {
+        net_match_enter_game(m.match.get());
+        auto& game = m.world->game;
+        auto& player = game.players[game.local_player_index];
+        const auto start = net_match_start_position(m.match.get(), game.local_player_index);
+        Unit* unit = commander_of(m.world, player);
+        spawn(unit, game.local_player_index, kStartX[start], kStartZ[start]);
+        net_match_send_unit_created(m.match.get(), unit);
+        net_match_end_loading(m.match.get());
+    };
     CHECK(wait_until([&] {
-        const bool a = net_match_paced_loading_frame(host->match.get(), &host_pace, loaded_rows);
-        const bool b =
-            net_match_paced_loading_frame(client->match.get(), &client_pace, loaded_rows);
-        return a && b;
+        for (std::size_t i = 0; i < 2; ++i) {
+            auto& m = *loading[i];
+            if (placed[i])
+                continue;
+            const bool ready = net_match_paced_loading_frame(m.match.get(), &paces[i], loaded_rows);
+            const auto now = net_connection_time(&m.connection);
+            if (!passed[i] && (m.world->game.load_flags & load_flag_barrier_passed) != 0) {
+                passed[i] = true;
+                passed_time[i] = now;
+                if (i == 0) {
+                    probes_at_pass = sent_count(*host, RecordType::probe);
+                    progress_at_pass = sent_count(*host, RecordType::load_progress);
+                    frames_allowed = (now - loading_from) / loading_frame_ticks + 1;
+                }
+            }
+            if (ready) {
+                place_commander(m);
+                placed[i] = true;
+                placed_time[i] = now;
+            }
+        }
+        return placed[0] && placed[1];
     }));
-    const auto frames_allowed =
-        (net_connection_time(&host->connection) - loading_from) / loading_frame_ticks + 1;
-    const auto probes = sent_count(*host, RecordType::probe) - probes_before;
-    const auto progress = sent_count(*host, RecordType::load_progress) - progress_before;
+    const auto probes = probes_at_pass - probes_before;
+    const auto progress = progress_at_pass - progress_before;
     CHECK(probes >= 1 && probes <= frames_allowed);
     CHECK(progress == probes);
+    // Nothing more goes out while the commanders wait, but for the 0x09.
+    CHECK(sent_count(*host, RecordType::probe) == probes_at_pass);
     CHECK(!host->connection.packets->guaranteed && !client->connection.packets->guaranteed);
+    for (std::size_t i = 0; i < 2; ++i)
+        CHECK(
+            passed[i] && placed[i] &&
+            placed_time[i] - passed_time[i] >= commander_wait_frames * loading_frame_ticks
+        );
     const auto host_start =
         net_match_start_position(host->match.get(), host->world->game.local_player_index);
     const auto client_start =
         net_match_start_position(client->match.get(), client->world->game.local_player_index);
     CHECK(host_start <= 1 && client_start <= 1 && host_start != client_start);
 
-    // Loading ends on both machines; the host publishes its session again,
-    // which now says the game has started (flag 0x20).
+    // Each machine's copy of the other's commander stands on that
+    // commander's start position from its 0x09, the first record that names
+    // it: the copy is there before any unit state record (0x2c) went out, and
+    // no record was refused.
+    const auto client_slot_on_host =
+        static_cast<uint8_t>(mp::slot_for_player_id(*host->lobby, client_id));
+    CHECK(wait_until([&] {
+        (void)net_match_pump(host->match.get());
+        (void)net_match_pump(client->match.get());
+        return host->creates == 1 && client->creates == 1;
+    }));
+    CHECK(sent_count(*host, RecordType::unit_state) == 0);
+    CHECK(sent_count(*client, RecordType::unit_state) == 0);
+    {
+        const auto* copy =
+            commander_of(client->world, client->world->game.players[host_slot_on_client]);
+        CHECK(copy->type_index == kCommanderDef);
+        CHECK(copy->position.x == kStartX[host_start] && copy->position.z == kStartZ[host_start]);
+        copy = commander_of(host->world, host->world->game.players[client_slot_on_host]);
+        CHECK(copy->type_index == kCommanderDef);
+        CHECK(
+            copy->position.x == kStartX[client_start] && copy->position.z == kStartZ[client_start]
+        );
+    }
+    CHECK(host->match->records_refused == 0 && client->match->records_refused == 0);
+
+    // Loading has ended on both machines; the host has published its session
+    // again, which now says the game has started (flag 0x20).
     auto& client_view = client->connection.host->engine.desc;
-    client_view.flags = 0;
-    host->world->game.player_count = 2;
-    net_match_end_loading(host->match.get());
-    net_match_end_loading(client->match.get());
     CHECK(wait_until([&] {
         return client_view.flags == (session_flag_game | session_flag_join_disabled);
     }));
@@ -2231,18 +2303,6 @@ void two_machines_lobby_to_match() {
     const auto published_options = static_cast<uint16_t>(client_view.user[0] >> 16);
     CHECK((published_options & OA_SETUP_OPTION_STARTED) != 0);
     CHECK((published_options & 0xf) == 2);
-
-    // Each machine creates its own commander and announces it (0x09).
-    net_match_enter_game(host->match.get());
-    net_match_enter_game(client->match.get());
-    for (auto* m : g_machines) {
-        auto& game = m->world->game;
-        auto& player = game.players[game.local_player_index];
-        const auto start = net_match_start_position(m->match.get(), game.local_player_index);
-        Unit* unit = commander_of(m->world, player);
-        spawn(unit, game.local_player_index, kStartX[start], kStartZ[start]);
-        net_match_send_unit_created(m->match.get(), unit);
-    }
 
     // 300 ticks with orders on both sides.
     for (uint32_t t = 0; t < 300; ++t) {
@@ -2293,8 +2353,6 @@ void two_machines_lobby_to_match() {
     CHECK(host_commander->position.x == kStartX[host_start] + (40 << 16));
 
     // A health event relayed to the owner comes back in its full record.
-    const auto client_slot_on_host =
-        static_cast<uint8_t>(mp::slot_for_player_id(*host->lobby, client_id));
     const auto* client_commander =
         commander_of(host->world, host->world->game.players[client_slot_on_host]);
     UnitDamageRecord damage{};
@@ -2361,6 +2419,43 @@ void two_machines_lobby_to_match() {
         remote.last_update_time = heard;
         game.player_timeout_seconds = seconds;
         match->timeout_player = no_player_id;
+    }
+
+    // Across the turn of the connections' clock, which reads 30 units a
+    // second from the milliseconds and turns over to 0 with them at 2^32
+    // milliseconds: a player heard from just before it is neither silent
+    // nor dropped just after it, a record queued before it goes out at the
+    // first paced flush after it, and a paused match goes on probing.
+    {
+        auto& game = host->world->game;
+        auto& remote = game.players[client_slot_on_host];
+        auto* match = host->match.get();
+        auto* packets = host->connection.packets;
+        g_now_ms = 0xffffffffu - 1000u;
+        const auto before = net_connection_time(&host->connection);
+        CHECK(before + 40 > base::game_loop::scaled_clock_turn);
+        match->timeout_baseline = before;
+        remote.last_update_time = before;
+        packet_layer_flush(packets, before, true);
+        const uint8_t probe = static_cast<uint8_t>(RecordType::probe);
+        CHECK(net_match_send(match, host_id, broadcast_destination_id, &probe, 1));
+        packet_layer_flush(packets, before + 1, false);
+        CHECK(packets->channels[0].queue_count == 1);
+        g_now_ms += 2000;
+        const auto after = net_connection_time(&host->connection);
+        CHECK(after < 40);
+        CHECK(net_match_check_timeouts(match) == no_player_id);
+        CHECK(!net_match_timeout_expired(match, client_id));
+        CHECK(remote.in_use != 0);
+        packet_layer_flush(packets, after, false);
+        CHECK(packets->channels[0].queue_count == 0);
+        match->keepalive_time = before + keepalive_interval;
+        game.sim_run_flags |= run_flag_paused;
+        net_match_paused_frame(match);
+        CHECK(match->keepalive_time == after + keepalive_interval);
+        game.sim_run_flags &= static_cast<uint16_t>(~run_flag_paused);
+        CHECK(net_match_check_timeouts(match) == no_player_id);
+        remote.last_update_time = net_connection_time(&host->connection);
     }
 
     // Game over: each side resends its economy until the other has

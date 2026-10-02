@@ -67,7 +67,7 @@ Slot::Slot(sim::simulation_state::Unit& view, SlotAssets& assets) noexcept
     : record(view.record), unit(&view), unit_index(view.record.id),
       squad(sim::unit_spawn::legacy::as<uint32_t>(view.record.squad)), flags2(view.record.flags2),
       cleared_on_unfinished_spawn(view.record.cleared_on_unfinished_spawn),
-      build_remaining_bits(reinterpret_cast<uint32_t&>(view.record.build_remaining)),
+      build_remaining(view.record.build_remaining),
       decloak_until_tick(view.record.decloak_until_tick),
       last_attacker_id(view.record.last_attacker_id),
       bank(sim::unit_spawn::legacy::as<uint16_t>(view.record.bank)), yaw(view.record.heading),

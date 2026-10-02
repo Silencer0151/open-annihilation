@@ -6,11 +6,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
-using oa::formats::objects3d::ThreeDoError;
+using oa::base::bytes::DecodeCode;
 
 void put32(std::vector<std::byte>& data, std::size_t at, int32_t value) {
     const auto v = static_cast<uint32_t>(value);
@@ -89,26 +91,74 @@ std::vector<std::byte> fixture() {
     return d;
 }
 
+/// Builds a model of `count` objects, each linked to the next by its
+/// sibling link or, when `nested`, by its child link. Every object is 256
+/// units (1/256) above its parent, and the last holds one vertex at Y 5.0.
+std::vector<std::byte> chain_model(std::size_t count, bool nested) {
+    constexpr std::size_t record = 52;
+    const std::size_t vertex_at = count * record;
+    std::vector<std::byte> d(vertex_at + 12);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto at = i * record;
+        const auto next = i + 1 < count ? static_cast<int32_t>(at + record) : 0;
+        const bool last = i + 1 == count;
+        header(
+            d,
+            at,
+            last ? 1 : 0,
+            0,
+            -1,
+            0,
+            256,
+            0,
+            0,
+            last ? static_cast<int32_t>(vertex_at) : 0,
+            0,
+            nested ? 0 : next,
+            nested ? next : 0
+        );
+    }
+    put32(d, vertex_at + 4, 5 * 65536);
+    return d;
+}
+
 void require(bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
 }
 
-template <class F>
-void rejects(F&& f, const char* message) {
-    try {
-        f();
-    } catch (const ThreeDoError&) {
-        return;
-    }
-    throw std::runtime_error(message);
+/// Requires a model load to fail with a code at an offset.
+///
+/// @param bytes the file
+/// @param code the error code expected
+/// @param offset the file offset expected
+/// @param message what the failure means
+void rejects(
+    const std::vector<std::byte>& bytes, DecodeCode code, uint64_t offset, const char* message
+) {
+    const auto loaded = oa::formats::objects3d::load_3do(bytes);
+    require(
+        !loaded.ok() && loaded.error.code == code && loaded.error.offset == offset &&
+            loaded.error.message != nullptr,
+        message
+    );
+}
+
+/// Loads a model the test expects to be valid.
+///
+/// @param bytes the file
+/// @return the model
+oa::formats::objects3d::Model load(const std::vector<std::byte>& bytes) {
+    auto loaded = oa::formats::objects3d::load_3do(bytes);
+    require(loaded.ok(), "a valid model was refused");
+    return std::move(*loaded.value);
 }
 } // namespace
 
 int main() {
     try {
         auto bytes = fixture();
-        const auto model = oa::formats::objects3d::load_3do(bytes);
+        const auto model = load(bytes);
         require(model.objects.size() == 2, "hierarchy was not flattened in preorder");
         require(
             model.objects[0].name == "base" && model.objects[1].name == "turret",
@@ -119,10 +169,11 @@ int main() {
             "piece topology differs"
         );
         require(
-            oa::formats::objects3d::maximum_height_fixed(model) == 196608,
+            oa::formats::objects3d::maximum_height_fixed(model).value == 196608,
             "model height calculation differs"
         );
-        const auto bounds = oa::formats::objects3d::derive_unit_type_bounds(model, 3, 2);
+        const auto bounds =
+            oa::formats::objects3d::derive_unit_type_bounds(model, 3, 2).value.value();
         require(
             bounds.bounds_min_x == -1572864 && bounds.bounds_min_y == 0 &&
                 bounds.bounds_min_z == -1048576 && bounds.bounds_max_x == 1572864 &&
@@ -137,7 +188,7 @@ int main() {
             p.word_after_texture_name == 11 && p.word_before_is_colored == 12,
             "uninterpreted primitive words were not preserved"
         );
-        const auto flat = oa::formats::objects3d::flatten_for_render(model);
+        const auto flat = oa::formats::objects3d::flatten_for_render(model).value.value();
         require(
             flat.size() == 1 && flat[0].is_selection_primitive,
             "selection primitive identity was lost"
@@ -150,21 +201,87 @@ int main() {
 
         auto truncated = bytes;
         truncated.resize(51);
-        rejects([&] { (void)oa::formats::objects3d::load_3do(truncated); }, "truncation accepted");
+        rejects(truncated, DecodeCode::truncated, 0, "truncation accepted");
         auto bad_index = bytes;
         put16(bad_index, 144, 3);
-        rejects(
-            [&] { (void)oa::formats::objects3d::load_3do(bad_index); }, "bad vertex index accepted"
-        );
+        rejects(bad_index, DecodeCode::out_of_range, 144, "bad vertex index accepted");
         auto cycle = bytes;
         put32(cycle, 264, 220);
-        rejects([&] { (void)oa::formats::objects3d::load_3do(cycle); }, "object cycle accepted");
+        rejects(cycle, DecodeCode::cycle, 220, "object cycle accepted");
         auto unterminated = bytes;
         for (std::size_t i = 272; i < unterminated.size(); ++i)
             unterminated[i] = std::byte{'x'};
+        rejects(unterminated, DecodeCode::truncated, 272, "unterminated name accepted");
+
+        // 65,536 objects, the most a model may hold, load from a sibling
+        // list and from a child chain alike, without exhausting the stack.
+        const auto siblings = load(chain_model(65'536, false));
+        require(
+            siblings.objects.size() == 65'536 && siblings.objects[0].next_sibling == 1 &&
+                siblings.objects[65'534].next_sibling == 65'535 &&
+                siblings.objects[65'535].parent == oa::formats::objects3d::kNoObject,
+            "long sibling list differs"
+        );
+        // Siblings stand on the root's own level: the highest is the last
+        // object's vertex plus its own offset.
+        require(
+            oa::formats::objects3d::maximum_height_fixed(siblings).value == 5 * 65536 + 256,
+            "long sibling list height differs"
+        );
+        const auto nested = load(chain_model(65'536, true));
+        require(
+            nested.objects.size() == 65'536 && nested.objects[0].first_child == 1 &&
+                nested.objects[65'535].parent == 65'534 &&
+                nested.objects[65'535].first_child == oa::formats::objects3d::kNoObject,
+            "deep child chain differs"
+        );
+        // Each of the 65,536 levels adds its offset to the vertex.
+        require(
+            oa::formats::objects3d::maximum_height_fixed(nested).value == 5 * 65536 + 65'536 * 256,
+            "deep child chain height differs"
+        );
+        // The 65,537th object is refused where its record lies.
         rejects(
-            [&] { (void)oa::formats::objects3d::load_3do(unterminated); },
-            "unterminated name accepted"
+            chain_model(65'537, false),
+            DecodeCode::limit_exceeded,
+            65'536 * 52,
+            "a sibling list over the object limit accepted"
+        );
+        rejects(
+            chain_model(65'537, true),
+            DecodeCode::limit_exceeded,
+            65'536 * 52,
+            "a child chain over the object limit accepted"
+        );
+        auto shared = chain_model(3, true);
+        put32(shared, 44, 104);
+        rejects(shared, DecodeCode::malformed, 104, "an object reached by two links accepted");
+        auto deep_cycle = chain_model(1'000, true);
+        put32(deep_cycle, 999 * 52 + 48, 52);
+        rejects(deep_cycle, DecodeCode::cycle, 52, "a link back up a deep chain accepted");
+
+        // A model built in memory may have links no loaded model has.
+        oa::formats::objects3d::Model looped;
+        looped.objects.resize(2);
+        looped.objects[0].first_child = 1;
+        looped.objects[1].next_sibling = 1;
+        const auto looped_height = oa::formats::objects3d::maximum_height_fixed(looped);
+        require(
+            !looped_height.ok() && looped_height.error.code == DecodeCode::cycle,
+            "a sibling link to itself was not reported as a cycle"
+        );
+        looped.objects[1].next_sibling = 7;
+        require(
+            oa::formats::objects3d::maximum_height_fixed(looped).error.code ==
+                    DecodeCode::out_of_range &&
+                !oa::formats::objects3d::derive_unit_type_bounds(looped, 1, 1).ok(),
+            "an out-of-range link was not reported"
+        );
+        looped.objects[1].next_sibling = oa::formats::objects3d::kNoObject;
+        looped.objects[1].parent = 1;
+        require(
+            !oa::formats::objects3d::flatten_for_render(looped).ok(),
+            "a piece that is its own parent was flattened"
         );
 
         oa::formats::objects3d::Model height_edge;
@@ -174,7 +291,7 @@ int main() {
         height_edge.objects[1].parent = 0;
         height_edge.objects[1].vertices = {{0, -200, 0}};
         require(
-            oa::formats::objects3d::maximum_height_fixed(height_edge) == 100,
+            oa::formats::objects3d::maximum_height_fixed(height_edge).value == 100,
             "recursive zero clamp in the height calculation differs"
         );
 

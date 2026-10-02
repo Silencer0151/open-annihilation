@@ -7,6 +7,8 @@
 // table and little-endian field access. Everything here is bounded and
 // reports failures through WireError; nothing allocates or throws.
 
+#include "oa/base/bytes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -122,27 +124,22 @@ record_wire_length(const uint8_t* bytes, std::size_t available, uint16_t* length
 
 /// Reads a little-endian u16 at p.
 [[nodiscard]] constexpr uint16_t load_u16(const uint8_t* p) noexcept {
-    return static_cast<uint16_t>(p[0] | (p[1] << 8));
+    return base::bytes::load_le16(p);
 }
 
 /// Reads a little-endian u32 at p.
 [[nodiscard]] constexpr uint32_t load_u32(const uint8_t* p) noexcept {
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+    return base::bytes::load_le32(p);
 }
 
 /// Writes v as a little-endian u16 at p.
 constexpr void store_u16(uint8_t* p, uint16_t v) noexcept {
-    p[0] = static_cast<uint8_t>(v);
-    p[1] = static_cast<uint8_t>(v >> 8);
+    base::bytes::store_le16(p, v);
 }
 
 /// Writes v as a little-endian u32 at p.
 constexpr void store_u32(uint8_t* p, uint32_t v) noexcept {
-    p[0] = static_cast<uint8_t>(v);
-    p[1] = static_cast<uint8_t>(v >> 8);
-    p[2] = static_cast<uint8_t>(v >> 16);
-    p[3] = static_cast<uint8_t>(v >> 24);
+    base::bytes::store_le32(p, v);
 }
 
 } // namespace oa::netgame

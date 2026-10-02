@@ -4,11 +4,13 @@
 // The in-game message log (Game.chat_lines) drawn over the battlefield, and
 // the game speed keys that post to it.
 #include "oa/app/asset_files.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -31,7 +34,10 @@ namespace messages = oa::sim::messages;
 std::optional<oa::formats::fnt::Font>
 load_engine_font(oa::AssetStore& assets, const char* name, const char* language) {
     try {
-        return oa::formats::fnt::load_named_fnt(assets, name, language != nullptr ? language : "");
+        return oa::ui::decoded::require(
+            oa::formats::fnt::load_named_fnt(assets, name, language != nullptr ? language : ""),
+            name
+        );
     } catch (const std::exception& error) {
         std::cerr << name << " font unavailable: " << error.what() << '\n';
         return std::nullopt;
@@ -52,6 +58,10 @@ int32_t message_line_step(const oa::formats::fnt::Font& font) {
     return static_cast<uint8_t>(font.nominal_height);
 }
 
+// Rows below the pen a message line's GUI-font glyphs may reach: the whole
+// height kept, as the log's lines are cut only by the battlefield's edge.
+constexpr int kGuiTextRowsBelowPen = 32;
+
 } // namespace
 
 void Runtime::load_common_fonts() {
@@ -61,14 +71,19 @@ void Runtime::load_common_fonts() {
 }
 
 void Runtime::load_translations(const char* language) {
-    // A missing or unreadable file leaves every text as it is.
+    // A missing or unreadable file leaves every text as it is. Most games
+    // have no translation file, so only one that is there and does not load
+    // is reported.
     const auto files = asset_files(assets_);
-    (void)oa::data::defs::load_locale_table(
-        &files,
-        &translations_.table,
-        kTranslationFile,
-        language != nullptr ? language : kDefaultLanguage
-    );
+    if (!oa::data::defs::load_locale_table(
+            &files,
+            &translations_.table,
+            kTranslationFile,
+            language != nullptr ? language : kDefaultLanguage
+        ) &&
+        files.exists != nullptr && files.exists(files.context, kTranslationFile))
+        std::cerr << "open-annihilation: " << kTranslationFile
+                  << " did not load in full; the texts it misses stay as they are\n";
 }
 
 messages::Hooks Runtime::message_hooks() {
@@ -172,6 +187,7 @@ const oa::formats::fnt::Font& Runtime::message_font() {
 void Runtime::draw_match_message_log() {
     if (!match_)
         return;
+    ensure_gui_font();
 
     struct Paint {
         Runtime* runtime{};
@@ -235,12 +251,23 @@ void Runtime::draw_match_message_log() {
                 &logo
             );
         };
+    // Gadget text: the GUI's font when it has one, else a label in the
+    // line's colour, its rows the font's lift above the pen.
     sink.text = [](void* user, const char* text, int32_t x, int32_t y) {
         auto& target = *static_cast<Paint*>(user);
-        target.runtime->paint_text(
-            *target.font,
+        auto& runtime = *target.runtime;
+        const oa::ui::display_layout::Point pen{
             target.corner.x + (x - oa::ui::hud::kMessageLogLeft) * target.scale,
-            target.corner.y + (y - oa::ui::hud::kMessageLogTop) * target.scale,
+            target.corner.y + (y - oa::ui::hud::kMessageLogTop) * target.scale
+        };
+        if (!runtime.gui_font_.sequences.empty()) {
+            runtime.overlay_gui_text(runtime.gui_font_, pen, text, kGuiTextRowsBelowPen);
+            return;
+        }
+        runtime.paint_text(
+            *target.font,
+            pen.x,
+            pen.y - oa::formats::fnt::row_lift(*target.font) * target.scale,
             text,
             target.color,
             target.scale
@@ -559,11 +586,72 @@ void Runtime::check_game_speed_messages() {
         throw std::runtime_error(
             "speed check: the line from no player does not start at the log's edge"
         );
+    const auto plain_frame = frame_now();
     const auto plain_changed =
-        changed_in(empty, frame_now(), square[0], square[1], square[2], square[3]);
+        changed_in(empty, plain_frame, square[0], square[1], square[2], square[3]);
     if (plain_changed == 0)
         throw std::runtime_error(
             "speed check: the line from no player left the logo's square as it was"
+        );
+    // The line's text is hattfont12's glyphs in their own colours with the
+    // pen at the line's corner, as gadget text writes them; nothing else of
+    // the battlefield changes.
+    ensure_gui_font();
+    if (gui_font_.sequences.empty())
+        throw std::runtime_error("speed check: hattfont12.gaf did not load");
+    constexpr int reach = 16;
+    int text_width = 0;
+    for (const unsigned char byte : std::string_view(kChatText))
+        if (const auto* glyph = oa::present::gaf_frame(&gui_font_.sequences.front(), byte))
+            text_width += glyph->width;
+    const int patch_width = text_width + 2 * reach;
+    const int patch_height = 3 * reach;
+    oa::present::SurfaceBuffer passes[2]{
+        oa::present::create_surface(patch_width, patch_height),
+        oa::present::create_surface(patch_width, patch_height)
+    };
+    for (int pass = 0; pass < 2; ++pass) {
+        std::fill(passes[pass].pixels.begin(), passes[pass].pixels.end(), pass == 0 ? 0x00 : 0xff);
+        renderer::draw_gadget_text(
+            &passes[pass].surface,
+            &gui_font_,
+            kChatText,
+            reach,
+            reach,
+            renderer::gadget_text_unbounded,
+            0
+        );
+    }
+    const auto patch_glyph = [&](int32_t x, int32_t y) -> std::optional<uint8_t> {
+        const int column = x - plain.text_x + reach;
+        const int row = y - plain.text_y + reach;
+        if (column < 0 || row < 0 || column >= patch_width || row >= patch_height)
+            return std::nullopt;
+        const auto offset = static_cast<std::size_t>(row * patch_width + column);
+        if (passes[0].pixels[offset] != passes[1].pixels[offset])
+            return std::nullopt;
+        return passes[0].pixels[offset];
+    };
+    std::size_t glyph_pixels = 0, wrong = 0, stray = 0;
+    const int32_t band_top = oa::ui::hud::kMessageLogTop;
+    const int32_t band_bottom = plain.text_y + 2 * reach;
+    each_pixel(
+        oa::ui::hud::kMessageLogLeft, band_top, battlefield_right, band_bottom, [&](int x, int y) {
+            const int32_t source_x = oa::ui::hud::kMessageLogLeft + (x - log_corner.x) / scale;
+            const int32_t source_y = oa::ui::hud::kMessageLogTop + (y - log_corner.y) / scale;
+            if (const auto index = patch_glyph(source_x, source_y)) {
+                ++glyph_pixels;
+                wrong += rgb_at(plain_frame, x, y) != palette_rgb(*index) ? 1 : 0;
+            } else if (rgb_at(plain_frame, x, y) != rgb_at(empty, x, y)) {
+                ++stray;
+            }
+        }
+    );
+    if (glyph_pixels == 0 || wrong != 0 || stray != 0)
+        throw std::runtime_error(
+            "speed check: the line from no player is not hattfont12 at its pen (" +
+            std::to_string(wrong) + " of " + std::to_string(glyph_pixels) +
+            " glyph pixels differ, " + std::to_string(stray) + " other pixels changed)"
         );
     messages::clear_messages(game);
 

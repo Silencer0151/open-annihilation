@@ -121,6 +121,14 @@ void Runtime::check_engine_settings_wiring() {
                 frame_stats_notes().max_frames_per_second == kCheckFrameRate,
             "the maximum frame rate did not take effect"
         );
+        // The lowest, a frame a tick, reaches the loop as the others do.
+        chosen.max_frame_rate = settings::lowest_frame_rate;
+        apply_engine_settings(chosen);
+        require(
+            options_.max_frames_per_second == kLowestMaxFramesPerSecond &&
+                frame_stats_notes().max_frames_per_second == kLowestMaxFramesPerSecond,
+            "the lowest maximum frame rate did not take effect"
+        );
         options_.max_frames_per_second_given = true;
         options_.max_frames_per_second = kCommandLineFrameRate;
         chosen.max_frame_rate = settings::highest_frame_rate;

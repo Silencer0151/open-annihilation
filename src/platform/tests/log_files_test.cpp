@@ -4,6 +4,7 @@
 // The log folder's names, rolling and pruning, and the streams sent to it.
 
 #include "oa/platform/log_files.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -65,10 +66,7 @@ std::vector<std::string> names_in(const fs::path& folder) {
 }
 
 fs::path fresh_folder(const std::string& name) {
-    const auto folder = fs::temp_directory_path() / ("oa-log-files-test-" + name);
-    fs::remove_all(folder);
-    fs::create_directories(folder);
-    return folder;
+    return oa::test::make_scratch_directory("oa-log-files-test-" + name);
 }
 
 void test_names() {
@@ -204,7 +202,10 @@ void test_streams(int report) {
 #if defined(_WIN32)
         (void)_write(report, message.data(), static_cast<unsigned>(message.size()));
 #else
-        (void)write(report, message.data(), message.size());
+        // The messages go back to the report as they can; a short write
+        // loses nothing the test checks.
+        const auto written = write(report, message.data(), message.size());
+        static_cast<void>(written);
 #endif
     }
     messages.clear();

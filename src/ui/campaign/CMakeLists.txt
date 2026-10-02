@@ -3,6 +3,7 @@
 
 add_library(oa-ui-campaign briefing_text.cpp single_player.cpp campaign.cpp endgame.cpp screens.cpp)
 add_library(oa::ui::campaign ALIAS oa-ui-campaign)
+target_link_libraries(oa-ui-campaign PRIVATE oa-base-game-math)
 target_include_directories(oa-ui-campaign PUBLIC include)
 target_compile_features(oa-ui-campaign PUBLIC cxx_std_20)
 target_link_libraries(oa-ui-campaign PUBLIC oa-data-campaign oa-core-types

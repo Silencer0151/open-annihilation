@@ -297,9 +297,14 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     for (std::size_t i = 1; i < input.types.size(); ++i) {
         if (!input.loaded[i].model)
             continue;
-        const auto& bounds = type_bounds_[i] = formats::objects3d::derive_unit_type_bounds(
+        const auto derived = formats::objects3d::derive_unit_type_bounds(
             *input.loaded[i].model, input.types[i].footprint_x, input.types[i].footprint_z
         );
+        // Only a model whose links are broken has no height, and a loaded
+        // model never has: its type keeps the bounds it has.
+        if (!derived.ok())
+            continue;
+        const auto& bounds = type_bounds_[i] = *derived.value;
         auto& def = state_.unit_defs[i];
         def.bounds_min_x = bounds->bounds_min_x;
         def.bounds_min_y = bounds->bounds_min_y;
@@ -336,7 +341,11 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
         static_cast<uint32_t>(input.scenario_definitions->integer("waterdoesdamage", 0));
     state().environment_damage = input.scenario_definitions->integer("waterdamage", 0);
     state().game.gravity = sim::ballistics::simulation_gravity(false, 0, scenario_gravity_);
-    sim::weapon_execution::store_weapon_defs(input.weapons, state().game.weapon_defs);
+    std::copy(
+        input.weapons.records().begin(),
+        input.weapons.records().end(),
+        std::begin(state().game.weapon_defs)
+    );
     state().game.sea_level = terrain_.sea_level();
     // The map's cell counts and its size in world units.
     state().game.map_width = static_cast<int32_t>(input.map.attribute_width);

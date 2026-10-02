@@ -6,7 +6,6 @@
 #include <array>
 #include <bit>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::formats::sqsh {
 namespace {
@@ -127,7 +126,8 @@ class MatchTree {
 };
 } // namespace
 
-std::vector<uint8_t> encode_lz77(std::span<const uint8_t> input, std::size_t output_limit) {
+base::bytes::Decoded<std::vector<uint8_t>>
+encode_lz77(std::span<const uint8_t> input, std::size_t output_limit) {
     MatchTree tree;
     std::size_t cursor = 0;
     auto available = std::min(input.size(), maximum_match_bytes);
@@ -145,10 +145,18 @@ std::vector<uint8_t> encode_lz77(std::span<const uint8_t> input, std::size_t out
     unsigned next_bit = 1;
     uint8_t flags = 0;
     std::vector<uint8_t> output;
+    bool overflowed = false;
     const auto emit = [&](uint8_t byte) {
-        if (output.size() == output_limit)
-            throw std::runtime_error("LZ77 output limit exceeded");
+        if (output.size() == output_limit) {
+            overflowed = true;
+            return;
+        }
         output.push_back(byte);
+    };
+    const auto too_long = [&] {
+        return base::bytes::DecodeError{
+            base::bytes::DecodeCode::limit_exceeded, cursor, "LZ77 output limit exceeded"
+        };
     };
     const auto flush = [&](unsigned count) {
         emit(flags);
@@ -179,6 +187,8 @@ std::vector<uint8_t> encode_lz77(std::span<const uint8_t> input, std::size_t out
         next_bit <<= 1;
         if (next_bit == (1u << tokens_per_flag_byte)) {
             flush(tokens_per_flag_byte);
+            if (overflowed)
+                return too_long();
             flags = 0;
             next_bit = 1;
         }
@@ -200,6 +210,8 @@ std::vector<uint8_t> encode_lz77(std::span<const uint8_t> input, std::size_t out
     // The count starts at 1 before the mask bits are counted, so one literal
     // beyond the terminating match token is emitted.
     flush(1 + std::bit_width(next_bit));
+    if (overflowed)
+        return too_long();
     return output;
 }
 } // namespace oa::formats::sqsh

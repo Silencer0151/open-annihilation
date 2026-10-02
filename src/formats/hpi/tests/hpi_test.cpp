@@ -45,6 +45,18 @@ bool throws(Function&& function, std::string_view containing = {}) {
     return false;
 }
 
+/// Reports whether reading an archive entry fails with a message holding `containing`.
+///
+/// @param archive the archive
+/// @param path the entry
+/// @param containing text the error's message holds
+/// @return true when the read fails so
+bool read_fails(const oa::HpiArchive& archive, std::string_view path, std::string_view containing) {
+    const auto read = archive.read(path);
+    return !read.ok() && read.error.message != nullptr &&
+           std::string_view(read.error.message).find(containing) != std::string_view::npos;
+}
+
 Bytes text(std::string_view value) {
     return Bytes(value.begin(), value.end());
 }
@@ -130,7 +142,9 @@ void hpi_writer_round_trip() {
             check(entries.size() == files.size(), "round trip entry count");
             check(entries[1].path == "units/armcom.fbi", "directory merge keeps first spelling");
             for (const auto& file : files)
-                check(archive.read(file.path) == file.bytes, "round trip content " + file.path);
+                check(
+                    archive.read(file.path).value == file.bytes, "round trip content " + file.path
+                );
         }
     }
 }
@@ -175,7 +189,7 @@ void hpi_header_key_ff_disables_decryption() {
     auto bytes = archive_of({{"a", text("Q"), 0}});
     put32(bytes, 12, 0xFF);
     oa::HpiArchive archive(dir.write("ff.hpi", bytes));
-    check(archive.read("a") == text("Q"), "header key 0xFF leaves data plain");
+    check(archive.read("a").value == text("Q"), "header key 0xFF leaves data plain");
 }
 
 void hpi_lookup_last_duplicate_wins() {
@@ -184,7 +198,7 @@ void hpi_lookup_last_duplicate_wins() {
         dir.write("dup.hpi", archive_of({{"a.txt", text("one"), 0}, {"A.TXT", text("two"), 0}}))
     );
     check(archive.entries().size() == 2, "duplicates are retained");
-    check(archive.read("a.txt") == text("two"), "last duplicate in a directory wins");
+    check(archive.read("a.txt").value == text("two"), "last duplicate in a directory wins");
 }
 
 void hpi_intermediate_file_ends_lookup() {
@@ -220,8 +234,8 @@ void hpi_entry_flag_bit0_is_directory() {
     bytes[28 + 8] = 0x03;
     bytes[28 + 9 + 8] = 0x02;
     oa::HpiArchive archive(dir.write("flags.hpi", bytes));
-    check(archive.read("d/f") == text("inner"), "flag 0x03 is a directory");
-    check(archive.read("g") == text("file"), "flag 0x02 is a file");
+    check(archive.read("d/f").value == text("inner"), "flag 0x03 is a directory");
+    check(archive.read("g").value == text("file"), "flag 0x02 is a file");
 }
 
 void hpi_any_nonzero_compression_is_chunked() {
@@ -229,7 +243,7 @@ void hpi_any_nonzero_compression_is_chunked() {
     auto bytes = archive_of({{"a", text("chunked"), oa::formats::hpi::CompressionLZ77}});
     bytes[kSingleRecord + 8] = 0x07;
     oa::HpiArchive archive(dir.write("method.hpi", bytes));
-    check(archive.read("a") == text("chunked"), "compression byte 7 reads as chunked");
+    check(archive.read("a").value == text("chunked"), "compression byte 7 reads as chunked");
 }
 
 std::size_t first_chunk(const Bytes& bytes) {
@@ -242,14 +256,10 @@ void sqsh_stored_type_is_fatal() {
         archive_of({{"a", text("stored"), oa::formats::hpi::CompressionLZ77}}, {0, false, "1997"});
     bytes[first_chunk(bytes) + 5] = 0;
     oa::HpiArchive archive(dir.write("stored.hpi", bytes));
-    check(
-        throws([&] { (void)archive.read("a"); }, "SQUASHERR_BADUNPACKSIZE"), "stored chunk is fatal"
-    );
+    check(read_fails(archive, "a", "SQUASHERR_BADUNPACKSIZE"), "stored chunk is fatal");
     bytes[first_chunk(bytes) + 5] = 4;
     oa::HpiArchive typed(dir.write("type4.hpi", bytes));
-    check(
-        throws([&] { (void)typed.read("a"); }, "SQUASHERR_BADUNPACKTYPE"), "type 4 chunk is fatal"
-    );
+    check(read_fails(typed, "a", "SQUASHERR_BADUNPACKTYPE"), "type 4 chunk is fatal");
 }
 
 void sqsh_version_byte_ignored() {
@@ -257,7 +267,7 @@ void sqsh_version_byte_ignored() {
     auto bytes = archive_of({{"a", text("versioned"), oa::formats::hpi::CompressionZLib}});
     bytes[first_chunk(bytes) + 4] = 0x99;
     oa::HpiArchive archive(dir.write("version.hpi", bytes));
-    check(archive.read("a") == text("versioned"), "SQSH version byte is not checked");
+    check(archive.read("a").value == text("versioned"), "SQSH version byte is not checked");
 }
 
 void sqsh_zlib_error_keeps_expected_length() {
@@ -274,7 +284,10 @@ void sqsh_zlib_error_keeps_expected_length() {
         oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
     );
     oa::HpiArchive archive(dir.write("adler.hpi", bytes));
-    check(archive.read("a") == text("adler tail"), "bad adler32 still yields the expected length");
+    check(
+        archive.read("a").value == text("adler tail"),
+        "bad adler32 still yields the expected length"
+    );
     bytes[chunk + 19] ^= 0xFF;
     put32(
         bytes,
@@ -282,10 +295,10 @@ void sqsh_zlib_error_keeps_expected_length() {
         oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
     );
     oa::HpiArchive broken(dir.write("broken.hpi", bytes));
-    check(broken.read("a") == Bytes(10, 0), "undecodable zlib is accepted as a zero block");
+    check(broken.read("a").value == Bytes(10, 0), "undecodable zlib is accepted as a zero block");
     bytes[chunk + 15] ^= 1;
     oa::HpiArchive sum(dir.write("sum.hpi", bytes));
-    check(throws([&] { (void)sum.read("a"); }, "SQUASHERR_BADCHECKSUM"), "checksum is enforced");
+    check(read_fails(sum, "a", "SQUASHERR_BADCHECKSUM"), "checksum is enforced");
 }
 
 void sqsh_chunk_table_locates_blocks() {
@@ -302,7 +315,7 @@ void sqsh_chunk_table_locates_blocks() {
     );
     put32(bytes, table, first + static_cast<uint32_t>(padding.size()));
     oa::HpiArchive archive(dir.write("gap.hpi", bytes));
-    check(archive.read("a") == big, "blocks are located by summing the size table");
+    check(archive.read("a").value == big, "blocks are located by summing the size table");
 }
 
 void hpi_negative_directory_count_is_empty() {

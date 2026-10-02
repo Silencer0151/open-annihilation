@@ -32,13 +32,18 @@ constexpr uint32_t kUnitStringLimit = 0x400;
 constexpr uint32_t kPoolGranule = 0x400;
 constexpr int32_t kMaxSchemas = 64;
 
+// Copies at most capacity - 1 characters of text into out and fills the rest
+// of out with zero bytes, so out always ends in one.
 void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
     if (capacity == 0)
         return;
     if (text == nullptr)
         text = "";
-    std::strncpy(out, text, capacity - 1);
-    out[capacity - 1] = '\0';
+    std::size_t length = 0;
+    while (length + 1 < capacity && text[length] != '\0')
+        ++length;
+    std::memcpy(out, text, length);
+    std::memset(out + length, 0, capacity - length);
 }
 
 bool prefix_nocase(const char* text, const char* prefix, std::size_t length) noexcept {

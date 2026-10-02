@@ -10,7 +10,7 @@ add_library(oa-formats-smacker src/smacker.cpp src/decoder.cpp)
 add_library(oa::formats::smacker ALIAS oa-formats-smacker)
 target_include_directories(oa-formats-smacker PUBLIC include)
 target_compile_features(oa-formats-smacker PUBLIC cxx_std_20)
-target_link_libraries(oa-formats-smacker PUBLIC oa-options)
+target_link_libraries(oa-formats-smacker PUBLIC oa-options PRIVATE oa-base-bytes)
 
 # The bit-level stream builder and small movie the decoder's and the intro
 # player's tests share.
@@ -26,7 +26,7 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_BINARY_DIR}/smacker-decoder)
   add_executable(oa-intro-media-test tests/smacker_test.cpp)
   target_link_libraries(oa-intro-media-test PRIVATE oa-media-intro-player-null)
-  target_link_libraries(oa-intro-media-test PRIVATE oa-formats-smacker)
+  target_link_libraries(oa-intro-media-test PRIVATE oa-formats-smacker oa-test-support)
   add_test(NAME intro-media-smacker COMMAND oa-intro-media-test)
   # Inside the engine, which provides the game-data helper: the installed
   # game's five movies.

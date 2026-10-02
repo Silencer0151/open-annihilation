@@ -4,6 +4,7 @@
 file(GLOB oa_ui_hud_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 add_library(oa-ui-hud ${oa_ui_hud_sources})
 add_library(oa::ui::hud ALIAS oa-ui-hud)
+target_link_libraries(oa-ui-hud PRIVATE oa-base-game-math)
 target_include_directories(oa-ui-hud PUBLIC include)
 target_link_libraries(oa-ui-hud PUBLIC oa-core-types oa-data-unit-definitions oa-data-persist
   PRIVATE oa-data-defs oa-sim-feature-runtime oa-sim-messages oa-sim-unit-movement oa-ui-console

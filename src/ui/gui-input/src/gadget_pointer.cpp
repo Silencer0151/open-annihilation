@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "gadget_internal.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 
 namespace oa::ui::gui_input {
+using base::game_math::truncate_to_int64;
 using namespace detail;
 using ui::gui_layout::find_gadget;
 using ui::gui_layout::GadgetRect;

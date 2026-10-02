@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <exception>
 #include <span>
 
 namespace oa::data::persist {
@@ -83,14 +82,12 @@ SquashStatus squash_pack(
     // block describes whatever the output buffer already held.
     uint32_t packed = input_bytes;
     if (type == SquashType::lz77) {
-        try {
-            const auto encoded =
-                formats::sqsh::encode_lz77(std::span(input, input_bytes), payload_room);
-            std::memcpy(payload, encoded.data(), encoded.size());
-            packed = static_cast<uint32_t>(encoded.size());
-        } catch (const std::exception&) {
+        const auto encoded =
+            formats::sqsh::encode_lz77(std::span(input, input_bytes), payload_room);
+        if (!encoded.ok())
             return SquashStatus::output_too_small;
-        }
+        std::memcpy(payload, encoded.value->data(), encoded.value->size());
+        packed = static_cast<uint32_t>(encoded.value->size());
     } else if (type == SquashType::zlib) {
         uLongf length = payload_room;
         packed = compress2(payload, &length, input, input_bytes, Z_DEFAULT_COMPRESSION) == Z_OK
@@ -135,14 +132,11 @@ squash_unpack(uint8_t* out, std::size_t out_capacity, uint8_t* block, std::size_
         return SquashStatus::bad_unpack_size;
     std::size_t produced = 0;
     if (type == static_cast<uint8_t>(SquashType::lz77)) {
-        try {
-            const auto decoded =
-                formats::sqsh::decode_lz77(std::span(payload, packed), out_capacity);
-            std::memcpy(out, decoded.data(), decoded.size());
-            produced = decoded.size();
-        } catch (const std::exception&) {
+        const auto decoded = formats::sqsh::decode_lz77(std::span(payload, packed), out_capacity);
+        if (!decoded.ok())
             return SquashStatus::bad_unpack_size;
-        }
+        std::memcpy(out, decoded.value->data(), decoded.value->size());
+        produced = decoded.value->size();
     } else if (type == static_cast<uint8_t>(SquashType::zlib)) {
         // The zlib result code is ignored; only the produced length is checked.
         uLongf length = unpacked;

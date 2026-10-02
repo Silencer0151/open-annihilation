@@ -83,7 +83,9 @@
 //   error as a simulation error and runs the match on: simulation_step,
 //   player_gone and message_hooks. A --benchmark run instead prints
 //   "benchmark tick stopped: <message>" and ticks that match no further.
-// A hook reached on such a path says so.
+// A hook reached on such a path says so. speed_changed and app_mode_set
+// must not throw. docs/development/conventions.md states this rule for the
+// extension table beside the rules of each layer.
 #pragma once
 
 #include <cstddef>

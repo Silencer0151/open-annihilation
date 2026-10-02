@@ -14,7 +14,8 @@ behaviour deliberately.
 
 `maximum_height_fixed` computes `UnitDef.model_height` when a unit type
 loads. It walks sibling and child links, takes vertex Y plus piece Y offsets,
-and keeps the game's recursive zero clamps and signed 32-bit arithmetic. Code
+and keeps the game's zero clamp at each child level and its signed 32-bit
+arithmetic. Code
 that reads the height's high 16 bits reads this same value; they are not a
 separate FBI or model property.
 
@@ -37,6 +38,10 @@ Width and height are `max - (min - 2) + 2`; origins are `-(min - 2)`.
 Width, height and origins are full int32 values; the game keeps the low 16
 bits of each as the shadow bitmap's size and origin.
 
+A model holds at most 65,536 objects. The loader and the height walk follow
+sibling and child links with explicit stacks rather than recursion, so a
+long sibling list or a deep child chain cannot exhaust the call stack.
+
 The 52-byte object, 32-byte primitive, unsigned 16-bit vertex indices, Y-up
 axis, 16.16 units and source visibility rule match the published 3DO format
 descriptions.
@@ -45,7 +50,8 @@ descriptions.
 
 The synthetic unit test covers hierarchy, unsigned indices, exact fixed-point
 conversion, preserved primitive words, selection identity, truncation, invalid
-indices, unterminated strings and cyclic object links.
+indices, unterminated strings, cyclic and shared object links, and sibling
+lists and child chains of 65,536 objects, the limit, and of one more.
 
 The corpus tools read all 608 3DO files of a Total Annihilation 3.1c install
 (3,014 objects, 92,086 vertices, 50,443 primitives) and agree with an

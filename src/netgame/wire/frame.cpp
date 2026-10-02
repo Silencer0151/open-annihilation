@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/frame.hpp"
+#include "oa/base/game_loop.hpp"
 #include <cstdint>
 #include <cstring>
 
@@ -191,7 +192,9 @@ WireError send_channel_queue(
 bool send_channel_flush(
     SendChannel* ch, uint32_t now_tick, bool force, const FrameSink& sink
 ) noexcept {
-    if (now_tick < ch->next_send_tick && !force)
+    // The clock turns over to 0 about every 39.8 hours: a reading that has
+    // turned over since the next send tick was set lies after it.
+    if (!force && base::game_loop::scaled_clock_before(now_tick, ch->next_send_tick))
         return false;
     ch->next_send_tick = now_tick + ch->ticks_between_sends;
     auto remaining = ch->queue_count;

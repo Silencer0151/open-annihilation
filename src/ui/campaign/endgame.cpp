@@ -4,6 +4,7 @@
 // End-of-game screen: score table, outcome background, palette fade and the
 // ENDMSN.GUI button set.
 #include "oa/ui/campaign/endgame.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/frontend_state/dispatcher.hpp"
@@ -16,6 +17,8 @@
 #include <string_view>
 
 namespace oa::ui::campaign {
+using base::game_math::truncate_low32;
+
 namespace {
 
 constexpr uint16_t kOutcomeVictory = 0x10; // Game.outcome_flags
@@ -38,13 +41,6 @@ constexpr int32_t kGlamourSoundVolume = 0; // mixer attenuation
 // housing of the Outcome0 background. ENDMSN.GUI's own y, 395, fits the
 // MainMenu slot of Outcome1, the background of a continuing campaign.
 constexpr int16_t finished_main_menu_y = 416;
-
-// Truncation toward zero through 64 bits; NaN and out-of-range values give 0.
-int32_t truncate(double value) {
-    if (!(value >= -9.2233720368547758e18 && value < 9.2233720368547758e18))
-        return 0;
-    return static_cast<int32_t>(static_cast<int64_t>(value));
-}
 
 bool named(const char* control, const char* name) {
     return control != nullptr && std::strcmp(control, name) == 0;
@@ -85,14 +81,14 @@ void build_score_summary(World& world, const oa::data::campaign::CampaignFile* c
         entry.name[kScoreNameBytes - 1] = '\0';
         entry.values[score_kills] = player.kills;
         entry.values[score_losses] = player.losses;
-        entry.values[score_energy_produced] = truncate(player.energy_produced_total);
-        entry.values[score_metal_produced] = truncate(player.metal_produced_total);
-        entry.values[score_energy_wasted] = truncate(player.energy_wasted_total);
-        entry.values[score_metal_wasted] = truncate(player.metal_wasted_total);
+        entry.values[score_energy_produced] = truncate_low32(player.energy_produced_total);
+        entry.values[score_metal_produced] = truncate_low32(player.metal_produced_total);
+        entry.values[score_energy_wasted] = truncate_low32(player.energy_wasted_total);
+        entry.values[score_metal_wasted] = truncate_low32(player.metal_wasted_total);
         const auto steps = static_cast<double>(game.tick / kTicksPerScoreStep);
         const auto score = static_cast<int32_t>(
-            static_cast<uint32_t>(truncate(steps * static_cast<double>(time_multiplier))) +
-            static_cast<uint32_t>(truncate(
+            static_cast<uint32_t>(truncate_low32(steps * static_cast<double>(time_multiplier))) +
+            static_cast<uint32_t>(truncate_low32(
                 static_cast<double>(entry.values[score_kills]) *
                 static_cast<double>(kill_multiplier)
             ))
@@ -152,7 +148,7 @@ void advance_score_bars(ScoreLayout* layout, uint32_t tick) {
                 continue;
             if (static_cast<int32_t>(bar.deadline) >= static_cast<int32_t>(tick))
                 continue;
-            bar.current += truncate(static_cast<double>(bar.rate));
+            bar.current += truncate_low32(static_cast<double>(bar.rate));
             if (bar.value < bar.current) {
                 bar.running = false;
                 bar.current = bar.value;
@@ -183,7 +179,8 @@ void draw_score_bar(
     out->inner_bottom = out->bottom - kBarInset;
     const double fraction = static_cast<double>(bar.current) / static_cast<double>(bar.maximum);
     out->fill_right =
-        truncate(fraction * static_cast<double>(kScoreBarWidth - 2 * kBarInset)) + out->inner_left;
+        truncate_low32(fraction * static_cast<double>(kScoreBarWidth - 2 * kBarInset)) +
+        out->inner_left;
     std::snprintf(out->label, sizeof(out->label), "%d", bar.current);
     const auto width = static_cast<int32_t>(oa::formats::fnt::measure_text(font, out->label));
     const int32_t line = oa::formats::fnt::line_height(font);

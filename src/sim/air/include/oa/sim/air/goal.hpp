@@ -53,7 +53,7 @@ inline constexpr double seek_arrival_distance = 48.0;
 // step, heading and flags.
 struct AirGoal {
     AirGoalKind kind{};
-    uint32_t* order_events{}; // owning order's raised event bits (AirOrder.events)
+    uint32_t* order_events{}; // owning order's raised event bits (Order.raised_events)
     uint16_t flags{};         // goal_* bits, or seek_* bits for a seek goal
     int16_t arrival_radius{}; // world units
     int16_t altitude{};       // world units

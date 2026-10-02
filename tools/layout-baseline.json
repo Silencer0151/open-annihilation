@@ -5,11 +5,6 @@
       "from": "oa-data-persist",
       "to": "oa-sim-world-environment",
       "reason": "the savegame writes the weather and sea records through the environment module"
-    },
-    {
-      "from": "oa-present-model",
-      "to": "oa-ui-hud",
-      "reason": "the model renderer places sprites with the HUD's sprite placement"
     }
   ]
 }

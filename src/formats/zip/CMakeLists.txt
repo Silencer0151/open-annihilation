@@ -6,7 +6,7 @@
 add_library(oa-formats-zip src/common.cpp src/read.cpp src/write.cpp)
 add_library(oa::formats::zip ALIAS oa-formats-zip)
 target_include_directories(oa-formats-zip PUBLIC include)
-target_link_libraries(oa-formats-zip PRIVATE ZLIB::ZLIB oa-options)
+target_link_libraries(oa-formats-zip PRIVATE oa-base-bytes ZLIB::ZLIB oa-options)
 target_compile_features(oa-formats-zip PUBLIC cxx_std_20)
 if(BUILD_TESTING)
   add_executable(oa-formats-zip-test tests/zip_test.cpp)

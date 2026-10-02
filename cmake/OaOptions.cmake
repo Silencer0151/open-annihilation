@@ -10,9 +10,22 @@ include_guard(GLOBAL)
 if(NOT TARGET oa-options)
   add_library(oa-options INTERFACE)
   if(MSVC)
-    target_compile_options(oa-options INTERFACE /W4 /permissive-)
+    # No warning that a type was padded to the alignment alignas asks for,
+    # which is what alignas is for.
+    target_compile_options(oa-options INTERFACE /W4 /permissive- /wd4324)
   else()
     target_compile_options(oa-options INTERFACE -Wall -Wextra -Wpedantic)
+  endif()
+  # OA_WARNINGS_AS_ERRORS turns every warning those options raise into an
+  # error, in the targets that link oa-options; SDL and the third-party
+  # sources keep their own warnings. CI turns it on for Clang and GCC.
+  option(OA_WARNINGS_AS_ERRORS "Fail the build on any compiler warning in engine code" OFF)
+  if(OA_WARNINGS_AS_ERRORS)
+    if(MSVC)
+      target_compile_options(oa-options INTERFACE /WX)
+    else()
+      target_compile_options(oa-options INTERFACE -Werror)
+    endif()
   endif()
   # Each basic floating-point operation is rounded as written: never fused
   # into a multiply-add, which GCC and Clang do by default wherever the CPU

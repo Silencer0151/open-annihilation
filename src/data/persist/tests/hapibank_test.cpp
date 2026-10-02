@@ -4,6 +4,7 @@
 #include "check.hpp"
 
 #include "oa/data/persist/hapibank.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -316,7 +317,7 @@ void audit_text() {
 }
 
 void file_round_trip() {
-    const auto dir = std::filesystem::temp_directory_path() / "oa-persist-test";
+    const auto dir = oa::test::make_scratch_directory("oa-persist-test");
     std::filesystem::create_directories(dir);
     const auto path = (dir / "game.sav").string();
     ScopedBank b;

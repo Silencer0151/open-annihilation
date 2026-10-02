@@ -44,6 +44,8 @@ std::string error_log_folder;
     (void)oa::platform::append_error_log(
         error_log_folder.c_str(), oa::platform::out_of_memory_message
     );
+    // The box needs the pointer, which full screen keeps on the window.
+    release_pointer(SDL_GetGrabbedWindow());
     (void)SDL_ShowSimpleMessageBox(
         SDL_MESSAGEBOX_ERROR, "Open Annihilation", oa::platform::out_of_memory_message, nullptr
     );
@@ -131,6 +133,7 @@ struct HostDisplay {
     }
 
     ~HostDisplay() {
+        release_pointer(window);
         if (renderer != nullptr)
             SDL_DestroyRenderer(renderer);
         if (window != nullptr)
@@ -194,11 +197,16 @@ void play_intro(const Options& options, HostDisplay* host) {
 }
 
 // Sends the game's standard output and standard error to the logs folder in
-// the per-user folder. Without a per-user folder they stay where they were.
+// the per-user folder. Without a per-user folder, or when the log cannot be
+// opened, they stay where they were, and standard error says why.
 void start_log() {
     try {
-        (void)oa::platform::log_files::begin(oa::platform::preferences::data_directory() / "logs");
-    } catch (const std::exception&) {
+        const auto folder = oa::platform::preferences::data_directory() / "logs";
+        if (!oa::platform::log_files::begin(folder))
+            std::cerr << "open-annihilation: cannot open a log in " << folder.string()
+                      << "; the output stays here\n";
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: no log: " << error.what() << '\n';
     }
 }
 

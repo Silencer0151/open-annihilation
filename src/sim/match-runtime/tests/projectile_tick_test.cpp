@@ -554,7 +554,9 @@ void direct_hit_does_not_chain(sim::match_runtime::Match& match, sim::unit_spawn
     // interceptor chain belongs to the area blast, so a shot beside it flies on.
     CHECK(match.spatial().plots[plot(4, 3)].ground == antinuke.unit_index);
     const auto health = antinuke.record.health;
-    const auto& bystander = launch(match, laser_weapon, {fx(60), fx(40), fx(60)}, {0, fx(1), 0}, 1);
+    const FixedVec3 bystander_from{fx(60), fx(40), fx(60)};
+    const FixedVec3 bystander_velocity{0, fx(1), 0};
+    const auto& bystander = launch(match, laser_weapon, bystander_from, bystander_velocity, 1);
     launch(match, probe_weapon, {fx(62), fx(31), fx(60)}, {fx(4), -fx(2), 0}, 1);
     const auto before = explosions_logged(match);
     ++match.state().game.tick;
@@ -817,10 +819,8 @@ int main() {
         fields[i].runtime_metadata = &metadata;
         fields[i].target_masks = &target_masks;
     }
-    const auto parsed = data::unit_definitions::parse_tdf(weapon_tdf);
-    CHECK(parsed);
     sim::combat_state::WeaponRegistry weapons;
-    CHECK(sim::combat_state::install_weapon_tdf(weapons, parsed.value) == 8);
+    CHECK(sim::combat_state::install_weapon_text(weapons, weapon_tdf) == 8);
     CHECK(weapons.find("AMD_ROCKET")->coverage == 2000);
     const auto collision_plots = terrain_plots();
     // Sprite rocks keep their damage in the plot's record word.

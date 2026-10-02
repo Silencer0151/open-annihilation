@@ -4,6 +4,7 @@
 // Runtime glue for the campaign package: binds the campaign object, the
 // NEWGAME lists and the MSNBRIEF panel to the frontend runtime.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/app/asset_files.hpp"
 
 #include "oa/sim/ai.hpp"
@@ -211,8 +212,11 @@ std::optional<oa::formats::fnt::Font> load_panel_font(
         if (file == nullptr || file->filename.empty())
             return std::nullopt;
         try {
-            return oa::formats::fnt::load_named_fnt(
-                assets, file->filename, language != nullptr ? language : ""
+            return oa::ui::decoded::require(
+                oa::formats::fnt::load_named_fnt(
+                    assets, file->filename, language != nullptr ? language : ""
+                ),
+                file->filename
             );
         } catch (const std::exception& error) {
             std::cerr << "briefing font " << file->filename << ": " << error.what() << '\n';
@@ -659,26 +663,9 @@ void Runtime::campaign_session_rules(int32_t (&record)[4]) {
     missions::campaign_session_record(&campaign_runtime().file, record);
 }
 
-void Runtime::restrict_campaign_catalog(oa::data::unit_definitions::UnitCatalog& catalog) {
+void Runtime::mark_campaign_units(oa::UnitDef* headers, uint32_t count) {
     auto& state = campaign_runtime();
-    const auto count = catalog.entries.size() + 1U;
-    std::vector<oa::UnitDef> headers(count);
-    headers[0].flags = OA_UNIT_DEF_FLAG_AVAILABLE;
-    for (std::size_t index = 0; index < catalog.entries.size(); ++index) {
-        auto& header = headers[index + 1U];
-        std::snprintf(
-            header.unit_name,
-            sizeof header.unit_name,
-            "%s",
-            catalog.entries[index].definition.unit_name.c_str()
-        );
-        header.flags = OA_UNIT_DEF_FLAG_AVAILABLE;
-    }
-    if (!campaign::load_unit_availability(
-            headers.data(), static_cast<uint32_t>(count), &state.file, &state.files
-        ))
-        return;
-    keep_available_units(catalog, headers);
+    (void)campaign::load_unit_availability(headers, count, &state.file, &state.files);
 }
 
 void Runtime::load_mission_features(
@@ -790,8 +777,10 @@ void Runtime::configure_computer_players() {
 }
 
 void Runtime::reload_computer_profiles() {
-    if (match_)
-        (void)oa::sim::ai::reload_match_computer_profiles(*match_, read_computer_profile());
+    if (!match_ || oa::sim::ai::reload_match_computer_profiles(*match_, read_computer_profile()))
+        return;
+    status_ = "ReloadAIProfiles: cannot store the computer players' profile";
+    std::cerr << "open-annihilation: " << status_ << '\n';
 }
 
 void Runtime::place_campaign_camera() {
@@ -1020,7 +1009,9 @@ void Runtime::show_mission_briefing() {
                         };
                     resources_.sprites.sequences.push_back(std::move(sequence));
                 }
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
+            // The briefing then shows no planet.
+            std::cerr << "briefing planet art " << art.gaf << ": " << error.what() << '\n';
         }
         files.release(files.context, planet_gaf);
     }

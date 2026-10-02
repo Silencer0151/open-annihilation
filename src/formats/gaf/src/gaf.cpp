@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/formats/gaf.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -33,60 +34,25 @@ constexpr std::size_t row_length_bytes = sizeof(uint16_t);
     return offset_value <= size && count <= size - offset_value;
 }
 
-[[nodiscard]] uint16_t le16(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    return static_cast<uint16_t>(bytes[at]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(bytes[at + 1]) << 8U);
+using base::bytes::ByteReader;
+using base::bytes::load_le16;
+using base::bytes::load_le32;
+
+/// Returns a reader whose cursor is at `at`; the caller has checked that the
+/// record there fits.
+///
+/// @param bytes the whole file
+/// @param at file offset of the record
+/// @return the reader
+[[nodiscard]] ByteReader reader_at(std::span<const uint8_t> bytes, std::size_t at) noexcept {
+    ByteReader reader(bytes);
+    reader.seek(at);
+    return reader;
 }
-
-[[nodiscard]] uint32_t le32(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    return static_cast<uint32_t>(bytes[at]) | (static_cast<uint32_t>(bytes[at + 1]) << 8U) |
-           (static_cast<uint32_t>(bytes[at + 2]) << 16U) |
-           (static_cast<uint32_t>(bytes[at + 3]) << 24U);
-}
-
-[[nodiscard]] int16_t signed16(uint16_t value) noexcept {
-    return std::bit_cast<int16_t>(value);
-}
-
-class ByteCursor {
-  public:
-
-    ByteCursor(std::span<const uint8_t> bytes, std::size_t at) noexcept : bytes_(bytes), at_(at) {}
-
-    [[nodiscard]] uint8_t u8() noexcept { return bytes_[at_++]; }
-
-    [[nodiscard]] uint16_t u16() noexcept {
-        const auto value = le16(bytes_, at_);
-        at_ += sizeof(uint16_t);
-        return value;
-    }
-
-    [[nodiscard]] uint32_t u32() noexcept {
-        const auto value = le32(bytes_, at_);
-        at_ += sizeof(uint32_t);
-        return value;
-    }
-
-    [[nodiscard]] int16_t i16() noexcept { return signed16(u16()); }
-
-    void copy(std::span<uint8_t> out) noexcept {
-        std::copy_n(
-            bytes_.begin() + static_cast<std::ptrdiff_t>(at_),
-            static_cast<std::ptrdiff_t>(out.size()),
-            out.begin()
-        );
-        at_ += out.size();
-    }
-
-  private:
-
-    std::span<const uint8_t> bytes_;
-    std::size_t at_ = 0;
-};
 
 /// Decodes the file header; the caller has checked that it fits.
 [[nodiscard]] on_disk::Header read_header(std::span<const uint8_t> bytes) noexcept {
-    ByteCursor cursor(bytes, 0);
+    auto cursor = reader_at(bytes, 0);
     on_disk::Header header;
     header.version = cursor.u32();
     header.sequence_count = cursor.u32();
@@ -97,18 +63,19 @@ class ByteCursor {
 /// Decodes the sequence header at `at`; the caller has checked that it fits.
 [[nodiscard]] on_disk::SequenceHeader
 read_sequence_header(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    ByteCursor cursor(bytes, at);
+    auto cursor = reader_at(bytes, at);
     on_disk::SequenceHeader header;
     header.frame_count = cursor.u16();
     header.repeat_flags = cursor.u16();
     header.reserved = cursor.u32();
-    cursor.copy(header.name);
+    const auto name = cursor.bytes(header.name.size());
+    std::copy(name.begin(), name.end(), header.name.begin());
     return header;
 }
 
 [[nodiscard]] on_disk::FrameListItem
 read_frame_list_item(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    ByteCursor cursor(bytes, at);
+    auto cursor = reader_at(bytes, at);
     on_disk::FrameListItem item;
     item.frame_offset = cursor.u32();
     item.duration = cursor.u32();
@@ -118,7 +85,7 @@ read_frame_list_item(std::span<const uint8_t> bytes, std::size_t at) noexcept {
 /// Decodes the frame record at `at`; the caller has checked that it fits.
 [[nodiscard]] on_disk::FrameInfo
 read_frame_info(std::span<const uint8_t> bytes, std::size_t at) noexcept {
-    ByteCursor cursor(bytes, at);
+    auto cursor = reader_at(bytes, at);
     on_disk::FrameInfo info;
     info.width = cursor.u16();
     info.height = cursor.u16();
@@ -199,7 +166,8 @@ class Parser {
         const auto header = read_header(bytes_);
         archive.version = header.version;
         archive.raw_sequence_count = header.sequence_count;
-        archive.header_sequence_count = signed16(static_cast<uint16_t>(archive.raw_sequence_count));
+        archive.header_sequence_count =
+            std::bit_cast<int16_t>(static_cast<uint16_t>(archive.raw_sequence_count));
         archive.reserved = header.reserved;
 
         // The count is the header word's low 16 bits, signed; zero or less loads none.
@@ -221,7 +189,9 @@ class Parser {
 
     /// Returns the offset the sequence pointer table holds for sequence `index`.
     [[nodiscard]] std::size_t sequence_offset(std::size_t index) const noexcept {
-        return static_cast<std::size_t>(le32(bytes_, layout::header_bytes + index * pointer_bytes));
+        return static_cast<std::size_t>(
+            load_le32(bytes_.data() + layout::header_bytes + index * pointer_bytes)
+        );
     }
 
     [[nodiscard]] bool set_error(ErrorCode code, std::size_t at, std::string message) {
@@ -323,8 +293,9 @@ class Parser {
             output.layers.reserve(layer_count);
             for (std::size_t index = 0; index < layer_count; ++index) {
                 Frame layer;
-                const auto layer_at =
-                    static_cast<std::size_t>(le32(bytes_, data_at + index * pointer_bytes));
+                const auto layer_at = static_cast<std::size_t>(
+                    load_le32(bytes_.data() + data_at + index * pointer_bytes)
+                );
                 if (!parse_frame(layer_at, 0, depth + 1, layer))
                     return false;
                 output.layers.push_back(std::move(layer));
@@ -375,7 +346,7 @@ class Parser {
                 return set_error(
                     ErrorCode::truncated, row_at, "truncated compressed GAF row length"
                 );
-            const auto encoded_bytes = static_cast<std::size_t>(le16(bytes_, row_at));
+            const auto encoded_bytes = static_cast<std::size_t>(load_le16(bytes_.data() + row_at));
             row_at += row_length_bytes;
             if (!fits(row_at, encoded_bytes, bytes_.size()))
                 return set_error(ErrorCode::truncated, row_at, "truncated compressed GAF row data");

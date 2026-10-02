@@ -37,10 +37,16 @@ int list(const char* path) {
     for (const auto& entry : archive.entries()) {
         const auto node = archive.lookup(entry.path);
         std::cout << entry.path << '\t' << entry.size << '\t';
-        if (node && archive.nodes()[*node].size == entry.size)
-            std::cout << std::hex << fnv(archive.read_node(*node)) << std::dec;
+        const auto bytes =
+            node && archive.nodes()[*node].size == entry.size
+                ? archive.read_node(*node)
+                : oa::base::bytes::Decoded<std::vector<uint8_t>>(oa::base::bytes::DecodeError{
+                      oa::base::bytes::DecodeCode::not_found, 0, "unreachable"
+                  });
+        if (bytes.ok())
+            std::cout << std::hex << fnv(*bytes.value) << std::dec;
         else
-            std::cout << "unreachable";
+            std::cout << bytes.error.message;
         std::cout << '\n';
     }
     return 0;

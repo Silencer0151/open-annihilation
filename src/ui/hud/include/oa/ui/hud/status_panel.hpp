@@ -3,11 +3,12 @@
 
 // Space-bar status strip: LIGHTBAR frame 1 of COMMONGUI.GAF slides up over
 // the bottom of the game view with the game time, the local player's unit
-// count and the game speed.
+// count and the game speed, written in the GUI's second font (hattfont11.gaf).
 #pragma once
 
 #include "oa/core/game_state.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace oa::ui::hud {
@@ -49,6 +50,20 @@ bool status_panel_step(Game& game, uint32_t& next_step_ms, uint32_t now_ms, bool
 
 // UI text lookup; a null lookup or a null result leaves the text as written.
 using TranslateText = const char* (*)(void* context, const char* text);
+
+/// Formats "Game Time : hh:mm:ss" from the 30 Hz Game.tick.
+///
+/// The strip and the console's clock show the time this way; the label goes
+/// through `translate`.
+///
+/// @param game Game block holding the tick.
+/// @param translate UI text lookup; may be null.
+/// @param context Context passed to `translate`.
+/// @param[out] out Buffer the line is written to, cut to fit.
+/// @param bytes Size of `out`.
+void format_game_time(
+    const Game& game, TranslateText translate, void* context, char* out, std::size_t bytes
+) noexcept;
 
 struct StatusPanelText {
     char time[256]{};

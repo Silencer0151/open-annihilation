@@ -11,6 +11,7 @@
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -302,9 +303,14 @@ bool load_types(ComputerPlayers* state, Match& match) noexcept {
             used += category.size();
         }
         type.categories[used] = '\0';
-        if (const auto found = source->unknown_fields.find("ai_weight");
-            found != source->unknown_fields.end())
-            copy_text(type.ai_directives, sizeof type.ai_directives, found->second);
+        // The FBI's ai_weight, which the unit header holds.
+        const auto* weight_end =
+            std::find(std::begin(def.ai_weight), std::end(def.ai_weight), '\0');
+        copy_text(
+            type.ai_directives,
+            sizeof type.ai_directives,
+            std::string_view(def.ai_weight, static_cast<std::size_t>(weight_end - def.ai_weight))
+        );
         type.makes_metal = source->makes_metal;
         type.min_water_depth = source->min_water_depth;
         type.extracts_metal = source->extracts_metal;

@@ -19,6 +19,14 @@ bool draws_health_bar(const World& world, const Unit& unit) noexcept {
     return (world.game.graphics_flags & kGraphicsDamageBars) != 0 && viewpoint_owns(world, unit);
 }
 
+bool draws_squad_digit(const World& world, const Unit& unit) noexcept {
+    return unit.squad != 0 && draws_health_bar(world, unit);
+}
+
+char squad_digit(const Unit& unit) noexcept {
+    return static_cast<char>(static_cast<uint8_t>('0' + static_cast<uint8_t>(unit.squad)));
+}
+
 bool panel_shows_damage(const World& world, const Unit& unit, const UnitDef& def) noexcept {
     return viewpoint_owns(world, unit) || (def.flags & OA_UNIT_DEF_FLAG_HIDE_DAMAGE) == 0;
 }

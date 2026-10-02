@@ -558,9 +558,11 @@ struct NetHost {
     }
 
     // One loading-screen frame, at most every 200 ms as the loading screen
-    // paces it; true once the start positions are final. Each frame that
-    // runs also reports the local players' load progress from the rows the
-    // engine last reported.
+    // paces it; true once the start positions are final and the other
+    // machines have had time to pass their own barriers, so the commanders
+    // can be placed (nm::commander_wait_frames). Each frame before the
+    // barrier passes also reports the local players' load progress from the
+    // rows the engine last reported.
     static bool loading_frame(Runtime& runtime) {
         auto& state = *runtime.net_;
         const bool ready = nm::net_match_paced_loading_frame(
@@ -572,6 +574,10 @@ struct NetHost {
 
     /// Places the local commanders once the load barrier passed, announces them and enters the
     /// match.
+    ///
+    /// It runs nm::commander_wait_frames loading frames after the barrier
+    /// passed, so the other machines take the commanders' 0x09 and their
+    /// copies stand on the start positions from it.
     ///
     /// Every slot simulated here (local or computer) that plays gets its
     /// commander on the start position the barrier assigned, with the host's
@@ -892,7 +898,7 @@ struct NetHost {
         };
 
         // The computer player builds its base. Its commander stands on the
-        // joiner from its first full record on.
+        // joiner from its 0x09 on.
         for (std::size_t tick = 0; tick < build_ticks; ++tick)
             play_tick();
         settle("the joiner does not hold the computer player's base");
@@ -1785,12 +1791,13 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     std::vector<UnitPose> host_poses;
     uint32_t copy_compared = 0;
     uint32_t copy_divergence = 0;
-    // The host's 0x09 for its commander goes out as its loading ends, while
-    // the joiner may still be on its loading screen, which refuses it as
-    // 3.1c's does; the joiner's copy then stands nowhere until the
-    // commander's first full record sets it on the host's path. The copy is
-    // compared from then on.
+    // The host's 0x09 for its commander goes out two loading frames after
+    // its barrier passed, once the joiner has passed its own and takes it:
+    // the joiner's copy stands on the host's start position from that 0x09,
+    // so it is on the host's path from the first unit state record it
+    // applies. The copy is compared from then on.
     uint32_t copy_placed_tick = 0;
+    uint32_t first_applied_tick = 0; // host tick of the first record the client applied
     const auto note_host_pose = [&] {
         const auto tick = host_world.game.tick;
         if (host_poses.size() <= tick)
@@ -1799,8 +1806,11 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     };
     const auto compare_copy = [&] {
         const auto tick = client_world.game.players[client_host_slot].last_sim_tick;
-        if (tick <= 0 || static_cast<std::size_t>(tick) >= host_poses.size() ||
-            joiner.match_->ground_runtime(host_commander) == nullptr)
+        if (tick <= 0 || static_cast<std::size_t>(tick) >= host_poses.size())
+            return;
+        if (first_applied_tick == 0)
+            first_applied_tick = static_cast<uint32_t>(tick);
+        if (joiner.match_->ground_runtime(host_commander) == nullptr)
             return;
         const auto& owner = host_poses[static_cast<std::size_t>(tick)];
         const auto divergence = pose_divergence(owner, NetHost::unit_pose(joiner, host_commander));
@@ -2117,8 +2127,8 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
               << client_shots.count << "\n";
     require(agreed, "world digests differ after settling");
     require(
-        copy_placed_tick != 0 && copy_placed_tick <= host_world.game.units_per_player + 1u,
-        "the client's copy of the host commander was not placed by its first full record"
+        copy_placed_tick != 0 && copy_placed_tick == first_applied_tick,
+        "the client's copy of the host commander did not stand on its start position from its 0x09"
     );
     require(
         copy_compared > ticks / 2 && copy_divergence == 0,

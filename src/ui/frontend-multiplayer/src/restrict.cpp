@@ -269,9 +269,9 @@ void restrict_free_pictures(Lobby& lobby, RestrictPanel& restrict) noexcept {
 }
 
 void restrict_tick(Lobby& lobby, RestrictPanel& restrict, Panel& panel) noexcept {
-    const auto tick = static_cast<int32_t>(now(lobby));
-    if (restrict.anim_tick < tick) {
-        restrict.anim_tick = tick + static_cast<int32_t>(kPictureInterval);
+    const auto tick = now(lobby);
+    if (lobby_clock_passed(tick, restrict.anim_tick)) {
+        restrict.anim_tick = tick + kPictureInterval;
         restrict_load_next_picture(lobby, restrict, panel);
     }
     UnitSyncRecord record{};

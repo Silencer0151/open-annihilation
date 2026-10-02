@@ -77,6 +77,26 @@ parse_frame_rate(std::string_view text, uint32_t least, bool zero_allowed, const
     return value;
 }
 
+/// The latest millisecond a --frame-rate run's clock may start at: about 31
+/// years, which leaves the run's nanoseconds far inside 64 bits.
+constexpr uint64_t kLatestFrameClockMs = 1'000'000'000'000;
+
+/// Returns the millisecond a --frame-clock value names.
+///
+/// Throws std::runtime_error unless the whole text is a decimal integer from
+/// 0 through kLatestFrameClockMs.
+///
+/// @param text the option's value
+/// @return milliseconds into the steady clock
+[[nodiscard]] uint64_t parse_frame_clock(std::string_view text) {
+    uint64_t value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+        value > kLatestFrameClockMs)
+        throw std::runtime_error("--frame-clock expects milliseconds from 0 through 1000000000000");
+    return value;
+}
+
 /// Returns the drawing threads a --draw-threads or OA_DRAW_THREADS value names.
 ///
 /// Throws std::runtime_error naming `source` unless the whole text is a
@@ -262,7 +282,7 @@ void check_director_options(Options& options) {
                 value(argument),
                 kLowestMaxFramesPerSecond,
                 true,
-                "--max-fps expects 0 for no limit, or frames a second from 40 through 1000"
+                "--max-fps expects 0 for no limit, or frames a second from 30 through 1000"
             );
             result.max_frames_per_second_given = true;
         } else if (argument == "--frame-rate")
@@ -280,6 +300,8 @@ void check_director_options(Options& options) {
             result.march = true;
         else if (argument == "--follow")
             result.follow = true;
+        else if (argument == "--frame-clock")
+            result.frame_clock_ms = parse_frame_clock(value(argument));
         else if (argument == "--campaign")
             result.campaign = value(argument);
         else if (argument == "--mission")
@@ -423,7 +445,7 @@ void check_director_options(Options& options) {
                    "[--max-fps N] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
-                   "[--follow]]] "
+                   "[--follow] [--frame-clock MS]]] "
                    "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
                    "[--resolution WxH] "
                    "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--reclaim-check] "
@@ -494,10 +516,10 @@ void check_director_options(Options& options) {
     if (result.frame_rate && (!result.match_ticks || result.campaign_mission || result.save_after ||
                               !result.load_file.empty()))
         throw std::runtime_error("--frame-rate draws a headless skirmish of --match-ticks ticks");
-    if (!result.frame_rate &&
-        (!result.frame_log.empty() || result.scroll_camera || result.march || result.follow))
+    if (!result.frame_rate && (!result.frame_log.empty() || result.scroll_camera || result.march ||
+                               result.follow || result.frame_clock_ms))
         throw std::runtime_error(
-            "--frame-log, --scroll-camera, --march and --follow need --frame-rate"
+            "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate"
         );
     if (extension.check_options != nullptr)
         extension.check_options(extension.context);

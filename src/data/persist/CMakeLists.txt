@@ -12,12 +12,13 @@ add_library(oa-data-persist
 add_library(oa::data::persist ALIAS oa-data-persist)
 target_include_directories(oa-data-persist PUBLIC include)
 target_compile_features(oa-data-persist PUBLIC cxx_std_20)
-target_link_libraries(oa-data-persist PUBLIC oa-core-types oa-sim-world-environment PRIVATE oa-formats-sqsh ZLIB::ZLIB oa-options oa-data-defs oa-data-mission-types)
+target_link_libraries(oa-data-persist PUBLIC oa-core-types oa-sim-world-environment PRIVATE oa-base-bytes oa-formats-sqsh ZLIB::ZLIB oa-options oa-data-defs oa-data-mission-types)
 
 if(BUILD_TESTING)
   foreach(test_id IN ITEMS squash hapibank sections orders features)
     add_executable(oa-persist-${test_id}-test tests/${test_id}_test.cpp)
-    target_link_libraries(oa-persist-${test_id}-test PRIVATE oa-data-persist oa-formats-sqsh oa-options)
+    target_link_libraries(oa-persist-${test_id}-test PRIVATE oa-data-persist oa-formats-sqsh oa-test-support
+      oa-options)
     add_test(NAME persist-${test_id} COMMAND oa-persist-${test_id}-test)
   endforeach()
   # Features blobs under counts far past the records they hold.

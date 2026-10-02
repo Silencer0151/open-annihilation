@@ -26,9 +26,13 @@ the canonical `Game` or `Player` record, its comment names that field;
 `ModeEnvironment` holds what `set_mode` reads of a screen package's window.
 These structures are views of the fields the loop reads, not replacements for
 those packed records. Clock values are in the game clock's own units;
-`scaled_clock` keeps its 32-bit product wrap before the division by 1000.
+`scaled_clock` keeps its 32-bit product wrap before the division by 1000,
+so its readings turn over to 0 past `scaled_clock_turn`, about every 39.8
+hours at 30 units a second. `scaled_clock_before` and `scaled_clock_elapsed`
+compare readings across that turn: a reading more than half a turn below
+another has turned over since, and lies after it.
 
-The tests cover counter wrap, lag selection, timing thresholds, callback order,
+The tests cover counter wrap, the clock's turn, lag selection, timing thresholds, callback order,
 mutation between callbacks, paused notifications, capture cadence and every mode
 target. They use trace hosts, so they check this coordinator and not the
 subsystems behind it.

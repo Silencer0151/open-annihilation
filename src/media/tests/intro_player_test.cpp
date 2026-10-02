@@ -13,6 +13,7 @@
 #include "oa/audio/sound_output.hpp"
 #include "oa/media/intro_player.hpp"
 #include "smacker_test_movie.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <array>
 #include <chrono>
@@ -378,7 +379,7 @@ void test_stalled_sound(const fs::path& scratch) {
 
 int main(int argc, char** argv) {
     const auto scratch =
-        argc > 1 ? fs::path(argv[1]) : fs::temp_directory_path() / "oa-intro-player";
+        argc > 1 ? fs::path(argv[1]) : oa::test::make_scratch_directory("oa-intro-player");
     std::error_code created;
     fs::create_directories(scratch, created);
     test_headless(scratch);

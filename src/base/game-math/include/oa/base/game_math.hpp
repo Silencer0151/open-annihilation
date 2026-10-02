@@ -186,4 +186,32 @@ void float_heap_make(FloatHeapPair* heap, int32_t size) noexcept;
 /// @param[in,out] heap heap array
 /// @param size number of pairs, at least 1
 void float_heap_pop(FloatHeapPair* heap, int32_t size) noexcept;
+
+/// Truncates a double toward zero to a signed 64-bit integer.
+///
+/// @param value value to convert
+/// @return the integer; INT64_MIN for NaN, an infinity or a value outside
+///         [-2^63, 2^63)
+[[nodiscard]] constexpr int64_t truncate_to_int64(double value) noexcept {
+    constexpr double limit = 9223372036854775808.0; // 2^63
+    if (!(value >= -limit && value < limit))
+        return INT64_MIN;
+    return static_cast<int64_t>(value);
+}
+
+/// Converts a double to an integer as the game's float-to-integer steps do:
+/// truncated toward zero to 64 bits, the low 32 bits kept.
+///
+/// A float argument converts to double exactly, so this serves float values
+/// too.
+///
+/// @param value value to convert
+/// @return the low 32 bits of truncate_to_int64(value), read as signed; 0 for
+///         NaN, an infinity or a value outside [-2^63, 2^63), whose 64-bit
+///         result INT64_MIN has a low word of 0
+[[nodiscard]] constexpr int32_t truncate_low32(double value) noexcept {
+    return static_cast<int32_t>(
+        static_cast<uint32_t>(static_cast<uint64_t>(truncate_to_int64(value)))
+    );
+}
 } // namespace oa::base::game_math

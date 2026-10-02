@@ -13,53 +13,49 @@
 #include <string_view>
 #include <vector>
 
+#include "oa/core/weapon_def.h"
+#include "oa/data/defs/weapons.hpp"
+
 namespace oa::sim::combat_state {
 inline constexpr size_t weapon_slot_count = 3;
 inline constexpr int32_t simulation_ticks_per_second = 30;
 inline constexpr int32_t milliseconds_per_second = 1000;
 inline constexpr double weapon_range_scale = 1.25;
-// Bits of WeaponDef.flags (OA_WEAPON_FLAG_*); each is set from the low bit of
-// the TDF boolean its name or comment gives.
-inline constexpr uint32_t weapon_line_of_sight_flag = 0x00000001U;
-inline constexpr uint32_t weapon_ballistic_flag = 0x00000002U;
-inline constexpr uint32_t weapon_vlaunch_flag = 0x00000010U;  // TDF vlaunch
-inline constexpr uint32_t weapon_guidance_flag = 0x00001000U; // TDF guidance
-inline constexpr uint32_t weapon_selfprop_flag = 0x00100000U; // TDF selfprop
-inline constexpr uint32_t weapon_burnblow_flag = 0x00800000U; // TDF burnblow
-inline constexpr uint32_t weapon_paralyzer_flag = 0x00000080U;
-inline constexpr uint32_t weapon_ground_skip_flag = 0x00004000U;   // TDF unitsonly
-inline constexpr uint32_t weapon_ground_bounce_flag = 0x00008000U; // TDF groundbounce
-inline constexpr uint32_t weapon_water_flag = 0x00010000U;         // TDF waterweapon
-inline constexpr uint32_t weapon_to_air_flag = 0x00020000U;
-inline constexpr uint32_t weapon_turret_flag = 0x00080000U;      // TDF turret
-inline constexpr uint32_t weapon_commandfire_flag = 0x04000000U; // TDF commandfire
-inline constexpr uint32_t weapon_beam_flag = 0x00000008U;
-inline constexpr uint32_t weapon_meteor_flag = 0x00000020U;
-inline constexpr uint32_t weapon_dropped_flag = 0x00000100U;
-inline constexpr uint32_t weapon_start_smoke_flag = 0x00000200U;
-inline constexpr uint32_t weapon_end_smoke_flag =
-    0x00000400U; // TDF endsmoke: a puff where the shot ends
-inline constexpr uint32_t weapon_sound_trigger_flag = 0x00000800U;
-inline constexpr uint32_t weapon_tracks_flag = 0x00002000U;
-inline constexpr uint32_t weapon_smoke_trail_flag = 0x00040000U;
-inline constexpr uint32_t weapon_propeller_flag = 0x00200000U;
-inline constexpr uint32_t weapon_two_phase_flag = 0x01000000U;
-inline constexpr uint32_t weapon_cruise_flag = 0x02000000U;
-inline constexpr uint32_t weapon_stockpile_flag = 0x10000000U;
-inline constexpr uint32_t weapon_targetable_flag = 0x20000000U;
-inline constexpr uint32_t weapon_shell_flag = 0x00000004U;    // TDF shellweapon
-inline constexpr uint32_t weapon_no_radar_flag = 0x00000040U; // TDF noradar: no radar blip
-inline constexpr uint32_t weapon_no_explode_flag =
-    0x00400000U; // TDF noexplode: flies on through its blasts
-inline constexpr uint32_t weapon_noautorange_flag = 0x08000000U; // TDF noautorange
-// TDF weaponvelocity (world units per second) to 16.16 world units per tick.
-inline constexpr double weapon_velocity_tdf_to_fixed = 65536.0 / 30.0;
-// TDF weaponacceleration (world units per second per second) to 16.16 world
-// units per tick per tick.
-inline constexpr double weapon_acceleration_tdf_to_fixed = 65536.0 / 900.0;
-// TDF turnrate (angle units per second) to angle units per tick.
-inline constexpr double weapon_turn_rate_tdf_to_tick = 1.0 / 30.0;
+// Bits of WeaponDef.flags, under the names the combat code uses for them.
+inline constexpr uint32_t weapon_line_of_sight_flag = OA_WEAPON_FLAG_LINE_OF_SIGHT;
+inline constexpr uint32_t weapon_ballistic_flag = OA_WEAPON_FLAG_BALLISTIC;
+inline constexpr uint32_t weapon_vlaunch_flag = OA_WEAPON_FLAG_VLAUNCH;
+inline constexpr uint32_t weapon_guidance_flag = OA_WEAPON_FLAG_GUIDANCE;
+inline constexpr uint32_t weapon_selfprop_flag = OA_WEAPON_FLAG_SELF_PROP;
+inline constexpr uint32_t weapon_burnblow_flag = OA_WEAPON_FLAG_BURN_BLOW;
+inline constexpr uint32_t weapon_paralyzer_flag = OA_WEAPON_FLAG_PARALYZER;
+inline constexpr uint32_t weapon_ground_skip_flag = OA_WEAPON_FLAG_UNITS_ONLY;
+inline constexpr uint32_t weapon_ground_bounce_flag = OA_WEAPON_FLAG_GROUND_BOUNCE;
+inline constexpr uint32_t weapon_water_flag = OA_WEAPON_FLAG_WATER_WEAPON;
+inline constexpr uint32_t weapon_to_air_flag = OA_WEAPON_FLAG_TO_AIR_WEAPON;
+inline constexpr uint32_t weapon_turret_flag = OA_WEAPON_FLAG_TURRET;
+inline constexpr uint32_t weapon_commandfire_flag = OA_WEAPON_FLAG_COMMAND_FIRE;
+inline constexpr uint32_t weapon_beam_flag = OA_WEAPON_FLAG_BEAM_WEAPON;
+inline constexpr uint32_t weapon_meteor_flag = OA_WEAPON_FLAG_METEOR;
+inline constexpr uint32_t weapon_dropped_flag = OA_WEAPON_FLAG_DROPPED;
+inline constexpr uint32_t weapon_start_smoke_flag = OA_WEAPON_FLAG_START_SMOKE;
+inline constexpr uint32_t weapon_end_smoke_flag = OA_WEAPON_FLAG_END_SMOKE; // a puff where it ends
+inline constexpr uint32_t weapon_sound_trigger_flag = OA_WEAPON_FLAG_SOUND_TRIGGER;
+inline constexpr uint32_t weapon_tracks_flag = OA_WEAPON_FLAG_TRACKS;
+inline constexpr uint32_t weapon_smoke_trail_flag = OA_WEAPON_FLAG_SMOKE_TRAIL;
+inline constexpr uint32_t weapon_propeller_flag = OA_WEAPON_FLAG_PROPELLER;
+inline constexpr uint32_t weapon_two_phase_flag = OA_WEAPON_FLAG_TWO_PHASE;
+inline constexpr uint32_t weapon_cruise_flag = OA_WEAPON_FLAG_CRUISE;
+inline constexpr uint32_t weapon_stockpile_flag = OA_WEAPON_FLAG_STOCKPILE;
+inline constexpr uint32_t weapon_targetable_flag = OA_WEAPON_FLAG_TARGETABLE;
+inline constexpr uint32_t weapon_shell_flag = OA_WEAPON_FLAG_SHELL_WEAPON;
+inline constexpr uint32_t weapon_no_radar_flag = OA_WEAPON_FLAG_NO_RADAR; // no radar blip
+// Flies on through its blasts.
+inline constexpr uint32_t weapon_no_explode_flag = OA_WEAPON_FLAG_NO_EXPLODE;
+inline constexpr uint32_t weapon_noautorange_flag = OA_WEAPON_FLAG_NO_AUTO_RANGE;
 
+// A weapon as the combat code reads it, converted from the WeaponDef record
+// its slot was loaded into (WeaponRegistry::install).
 struct WeaponDefinition {
     uint16_t reload_time_ticks{};
     uint16_t default_damage{}; // WeaponDef.damage_default, TDF [DAMAGE] default
@@ -87,11 +83,10 @@ struct WeaponDefinition {
     // WeaponDef.explosion_art and WeaponDef.water_explosion_art.
     std::string explosion_gaf; // TDF explosiongaf, opened as anims/<name>
     std::string explosion_art; // TDF explosionart, the sequence in that archive
+    // TDF waterexplosiongaf and waterexplosionart; on a lava world the weapons
+    // are loaded with lavaexplosiongaf and lavaexplosionart here instead.
     std::string water_explosion_gaf;
     std::string water_explosion_art;
-    // Lava worlds load these into WeaponDef.water_explosion_art instead.
-    std::string lava_explosion_gaf;
-    std::string lava_explosion_art;
     std::string soundstart;         // TDF soundstart= wav stem
     std::string soundhit;           // WeaponDef.sound_hit: where it goes off on land or on a unit
     std::string soundwater;         // WeaponDef.sound_water: where it goes off in the water
@@ -123,15 +118,6 @@ struct WeaponDefinition {
 /// @return the override amount, else `default_damage`
 [[nodiscard]] int32_t
 damage_against(const WeaponDefinition& definition, std::string_view unit_name) noexcept;
-
-// Remaining TDF keys the projectile constructors and update read.
-struct WeaponFlightFields {
-    std::string_view edge_effectiveness, spray_angle, duration, random_decay, flight_time;
-    std::string_view beam_weapon, meteor, dropped, start_smoke, sound_trigger, tracks, smoke_trail;
-    std::string_view propeller, two_phase, cruise, stockpile, targetable, end_smoke, smoke_delay;
-    std::string_view coverage, shake_magnitude, shake_duration;
-    std::string_view no_explode, shell_weapon, no_radar;
-};
 
 // The reload countdown has no copy here: it lives only in the canonical
 // UnitWeapon.reload, which saves, traces and the state digest read.
@@ -235,12 +221,6 @@ turn_toward_angle(uint16_t current, uint16_t desired, uint16_t rate) noexcept {
 
 inline constexpr size_t weapon_registry_capacity = 256;
 
-struct WeaponRecord {
-    uint8_t index{}; // explicit TDF field ID
-    std::string name;
-    double reload_time_seconds{};
-};
-
 /// The 256 weapon definitions of a game, indexed by their TDF ID.
 class WeaponRegistry {
   public:
@@ -248,165 +228,23 @@ class WeaponRegistry {
     /// Creates 256 empty definitions, each carrying its own registry index.
     WeaponRegistry();
 
-    /// Installs a weapon's name and reload time.
+    /// Installs one loaded weapon slot under its section name.
     ///
-    /// Throws std::invalid_argument for a bad name or a non-finite reload time.
+    /// The definition takes the record's values as they are: velocities in
+    /// 16.16 world units per tick, times in ticks, minbarrelangle in radians.
+    /// The record itself is kept for Game.weapon_defs (see records()).
     ///
-    /// @param record registry index, internal name (1..31 bytes, no NUL) and reloadtime in seconds
-    /// @quirk The reload is `seconds * 30` truncated toward zero through 64 bits and then
-    ///        narrowed to 16 bits, as the game stores it.
-    void install(const WeaponRecord& record);
-
-    /// Installs a weapon's name and reload time from TDF text.
-    ///
-    /// Throws std::invalid_argument when the reload time does not parse.
-    ///
-    /// @param index registry index (the section's ID)
-    /// @param section_name weapon's internal name
-    /// @param reload_time_text TDF reloadtime in seconds; empty means 0
-    void install_tdf_section(
-        uint8_t index, std::string_view section_name, std::string_view reload_time_text
-    );
-
-    /// Installs a weapon's name and reload time, taking the registry index from TDF ID text.
-    ///
-    /// Throws std::invalid_argument for an ID outside 0..255 or a bad reload time.
-    ///
-    /// @param id_text TDF ID, a decimal 0..255
-    /// @param section_name weapon's internal name
-    /// @param reload_time_text TDF reloadtime in seconds; empty means 0
-    void install_tdf_section(
-        std::string_view id_text, std::string_view section_name, std::string_view reload_time_text
-    );
-
-    /// Parses the targeting, cost and flight keys of one weapon section.
-    ///
-    /// Empty or unparsable text takes the key's default: range 0x7fff, minbarrelangle
-    /// -11.25 degrees, every other key 0. Boolean keys set or clear one `flags` bit
-    /// from their low bit.
-    ///
-    /// @param index registry index of the weapon
-    /// @param range_text TDF range, world units
-    /// @param line_of_sight TDF lineofsight flag
-    /// @param ballistic TDF ballistic flag
-    /// @param paralyzer TDF paralyzer flag
-    /// @param water_weapon TDF waterweapon flag
-    /// @param to_air_weapon TDF toairweapon flag
-    /// @param default_damage [DAMAGE] default
-    /// @param projectile_velocity TDF weaponvelocity, world units per second; stored as 16.16 per tick
-    /// @param minimum_barrel_angle TDF minbarrelangle, degrees; stored in radians
-    /// @param turret TDF turret flag
-    /// @param vlaunch TDF vlaunch flag
-    /// @param energy_per_shot TDF energypershot
-    /// @param metal_per_shot TDF metalpershot
-    /// @param weapontimer TDF weapontimer, seconds; stored as ticks
-    /// @param rendertype TDF rendertype
-    /// @param color TDF color, a palette index
-    /// @param color2 TDF color2, a palette index
-    /// @param areaofeffect TDF areaofeffect, world units
-    /// @param noautorange TDF noautorange flag
-    /// @param commandfire TDF commandfire flag
-    /// @param unitsonly TDF unitsonly flag (the ground-skip bit)
-    /// @param groundbounce TDF groundbounce flag
-    /// @param interceptor TDF interceptor flag
-    /// @param accuracy TDF accuracy, angle units
-    /// @param tolerance TDF tolerance, angle units
-    /// @param pitch_tolerance TDF pitchtolerance, angle units
-    /// @param start_velocity TDF startvelocity, world units per second; stored as 16.16 per tick
-    /// @param acceleration TDF weaponacceleration, world units per second per second; stored as
-    ///     16.16 per tick per tick
-    /// @param turn_rate TDF turnrate, angle units per second; stored as angle units per tick
-    /// @param selfprop TDF selfprop flag
-    /// @param guidance TDF guidance flag
-    /// @param burnblow TDF burnblow flag
-    /// @param burst TDF burst, shots per volley
-    /// @param burstrate TDF burstrate, seconds; stored as ticks
-    void install_target_fields(
-        uint8_t index,
-        std::string_view range_text,
-        std::string_view line_of_sight,
-        std::string_view ballistic,
-        std::string_view paralyzer,
-        std::string_view water_weapon,
-        std::string_view to_air_weapon,
-        std::string_view default_damage,
-        std::string_view projectile_velocity,
-        std::string_view minimum_barrel_angle,
-        std::string_view turret = {},
-        std::string_view vlaunch = {},
-        std::string_view energy_per_shot = {},
-        std::string_view metal_per_shot = {},
-        std::string_view weapontimer = {},
-        std::string_view rendertype = {},
-        std::string_view color = {},
-        std::string_view color2 = {},
-        std::string_view areaofeffect = {},
-        std::string_view noautorange = {},
-        std::string_view commandfire = {},
-        std::string_view unitsonly = {},
-        std::string_view groundbounce = {},
-        std::string_view interceptor = {},
-        std::string_view accuracy = {},
-        std::string_view tolerance = {},
-        std::string_view pitch_tolerance = {},
-        std::string_view start_velocity = {},
-        std::string_view acceleration = {},
-        std::string_view turn_rate = {},
-        std::string_view selfprop = {},
-        std::string_view guidance = {},
-        std::string_view burnblow = {},
-        std::string_view burst = {},
-        std::string_view burstrate = {}
-    );
-    /// Stores the explosion sprite names of one weapon.
-    ///
-    /// @param index registry index of the weapon
-    /// @param explosion_gaf TDF explosiongaf, the GAF archive under anims/
-    /// @param explosion_art TDF explosionart, the sequence in that archive
-    /// @param water_explosion_gaf TDF waterexplosiongaf
-    /// @param water_explosion_art TDF waterexplosionart
-    /// @param lava_explosion_gaf TDF lavaexplosiongaf, used instead of the water pair on lava worlds
-    /// @param lava_explosion_art TDF lavaexplosionart
-    void install_explosion_sprites(
-        uint8_t index,
-        std::string_view explosion_gaf,
-        std::string_view explosion_art,
-        std::string_view water_explosion_gaf = {},
-        std::string_view water_explosion_art = {},
-        std::string_view lava_explosion_gaf = {},
-        std::string_view lava_explosion_art = {}
-    );
-    /// Stores the sound names of one weapon.
-    ///
-    /// @param index registry index of the weapon
-    /// @param soundstart TDF soundstart, played when it fires
-    /// @param soundhit TDF soundhit, played where it goes off on land or on a unit
-    /// @param soundwater TDF soundwater, played where it goes off in the water
-    void install_sounds(
-        uint8_t index,
-        std::string_view soundstart,
-        std::string_view soundhit,
-        std::string_view soundwater
-    );
-    /// Parses the remaining projectile keys of one weapon section.
-    ///
-    /// Second-valued keys are scaled by 30 and truncated to ticks; boolean keys set or
-    /// clear one `flags` bit from their low bit.
-    ///
-    /// @param index registry index of the weapon
-    /// @param fields raw TDF text of each key; empty means 0
-    /// @quirk shakeduration keeps the whole 32-bit truncated tick count, unlike the
-    ///        16-bit tick fields.
-    void install_flight_fields(uint8_t index, const WeaponFlightFields& fields);
+    /// @param weapon slot of a data::defs::WeaponTable; WeaponDef.weapon_id is
+    ///     the registry index and WeaponDef.key the name
+    /// @param assets explosion and sound names the slot's section gave
+    void install(const WeaponDef& weapon, const data::defs::WeaponAssetNames& assets);
 
     /// Adds or replaces one [DAMAGE] entry of a weapon.
     ///
     /// @param index registry index of the weapon
     /// @param unit_name target UNITNAME; stored lower-case
-    /// @param amount_text damage against that unit; unparsable text means 0
-    void install_damage_override(
-        uint8_t index, std::string_view unit_name, std::string_view amount_text
-    );
+    /// @param amount damage against that unit
+    void install_damage_override(uint8_t index, std::string_view unit_name, int32_t amount);
 
     /// Finds an installed weapon by its internal name.
     ///
@@ -427,136 +265,53 @@ class WeaponRegistry {
     /// Returns the internal name at a registry index, empty when none is installed.
     [[nodiscard]] std::string_view name(uint8_t index) const noexcept { return names_[index]; }
 
+    /// Returns the weapon records, one per registry index, as Game.weapon_defs holds them.
+    ///
+    /// A slot nothing was installed in is zeroed apart from its weapon_id.
+    [[nodiscard]] const std::array<WeaponDef, weapon_registry_capacity>& records() const noexcept {
+        return records_;
+    }
+
   private:
 
     std::array<WeaponDefinition, weapon_registry_capacity> definitions_{};
     std::array<std::string, weapon_registry_capacity> names_{};
+    std::array<WeaponDef, weapon_registry_capacity> records_{};
 };
 
-/// Installs every weapon section of a parsed weapons TDF file.
+/// Installs every loaded slot of a weapon table, with its [DAMAGE] entries.
 ///
-/// Works with oa::data::unit_definitions::TdfDocument without depending on that parser.
-/// Registry slots come from each section's required ID field, not from the order
-/// the files were found in.
+/// A slot is loaded when its section name (WeaponDef.key) is set; the others
+/// are left as they were.
 ///
-/// Throws std::invalid_argument for a section without an ID.
+/// @param[in,out] registry registry the slots are installed into
+/// @param table weapons as data::defs::load_weapon_defs or load_weapon_text left them
+/// @return the number of slots installed
+size_t install_weapon_table(WeaponRegistry& registry, const data::defs::WeaponTable& table);
+
+/// Loads every WEAPONS\*.TDF in file order and installs the slots they name.
 ///
-/// @param[in,out] registry registry the sections are installed into
-/// @param document parsed TDF file whose sections are weapons
-/// @return the number of sections installed
-template <class TdfDocument>
-size_t install_weapon_tdf(WeaponRegistry& registry, const TdfDocument& document) {
-    size_t installed = 0;
-    for (const auto& section : document.sections) {
-        const auto* id = section.find("id");
-        if (!id)
-            throw std::invalid_argument("weapon TDF section is missing ID");
-        const auto* reload = section.find("reloadtime");
-        registry.install_tdf_section(
-            *id, section.name, reload ? std::string_view(*reload) : std::string_view{}
-        );
-        const auto field = [&](std::string_view key) {
-            const auto* value = section.find(key);
-            return value ? std::string_view(*value) : std::string_view{};
-        };
-        std::string id_copy(*id);
-        const auto index = std::strtoul(id_copy.c_str(), nullptr, 10);
-        std::string_view damage_default{};
-        if constexpr (requires { section.child(std::string_view{}); }) {
-            const auto* damage = section.child("damage");
-            if (damage)
-                if (const auto* value = damage->find("default"))
-                    damage_default = *value;
-        }
-        registry.install_target_fields(
-            static_cast<uint8_t>(index),
-            field("range"),
-            field("lineofsight"),
-            field("ballistic"),
-            field("paralyzer"),
-            field("waterweapon"),
-            field("toairweapon"),
-            damage_default,
-            field("weaponvelocity"),
-            field("minbarrelangle"),
-            field("turret"),
-            field("vlaunch"),
-            field("energypershot"),
-            field("metalpershot"),
-            field("weapontimer"),
-            field("rendertype"),
-            field("color"),
-            field("color2"),
-            field("areaofeffect"),
-            field("noautorange"),
-            field("commandfire"),
-            field("unitsonly"),
-            field("groundbounce"),
-            field("interceptor"),
-            field("accuracy"),
-            field("tolerance"),
-            field("pitchtolerance"),
-            field("startvelocity"),
-            field("weaponacceleration"),
-            field("turnrate"),
-            field("selfprop"),
-            field("guidance"),
-            field("burnblow"),
-            field("burst"),
-            field("burstrate")
-        );
-        registry.install_explosion_sprites(
-            static_cast<uint8_t>(index),
-            field("explosiongaf"),
-            field("explosionart"),
-            field("waterexplosiongaf"),
-            field("waterexplosionart"),
-            field("lavaexplosiongaf"),
-            field("lavaexplosionart")
-        );
-        registry.install_sounds(
-            static_cast<uint8_t>(index), field("soundstart"), field("soundhit"), field("soundwater")
-        );
-        registry.install_flight_fields(
-            static_cast<uint8_t>(index),
-            {field("edgeeffectiveness"),
-             field("sprayangle"),
-             field("duration"),
-             field("randomdecay"),
-             field("flighttime"),
-             field("beamweapon"),
-             field("meteor"),
-             field("dropped"),
-             field("startsmoke"),
-             field("soundtrigger"),
-             field("tracks"),
-             field("smoketrail"),
-             field("propeller"),
-             field("twophase"),
-             field("cruise"),
-             field("stockpile"),
-             field("targetable"),
-             field("endsmoke"),
-             field("smokedelay"),
-             field("coverage"),
-             field("shakemagnitude"),
-             field("shakeduration"),
-             field("noexplode"),
-             field("shellweapon"),
-             field("noradar")}
-        );
-        if constexpr (requires { section.child(std::string_view{}); }) {
-            if (const auto* damage = section.child("damage"))
-                for (const auto& [unit_name, amount] : damage->fields)
-                    if (unit_name != "default")
-                        registry.install_damage_override(
-                            static_cast<uint8_t>(index), unit_name, amount
-                        );
-        }
-        ++installed;
-    }
-    return installed;
-}
+/// The files are read by data::defs::load_weapon_defs.
+///
+/// @param[in,out] registry registry the slots are installed into
+/// @param files file boundary over the game data
+/// @param lava_world whether lavaexplosion* keys stand in for waterexplosion*
+/// @return the number of slots installed
+size_t install_weapon_files(
+    WeaponRegistry& registry, const data::defs::Files& files, bool lava_world = false
+);
+
+/// Loads weapon TDF text and installs the slots it names.
+///
+/// The text is read by data::defs::load_weapon_text into a table of its own,
+/// so slots it does not name keep what the registry held.
+///
+/// @param[in,out] registry registry the slots are installed into
+/// @param text weapon TDF text
+/// @param lava_world whether lavaexplosion* keys stand in for waterexplosion*
+/// @return the number of slots installed; 0 when the text does not parse
+size_t
+install_weapon_text(WeaponRegistry& registry, std::string_view text, bool lava_world = false);
 
 struct WeaponBinding {
     UnitWeapons weapons;

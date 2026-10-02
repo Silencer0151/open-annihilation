@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/audio/cd_music.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <cstdint>
 #include <cstring>
 
 namespace oa::audio {
 namespace {
+using base::bytes::load_le32;
 
 constexpr int32_t default_track_kinds = 4;
 constexpr uint32_t fade_step_interval = 2;
@@ -51,11 +53,6 @@ int32_t add_timer(Mixer& mixer, uint32_t interval, TimerCallback callback) noexc
     return mixer.timers.add != nullptr
                ? mixer.timers.add(mixer.timers.context, interval, callback, &mixer)
                : no_timer;
-}
-
-uint32_t read_le32(const uint8_t* bytes) noexcept {
-    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8 |
-           static_cast<uint32_t>(bytes[2]) << 16 | static_cast<uint32_t>(bytes[3]) << 24;
 }
 
 void write_le32(uint8_t* bytes, uint32_t value) noexcept {
@@ -486,7 +483,7 @@ void cd_handle_disc_change(Mixer& mixer, DiscCache& cache, const Game& game) noe
 
     const uint32_t disc = cd_disc_id(mixer);
     std::size_t found = 0;
-    while (found < disc_cache_records && read_le32(cache.records[found].disc_id) != disc)
+    while (found < disc_cache_records && load_le32(cache.records[found].disc_id) != disc)
         ++found;
     if (found < disc_cache_records) {
         const DiscCacheRecord record = cache.records[found];

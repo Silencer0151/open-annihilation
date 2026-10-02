@@ -19,7 +19,7 @@ the locks a running game puts on them (`settings_locks`).
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
 | Gameplay | Unit limit | 50 to 1500 per player, steps of 50 | the installation's `totala.ini` UnitLimit, else 250 | `open-annihilation.unit-limit` |
-| Graphics | Maximum frame rate | 40 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
+| Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
 | | Enhanced anti-aliasing | Off, 2×, 3×, 4×, 8×, 16× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
 | Developer | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |

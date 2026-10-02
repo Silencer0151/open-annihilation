@@ -4,6 +4,7 @@
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "test_support.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -421,9 +422,7 @@ void write_real_save(
 // Writes a real HAPIBANK summary with a radar image and a file that is not a
 // bank under a fresh SAVEGAME folder.
 std::filesystem::path write_real_saves(const char* folder) {
-    const auto root = std::filesystem::temp_directory_path() / folder;
-    std::error_code error;
-    std::filesystem::remove_all(root, error);
+    const auto root = oa::test::make_scratch_directory(folder);
     std::filesystem::create_directories(root / "SAVEGAME");
     write_real_save(root / "SAVEGAME" / "outpost.SAV", true);
     std::ofstream(root / "SAVEGAME" / "junk.SAV") << "not a bank";
@@ -448,9 +447,7 @@ OA_TEST(persist_reader_lists_real_saves) {
 // as the image's width, height and rows, and nothing from a save without a
 // whole image or with one too small to draw from inside its edges.
 OA_TEST(persist_reader_reads_radar_image) {
-    const auto root = std::filesystem::temp_directory_path() / "oa-ui-frontend-radar-saves";
-    std::error_code error;
-    std::filesystem::remove_all(root, error);
+    const auto root = oa::test::make_scratch_directory("oa-ui-frontend-radar-saves");
     std::filesystem::create_directories(root / "SAVEGAME");
     write_real_save(root / "SAVEGAME" / "radar.SAV", true);
     write_real_save(root / "SAVEGAME" / "plain.SAV", false);
@@ -497,6 +494,7 @@ OA_TEST(persist_reader_reads_radar_image) {
         OA_CHECK(!read(path, small));
         OA_CHECK(small.pixels.empty() && small.surface.width == 0);
     }
+    std::error_code error;
     std::filesystem::remove_all(root, error);
 }
 

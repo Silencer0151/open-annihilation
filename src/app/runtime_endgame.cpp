@@ -4,6 +4,7 @@
 // End-of-game screen over the finished match's Game block. The extension
 // hears the match events it reports.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 
 #include "oa/ui/frontend_state/app_modes.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
@@ -424,8 +425,8 @@ void Runtime::load_outcome_glamour() {
     if (background.glamour[0] == '\0')
         return;
     try {
-        state.glamour =
-            oa::decode_pcx(assets_.read(std::string("bitmaps/") + background.glamour).bytes);
+        const auto path = std::string("bitmaps/") + background.glamour;
+        state.glamour = oa::ui::decoded::require(oa::decode_pcx(assets_.read(path).bytes), path);
     } catch (const std::exception& error) {
         std::cerr << "glamour picture unavailable: " << error.what() << '\n';
         state.glamour = {};

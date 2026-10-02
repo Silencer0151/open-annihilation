@@ -63,6 +63,19 @@ uint32_t scaled_clock(uint32_t milliseconds, uint32_t scale) noexcept {
     return (milliseconds * scale) / milliseconds_per_second;
 }
 
+bool scaled_clock_before(uint32_t reading, uint32_t other) noexcept {
+    // Units from the other to the reading, negative when the reading is the smaller.
+    const int32_t lead = signed32(reading - other);
+    constexpr auto half_turn = static_cast<int32_t>(scaled_clock_turn / 2);
+    return lead < 0 && lead > -half_turn;
+}
+
+uint32_t scaled_clock_elapsed(uint32_t later, uint32_t earlier) noexcept {
+    if (later >= earlier)
+        return later - earlier;
+    return later + (scaled_clock_turn - earlier);
+}
+
 void update_timing(Timing& s, uint32_t now) {
     if (!std::isfinite(s.remainder))
         throw std::invalid_argument("nonfinite timing remainder");

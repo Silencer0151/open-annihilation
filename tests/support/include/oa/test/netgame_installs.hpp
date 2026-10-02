@@ -50,7 +50,7 @@ holds(const std::filesystem::path& root, std::initializer_list<const char*> file
 [[nodiscard]] inline std::vector<uint8_t>
 read_archived(const std::filesystem::path& root, const char* archive, const char* path) {
     try {
-        return oa::HpiArchive(root / archive).read(path);
+        return oa::HpiArchive(root / archive).read(path).value.value_or(std::vector<uint8_t>{});
     } catch (const std::exception&) {
         return {};
     }

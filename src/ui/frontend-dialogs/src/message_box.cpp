@@ -5,6 +5,7 @@
 #include "dialog_internal.hpp"
 
 #include "oa/formats/fnt.hpp"
+#include "oa/ui/decoded.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -42,7 +43,10 @@ bool open_message_box(
     auto& gadgets = dialog->resources.layout.gadgets;
     int32_t font_height = 0;
     try {
-        font_height = formats::fnt::load_named_fnt(*ctx->assets, kLineFont, "").nominal_height;
+        font_height = ui::decoded::require(
+                          formats::fnt::load_named_fnt(*ctx->assets, kLineFont, ""), kLineFont
+        )
+                          .nominal_height;
     } catch (const std::exception&) {
         dialog_close(*dialog);
         return false;

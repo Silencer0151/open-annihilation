@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/formats/cob.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,8 @@
 
 namespace oa::formats::cob {
 namespace {
+
+using base::bytes::load_le32;
 
 constexpr std::size_t kHeaderBytes = header_bytes;
 
@@ -43,27 +46,20 @@ bool add_overflow(std::size_t left, std::size_t right, std::size_t& result) noex
     return false;
 }
 
-uint32_t read_u32(std::span<const uint8_t> bytes, std::size_t offset) noexcept {
-    return static_cast<uint32_t>(bytes[offset]) |
-           (static_cast<uint32_t>(bytes[offset + 1U]) << 8U) |
-           (static_cast<uint32_t>(bytes[offset + 2U]) << 16U) |
-           (static_cast<uint32_t>(bytes[offset + 3U]) << 24U);
-}
-
 /// Decodes the eleven header words; the caller has checked that they fit.
 DiskHeader read_disk_header(std::span<const uint8_t> bytes) noexcept {
     DiskHeader header{};
-    header.version_signature = read_u32(bytes, 0);
-    header.script_count = read_u32(bytes, 4);
-    header.piece_count = read_u32(bytes, 8);
-    header.code_word_count = read_u32(bytes, 12);
-    header.static_variable_count = read_u32(bytes, 16);
-    header.sound_count = read_u32(bytes, 20);
-    header.script_entry_offset = read_u32(bytes, 24);
-    header.script_name_offset_table = read_u32(bytes, 28);
-    header.piece_name_offset_table = read_u32(bytes, 32);
-    header.code_offset = read_u32(bytes, 36);
-    header.name_pool_offset = read_u32(bytes, 40);
+    header.version_signature = load_le32(bytes.data() + 0);
+    header.script_count = load_le32(bytes.data() + 4);
+    header.piece_count = load_le32(bytes.data() + 8);
+    header.code_word_count = load_le32(bytes.data() + 12);
+    header.static_variable_count = load_le32(bytes.data() + 16);
+    header.sound_count = load_le32(bytes.data() + 20);
+    header.script_entry_offset = load_le32(bytes.data() + 24);
+    header.script_name_offset_table = load_le32(bytes.data() + 28);
+    header.piece_name_offset_table = load_le32(bytes.data() + 32);
+    header.code_offset = load_le32(bytes.data() + 36);
+    header.name_pool_offset = load_le32(bytes.data() + 40);
     return header;
 }
 
@@ -162,27 +158,24 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
     result.header = header;
     result.code.reserve(header.code_word_count);
     for (uint32_t i = 0; i < header.code_word_count; ++i) {
-        result.code.push_back(read_u32(
-            bytes,
-            static_cast<std::size_t>(header.code_offset) +
-                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        result.code.push_back(load_le32(
+            bytes.data() + static_cast<std::size_t>(header.code_offset) +
+            static_cast<std::size_t>(i) * sizeof(uint32_t)
         ));
     }
     result.entry_points.reserve(header.script_count);
     result.scripts.reserve(header.script_count);
     for (uint32_t i = 0; i < header.script_count; ++i) {
-        const auto entry = read_u32(
-            bytes,
-            static_cast<std::size_t>(header.script_entry_offset) +
-                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        const auto entry = load_le32(
+            bytes.data() + static_cast<std::size_t>(header.script_entry_offset) +
+            static_cast<std::size_t>(i) * sizeof(uint32_t)
         );
         if (entry >= header.code_word_count) {
             return failure("COB script entry points outside code section");
         }
-        const auto name_offset = read_u32(
-            bytes,
-            static_cast<std::size_t>(header.script_name_offset_table) +
-                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        const auto name_offset = load_le32(
+            bytes.data() + static_cast<std::size_t>(header.script_name_offset_table) +
+            static_cast<std::size_t>(i) * sizeof(uint32_t)
         );
         Script script;
         if (!read_name(bytes, name_offset, header.name_pool_offset, limits, script.name)) {
@@ -194,10 +187,9 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
     }
     result.piece_names.reserve(header.piece_count);
     for (uint32_t i = 0; i < header.piece_count; ++i) {
-        const auto name_offset = read_u32(
-            bytes,
-            static_cast<std::size_t>(header.piece_name_offset_table) +
-                static_cast<std::size_t>(i) * sizeof(uint32_t)
+        const auto name_offset = load_le32(
+            bytes.data() + static_cast<std::size_t>(header.piece_name_offset_table) +
+            static_cast<std::size_t>(i) * sizeof(uint32_t)
         );
         std::string name;
         if (!read_name(bytes, name_offset, header.name_pool_offset, limits, name)) {

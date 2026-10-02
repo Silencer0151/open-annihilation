@@ -98,8 +98,8 @@ bool locate_data(
         archive.subspan(static_cast<size_t>(header), local_bytes);
     if (!signature_at(record, 0, local_signature))
         return fail(error, ZipStatus::bad_local_record, header, entry.name);
-    const uint16_t name_length = read_le16(record, local_name_length);
-    const uint16_t extra_length = read_le16(record, local_extra_length);
+    const uint16_t name_length = load_le16(record.data() + local_name_length);
+    const uint16_t extra_length = load_le16(record.data() + local_extra_length);
     const uint64_t data = header + local_bytes + name_length + extra_length;
     if (data > archive.size())
         return fail(error, ZipStatus::truncated, header, entry.name);
@@ -108,17 +108,17 @@ bool locate_data(
     const std::string_view name{reinterpret_cast<const char*>(name_bytes.data()), name_length};
     if (name != entry.name)
         return fail(error, ZipStatus::bad_local_record, header, entry.name);
-    const uint16_t flags = read_le16(record, local_flags);
+    const uint16_t flags = load_le16(record.data() + local_flags);
     if ((flags & encryption_flags) != 0)
         return fail(error, ZipStatus::encrypted, header, entry.name);
-    if (read_le16(record, local_method) != static_cast<uint16_t>(entry.method))
+    if (load_le16(record.data() + local_method) != static_cast<uint16_t>(entry.method))
         return fail(error, ZipStatus::bad_local_record, header, entry.name);
-    const uint32_t compressed_bytes = read_le32(record, local_compressed_bytes);
-    const uint32_t bytes = read_le32(record, local_uncompressed_bytes);
+    const uint32_t compressed_bytes = load_le32(record.data() + local_compressed_bytes);
+    const uint32_t bytes = load_le32(record.data() + local_uncompressed_bytes);
     if (compressed_bytes == zip64_sentinel_32 || bytes == zip64_sentinel_32)
         return fail(error, ZipStatus::zip64, header, entry.name);
     const bool deferred = (flags & flag_data_descriptor) != 0;
-    if (!local_field_agrees(read_le32(record, local_crc32), entry.crc32, deferred) ||
+    if (!local_field_agrees(load_le32(record.data() + local_crc32), entry.crc32, deferred) ||
         !local_field_agrees(compressed_bytes, entry.compressed_bytes, deferred) ||
         !local_field_agrees(bytes, entry.bytes, deferred))
         return fail(error, ZipStatus::bad_local_record, header, entry.name);
@@ -173,7 +173,7 @@ bool find_end_record(std::span<const uint8_t> archive, size_t& end_offset) noexc
     const size_t first = last - std::min(last, max_comment_bytes);
     for (size_t offset = last + 1; offset-- > first;) {
         if (signature_at(archive, offset, end_signature) &&
-            offset + end_bytes + read_le16(archive, offset + end_comment_length) ==
+            offset + end_bytes + load_le16(archive.data() + offset + end_comment_length) ==
                 archive.size()) {
             end_offset = offset;
             return true;
@@ -209,9 +209,9 @@ bool read_records(
         const std::span<const uint8_t> record = archive.subspan(offset, central_bytes);
         if (!signature_at(record, 0, central_signature))
             return fail(error, ZipStatus::bad_central_record, offset);
-        const size_t name_length = read_le16(record, central_name_length);
-        const size_t tail_length = name_length + read_le16(record, central_extra_length) +
-                                   read_le16(record, central_comment_length);
+        const size_t name_length = load_le16(record.data() + central_name_length);
+        const size_t tail_length = name_length + load_le16(record.data() + central_extra_length) +
+                                   load_le16(record.data() + central_comment_length);
         if (end - offset - central_bytes < tail_length)
             return fail(error, ZipStatus::truncated, offset);
         const std::span<const uint8_t> name_bytes =
@@ -219,15 +219,15 @@ bool read_records(
         const std::string_view name{
             reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size()
         };
-        const uint16_t flags = read_le16(record, central_flags);
-        const uint16_t method = read_le16(record, central_method);
-        const uint16_t start_disk = read_le16(record, central_start_disk);
+        const uint16_t flags = load_le16(record.data() + central_flags);
+        const uint16_t method = load_le16(record.data() + central_method);
+        const uint16_t start_disk = load_le16(record.data() + central_start_disk);
         Entry entry{};
         entry.name = std::string{name};
-        entry.crc32 = read_le32(record, central_crc32);
-        entry.compressed_bytes = read_le32(record, central_compressed_bytes);
-        entry.bytes = read_le32(record, central_uncompressed_bytes);
-        entry.local_header_offset = read_le32(record, central_local_header_offset);
+        entry.crc32 = load_le32(record.data() + central_crc32);
+        entry.compressed_bytes = load_le32(record.data() + central_compressed_bytes);
+        entry.bytes = load_le32(record.data() + central_uncompressed_bytes);
+        entry.local_header_offset = load_le32(record.data() + central_local_header_offset);
         entry.directory = !name.empty() && name.back() == '/';
         if (entry.compressed_bytes == zip64_sentinel_32 || entry.bytes == zip64_sentinel_32 ||
             entry.local_header_offset == zip64_sentinel_32 || start_disk == zip64_sentinel_16)
@@ -270,12 +270,12 @@ bool read_directory(
     if (!find_end_record(archive, end_offset))
         return fail(error, ZipStatus::no_end_record, 0);
     const std::span<const uint8_t> end = archive.subspan(end_offset, end_bytes);
-    const uint16_t disk = read_le16(end, end_disk);
-    const uint16_t directory_disk = read_le16(end, end_directory_disk);
-    const uint16_t disk_entry_count = read_le16(end, end_disk_entry_count);
-    const uint16_t entry_count = read_le16(end, end_entry_count);
-    const uint32_t directory_bytes = read_le32(end, end_directory_bytes);
-    const uint32_t directory_offset = read_le32(end, end_directory_offset);
+    const uint16_t disk = load_le16(end.data() + end_disk);
+    const uint16_t directory_disk = load_le16(end.data() + end_directory_disk);
+    const uint16_t disk_entry_count = load_le16(end.data() + end_disk_entry_count);
+    const uint16_t entry_count = load_le16(end.data() + end_entry_count);
+    const uint32_t directory_bytes = load_le32(end.data() + end_directory_bytes);
+    const uint32_t directory_offset = load_le32(end.data() + end_directory_offset);
     if (disk == zip64_sentinel_16 || directory_disk == zip64_sentinel_16 ||
         disk_entry_count == zip64_sentinel_16 || entry_count == zip64_sentinel_16 ||
         directory_bytes == zip64_sentinel_32 || directory_offset == zip64_sentinel_32)

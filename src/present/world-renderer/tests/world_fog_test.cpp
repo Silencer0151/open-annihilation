@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/world_renderer/world_fog.hpp"
+#include "oa/test/check.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <vector>
 
@@ -40,21 +40,21 @@ struct SightMap {
 void placement_follows_camera() {
     const SightMap map(16, 16, 1, 0x2);
     const auto at_origin = map.build(0, 0, 64, 32);
-    assert(at_origin.width == 4 && at_origin.height == 3);
-    assert(at_origin.first_cell_x == -1 && at_origin.first_cell_z == -1);
-    assert(at_origin.offset_x == -16 && at_origin.offset_z == -16);
-    assert(at_origin.variant_phase == 0);
+    OA_CHECK(at_origin.width == 4 && at_origin.height == 3);
+    OA_CHECK(at_origin.first_cell_x == -1 && at_origin.first_cell_z == -1);
+    OA_CHECK(at_origin.offset_x == -16 && at_origin.offset_z == -16);
+    OA_CHECK(at_origin.variant_phase == 0);
     const auto shifted = map.build(20, 50, 64, 32);
-    assert(shifted.first_cell_x == 0 && shifted.offset_x == -4);
-    assert(shifted.first_cell_z == 1 && shifted.offset_z == -2);
-    assert(shifted.variant_phase == 1 + 2);
+    OA_CHECK(shifted.first_cell_x == 0 && shifted.offset_x == -4);
+    OA_CHECK(shifted.first_cell_z == 1 && shifted.offset_z == -2);
+    OA_CHECK(shifted.variant_phase == 1 + 2);
 }
 
 void clear_when_everything_is_seen() {
     const SightMap map(16, 16, 1, 0x2);
     const auto grid = map.build(64, 64, 128, 128);
     for (const auto& tile : grid.tiles)
-        assert(tile.unseen == 0 && tile.unmapped == 0);
+        OA_CHECK(tile.unseen == 0 && tile.unmapped == 0);
 }
 
 void one_unseen_cell_marks_four_corners() {
@@ -62,32 +62,32 @@ void one_unseen_cell_marks_four_corners() {
     // Camera at 64 puts sight cell 1 at tile column 0 (offset -16).
     map.grid.coverage[5 * 16 + 4] = 0;
     const auto grid = map.build(64, 64, 128, 128);
-    assert(grid.first_cell_x == 1 && grid.first_cell_z == 1);
+    OA_CHECK(grid.first_cell_x == 1 && grid.first_cell_z == 1);
     const auto column = 4 - grid.first_cell_x;
     const auto row = 5 - grid.first_cell_z;
-    assert(grid.at(column, row).unseen == wr::fog_corner_top_left);
-    assert(grid.at(column - 1, row).unseen == wr::fog_corner_top_right);
-    assert(grid.at(column, row - 1).unseen == wr::fog_corner_bottom_left);
-    assert(grid.at(column - 1, row - 1).unseen == wr::fog_corner_bottom_right);
+    OA_CHECK(grid.at(column, row).unseen == wr::fog_corner_top_left);
+    OA_CHECK(grid.at(column - 1, row).unseen == wr::fog_corner_top_right);
+    OA_CHECK(grid.at(column, row - 1).unseen == wr::fog_corner_bottom_left);
+    OA_CHECK(grid.at(column - 1, row - 1).unseen == wr::fog_corner_bottom_right);
     std::size_t marked = 0;
     for (const auto& tile : grid.tiles)
         marked += tile.unseen != 0 ? 1U : 0U;
-    assert(marked == 4);
+    OA_CHECK(marked == 4);
     const auto no_los = map.build(64, 64, 128, 128, false);
     for (const auto& tile : no_los.tiles)
-        assert(tile.unseen == 0);
+        OA_CHECK(tile.unseen == 0);
 }
 
 void unmapped_cells_use_the_black_mask() {
     SightMap map(16, 16, 1, 0x2);
     map.grid.player_bits[6 * 16 + 6] = 0x1; // mapped by another player only
     const auto grid = map.build(64, 64, 128, 128);
-    assert(
+    OA_CHECK(
         grid.at(6 - grid.first_cell_x, 6 - grid.first_cell_z).unmapped == wr::fog_corner_top_left
     );
     const auto unmapped_ignored = map.build(64, 64, 128, 128, true, false);
     for (const auto& tile : unmapped_ignored.tiles)
-        assert(tile.unmapped == 0);
+        OA_CHECK(tile.unmapped == 0);
 }
 
 void map_border_extends_masks_outward() {
@@ -95,10 +95,10 @@ void map_border_extends_masks_outward() {
     const auto grid = map.build(0, 0, 64, 64);
     // Tile row 0 straddles the top map edge: its top corners are off the map
     // and inherit the bottom corners.
-    assert(grid.at(2, 0).unseen == wr::fog_mask_full);
-    assert(grid.at(2, 0).unmapped == wr::fog_mask_full);
-    assert(grid.at(0, 2).unseen == wr::fog_mask_full);
-    assert(grid.at(2, 2).unseen == wr::fog_mask_full);
+    OA_CHECK(grid.at(2, 0).unseen == wr::fog_mask_full);
+    OA_CHECK(grid.at(2, 0).unmapped == wr::fog_mask_full);
+    OA_CHECK(grid.at(0, 2).unseen == wr::fog_mask_full);
+    OA_CHECK(grid.at(2, 2).unseen == wr::fog_mask_full);
 }
 
 // A view that is not a whole number of tiles, scrolled to the far corner:
@@ -107,22 +107,22 @@ void map_border_extends_masks_outward() {
 void border_tile_follows_the_edge_cell_at_any_view_size() {
     const SightMap map(8, 8, 0, 0);
     const auto grid = map.build(156, 156, 100, 100);
-    assert(grid.first_cell_x == 4 && grid.offset_x == -12 && grid.width == 6);
+    OA_CHECK(grid.first_cell_x == 4 && grid.offset_x == -12 && grid.width == 6);
     const auto edge = 7 - grid.first_cell_x;
     for (int32_t along = 0; along <= edge; ++along) {
-        assert(grid.at(edge, along).unseen == wr::fog_mask_full);
-        assert(grid.at(edge, along).unmapped == wr::fog_mask_full);
-        assert(grid.at(along, edge).unseen == wr::fog_mask_full);
-        assert(grid.at(edge + 1, along).unseen == 0 && grid.at(edge + 1, along).unmapped == 0);
-        assert(grid.at(along, edge + 1).unseen == 0);
+        OA_CHECK(grid.at(edge, along).unseen == wr::fog_mask_full);
+        OA_CHECK(grid.at(edge, along).unmapped == wr::fog_mask_full);
+        OA_CHECK(grid.at(along, edge).unseen == wr::fog_mask_full);
+        OA_CHECK(grid.at(edge + 1, along).unseen == 0 && grid.at(edge + 1, along).unmapped == 0);
+        OA_CHECK(grid.at(along, edge + 1).unseen == 0);
     }
 }
 
 void map_span_follows_the_terrain_dda() {
-    assert(wr::fog_map_span(wr::fog_zoom_one, 100) == 100);
-    assert(wr::fog_map_span(2 * wr::fog_zoom_one, 100) == 50);
-    assert(wr::fog_map_span(wr::fog_zoom_one / 2, 100) == 199);
-    assert(wr::fog_map_span(wr::fog_zoom_one, 0) == 0);
+    OA_CHECK(wr::fog_map_span(wr::fog_zoom_one, 100) == 100);
+    OA_CHECK(wr::fog_map_span(2 * wr::fog_zoom_one, 100) == 50);
+    OA_CHECK(wr::fog_map_span(wr::fog_zoom_one / 2, 100) == 199);
+    OA_CHECK(wr::fog_map_span(wr::fog_zoom_one, 0) == 0);
 }
 
 struct Canvas {
@@ -190,15 +190,15 @@ void drawing_fills_grays_and_masks_tiles() {
     const wr::FogView view{0, 0, 64, 64, 0, 0, wr::fog_zoom_one};
     wr::draw_fog_grid(canvas.surface, view, test_grid(), test_tiles(), test_shading());
     // Never-mapped tile (1, 1) spans map [16, 48) on both axes.
-    assert(canvas.red(16, 16) == 1 && canvas.red(47, 47) == 1);
-    assert(canvas.red(15, 16) == 100 && canvas.red(16, 15) == 100);
+    OA_CHECK(canvas.red(16, 16) == 1 && canvas.red(47, 47) == 1);
+    OA_CHECK(canvas.red(15, 16) == 100 && canvas.red(16, 15) == 100);
     // Unseen tile (2, 1) grays [48, 64) x [16, 48): level 100 maps to 50.
-    assert(canvas.red(48, 16) == 50 && canvas.red(63, 47) == 50 && canvas.red(48, 48) == 100);
+    OA_CHECK(canvas.red(48, 16) == 50 && canvas.red(63, 47) == 50 && canvas.red(48, 48) == 100);
     // Partial tile (1, 2) at [16, 48) x [48, 80): the gray quadrant then the
     // black texel at its top-left map pixel.
-    assert(canvas.red(16, 48) == 200);
-    assert(canvas.red(17, 48) == 50 && canvas.red(31, 63) == 50);
-    assert(canvas.red(32, 48) == 100);
+    OA_CHECK(canvas.red(16, 48) == 200);
+    OA_CHECK(canvas.red(17, 48) == 50 && canvas.red(31, 63) == 50);
+    OA_CHECK(canvas.red(32, 48) == 100);
 }
 
 void drawing_scales_with_the_zoom() {
@@ -206,25 +206,25 @@ void drawing_scales_with_the_zoom() {
     // Zoom 2: map pixel m covers destination [2m, 2m + 2).
     const wr::FogView view{0, 0, 64, 64, 0, 0, 2 * wr::fog_zoom_one};
     wr::draw_fog_grid(canvas.surface, view, test_grid(), test_tiles(), test_shading());
-    assert(canvas.red(31, 32) == 100 && canvas.red(32, 32) == 1 && canvas.red(63, 63) == 1);
+    OA_CHECK(canvas.red(31, 32) == 100 && canvas.red(32, 32) == 1 && canvas.red(63, 63) == 1);
     Canvas half(64);
     // Zoom 1/2: only even map pixels are shown, one destination pixel each.
     const wr::FogView zoomed_out{0, 0, 64, 64, 0, 0, wr::fog_zoom_one / 2};
     wr::draw_fog_grid(half.surface, zoomed_out, test_grid(), test_tiles(), test_shading());
-    assert(half.red(7, 8) == 100 && half.red(8, 8) == 1 && half.red(23, 23) == 1);
-    assert(half.red(24, 8) == 50 && half.red(31, 23) == 50 && half.red(40, 8) == 100);
-    assert(half.red(8, 24) == 200 && half.red(9, 24) == 50 && half.red(16, 24) == 100);
+    OA_CHECK(half.red(7, 8) == 100 && half.red(8, 8) == 1 && half.red(23, 23) == 1);
+    OA_CHECK(half.red(24, 8) == 50 && half.red(31, 23) == 50 && half.red(40, 8) == 100);
+    OA_CHECK(half.red(8, 24) == 200 && half.red(9, 24) == 50 && half.red(16, 24) == 100);
 }
 
 void drawing_clips_to_the_surface_and_view() {
     Canvas canvas(40);
     const wr::FogView view{8, 8, 64, 64, 0, 0, wr::fog_zoom_one};
     wr::draw_fog_grid(canvas.surface, view, test_grid(), test_tiles(), test_shading());
-    assert(canvas.red(23, 24) == 100 && canvas.red(24, 24) == 1 && canvas.red(39, 39) == 1);
+    OA_CHECK(canvas.red(23, 24) == 100 && canvas.red(24, 24) == 1 && canvas.red(39, 39) == 1);
     Canvas untouched(64);
     wr::FogGrid empty;
     wr::draw_fog_grid(untouched.surface, view, empty, test_tiles(), test_shading());
-    assert(untouched.red(24, 24) == 100);
+    OA_CHECK(untouched.red(24, 24) == 100);
 }
 
 void dithered_fog_clears_alternate_map_pixels() {
@@ -235,9 +235,9 @@ void dithered_fog_clears_alternate_map_pixels() {
     wr::draw_fog_grid(canvas.surface, view, test_grid(), test_tiles(), shading);
     // Unseen tile (2, 1): map x 48 + camera 5 is odd, so 48 keeps the ground
     // and 49 clears.
-    assert(canvas.red(48, 16) == 100 && canvas.red(49, 16) == 9 && canvas.red(49, 17) == 100);
+    OA_CHECK(canvas.red(48, 16) == 100 && canvas.red(49, 16) == 9 && canvas.red(49, 17) == 100);
     // The partial tile's gray quadrant dithers the same way.
-    assert(canvas.red(17, 48) == 9 && canvas.red(18, 48) == 100);
+    OA_CHECK(canvas.red(17, 48) == 9 && canvas.red(18, 48) == 100);
 }
 
 } // namespace
@@ -254,5 +254,5 @@ int main() {
     drawing_scales_with_the_zoom();
     drawing_clips_to_the_surface_and_view();
     dithered_fog_clears_alternate_map_pixels();
-    return 0;
+    return oa::test::check_exit_status();
 }

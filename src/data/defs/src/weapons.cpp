@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/weapons.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -79,12 +80,23 @@ void set_flag(WeaponDef* weapon, uint32_t flag, int32_t value) noexcept {
 // A scaled TDF double truncated toward zero to 64 bits; callers keep the low
 // bits they store.
 int64_t scaled(const formats::tdf::Block* section, const char* key, double scale) noexcept {
-    return formats::tdf::truncate_to_int64(formats::tdf::get_double(section, key, 0.0) * scale);
+    return base::game_math::truncate_to_int64(formats::tdf::get_double(section, key, 0.0) * scale);
+}
+
+/// Copies a key's text into one of a slot's asset names, or empties the name for a missing key.
+void keep_name(
+    char (&kept)[weapon_asset_name_capacity], const formats::tdf::Block* section, const char* key
+) noexcept {
+    formats::tdf::get_string(section, key, kept, sizeof kept, "");
 }
 
 int16_t sound_of(
-    const WeaponResolver* resolver, const formats::tdf::Block* section, const char* key
+    const WeaponResolver* resolver,
+    const formats::tdf::Block* section,
+    const char* key,
+    char (&kept)[weapon_asset_name_capacity]
 ) noexcept {
+    keep_name(kept, section, key);
     char name[asset_name_capacity];
     if (!formats::tdf::get_string(section, key, name, sizeof name, ""))
         return weapon_no_sound;
@@ -97,8 +109,12 @@ oa_ref32 animation_of(
     const WeaponResolver* resolver,
     const formats::tdf::Block* section,
     const char* gaf_key,
-    const char* art_key
+    const char* art_key,
+    char (&kept_gaf)[weapon_asset_name_capacity],
+    char (&kept_art)[weapon_asset_name_capacity]
 ) noexcept {
+    keep_name(kept_gaf, section, gaf_key);
+    keep_name(kept_art, section, art_key);
     char gaf[asset_name_capacity];
     char art[asset_name_capacity];
     if (!formats::tdf::get_string(section, gaf_key, gaf, sizeof gaf, "") ||
@@ -220,6 +236,29 @@ void share_or_load_model(
 
 } // namespace
 
+namespace {
+
+/// Loads every top-level section of a parsed weapon document, in order.
+///
+/// @param[in,out] table weapon table
+/// @param[in,out] document parsed TDF; its cursor is moved
+/// @param options asset resolver and world options; may be null
+/// @return false when any section was rejected
+bool load_document(
+    WeaponTable* table, formats::tdf::Document* document, const WeaponLoadOptions* options
+) noexcept {
+    bool all = true;
+    for (uint32_t entry = 0;; ++entry) {
+        formats::tdf::reset_cursor(document);
+        if (!formats::tdf::step_entry(document, entry))
+            break;
+        all = weapon_load(table, formats::tdf::cursor(document), options) && all;
+    }
+    return all;
+}
+
+} // namespace
+
 const char* weapon_model_name(const WeaponDef* weapon) noexcept {
     return weapon->model_name;
 }
@@ -246,7 +285,7 @@ int32_t weapon_damage_for(
 }
 
 void weapon_table_init(WeaponTable* table) noexcept {
-    std::memset(table, 0, sizeof *table);
+    std::memset(static_cast<void*>(table), 0, sizeof *table);
     for (uint32_t slot = 0; slot < OA_WEAPON_DEF_COUNT; ++slot)
         table->defs[slot].weapon_id = static_cast<uint8_t>(slot);
 }
@@ -328,19 +367,28 @@ bool weapon_load(
     weapon->shake_duration =
         static_cast<int32_t>(scaled(section, "shakeduration", weapon_ticks_per_second));
 
+    WeaponAssetNames& names = table->assets[id];
+    keep_name(names.model, section, "model");
     char model[asset_name_capacity];
     if (formats::tdf::get_string(section, "model", model, sizeof model, ""))
         share_or_load_model(table, static_cast<uint8_t>(id), model, resolver);
     else
         weapon->model = 0;
-    weapon->explosion_art = animation_of(resolver, section, "explosiongaf", "explosionart");
+    weapon->explosion_art = animation_of(
+        resolver, section, "explosiongaf", "explosionart", names.explosion_gaf, names.explosion_art
+    );
     const bool lava = options != nullptr && options->lava_world;
-    weapon->water_explosion_art =
-        lava ? animation_of(resolver, section, "lavaexplosiongaf", "lavaexplosionart")
-             : animation_of(resolver, section, "waterexplosiongaf", "waterexplosionart");
-    weapon->sound_start = sound_of(resolver, section, "soundstart");
-    weapon->sound_hit = sound_of(resolver, section, "soundhit");
-    weapon->sound_water = sound_of(resolver, section, "soundwater");
+    weapon->water_explosion_art = animation_of(
+        resolver,
+        section,
+        lava ? "lavaexplosiongaf" : "waterexplosiongaf",
+        lava ? "lavaexplosionart" : "waterexplosionart",
+        names.water_explosion_gaf,
+        names.water_explosion_art
+    );
+    weapon->sound_start = sound_of(resolver, section, "soundstart", names.sound_start);
+    weapon->sound_hit = sound_of(resolver, section, "soundhit", names.sound_hit);
+    weapon->sound_water = sound_of(resolver, section, "soundwater", names.sound_water);
 
     const formats::tdf::Block* damage = formats::tdf::find_child(section, "DAMAGE");
     if (damage == nullptr) {
@@ -360,6 +408,17 @@ bool weapon_load(
         weapon->damage_overrides = static_cast<uint32_t>(id) + 1u;
     }
     return true;
+}
+
+bool load_weapon_text(
+    WeaponTable* table, const char* text, uint32_t length, const WeaponLoadOptions* options
+) noexcept {
+    formats::tdf::Document document;
+    formats::tdf::document_init(&document);
+    const bool parsed = formats::tdf::parse_text(&document, text, length, false, nullptr);
+    const bool loaded = parsed && load_document(table, &document, options);
+    formats::tdf::document_free(&document);
+    return loaded;
 }
 
 uint32_t load_weapon_defs(
@@ -385,12 +444,7 @@ uint32_t load_weapon_defs(
         if (load_tdf_file(files, path, &document, nullptr) &&
             (document.from_archive || options == nullptr || !options->archive_only)) {
             ++loaded;
-            for (uint32_t entry = 0;; ++entry) {
-                formats::tdf::reset_cursor(&document);
-                if (!formats::tdf::step_entry(&document, entry))
-                    break;
-                weapon_load(table, formats::tdf::cursor(&document), options);
-            }
+            (void)load_document(table, &document, options);
         }
         formats::tdf::document_free(&document);
     }

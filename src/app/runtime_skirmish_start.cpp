@@ -10,10 +10,11 @@
 #include "oa/data/defs/gamedata_tables.hpp"
 #include "oa/data/defs/unit_def_loader.hpp"
 #include "oa/data/defs/unit_header.hpp"
+#include "oa/data/defs/unit_records.hpp"
 #include "oa/data/mission_types.hpp"
-#include "oa/sim/weapon_execution/weapon_launch.hpp"
 #include "oa/sim/session.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/ui/hud/player_records.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include <algorithm>
@@ -44,34 +45,6 @@ constexpr int32_t kStandInPhysicalMemory = 256 * 0x100000;
 // The player timeout of a match no launch switch changed: seconds a silent
 // player is waited for.
 constexpr int32_t kPlayerTimeoutSeconds = 30;
-
-class UnitCatalogReader final : public oa::data::unit_definitions::CatalogAssetReader {
-  public:
-
-    explicit UnitCatalogReader(const oa::AssetStore& assets) : assets_(assets) {}
-
-    oa::data::unit_definitions::Result<std::vector<std::string>>
-    list_effective(std::string_view directory, std::string_view extension) const override {
-        try {
-            return {assets_.list_effective(directory, extension), {}};
-        } catch (const std::exception& error) {
-            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
-        }
-    }
-
-    oa::data::unit_definitions::Result<std::string> read(std::string_view path) const override {
-        try {
-            const auto bytes = assets_.read(path).bytes;
-            return {std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {}};
-        } catch (const std::exception& error) {
-            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
-        }
-    }
-
-  private:
-
-    const oa::AssetStore& assets_;
-};
 
 class FeatureCatalogReader final : public oa::sim::map_runtime::FeatureAssetReader {
   public:
@@ -199,35 +172,6 @@ std::string lowered_name(std::string_view name) {
 
 } // namespace
 
-void Runtime::keep_available_units(
-    oa::data::unit_definitions::UnitCatalog& catalog, std::span<const oa::UnitDef> headers
-) {
-    std::size_t kept = 0;
-    for (std::size_t index = 0; index < catalog.entries.size(); ++index) {
-        if ((headers[index + 1U].flags & OA_UNIT_DEF_FLAG_AVAILABLE) == 0)
-            continue;
-        if (kept != index)
-            catalog.entries[kept] = std::move(catalog.entries[index]);
-        catalog.entries[kept].type_id = static_cast<uint16_t>(kept + 1U);
-        ++kept;
-    }
-    catalog.entries.resize(kept);
-}
-
-void Runtime::restrict_marked_catalog(
-    oa::data::unit_definitions::UnitCatalog& catalog, const UnitFilter& filter
-) {
-    const auto count = catalog.entries.size() + 1U;
-    std::vector<oa::UnitDef> headers(count);
-    for (std::size_t index = 0; index < catalog.entries.size(); ++index) {
-        const auto bytes = assets_.read(catalog.entries[index].logical_path).bytes;
-        headers[index + 1U].fbi_hash =
-            oa::formats::tdf::buffer_hash(bytes.data(), static_cast<int32_t>(bytes.size()));
-    }
-    filter.mark_units(filter.context, headers.data(), static_cast<uint32_t>(count));
-    keep_available_units(catalog, headers);
-}
-
 oa::data::unit_definitions::Result<std::vector<oa::data::unit_definitions::TdfDocument>>
 Runtime::load_feature_tdf_set() const {
     return oa::sim::map_runtime::load_feature_documents(FeatureCatalogReader(assets_));
@@ -283,13 +227,12 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
     host.load_object = [](void* context, const char* object_name) -> oa_ref32 {
         auto& self = *static_cast<Runtime*>(context);
         try {
-            const auto bytes =
-                self.assets_.read("objects3d/" + std::string(object_name) + ".3DO").bytes;
-            const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+            const auto path = "objects3d/" + std::string(object_name) + ".3DO";
+            const auto bytes = self.assets_.read(path).bytes;
             self.feature_assets_.models.push_back(
-                std::make_shared<const oa::formats::objects3d::Model>(
-                    oa::formats::objects3d::load_3do({begin, bytes.size()})
-                )
+                std::make_shared<const oa::formats::objects3d::Model>(oa::ui::decoded::require(
+                    oa::formats::objects3d::load_3do(std::as_bytes(std::span(bytes))), path
+                ))
             );
         } catch (const std::exception&) {
             return 0;
@@ -436,40 +379,26 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     if (bootstrap.place_commanders && selected_start_markers_.empty() && !campaign_mission_)
         throw std::runtime_error("selected map has no start-position schema");
     session_schema_ = session_schema();
-    const auto movement_data = assets_.read("gamedata/moveinfo.tdf");
-    const std::string_view movement_text(
-        reinterpret_cast<const char*>(movement_data.bytes.data()), movement_data.bytes.size()
-    );
-    const auto movement = oa::data::unit_definitions::load_movement_classes(movement_text);
-    if (!movement)
-        throw std::runtime_error("cannot load moveinfo.tdf: " + movement.error.message);
-
+    // The weapons, every WEAPONS\*.TDF section into its ID's slot. A lava
+    // world loads the lava explosions into the water explosion slot.
     weapon_registry_ = oa::sim::combat_state::WeaponRegistry{};
     weapon_model_names_.clear();
+    const oa::data::defs::Files files = asset_files(assets_);
     std::size_t installed_weapons = 0;
-    const auto weapon_documents = assets_.list_effective("weapons", ".tdf");
-    for (const auto& path : weapon_documents) {
-        const auto bytes = read(path);
-        if (!bytes)
-            continue;
-        const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-        const auto document = oa::data::unit_definitions::parse_tdf(text);
-        if (!document)
-            throw std::runtime_error(
-                "cannot parse weapon definitions '" + std::string(path) +
-                "': " + document.error.message
-            );
-        installed_weapons +=
-            oa::sim::combat_state::install_weapon_tdf(weapon_registry_, document.value);
-        for (const auto& section : document.value.sections) {
-            const auto* id = section.find("id");
-            const auto* model = section.find("model");
-            if (id == nullptr || model == nullptr || model->empty())
-                continue;
-            const auto slot = std::strtoul(std::string(*id).c_str(), nullptr, 10);
-            if (slot <= 0xff)
-                weapon_model_names_.emplace(static_cast<uint8_t>(slot), *model);
+    {
+        const auto weapon_table = std::make_unique<oa::data::defs::WeaponTable>();
+        const oa::data::defs::WeaponLoadOptions weapon_options{
+            nullptr, nullptr, integer("lavaworld", 0) != 0, false
+        };
+        oa::data::defs::load_weapon_defs(&files, weapon_table.get(), &weapon_options);
+        installed_weapons =
+            oa::sim::combat_state::install_weapon_table(weapon_registry_, *weapon_table);
+        for (std::size_t slot = 0; slot < OA_WEAPON_DEF_COUNT; ++slot) {
+            const char* model = weapon_table->assets[slot].model;
+            if (weapon_table->defs[slot].key[0] != '\0' && model[0] != '\0')
+                weapon_model_names_.emplace(static_cast<uint8_t>(slot), model);
         }
+        oa::data::defs::weapon_table_free(weapon_table.get());
     }
     if (installed_weapons == 0)
         throw std::runtime_error("no base weapon definitions were installed");
@@ -525,25 +454,13 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     spawn_types_.push_back({});
     spawn_type_names_.emplace_back();
     loaded_commander_types_.push_back({});
-    const UnitCatalogReader catalog_reader(assets_);
-    auto catalog = oa::data::unit_definitions::load_unit_catalog(catalog_reader);
-    if (!catalog)
-        throw std::runtime_error("cannot load unit catalog: " + catalog.error.message);
-    if (campaign_mission_)
-        restrict_campaign_catalog(catalog.value);
-    if (bootstrap.unit_filter.mark_units != nullptr)
-        restrict_marked_catalog(catalog.value, bootstrap.unit_filter);
-    const auto categories = oa::data::unit_definitions::resolve_unit_categories(catalog.value);
-    if (!categories)
-        throw std::runtime_error("cannot resolve unit categories: " + categories.error.message);
-    category_registry_ = std::move(categories.value);
-    // The unit definitions over the catalog order: the movement classes, then
-    // each unit's FBI against Game.weapon_defs and the sound categories.
-    const oa::data::defs::Files files = asset_files(assets_);
+    // The unit headers, one per units/*.FBI. A mission keeps the types its
+    // use-only file lists and a session those its players agreed on; the
+    // table then drops the rest and sorts the kept ones by unit name, which
+    // numbers them.
     if (!oa::data::defs::load_move_classes(&files, &unit_table_.move_classes, nullptr, nullptr))
         throw std::runtime_error("Can't load MOVEINFO.TDF");
-    const auto weapon_defs = std::make_unique<oa::WeaponDef[][OA_WEAPON_DEF_COUNT]>(1);
-    oa::sim::weapon_execution::store_weapon_defs(weapon_registry_, weapon_defs[0]);
+    const auto& weapon_defs = weapon_registry_.records();
     oa::data::defs::WeaponTdfSet weapon_files{};
     if (!oa::data::defs::load_weapon_tdf_set(&files, nullptr, false, &weapon_files))
         throw std::runtime_error("cannot list the weapon files");
@@ -553,33 +470,81 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     const oa::data::defs::UnitHeaderSources header_sources{
         "", &weapon_files, kBuildVersionMajor, kBuildVersionMinor, false, false
     };
-    CorpseFeatures corpses{feature_table_, feature_documents.value, &feature_host, {}};
-    const oa::data::defs::UnitDefLoadHost corpse_host{&corpses, CorpseFeatures::load};
+    std::vector<std::string> unit_files;
+    files.list(
+        files.context,
+        "units",
+        "FBI",
+        [](void* user, const char* name) {
+            static_cast<std::vector<std::string>*>(user)->emplace_back(name);
+        },
+        &unit_files
+    );
     auto& unit_table = unit_table_.tables;
     if (!oa::data::defs::unit_def_tables_allocate(
-            &unit_table, static_cast<uint32_t>(catalog.value.entries.size() + 1U)
+            &unit_table, static_cast<uint32_t>(unit_files.size() + 1U)
         ))
         throw std::runtime_error("unit catalog exceeds the unit table");
+    for (std::size_t index = 0; index < unit_files.size(); ++index) {
+        char fbi_path[oa::data::defs::path_capacity];
+        oa::data::defs::build_variant_path(
+            &files, fbi_path, sizeof fbi_path, "units", unit_files[index].c_str(), "FBI", nullptr
+        );
+        bool refused = false;
+        if (!oa::data::defs::load_unit_header(
+                &files, fbi_path, unit_table.records[index + 1U], header_sources, &refused
+            ))
+            throw std::runtime_error("cannot load unit header " + std::string(fbi_path));
+    }
+    if (campaign_mission_)
+        mark_campaign_units(unit_table.records, unit_table.count);
+    if (bootstrap.unit_filter.mark_units != nullptr)
+        bootstrap.unit_filter.mark_units(
+            bootstrap.unit_filter.context, unit_table.records, unit_table.count
+        );
+    unit_table.count =
+        oa::data::defs::unit_defs_finalize_catalog(unit_table.records, unit_table.count);
+    const std::size_t unit_count = unit_table.count != 0 ? unit_table.count - 1U : 0U;
+    // Each kept unit's FBI, by unit name, against Game.weapon_defs, the
+    // movement classes and the sound categories.
+    CorpseFeatures corpses{feature_table_, feature_documents.value, &feature_host, {}};
+    const oa::data::defs::UnitDefLoadHost corpse_host{&corpses, CorpseFeatures::load};
     const oa::data::defs::UnitDefSources unit_sources{
         "",
         &unit_table_.move_classes,
-        weapon_defs[0],
+        weapon_defs.data(),
         &unit_table_.sound_categories,
         &unit_table.categories,
         &unit_table.blocks,
         &corpse_host
     };
-    loaded_commander_types_.reserve(catalog.value.entries.size() + 1U);
-    unit_definitions_.reserve(catalog.value.entries.size());
-    runtime_definition_metadata_.reserve(catalog.value.entries.size());
-    spawn_types_.reserve(catalog.value.entries.size() + 1);
-    spawn_type_names_.reserve(catalog.value.entries.size() + 1);
+    const oa::data::unit_definitions::UnitDefinitionSources definition_sources{
+        &unit_table_.move_classes,
+        weapon_defs.data(),
+        &unit_table_.sound_categories,
+        &unit_table.categories
+    };
+    loaded_commander_types_.reserve(unit_count + 1U);
+    unit_definitions_.reserve(unit_count);
+    runtime_definition_metadata_.reserve(unit_count);
+    spawn_types_.reserve(unit_count + 1);
+    spawn_type_names_.reserve(unit_count + 1);
     set_load_progress(2, 5);
-    std::size_t loaded_units = 0;
-    for (const auto& catalog_entry : catalog.value.entries) {
-        const auto& definition = catalog_entry.definition;
-        auto metadata =
-            oa::data::unit_definitions::resolve_runtime_metadata(definition, movement.value);
+    for (std::size_t type_id = 1; type_id <= unit_count; ++type_id) {
+        oa::UnitDef& record = unit_table.records[type_id];
+        char fbi_path[oa::data::defs::path_capacity];
+        oa::data::defs::build_variant_path(
+            &files, fbi_path, sizeof fbi_path, "units", record.unit_name, "FBI", nullptr
+        );
+        if (!oa::data::defs::load_unit_def(&files, fbi_path, record, unit_sources))
+            throw std::runtime_error("cannot load unit definition " + std::string(fbi_path));
+        if (!corpses.error.empty())
+            throw std::runtime_error(corpses.error);
+        auto definition =
+            oa::data::unit_definitions::unit_definition_from(record, definition_sources);
+        auto metadata = oa::data::unit_definitions::resolve_runtime_metadata(
+            record, unit_table_.move_classes, unit_table.blocks
+        );
         if (!metadata)
             throw std::runtime_error(
                 "cannot resolve runtime metadata for '" + definition.unit_name +
@@ -591,30 +556,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             weapon_registry_, {definition.weapon1, definition.weapon2, definition.weapon3}
         );
         bindings.resolved_weapon_present = weapon_binding.resolved_nondefault_weapon;
-        bindings.default_mission =
-            oa::data::mission_types::index_for_name(definition.default_mission_type);
+        bindings.default_mission = static_cast<uint8_t>(record.default_mission_type);
         bindings.movement_footprint =
             std::array<int16_t, 2>{metadata.value.footprint_x, metadata.value.footprint_z};
-        // The unit header from the enumerated file, then the FBI by unit name.
-        const auto type_id = static_cast<uint16_t>(loaded_units + 1U);
-        oa::UnitDef& record = unit_table.records[type_id];
-        record.type_id = type_id;
-        const auto& logical_path = catalog_entry.logical_path;
-        const auto file_name = logical_path.substr(logical_path.find_last_of("/\\") + 1U);
-        char fbi_path[oa::data::defs::path_capacity];
-        oa::data::defs::build_variant_path(
-            &files, fbi_path, sizeof fbi_path, "units", file_name.c_str(), "FBI", nullptr
-        );
-        bool refused = false;
-        if (!oa::data::defs::load_unit_header(&files, fbi_path, record, header_sources, &refused))
-            throw std::runtime_error("cannot load unit header " + std::string(fbi_path));
-        oa::data::defs::build_variant_path(
-            &files, fbi_path, sizeof fbi_path, "units", record.unit_name, "FBI", nullptr
-        );
-        if (!oa::data::defs::load_unit_def(&files, fbi_path, record, unit_sources))
-            throw std::runtime_error("cannot load unit definition " + std::string(fbi_path));
-        if (!corpses.error.empty())
-            throw std::runtime_error(corpses.error);
         loaded_commander_types_.push_back(
             oa::sim::unit_spawn::load_runtime_type(definition, bindings, *this)
         );
@@ -622,20 +566,19 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         // the page-zero bit; the COB stays with the runtime type.
         const auto& loaded_type = loaded_commander_types_.back();
         record.bounds_min_y = 0;
-        record.model_height = oa::formats::objects3d::maximum_height_fixed(*loaded_type.model);
+        record.model_height = oa::ui::decoded::require(
+            oa::formats::objects3d::maximum_height_fixed(*loaded_type.model), loaded_type.model_path
+        );
         record.size_y = record.model_height - record.bounds_min_y;
         record.flags = (record.flags & ~OA_UNIT_DEF_FLAG_BUILD_MENU_DEFAULT) |
                        (loaded_type.type.simulation.flags & OA_UNIT_DEF_FLAG_BUILD_MENU_DEFAULT);
         record.gui_page_count = loaded_type.type.gui_page_count;
-        unit_definitions_.push_back(definition);
+        unit_definitions_.push_back(std::move(definition));
         runtime_definition_metadata_.push_back(std::move(metadata.value));
         spawn_types_.push_back(loaded_commander_types_.back().type);
         spawn_type_names_.push_back(loaded_commander_types_.back().unit_name);
-        ++loaded_units;
-        if (catalog.value.entries.size() != 0 && loaded_units % 20 == 0)
-            set_load_progress(
-                2, static_cast<uint8_t>(loaded_units * 100 / catalog.value.entries.size())
-            );
+        if (type_id % 20 == 0)
+            set_load_progress(2, static_cast<uint8_t>(type_id * 100 / unit_count));
     }
     // The headers loaded above are the unit headers; the kept types take their
     // agreed limits (UnitDef.player_limit) from the verdicts.
@@ -653,14 +596,19 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     frontend_game().unit_defs_stale = 1;
     set_load_progress(2, 100);
     set_load_progress(4, 20);
+    // The target-category masks, once every type has joined its categories.
+    unit_target_masks_.assign(loaded_commander_types_.size(), {});
     offline_type_fields_.resize(loaded_commander_types_.size());
     for (std::size_t index = 1; index < loaded_commander_types_.size(); ++index) {
         const auto& metadata = runtime_definition_metadata_[index - 1U];
         auto& fields = offline_type_fields_[index];
+        unit_target_masks_[index] = oa::data::unit_definitions::target_category_masks(
+            unit_table.records[index], unit_table.categories
+        );
         fields.definition = &unit_definitions_[index - 1U];
         fields.yard_mask = metadata.yard_cells;
         fields.runtime_metadata = &metadata;
-        fields.target_masks = &category_registry_.target_masks[index];
+        fields.target_masks = &unit_target_masks_[index];
         // UnitDef.move_class refers to the movement class, so class 0 (KBOTSS2)
         // is nonzero too; the handle is the class index + 1 and 0 means none.
         if (metadata.movement_class_handle)
@@ -718,9 +666,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
                 if (!model) {
                     const auto path = "objects3d/" + placed.object + ".3DO";
                     const auto bytes = assets_.read(path).bytes;
-                    const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
                     model = std::make_shared<const oa::formats::objects3d::Model>(
-                        oa::formats::objects3d::load_3do({begin, bytes.size()})
+                        oa::ui::decoded::require(
+                            oa::formats::objects3d::load_3do(std::as_bytes(std::span(bytes))), path
+                        )
                     );
                 }
                 MatchFeatureDraw draw;
@@ -902,8 +851,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // starts, so that the first of each explosion does not wait for its file.
     for (std::size_t index = 0; index < oa::sim::combat_state::weapon_registry_capacity; ++index) {
         const auto& weapon = weapon_registry_.definition(static_cast<uint8_t>(index));
-        for (const auto* name :
-             {&weapon.explosion_gaf, &weapon.water_explosion_gaf, &weapon.lava_explosion_gaf})
+        for (const auto* name : {&weapon.explosion_gaf, &weapon.water_explosion_gaf})
             if (!name->empty())
                 (void)explosion_gaf_archive(*name);
     }
@@ -1193,7 +1141,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
                                   (extension_state::shared_match | extension_state::replay)) != 0
     );
     status_ = "Offline match world prepared for " + selected_map_name_runtime_ + " with " +
-              std::to_string(catalog.value.entries.size()) + " unit runtimes, " +
+              std::to_string(unit_definitions_.size()) + " unit runtimes, " +
               std::to_string(feature_table_.defs.size()) + " feature definitions and " +
               std::to_string(started_players) +
               (campaign_mission_ ? " placed units" : " commanders") +

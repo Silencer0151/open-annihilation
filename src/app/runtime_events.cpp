@@ -52,6 +52,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             render_match_surface();
         return;
     }
+    // The pointer outside the window has no place on the screen until it
+    // comes back.
+    if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
+        match_pointer_known_ = false;
     if (event.type == SDL_EVENT_TEXT_INPUT && chat_composing_) {
         chat_buffer_ += event.text.text;
         return;
@@ -184,6 +188,9 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         }
         const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
         const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
+        // Where the pointer is on the match's screen is known once SDL
+        // reports it there (the screen's edges scroll the camera only then).
+        match_pointer_known_ = screen_ == Screen::match;
         update_pointer(x, y);
         // A press on a HUD button holds it until either button comes up, on
         // whatever screen; the release acts on a HUD button only when the
@@ -385,10 +392,15 @@ void Runtime::record_typed_key(uint8_t key) {
 void Runtime::show_unsupported(std::string_view message) {
     status_ = std::string(message);
     std::cerr << "unsupported operation: " << message << '\n';
-    if (sdl_.window != nullptr)
+    if (sdl_.window != nullptr) {
+        // The box needs the pointer; full screen holds it again once the
+        // box has closed and the window has the focus back.
+        release_pointer(sdl_.window);
         SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_INFORMATION, "Open Annihilation", status_.c_str(), sdl_.window
         );
+        keep_pointer_on_screen(sdl_.window);
+    }
 }
 
 void Runtime::start_menu_music() {

@@ -388,6 +388,7 @@ int Runtime::run() {
     if (extension_.shutdown != nullptr)
         extension_.shutdown(extension_.context, *this);
     flush_preferences();
+    release_pointer(sdl_.window);
     return exit_status_;
 }
 

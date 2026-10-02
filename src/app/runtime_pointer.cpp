@@ -253,6 +253,13 @@ oa::sim::selection::VisibleLists Runtime::on_screen_lists() {
     lists.unit_capacity = static_cast<uint32_t>(on_screen_units_.size());
     lists.radar = radar_state_.hot_units.data();
     lists.radar_capacity = static_cast<uint32_t>(radar_state_.hot_units.size());
+    // The radar renderer places its picture and lists its blips in Game as it
+    // draws; selection takes them from here rather than reading them itself.
+    if (match_) {
+        const auto& game = match_->state().game;
+        lists.radar_count = game.hot_radar_unit_count;
+        lists.radar_picture = game.radar_picture_rect;
+    }
     return lists;
 }
 

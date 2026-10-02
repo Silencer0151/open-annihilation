@@ -125,32 +125,12 @@ int main() {
     fields[1].runtime_metadata = &metadata;
     fields[1].target_masks = &target_masks;
     sim::combat_state::WeaponRegistry weapons;
-    weapons.install_tdf_section(1, "TESTGUN", "0.1");
-    weapons.install_target_fields(
-        1,
-        "400",
-        "1",
-        "0",
-        "0",
-        "0",
-        "0",
-        "10",
-        "100",
-        "",
-        "1",
-        "0",
-        "0",
-        "0",
-        {},
-        {},
-        {},
-        {},
-        {},
-        {},
-        {},
-        "1",
-        "1",
-        "1"
+    // burst=2 and a burstrate of one tick (0.034 seconds * 30, truncated).
+    (void)sim::combat_state::install_weapon_text(
+        weapons,
+        "[TESTGUN]{id=1; reloadtime=0.1; range=400; lineofsight=1; weaponvelocity=100; turret=1;"
+        " unitsonly=1; groundbounce=1; interceptor=1; burst=2; burstrate=0.034;"
+        " [DAMAGE]{default=10;}}"
     );
     CHECK(weapons.find("TESTGUN")->flags & sim::combat_state::weapon_ground_skip_flag);
     CHECK(weapons.find("TESTGUN")->flags & sim::combat_state::weapon_ground_bounce_flag);
@@ -162,10 +142,7 @@ int main() {
     CHECK(weapons.find("TESTGUN")->default_damage == 10);
     CHECK(weapons.find("TESTGUN")->flags & sim::combat_state::weapon_line_of_sight_flag);
     CHECK(weapons.find("TESTGUN")->flags & sim::combat_state::weapon_turret_flag);
-    // burstrate text is seconds * 30, so the 1-tick rate is stored directly.
-    auto& burst_weapon = const_cast<sim::combat_state::WeaponDefinition&>(*weapons.find("TESTGUN"));
-    burst_weapon.burst = 2;
-    burst_weapon.burst_rate_ticks = 1;
+    CHECK(weapons.find("TESTGUN")->burst == 2 && weapons.find("TESTGUN")->burst_rate_ticks == 1);
     Services services;
     Scenario scenario;
     // Sprite features: a 2x2 rock of 100 hit points and 1x1 trees of 80.
@@ -318,11 +295,16 @@ int main() {
     const auto far = place(1, 10, 4);
     const auto skipped = place(1, 6, 6);
     constexpr uint8_t blast_index = 2;
-    auto& blast = const_cast<sim::combat_state::WeaponDefinition&>(weapons.definition(blast_index));
-    blast.registry_index = blast_index;
-    blast.default_damage = 25;
-    blast.areaofeffect = 64;
-    sim::weapon_execution::store_weapon_defs(weapons, match.state().game.weapon_defs);
+    CHECK(
+        sim::combat_state::install_weapon_text(
+            weapons, "[TESTBLAST]{id=2; areaofeffect=64; [DAMAGE]{default=25;}}"
+        ) == 1
+    );
+    std::copy(
+        weapons.records().begin(),
+        weapons.records().end(),
+        std::begin(match.state().game.weapon_defs)
+    );
     oa::Projectile shot{};
     shot.def = oa::oa_ref_from_index(blast_index);
     shot.position = {40 << 16, 0, 40 << 16};
@@ -331,8 +313,17 @@ int main() {
     CHECK(world.plots[origin].feature_record == 25);
     CHECK(world.plots[edge].feature_record == 0);
     CHECK(world.plots[far].feature_record == 0);
-    blast.flags = sim::combat_state::weapon_ground_skip_flag;
-    sim::weapon_execution::store_weapon_defs(weapons, match.state().game.weapon_defs);
+    // unitsonly: the blast passes over the ground's features.
+    CHECK(
+        sim::combat_state::install_weapon_text(
+            weapons, "[TESTBLAST]{id=2; areaofeffect=64; unitsonly=1; [DAMAGE]{default=25;}}"
+        ) == 1
+    );
+    std::copy(
+        weapons.records().begin(),
+        weapons.records().end(),
+        std::begin(match.state().game.weapon_defs)
+    );
     shot.position = {104 << 16, 0, 104 << 16};
     match.detonate(shot, nullptr);
     CHECK(world.plots[skipped].feature_record == 0);

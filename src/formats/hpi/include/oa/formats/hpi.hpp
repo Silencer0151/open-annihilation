@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstdint>
 #include <array>
 #include <cstddef>
@@ -114,6 +116,9 @@ inline constexpr std::size_t LooseIndexEntryLimit = 16 * 1024;
 inline constexpr std::size_t TrailerYearBytes = 4;
 // Decoded bytes per chunk of a compressed entry, and the per-read block cache.
 inline constexpr uint32_t BlockBytes = 0x10000;
+/// Largest file, in bytes, read whole from an archive or a loose folder; a
+/// larger one is refused before anything is allocated.
+inline constexpr uint64_t EntryByteLimit = 1ULL << 30;
 // Plain *.HPI archives mounted from the game directory before the scan stops.
 inline constexpr int PlainArchiveMountLimit = 10;
 
@@ -241,11 +246,10 @@ class HpiArchive {
     [[nodiscard]] std::vector<ArchiveEntry> entries() const;
     /// Reads the whole decoded content of a file.
     ///
-    /// Throws std::invalid_argument when lookup() finds no file.
-    ///
     /// @param path '\\'- or '/'-separated path inside the archive
-    /// @return the decoded bytes
-    [[nodiscard]] std::vector<uint8_t> read(std::string_view path) const;
+    /// @return the decoded bytes; not_found when lookup() finds no file, or
+    ///         read_node's error
+    [[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>> read(std::string_view path) const;
 
     /// Returns the host path the archive was opened from.
     ///
@@ -270,23 +274,33 @@ class HpiArchive {
     [[nodiscard]] std::optional<uint32_t> lookup_directory(std::string_view path) const noexcept;
     /// Reads the whole decoded content of a file node.
     ///
-    /// Throws std::invalid_argument for a directory or bad index and
-    /// std::runtime_error for a truncated entry.
+    /// The size the entry claims is checked before its buffer is allocated:
+    /// it is at most EntryByteLimit, a stored entry lies wholly inside the
+    /// archive, and a compressed one has room for each chunk's size-table
+    /// slot and header.
     ///
     /// @param index file node index
-    /// @return the decoded bytes
-    [[nodiscard]] std::vector<uint8_t> read_node(uint32_t index) const;
+    /// @return the decoded bytes; or out_of_range for a directory or bad
+    ///         index, limit_exceeded for an entry over EntryByteLimit,
+    ///         truncated, at its archive offset, for an entry the archive
+    ///         cannot hold or that reads short, or read_node_range's error
+    [[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>> read_node(uint32_t index) const;
     /// Copies a range of a file node's decoded bytes.
     ///
     /// Compressed entries are located through the decrypted chunk-size table
-    /// and decoded one 64 KiB block at a time. A chunk that fails to decode
-    /// throws std::runtime_error, as 3.1c treats it as fatal.
+    /// and decoded one 64 KiB block at a time.
     ///
     /// @param index file node index
     /// @param position first decoded byte to copy
     /// @param[out] output destination; the range is clamped to the entry
-    /// @return the count copied, or -1 when a chunk cannot be read
-    [[nodiscard]] int64_t
+    /// @return the count copied, short when a stored entry runs past the end
+    ///         of the archive; or, at its archive offset, truncated for a
+    ///         chunk or size table that cannot be read, limit_exceeded for a
+    ///         stored chunk over 1 MiB, or malformed for a chunk that fails
+    ///         to decode, with its SQUASHERR_* name as the message and its
+    ///         SquashStatus as the detail; 3.1c treats that last one as fatal.
+    ///         out_of_range for a directory or bad index.
+    [[nodiscard]] base::bytes::Decoded<uint32_t>
     read_node_range(uint32_t index, uint32_t position, std::span<uint8_t> output) const;
 
   private:
@@ -725,11 +739,13 @@ struct Image {
 
 /// Decodes an 8-bit indexed or 24-bit three-plane PCX image.
 ///
-/// Throws std::runtime_error for an unsupported layout, a missing 256-colour
-/// palette, invalid RLE or an image over the 64-megapixel limit.
-///
 /// @param data the whole file
-/// @return RGB pixels, plus indices and the palette for an indexed image
-[[nodiscard]] Image decode_pcx(std::span<const uint8_t> data);
+/// @return RGB pixels, plus indices and the palette for an indexed image; or
+///         the first error at its file offset: a short header, a bad
+///         manufacturer byte or version, an unsupported layout, an image
+///         over the 64-megapixel limit, a missing 256-colour palette, pixel
+///         data that ends early, an invalid or scanline-crossing run, or
+///         bytes left over before the palette
+[[nodiscard]] base::bytes::Decoded<Image> decode_pcx(std::span<const uint8_t> data);
 
 } // namespace oa

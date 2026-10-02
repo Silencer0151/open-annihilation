@@ -241,7 +241,12 @@ struct LandServices : sim::match_runtime::OfflineServices {
 };
 
 struct LandScenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
+    // The map's gravity; 0 leaves the key unset.
+    int32_t gravity{};
+
+    int32_t integer(std::string_view key, int32_t fallback) override {
+        return key == "gravity" && gravity != 0 ? gravity : fallback;
+    }
 
     std::optional<std::string> text(std::string_view) override { return std::nullopt; }
 };
@@ -255,14 +260,16 @@ struct Land {
     std::unique_ptr<sim::match_runtime::Match> match;
 
     // Land of `columns` by `rows` 16-unit cells, with open sea, its floor at
-    // height 0, west of column `shore`.
+    // height 0, west of column `shore`, and the map's gravity; 0 sets none.
     explicit Land(
         test::InstalledUnits& loaded,
         int32_t columns = land_columns,
         int32_t rows = land_rows,
-        int32_t shore = 0
+        int32_t shore = 0,
+        int32_t gravity = 0
     )
         : units(loaded), ground(columns, rows, land_sea_level, shore, shore, 0, 0, land_height) {
+        scenario.gravity = gravity;
         sim::match_runtime::OfflineInputs input{
             ground.map,
             units.loaded,
@@ -760,28 +767,178 @@ void installed_ground_attack_resolves_by_type(test::InstalledUnits& units) {
     }
 }
 
-void installed_attack_commands(const AssetStore& store) {
-    test::InstalledUnits units(
-        store,
-        {"CORAK",
-         "ARMPW",
-         "ARMZEUS",
-         "CORPYRO",
-         "ARMHAM",
-         "CORTHUD",
-         "ARMROCK",
-         "CORSTORM",
-         "ARMFLASH",
-         "CORGATOR",
-         "ARMSTUMP",
-         "CORRAID",
-         "ARMBRAWL",
-         "CORAPE",
-         "ARMMH",
-         "CORMH",
-         "ARMTHUND",
-         "ARMFIG"}
+// The gravity of the map bombers fly over: AirStrike times its release by
+// how long a bomb takes to fall from cruise height, and fails without one.
+constexpr int32_t bomber_gravity = 112;
+// Ticks a bomber has to destroy or damage its target.
+constexpr uint32_t bombing_ticks = 3000;
+// The mission a damaged aircraft takes to set down on a repair pad.
+constexpr uint8_t landing_order = sim::ground_orders::vtol_landing_kind;
+constexpr uint8_t air_to_air_order = sim::match_runtime::air_to_air_kind;
+// Ticks a fighter has to destroy an aircraft it was commanded at.
+constexpr uint32_t dogfight_ticks = 3000;
+
+// Whole world units above the surface the lowest an aircraft comes while
+// `until` runs, counted from the tick it first reaches half its cruise
+// height.
+struct LowestFlight {
+    Land& land;
+    const sim::unit_spawn::Slot& slot;
+    int32_t cruise;
+    bool climbed{};
+    int32_t lowest;
+
+    LowestFlight(Land& at, const sim::unit_spawn::Slot& aircraft)
+        : land(at), slot(aircraft),
+          cruise(at.units.definitions[aircraft.record.type_index].cruise_altitude), lowest(cruise) {
+    }
+
+    void watch() {
+        const auto height = height_above_surface(land, slot);
+        climbed = climbed || height >= cruise / 2;
+        if (climbed)
+            lowest = std::min(lowest, height);
+    }
+
+    bool stayed_up() const { return climbed && lowest >= cruise / 2; }
+};
+
+// Commanded from out of reach at a unit on the ground, an installed bomber
+// takes AirStrike: it flies at the unit, lets its bombs go as it passes over
+// it and swings round for further passes until the unit is destroyed, in the
+// air throughout.
+void installed_bomber_destroys_a_ground_unit(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells, 0, bomber_gravity);
+    auto& target = land.target(coast_target_x, coast_target_z);
+    auto& bomber = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    const auto at = point_on(target);
+    CHECK(land.match->issue_attack_command(bomber.unit_index, target.unit_index, false, &at));
+    if (!head_is(bomber, air_strike_order))
+        throw std::runtime_error(std::string(name) + " did not take AirStrike at the unit");
+    LowestFlight flight(land, bomber);
+    land.run(bombing_ticks, [&] {
+        flight.watch();
+        return target.record.health == 0;
+    });
+    if (target.record.health != 0 || !flight.stayed_up())
+        throw std::runtime_error(
+            std::string(name) + " left its target with " + std::to_string(target.record.health) +
+            " health and came down to " + std::to_string(flight.lowest) +
+            " above the land at cruise height " + std::to_string(flight.cruise)
+        );
+}
+
+// Commanded at a point on the ground, an installed bomber takes AirStrike at
+// the point, aims its bombs there and they come down on it: a unit standing
+// on the point is damaged though the command named no unit.
+void installed_bomber_bombs_a_ground_point(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells, 0, bomber_gravity);
+    auto& standing = land.target(coast_target_x, coast_target_z);
+    const auto full = standing.record.health;
+    const sim::ground_orders::Point at{
+        coast_target_x * fixed_one, land_height * fixed_one, coast_target_z * fixed_one
+    };
+    auto& bomber = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    (void)land.match->issue_attack_ground(bomber.unit_index, at, false);
+    if (!head_is(bomber, air_strike_order))
+        throw std::runtime_error(std::string(name) + " did not take AirStrike at the point");
+    bool aimed = false;
+    land.run(bombing_ticks, [&] {
+        const auto& aim = bomber.record.weapons[0];
+        aimed = aimed || (aim.target_a == coast_target_x && aim.target_b == coast_target_z);
+        return standing.record.health < full;
+    });
+    if (!aimed || standing.record.health >= full || !head_is(bomber, air_strike_order))
+        throw std::runtime_error(
+            std::string(name) + (aimed ? " aimed at the point" : " never aimed at the point") +
+            " and left the unit there with " + std::to_string(standing.record.health) + " of " +
+            std::to_string(full) + " health"
+        );
+}
+
+// An installed bomber below three quarters of its health when it breaks away
+// from a pass goes to an active repair pad of its own side nearby: it takes
+// VTOL_Landing on the pad ahead of its attack, sets down on the pad and is
+// repaired there.
+void installed_damaged_bomber_goes_to_a_pad(
+    test::InstalledUnits& units, std::string_view name, std::string_view pad_name
+) {
+    Land land(units, coast_cells, coast_cells, 0, bomber_gravity);
+    auto& target = land.target(coast_target_x, coast_target_z);
+    auto& pad = land.spawn(0, pad_name, coast_target_x - 400, coast_target_z - distant_start);
+    auto& bomber = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    pad.record.state_flags |= OA_UNIT_STATE_ACTIVE;
+    const auto max_health = land.units.definitions[bomber.record.type_index].max_damage;
+    bomber.record.health = static_cast<uint16_t>(max_health / 2);
+    const auto damaged = bomber.record.health;
+    const auto at = point_on(target);
+    CHECK(land.match->issue_attack_command(bomber.unit_index, target.unit_index, false, &at));
+    land.run(bombing_ticks, [&] { return head_is(bomber, landing_order); });
+    if (!head_is(bomber, landing_order))
+        throw std::runtime_error(std::string(name) + " never made for the repair pad");
+    land.run(bombing_ticks, [&] { return bomber.record.health > damaged; });
+    if (bomber.record.health <= damaged || distance(bomber, pad) > 32.0)
+        throw std::runtime_error(
+            std::string(name) + " came to " + std::to_string(distance(bomber, pad)) +
+            " from the pad with " + std::to_string(bomber.record.health) + " health"
+        );
+}
+
+// Commanded at an aircraft in flight, an installed fighter takes AirToAir:
+// it chases the aircraft, in the air throughout, and destroys it; its attack
+// then hands over to VTOL_SeekAttack, which keeps it in the air looking for
+// the next unit.
+void installed_fighter_destroys_an_aircraft(
+    test::InstalledUnits& units, std::string_view name, std::string_view quarry_name
+) {
+    Land land(units, coast_cells, coast_cells);
+    auto& quarry = land.spawn(1, quarry_name, coast_target_x, coast_target_z);
+    land.run(2);
+    quarry.record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
+    // The quarry patrols to and fro across the map.
+    (void)land.match->issue_patrol(
+        quarry.unit_index, point(coast_target_x + 1000, coast_target_z), false
     );
+    land.run(approach_ticks, [&] {
+        return (quarry.record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) == airborne &&
+               height_above_surface(land, quarry) >=
+                   land.units.definitions[quarry.record.type_index].cruise_altitude / 2;
+    });
+    CHECK((quarry.record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) == airborne);
+    auto& fighter = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    CHECK(land.match->issue_attack_command(fighter.unit_index, quarry.unit_index, false, nullptr));
+    if (!head_is(fighter, air_to_air_order))
+        throw std::runtime_error(std::string(name) + " did not take AirToAir at the aircraft");
+    LowestFlight flight(land, fighter);
+    land.run(dogfight_ticks, [&] {
+        flight.watch();
+        return quarry.record.health == 0;
+    });
+    if (quarry.record.health != 0 || !flight.stayed_up())
+        throw std::runtime_error(
+            std::string(name) + " left the " + std::string(quarry_name) + " with " +
+            std::to_string(quarry.record.health) + " health and came down to " +
+            std::to_string(flight.lowest) + " above the land at cruise height " +
+            std::to_string(flight.cruise)
+        );
+    land.run(hover_watch_ticks, [&] { return head_is(fighter, seek_attack_order); });
+    if (!head_is(fighter, seek_attack_order) ||
+        (fighter.record.flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != airborne)
+        throw std::runtime_error(
+            std::string(name) + " did not go on seeking in the air after its kill"
+        );
+}
+
+void installed_attack_commands(const AssetStore& store) {
+    test::InstalledUnits units(store, {"CORAK",    "ARMPW",    "ARMZEUS",  "CORPYRO",  "ARMHAM",
+                                       "CORTHUD",  "ARMROCK",  "CORSTORM", "ARMFLASH", "CORGATOR",
+                                       "ARMSTUMP", "CORRAID",  "ARMBRAWL", "CORAPE",   "ARMMH",
+                                       "CORMH",    "ARMTHUND", "CORSHAD",  "ARMFIG",   "CORVENG",
+                                       "CORFINK",  "ARMASP"});
     // Kbots with lasers, lightning, flame, plasma cannon and rockets, and a
     // vehicle: all brake within the stretch the command finds them at.
     for (const auto* name :
@@ -808,6 +965,15 @@ void installed_attack_commands(const AssetStore& store) {
         installed_gunship_moves_on_after_its_kill(units, name);
         installed_gunship_attacks_the_ground(units, name);
     }
+    // Bombers make passes over a unit or a point and go to a repair pad when
+    // damaged; fighters chase aircraft down.
+    for (const auto* name : {"ARMTHUND", "CORSHAD"}) {
+        installed_bomber_destroys_a_ground_unit(units, name);
+        installed_bomber_bombs_a_ground_point(units, name);
+    }
+    installed_damaged_bomber_goes_to_a_pad(units, "ARMTHUND", "ARMASP");
+    installed_fighter_destroys_an_aircraft(units, "ARMFIG", "CORFINK");
+    installed_fighter_destroys_an_aircraft(units, "CORVENG", "CORFINK");
     // Bombers, fighters, gunships and a vehicle commanded at the ground.
     installed_ground_attack_resolves_by_type(units);
     // Missile hovercraft, whose missiles launch vertically and do not track.

@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
-#include "oa/formats/tdf.hpp"
 #include <bit>
-#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace oa::sim::unit_spawn {
 namespace {
@@ -43,40 +42,6 @@ bool equal_name(std::string_view a, std::string_view b) {
 }
 } // namespace
 
-std::array<int16_t, 2> resolve_movement_footprint(
-    const data::unit_definitions::UnitDefinition& definition,
-    const data::unit_definitions::TdfDocument& moveinfo
-) {
-    const auto number = [](const std::string* text) -> int16_t {
-        if (!text)
-            return 0;
-        auto view = std::string_view(*text);
-        while (!view.empty() && (view.front() == ' ' || view.front() == '\t'))
-            view.remove_prefix(1);
-        if (!view.empty() && view.front() == '+')
-            view.remove_prefix(1);
-        int32_t value{};
-        const auto parsed = std::from_chars(view.data(), view.data() + view.size(), value);
-        if (parsed.ec != std::errc{})
-            throw std::invalid_argument("invalid movement footprint integer");
-        return std::bit_cast<int16_t>(static_cast<uint16_t>(value));
-    };
-    if (!definition.movement_class.empty())
-        for (unsigned index = 0; index < 32; ++index) {
-            const auto key = "CLASS" + std::to_string(index);
-            for (const auto& section : moveinfo.sections)
-                if (equal_name(section.name, key)) {
-                    const auto* name = section.find("name");
-                    if (name && equal_name(*name, definition.movement_class))
-                        return {
-                            number(section.find("footprintx")), number(section.find("footprintz"))
-                        };
-                    break;
-                }
-        }
-    return {definition.footprint_x, definition.footprint_z};
-}
-
 LoadedType load_runtime_type(
     const data::unit_definitions::UnitDefinition& definition,
     const RuntimeBindings& bindings,
@@ -109,13 +74,15 @@ LoadedType load_runtime_type(
     const auto object = base_name(definition.object_name);
     const auto unit = base_name(definition.unit_name);
     result.model_path = "objects3d/" + object + ".3DO";
-    auto model_bytes = assets.read(result.model_path);
-    if (!model_bytes)
-        throw std::runtime_error("required unit model not found: " + result.model_path);
-    const auto* begin = reinterpret_cast<const std::byte*>(model_bytes->data());
-    result.model = std::make_shared<const formats::objects3d::Model>(
-        formats::objects3d::load_3do({begin, model_bytes->size()})
-    );
+    const auto model_bytes = assets.read(result.model_path);
+    auto model = model_bytes
+                     ? formats::objects3d::load_3do(std::as_bytes(std::span(*model_bytes)))
+                     : base::bytes::Decoded<formats::objects3d::Model>(base::bytes::DecodeError{
+                           base::bytes::DecodeCode::not_found, 0, "required unit model not found"
+                       });
+    if (!model.ok())
+        throw std::runtime_error(model.error.message + (": " + result.model_path));
+    result.model = std::make_shared<const formats::objects3d::Model>(std::move(*model.value));
     t.model = reinterpret_cast<AssetHandle>(result.model.get());
     // Page zero is probed first, then consecutive pages starting at one.
     const auto zero_bytes = assets.read("guis/" + unit + "0.GUI");

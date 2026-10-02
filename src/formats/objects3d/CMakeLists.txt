@@ -10,7 +10,7 @@ add_library(oa-formats-objects3d src/three_do.cpp)
 add_library(oa::formats::objects3d ALIAS oa-formats-objects3d)
 target_include_directories(oa-formats-objects3d PUBLIC include)
 target_compile_features(oa-formats-objects3d PUBLIC cxx_std_20)
-target_link_libraries(oa-formats-objects3d PUBLIC oa-options)
+target_link_libraries(oa-formats-objects3d PUBLIC oa-base-bytes oa-options)
 
 if(BUILD_TESTING)
   add_executable(oa-model-format-test tests/three_do_test.cpp)

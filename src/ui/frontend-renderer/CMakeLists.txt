@@ -7,7 +7,7 @@ add_library(oa::ui::frontend_renderer ALIAS oa-ui-frontend-renderer)
 target_include_directories(oa-ui-frontend-renderer PUBLIC include)
 target_link_libraries(oa-ui-frontend-renderer PUBLIC
   oa-formats-hpi oa-formats-fnt oa-ui-gui-layout oa-ui-gui-input oa-formats-gaf oa-present
-  oa-options)
+  oa-ui-decoded oa-options)
 
 add_executable(oa-render-main-menu EXCLUDE_FROM_ALL tools/render_main_menu.cpp)
 target_link_libraries(oa-render-main-menu PRIVATE oa-ui-frontend-renderer)

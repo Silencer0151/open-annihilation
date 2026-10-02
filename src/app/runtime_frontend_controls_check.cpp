@@ -882,8 +882,8 @@ void Runtime::check_frontend_controls() {
 
     // Alt+Enter switches the window to full screen and back, on a menu and
     // in a match: Return and keypad Enter alike, a held key's repeats
-    // switching nothing and reaching no screen, and the screen following the
-    // window's new size.
+    // switching nothing and reaching no screen, the screen following the
+    // window's new size, and full screen keeping the pointer on the window.
     const auto key = [&](SDL_EventType type, SDL_Keycode code, SDL_Keymod mod, bool repeat) {
         SDL_Event event{};
         event.type = type;
@@ -921,6 +921,34 @@ void Runtime::check_frontend_controls() {
         (void)SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
         return std::to_string(width) + 'x' + std::to_string(height);
     };
+    // Whether the window lies on its display's usable area, as a window that
+    // leaves full screen is brought back (bring_window_on_display).
+    const auto on_display = [&] {
+        SDL_Rect window{};
+        SDL_Rect usable{};
+        return SDL_GetWindowPosition(sdl_.window, &window.x, &window.y) &&
+               SDL_GetWindowSize(sdl_.window, &window.w, &window.h) &&
+               SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(sdl_.window), &usable) &&
+               window.x >= usable.x && window.y >= usable.y &&
+               window.x + window.w <= usable.x + usable.w &&
+               window.y + window.h <= usable.y + usable.h;
+    };
+    // Full screen with the focus keeps the pointer on the window; a window
+    // leaves it free.
+    bool pointer_kept_in_full_screen = false;
+    const auto expect_pointer_bounds = [&](std::string_view where) {
+        const bool focused = (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        const bool kept = SDL_GetWindowMouseGrab(sdl_.window);
+        if (full_screen() && focused)
+            expect(
+                kept, "full screen does not keep the pointer on the window " + std::string(where)
+            );
+        else
+            expect(
+                !kept, "the pointer is held in a window or without the focus " + std::string(where)
+            );
+        pointer_kept_in_full_screen = pointer_kept_in_full_screen || (kept && full_screen());
+    };
     // The screen is laid out at the window's size: a match's frame takes
     // the window's pixels, and a menu is drawn to the whole window.
     const auto follows_window = [&] {
@@ -949,6 +977,7 @@ void Runtime::check_frontend_controls() {
     const auto switches_twice = [&](std::string_view where, Screen screen) {
         const bool started_full_screen = full_screen();
         const auto started_size = window_size();
+        const bool started_on_display = started_full_screen || on_display();
         alt_enter(SDLK_RETURN, 3);
         const auto switched_size = window_size();
         expect(
@@ -960,6 +989,7 @@ void Runtime::check_frontend_controls() {
             "the screen does not follow the window's size " + switched_size + ' ' +
                 std::string(where)
         );
+        expect_pointer_bounds(where);
         const std::string step = where == "on a menu" ? "alt-enter-menu" : "alt-enter-match";
         snapshot_window(step + "-switched");
         alt_enter(SDLK_KP_ENTER, 3);
@@ -967,11 +997,20 @@ void Runtime::check_frontend_controls() {
             full_screen() == started_full_screen,
             "Alt+keypad Enter did not switch the window back " + std::string(where)
         );
-        expect(
-            window_size() == started_size,
-            "the window came back at " + window_size() + ", not " + started_size + ' ' +
-                std::string(where)
-        );
+        // A window comes back at its own size, and one that was off its
+        // display comes back onto it, shrunk when it was too large for it.
+        if (started_on_display)
+            expect(
+                window_size() == started_size,
+                "the window came back at " + window_size() + ", not " + started_size + ' ' +
+                    std::string(where)
+            );
+        else
+            expect(
+                on_display(),
+                "the window came back off its display at " + window_size() + ' ' +
+                    std::string(where)
+            );
         expect(
             follows_window(),
             "the screen does not follow the window's size " + window_size() + " back " +
@@ -980,10 +1019,11 @@ void Runtime::check_frontend_controls() {
         expect(
             screen_ == screen, "Alt+Enter left the screen it was pressed on " + std::string(where)
         );
+        expect_pointer_bounds(std::string(where) + " back");
         snapshot_window(step + "-back");
         std::cout << "frontend controls check: Alt+Enter " << where << " switched to "
                   << (started_full_screen ? "a window" : "full screen") << " (" << started_size
-                  << " to " << switched_size << ") and back\n";
+                  << " to " << switched_size << ") and back at " << window_size() << '\n';
     };
     switches_twice("on a menu", Screen::single_player);
     // Over a message box, a held Alt+Enter switches the window and leaves the
@@ -1040,6 +1080,11 @@ void Runtime::check_frontend_controls() {
     );
     key(SDL_EVENT_KEY_DOWN, SDLK_ESCAPE, SDL_KMOD_NONE, false);
     expect(!chat_composing_, "Escape did not close the chat line");
+    // SDL's dummy video driver gives its window the focus, so there full
+    // screen held the pointer.
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    if (video_driver != nullptr && std::string_view(video_driver) == "dummy")
+        expect(pointer_kept_in_full_screen, "full screen never kept the pointer on the window");
 
     if (!problems.empty()) {
         std::string report;

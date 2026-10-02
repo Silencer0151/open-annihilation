@@ -217,7 +217,10 @@ namespace {
 const void*
 load_named_gaf(const GadgetRenderer& renderer, const GadgetPanel& panel, const char* name) {
     char name_path[data::defs::path_capacity]{};
-    std::strncpy(name_path, panel.gaf_path.data(), sizeof(name_path) - 1);
+    std::size_t directory_length = 0;
+    while (directory_length + 1 < sizeof(name_path) && panel.gaf_path[directory_length] != '\0')
+        ++directory_length;
+    std::memcpy(name_path, panel.gaf_path.data(), directory_length);
     std::strncat(name_path, name, sizeof(name_path) - std::strlen(name_path) - 1);
     char path[data::defs::path_capacity]{};
     data::defs::format_with_extension(name_path, path, sizeof(path), kGafExtension);

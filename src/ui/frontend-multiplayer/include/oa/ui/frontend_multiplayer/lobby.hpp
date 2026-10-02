@@ -202,7 +202,10 @@ struct LobbyServices {
     void* context{};
     void (*play_sound)(void* context, const char* name){}; // interface sound by name
     void (*message)(void* context, const char* text){};    // modal message box
-    uint32_t (*tick)(void* context){};                     // 30 Hz game clock
+    // 30 Hz game clock. It reads as base::game_loop::scaled_clock does and
+    // turns over to 0 past base::game_loop::scaled_clock_turn; the lobby's
+    // timers compare its readings with lobby_clock_passed.
+    uint32_t (*tick)(void* context){};
     bool (*disc_present)(void* context){};
     int32_t (*display_modes)(void* context, DisplayMode* out, int32_t capacity){};
     // Lobby notifications the game reacts to (sound cues): 2 player added,
@@ -290,9 +293,9 @@ struct Lobby {
     int16_t start_frame{}; // battlestart animation frame
     uint32_t start_frame_tick{};
     uint32_t next_stats_tick{};
-    uint8_t confirm_slot{};    // YesOrNo target
-    uint32_t timeout_player{}; // TIMEOUT.GUI target player id
-    int32_t timeout_refresh_tick{};
+    uint8_t confirm_slot{};          // YesOrNo target
+    uint32_t timeout_player{};       // TIMEOUT.GUI target player id
+    uint32_t timeout_refresh_tick{}; // the tick TIMEOUT.GUI is next redrawn after
     /// The player the stall scan at the end of the last pump found
     /// (lobby_check_timeouts), which TIMEOUT.GUI follows; 0 for none.
     uint32_t stalled_player{};
@@ -742,15 +745,28 @@ LobbyAction lobby_tick(
     Lobby& lobby, Panel& panel, LobbyFront front = LobbyFront::battleroom, Panel* view_map = nullptr
 ) noexcept;
 
+/// Tells whether the lobby's clock has passed the time a timer waits for.
+///
+/// The clock (LobbyServices::tick) runs from 0 through
+/// base::game_loop::scaled_clock_turn and then turns over to 0, about every
+/// 39.8 hours. A reading that has turned over since the time was set has
+/// passed it, so a timer set just before the turn runs out at the first
+/// reading after it.
+///
+/// @param tick the clock, in 30 Hz ticks
+/// @param due the time waited for: a reading, or a reading plus a wait shorter than half a turn
+/// @return true once `tick` lies after `due`
+[[nodiscard]] bool lobby_clock_passed(uint32_t tick, uint32_t due) noexcept;
+
 /// Scans the remote players for a stall, as each battle-room pump ends.
 ///
 /// A remote player is stalled once more than Game.player_timeout_seconds
 /// have passed since it was last heard from, or since the scan last found
-/// the game paused when that is later. This machine's own players, its
-/// computer players among them, are never stalled. While the game is
-/// paused the scan only moves Lobby::timeout_baseline to now, and with the
-/// console's "Drop 0" it does not run; either way the player TIMEOUT.GUI
-/// names stays as it was.
+/// the game paused when that is later, counting a turn of the clock to 0
+/// between. This machine's own players, its computer players among them,
+/// are never stalled. While the game is paused the scan only moves
+/// Lobby::timeout_baseline to now, and with the console's "Drop 0" it does
+/// not run; either way the player TIMEOUT.GUI names stays as it was.
 ///
 /// @param[in,out] lobby Lobby state.
 /// @return The player TIMEOUT.GUI names: the first stalled player in slot order when every stalled

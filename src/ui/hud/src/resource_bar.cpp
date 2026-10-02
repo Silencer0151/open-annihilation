@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/base/game_math.hpp"
 
 #include "oa/ui/hud/game_fields.hpp"
 
@@ -17,21 +18,14 @@
 #include <string>
 
 namespace oa::ui::hud {
+using base::game_math::truncate_low32;
+
 namespace {
 
 using oa::data::unit_definitions::TdfSection;
 
 // Energy readouts past this magnitude switch to thousands.
 constexpr float kReadoutThousandsBeyond = 99999.0F;
-
-// Float-to-integer conversion: truncation through a 64-bit integer, keeping
-// the low 32 bits.
-int32_t truncate_low32(double value) noexcept {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    return static_cast<int32_t>(static_cast<uint32_t>(static_cast<int64_t>(std::trunc(value))));
-}
 
 int32_t tdf_int(const TdfSection& section, std::string_view key, int32_t fallback) {
     const auto* value = section.find(key);

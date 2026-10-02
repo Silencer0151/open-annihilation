@@ -77,7 +77,10 @@ TreeNode build_tree(std::span<const HpiWriteFile> files) {
 std::vector<uint8_t> squash_chunk(std::span<const uint8_t> input, uint8_t method, bool scramble) {
     std::vector<uint8_t> payload;
     if (method == formats::hpi::CompressionLZ77) {
-        payload = formats::sqsh::encode_lz77(input, input.size() * 2 + kLz77Slack);
+        auto encoded = formats::sqsh::encode_lz77(input, input.size() * 2 + kLz77Slack);
+        if (!encoded.ok())
+            throw std::runtime_error(encoded.error.message);
+        payload = std::move(*encoded.value);
     } else if (method == formats::hpi::CompressionZLib) {
         uLongf size = compressBound(static_cast<uLong>(input.size()));
         payload.resize(size);

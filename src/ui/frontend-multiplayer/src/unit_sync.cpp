@@ -3,6 +3,7 @@
 
 // Unit-content sync table behind the battleroom and the restriction panel.
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
+#include "oa/base/bytes.hpp"
 
 #include "oa/netgame/player_slots.hpp"
 #include "oa/netgame/records.hpp"
@@ -15,6 +16,7 @@
 namespace oa::ui::frontend_multiplayer {
 
 namespace {
+using base::bytes::load_le32;
 
 constexpr uint8_t kSubtypeGreeting = 0;
 constexpr uint8_t kSubtypeDefCount = 1;
@@ -53,12 +55,6 @@ UnitSyncRecord* upsert(UnitSync& sync, uint32_t key) noexcept {
     record = UnitSyncRecord{};
     record.key = key;
     return &record;
-}
-
-uint32_t load_u32(const uint8_t* bytes) noexcept {
-    uint32_t value = 0;
-    std::memcpy(&value, bytes, sizeof(value));
-    return value;
 }
 
 // A peer the host still waits on: seated, not defeated and not played
@@ -192,7 +188,7 @@ void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) n
     if (subtype >= netgame::handshake_subtype_limit || sync.finished)
         return;
     ++sync.records_handled;
-    const auto key = load_u32(record + 6);
+    const auto key = load_le32(record + 6);
     if (!sync.host) {
         if (subtype != kSubtypeVerdict)
             return;
@@ -217,7 +213,7 @@ void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) n
             peer = &sync.peers[index];
     if (peer == nullptr)
         return;
-    const auto value = load_u32(record + 10);
+    const auto value = load_le32(record + 10);
     if (subtype == kSubtypeDefCount) {
         peer->expected = value;
     } else if (subtype == kSubtypeChecksum) {

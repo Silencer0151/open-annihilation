@@ -298,8 +298,11 @@ void stored_values_are_read_and_clamped_into_their_ranges() {
 
     CHECK(read_one(settings::key::max_frame_rate, "60").max_frame_rate == 60);
     CHECK(read_one(settings::key::max_frame_rate, "63").max_frame_rate == 63);
-    CHECK(read_one(settings::key::max_frame_rate, "10").max_frame_rate == 40);
-    CHECK(read_one(settings::key::max_frame_rate, "0").max_frame_rate == 40);
+    CHECK(read_one(settings::key::max_frame_rate, "35").max_frame_rate == 35);
+    CHECK(read_one(settings::key::max_frame_rate, "30").max_frame_rate == 30);
+    CHECK(read_one(settings::key::max_frame_rate, "29").max_frame_rate == 30);
+    CHECK(read_one(settings::key::max_frame_rate, "10").max_frame_rate == 30);
+    CHECK(read_one(settings::key::max_frame_rate, "0").max_frame_rate == 30);
     CHECK(read_one(settings::key::max_frame_rate, "500").max_frame_rate == 120);
 
     using settings::AntiAliasing;
@@ -429,6 +432,22 @@ void the_round_trip_keeps_every_value() {
     }
 }
 
+void the_frame_rate_goes_down_to_a_frame_a_tick() {
+    // The lowest maximum frame rate is the simulation's 30 ticks a second,
+    // and the setting's steps reach it from the highest.
+    CHECK(settings::lowest_frame_rate == 30);
+    CHECK(
+        (settings::highest_frame_rate - settings::lowest_frame_rate) % settings::frame_rate_step ==
+        0
+    );
+    settings::EngineSettings chosen{};
+    chosen.max_frame_rate = settings::lowest_frame_rate;
+    Values values;
+    settings::write_settings(values, {}, chosen, {}, false);
+    CHECK(values.at(std::string{settings::key::max_frame_rate}) == "30");
+    CHECK(settings::read_settings(values, players_own_on_linux, false).max_frame_rate == 30);
+}
+
 void the_path_credit_shows_as_whole_cycles() {
     CHECK(settings::path_search_multiplier(1333) == 1);
     CHECK(settings::path_search_multiplier(1999) == 1);
@@ -487,6 +506,7 @@ int main() {
     only_changed_settings_are_written();
     restore_defaults_erases_the_keys_of_settings_at_their_defaults();
     the_round_trip_keeps_every_value();
+    the_frame_rate_goes_down_to_a_frame_a_tick();
     the_path_credit_shows_as_whole_cycles();
     shared_games_and_replays_search_at_one_cycle();
     a_game_locks_the_next_game_settings();

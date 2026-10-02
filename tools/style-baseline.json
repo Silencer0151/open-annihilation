@@ -25,7 +25,7 @@
    "member-initializer": 100
   },
   "src/data/persist": {
-   "doc-block": 9,
+   "doc-block": 5,
    "member-initializer": 69
   },
   "src/formats/cob": {
@@ -66,11 +66,11 @@
    "member-initializer": 6
   },
   "src/sim/air": {
-   "doc-block": 20
+   "doc-block": 6
   },
   "src/sim/combat-state": {
-   "tier-heap-container": 29,
-   "tier-throw": 6,
+   "tier-heap-container": 17,
+   "tier-throw": 1,
    "tier-virtual": 16
   },
   "src/sim/effect-particles": {
@@ -96,7 +96,7 @@
    "tier-virtual": 3
   },
   "src/sim/match-runtime": {
-   "doc-block": 166,
+   "doc-block": 164,
    "flags-raw-mask": 80,
    "member-initializer": 4,
    "tier-heap-container": 65,
@@ -174,8 +174,8 @@
    "doc-block": 28,
    "flags-raw-mask": 14,
    "member-initializer": 1,
-   "tier-heap-container": 15,
-   "tier-throw": 34,
+   "tier-heap-container": 14,
+   "tier-throw": 33,
    "tier-virtual": 30
   },
   "src/sim/visibility-state": {
@@ -223,7 +223,7 @@
   "src/ui/hud": {
    "doc-block": 12,
    "flags-raw-mask": 18,
-   "member-initializer": 157
+   "member-initializer": 138
   },
   "src/ui/screen-registry": {
    "member-initializer": 50

@@ -28,6 +28,7 @@
 #include <string_view>
 
 namespace oa::sim::match_runtime::tick_detail {
+using base::game_math::truncate_low32;
 
 [[noreturn]] inline void unsupported(const char* operation) {
     throw std::runtime_error(std::string("unsupported simulation branch: ") + operation);
@@ -35,17 +36,6 @@ namespace oa::sim::match_runtime::tick_detail {
 
 [[noreturn]] inline void unsupported(const std::string& operation) {
     throw std::runtime_error("unsupported simulation branch: " + operation);
-}
-
-// The economy tick's float-to-integer conversion: the value is truncated to
-// 64 bits and its low 32 bits are kept. NaN and values past 64 bits give
-// INT64_MIN, whose low word is zero.
-inline int32_t truncate_low32(float value) noexcept {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    const auto wide = static_cast<int64_t>(std::trunc(value));
-    return static_cast<int32_t>(static_cast<uint32_t>(wide));
 }
 
 // Overlay/queue walks must stop at a cycle. Patrol clone and a bad
@@ -421,7 +411,7 @@ class TickHost final : public sim::simulation_state::Host,
 
     explicit TickHost(Match& m) : match(m) {}
 
-    // The air module's services over this match.
+    // The world queries the air goals and the air driver make, over this match.
     sim::air::AirHost air_host();
 
     // Hands the order's goal to the unit's movement object: its ground

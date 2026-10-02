@@ -2,24 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/unit_state.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <cstdint>
 
 namespace oa::netgame {
+using base::game_math::truncate_to_int64;
+
 namespace {
 
 constexpr float build_fraction_encode_scale = -254.0f;
 constexpr float build_fraction_decode_scale = 0.0039215689f; // 1/255 as a float
-constexpr int64_t out_of_range_int64 = INT64_MIN;
-constexpr double int64_limit = 9223372036854775808.0;
-
-// Truncates toward zero to a 64-bit integer; NaN and values outside the
-// 64-bit range give INT64_MIN.
-int64_t truncate_to_int64(double value) noexcept {
-    if (!(value > -int64_limit && value < int64_limit))
-        return out_of_range_int64;
-    return static_cast<int64_t>(value);
-}
 
 bool valid_def_bits(unsigned bits) noexcept {
     return bits >= 1 && bits <= unit_state_max_def_index_bits;

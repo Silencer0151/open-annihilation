@@ -50,7 +50,14 @@ else the file's first two path components (src/app). Rules:
   tier-virtual,          virtual, throw and the heap-allocating standard
   tier-throw,            containers (HEAP_CONTAINERS) in the directories of
   tier-heap-container    the core, base and simulation tiers (TIER_DIRECTORIES),
-                         outside their tests.
+                         outside their tests;
+  test-assert            a check made with assert(), or an #undef NDEBUG, in
+                         a test: a file under a tests directory or named
+                         <name>_test. A build that defines NDEBUG removes
+                         assert(), and the test then passes whatever the
+                         code does; check with OA_CHECK
+                         (tests/support/include/oa/test/check.hpp) or the
+                         module's own check macro.
 
 The name rules read whole lines, comments and string literals included.
 offset-comment reads comments only. The other rules read code, with comments
@@ -126,7 +133,7 @@ ENGINE_DIR_VARIABLE_RE = re.compile(r"\bOA_ENGINE_DIR\b")
 RULES = (
     "qualified-fixed-width", "name-offset", "name-address", "name-placeholder", "name-unresolved", "name-unknown",
     "flags-raw-mask", "member-initializer", "offset-comment", "doc-block", "tier-virtual", "tier-throw",
-    "tier-heap-container",
+    "tier-heap-container", "test-assert",
 )
 # Where an offset comment describes a file's byte layout: the game data
 # decoders and the saved-game code.
@@ -138,6 +145,13 @@ FORMAT_DIRECTORIES = ("src/formats/", "src/data/persist/")
 TIER_DIRECTORIES = ("src/core/", "src/base/", "src/sim/", "src/data/campaign/")
 # A directory of tests, whose files the tier rules leave out.
 TEST_DIRECTORY = "tests"
+# What test-assert finds in a test's code: a call of assert() (not
+# static_assert, nor a member or qualified name ending in assert), and a
+# directive that undefines NDEBUG to keep it.
+TEST_ASSERT_RE = re.compile(r"(?<![\w.:>])assert\s*\(")
+UNDEF_NDEBUG_RE = re.compile(r"^\s*#\s*undef\s+NDEBUG\b")
+# The stem a test program's file ends with outside a tests directory.
+TEST_FILE_STEM_SUFFIX = "_test"
 # How many findings of one directory and rule a failure prints.
 SHOWN_FINDINGS = 40
 
@@ -831,6 +845,11 @@ def in_tier(name):
     return name.startswith(TIER_DIRECTORIES) and TEST_DIRECTORY not in name.split("/")[:-1]
 
 
+def is_test_file(name):
+    """Tests whether a file belongs to a test: it lies under a tests directory or is named <name>_test."""
+    return TEST_DIRECTORY in name.split("/")[:-1] or Path(name).stem.endswith(TEST_FILE_STEM_SUFFIX)
+
+
 def source_findings(source, scalar_names):
     """Returns the findings of one source.
 
@@ -844,6 +863,7 @@ def source_findings(source, scalar_names):
     structure = scan_structure(source.lines, suffix in C_SUFFIXES, scalar_names)
     format_file = name.startswith(FORMAT_DIRECTORIES)
     tier = in_tier(name)
+    test_file = is_test_file(name)
     for number, line in enumerate(source.lines, start=1):
         code = line.code
         for match in QUALIFIED_FIXED_WIDTH_RE.finditer(code):
@@ -864,6 +884,11 @@ def source_findings(source, scalar_names):
                                   ("tier-heap-container", HEAP_CONTAINER_RE)):
                 for match in pattern.finditer(code):
                     findings.append(Finding(name, number, rule, match.group(0)))
+        if test_file:
+            for match in TEST_ASSERT_RE.finditer(code):
+                findings.append(Finding(name, number, "test-assert", "assert("))
+            if UNDEF_NDEBUG_RE.match(code):
+                findings.append(Finding(name, number, "test-assert", "#undef NDEBUG"))
     for number, member in structure.members:
         findings.append(Finding(name, number, "member-initializer", member))
     if suffix in HEADER_SUFFIXES:

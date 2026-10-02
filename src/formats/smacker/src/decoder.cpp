@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/formats/smacker/decoder.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -9,6 +10,8 @@
 
 namespace oa::formats::smacker {
 namespace {
+
+using base::bytes::load_le32;
 
 /// Values a byte tree may hold; each leaf holds one byte.
 constexpr uint32_t kMaxByteTreeLeaves = 256;
@@ -346,15 +349,6 @@ void reset_recent(CodeTree& tree) noexcept {
         tree.entries[slot] = 0;
 }
 
-/// Returns a little-endian 32-bit value.
-///
-/// @param bytes at least four bytes
-/// @return the value of the first four
-uint32_t read_le32(std::span<const uint8_t> bytes) noexcept {
-    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8 |
-           static_cast<uint32_t>(bytes[2]) << 16 | static_cast<uint32_t>(bytes[3]) << 24;
-}
-
 /// Widens a six-bit palette component to eight bits.
 ///
 /// @param component the component; bits above the sixth are ignored
@@ -446,7 +440,7 @@ bool split_frame(
             error = "Smacker audio chunk length is truncated";
             return false;
         }
-        const auto size = read_le32(payload.subspan(at));
+        const auto size = load_le32(payload.subspan(at).data());
         const auto prefix = audio_chunk_prefix(audio_format(header.audio[track]));
         if (size < kAudioChunkLengthBytes + prefix || size > payload.size() - at) {
             error = "Smacker audio chunk exceeds its frame";
@@ -538,7 +532,7 @@ bool decode_audio(
         error = "Smacker audio chunk is too short";
         return false;
     }
-    const auto decoded_bytes = read_le32(chunk);
+    const auto decoded_bytes = load_le32(chunk.data());
     if (decoded_bytes > kMaxPackedAudioBytes) {
         error = "Smacker audio chunk exceeds bound";
         return false;

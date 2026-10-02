@@ -152,27 +152,24 @@ void Runtime::refresh_radar_mapped() {
     radar.sight_bits.assign(cells, mapping_on ? uint16_t{0} : bit);
     radar.coverage.assign(cells, los_on ? uint8_t{0} : uint8_t{1});
     if (mapping_on || los_on) {
-        try {
-            const auto& sight = match_->sight();
-            std::span<const uint8_t> live{};
-            if (los_on)
-                live = match_->player_coverage(viewer);
-            if (sight.width > 0 && sight.height > 0) {
-                for (int gy = 0; gy < grid_h; ++gy) {
-                    const auto sy = static_cast<std::size_t>(gy * sight.height / grid_h);
-                    for (int gx = 0; gx < grid_w; ++gx) {
-                        const auto sx = static_cast<std::size_t>(gx * sight.width / grid_w);
-                        const auto index = sy * static_cast<std::size_t>(sight.width) + sx;
-                        const auto cell = static_cast<std::size_t>(gy) * grid_w + gx;
-                        if (mapping_on && index < radar_explored_.size() &&
-                            radar_explored_[index] != 0)
-                            radar.sight_bits[cell] = bit;
-                        if (los_on && index < live.size() && live[index] != 0)
-                            radar.coverage[cell] = 1;
-                    }
+        const auto& sight = match_->sight();
+        // A viewer outside the player table has no live coverage.
+        std::span<const uint8_t> live{};
+        if (los_on && viewer < OA_PLAYER_COUNT)
+            live = match_->player_coverage(viewer);
+        if (sight.width > 0 && sight.height > 0) {
+            for (int gy = 0; gy < grid_h; ++gy) {
+                const auto sy = static_cast<std::size_t>(gy * sight.height / grid_h);
+                for (int gx = 0; gx < grid_w; ++gx) {
+                    const auto sx = static_cast<std::size_t>(gx * sight.width / grid_w);
+                    const auto index = sy * static_cast<std::size_t>(sight.width) + sx;
+                    const auto cell = static_cast<std::size_t>(gy) * grid_w + gx;
+                    if (mapping_on && index < radar_explored_.size() && radar_explored_[index] != 0)
+                        radar.sight_bits[cell] = bit;
+                    if (los_on && index < live.size() && live[index] != 0)
+                        radar.coverage[cell] = 1;
                 }
             }
-        } catch (const std::exception&) {
         }
     }
     // The match's sight grids keep no dirty mark for the mapped image, so

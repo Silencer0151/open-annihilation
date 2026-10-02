@@ -7,6 +7,7 @@
 // they carry.
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/base/bytes.hpp"
 
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/formats/cob.hpp"
@@ -54,6 +55,8 @@ namespace hud = oa::ui::hud;
 namespace save_key = oa::data::persist::save_key;
 
 namespace {
+using base::bytes::load_le16;
+using base::bytes::load_le32;
 
 // The 3.1c build stamp, which fills two Summary keys ("BUILD DATE: %s",
 // "BUILD TIME: %s").
@@ -125,14 +128,6 @@ void store_le16(uint8_t* out, uint16_t value) noexcept {
 void store_le32(uint8_t* out, uint32_t value) noexcept {
     store_le16(out, static_cast<uint16_t>(value));
     store_le16(out + 2, static_cast<uint16_t>(value >> 16));
-}
-
-uint16_t load_le16(const uint8_t* in) noexcept {
-    return static_cast<uint16_t>(in[0] | (in[1] << 8));
-}
-
-uint32_t load_le32(const uint8_t* in) noexcept {
-    return static_cast<uint32_t>(load_le16(in)) | (static_cast<uint32_t>(load_le16(in + 2)) << 16);
 }
 
 float load_le_float(const uint8_t* in) noexcept {
@@ -966,6 +961,7 @@ bool Runtime::write_saved_game(
         missions::CampaignFile* campaign{}; // null for a skirmish
         missions::CampaignEnv env{};
         persist::ImageRows radar{}; // Game.radar_final_surface's rows
+        bool mission_info_failed{}; // the next mission's info did not load
     } summary_bindings{
         this, save.world, campaign ? &campaign_object() : nullptr, campaign_object_env()
     };
@@ -995,10 +991,9 @@ bool Runtime::write_saved_game(
     };
     summary.bind_mission_info = [](void* context) {
         auto* b = static_cast<SummaryBindings*>(context);
-        if (b->campaign != nullptr)
-            (void)missions::campaign_bind_mission(
-                b->campaign, &b->env, b->world->game.mission_index
-            );
+        if (b->campaign != nullptr &&
+            !missions::campaign_bind_mission(b->campaign, &b->env, b->world->game.mission_index))
+            b->mission_info_failed = true;
     };
     // The radar image the match shows (Game.radar_final_surface), which the
     // load and save dialogs show for the save; none until the match is drawn.
@@ -1033,6 +1028,12 @@ bool Runtime::write_saved_game(
         &save, &summary, path.string().c_str(), description, game_id, &sink
     );
     status_ = written ? "Saved " + path.filename().string() : "Could not write " + path.string();
+    // Between missions the save binds the next mission's information; the
+    // file holds none of it, so the save stands, but the player is told.
+    if (written && summary_bindings.mission_info_failed) {
+        status_ += "; the next mission's information did not load";
+        std::cerr << "open-annihilation: " << status_ << '\n';
+    }
     return written;
 }
 

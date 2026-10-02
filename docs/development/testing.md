@@ -156,8 +156,13 @@ installer itself. These tests read it:
   captions.
 
 Without `OA_DEMO_INSTALLER` each reports skipped, under
-`OA_REQUIRE_GAME_DATA` too, since the demo is optional. `demo-installer`
-covers the same code over a synthetic installer and runs everywhere.
+`OA_REQUIRE_GAME_DATA` too, since the demo is optional; a path that names no
+installer, or the wrong file, fails them. Each carries the ctest label
+`demo`, so `ctest --test-dir build -L demo` runs them all. Configure with
+`-DOA_REQUIRE_DEMO_INSTALLER=ON` to prove they ran: configuration then fails
+when `OA_DEMO_INSTALLER` names no file, and a demo test that skips fails.
+`demo-installer` covers the same code over a synthetic installer and runs
+everywhere.
 
 ### Network play
 
@@ -193,6 +198,10 @@ and `--match-ticks N` it replays without a window.
 
 - **Core only**, without SDL or game data: configure with
   `-DOA_BUILD_PLATFORM=OFF -DOA_BUILD_INTRO_PLAYER=OFF`.
+- **Warnings as errors:** configure with `-DOA_WARNINGS_AS_ERRORS=ON` to
+  fail the build on any compiler warning in the targets that link
+  `oa-options` (`-Werror`, or `/WX` with Visual Studio's compiler), as CI
+  does with Clang and GCC.
 - **Sanitizers:** configure with `-DOA_SANITIZERS=ON` (Clang or GCC) and run
   the suite as the CI sanitizer job does, since `platform-shims` ends a
   child process with SIGFPE on purpose.
@@ -237,14 +246,22 @@ and `--match-ticks N` it replays without a window.
 
 ### What CI runs
 
-Continuous integration builds the tree on macOS, Windows and Linux, starts
-`open-annihilation` on each, runs every test that needs no game data,
-network play's among them, and runs the suite once more under
-AddressSanitizer and UndefinedBehaviorSanitizer and once with the recorder
-test extensions registered beside network play
-(`-DOA_RECORD_EXTENSION_HOOKS=ON`). CI has no game installation: the
-game-data tests and the native checks run only on contributors' machines,
-so run them before asking for review.
+Continuous integration (`.github/workflows/build.yml`) runs these jobs:
+
+| Job | What it does |
+|---|---|
+| `build` | Builds the tree on macOS (arm64), Windows and Linux, in Debug and in Check, starts `open-annihilation` on each, and runs every test that needs no game data, network play's among them. Running both build types runs the pinned-digest tests (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`, `game-math-extended`) on an optimised build as well, so a build type that computes different results fails. Linux also runs the format and licence checks, and macOS the documentation check |
+| `demo` | On macOS and Linux, downloads the installer of the Total Annihilation demo (1997), checks it against its pinned SHA-256 and caches it, then builds in Check and runs the demo's tests (`ctest -L demo`) with `-DOA_REQUIRE_DEMO_INSTALLER=ON`, so a demo test that skips fails |
+| `extension-recorder` | Builds and tests on Linux with the recorder test extensions registered beside network play (`-DOA_RECORD_EXTENSION_HOOKS=ON`) |
+| `sanitizers` | Builds Debug with Clang on Linux under AddressSanitizer and UndefinedBehaviorSanitizer and runs the suite |
+
+Every job but the Windows ones configures with `-DOA_WARNINGS_AS_ERRORS=ON`,
+so a warning from Clang or GCC in engine code fails it. The warnings of
+Visual Studio's compiler do not fail the build yet.
+
+The installation of Total Annihilation 3.1c is not CI's to download: the
+game-data tests and the native checks over it run only on contributors'
+machines, so run them before asking for review.
 
 ## Kinds of test
 
@@ -332,11 +349,16 @@ int main() {
 ```
 
 - Never check with `assert()`: Release builds remove it, and the test then
-  passes whatever the code does.
-- There is no shared harness yet. Where the module's tests already have a
-  check macro, use it rather than adding another variant. The registry
-  harness in `src/ui/frontend/tests/test_support.hpp` (`OA_TEST`,
-  `OA_GAME_DATA_TEST`, `OA_CHECK`) is the model a shared one will follow.
+  passes whatever the code does. `style-ratchet` fails on `assert()`, and on
+  `#undef NDEBUG`, in a file under a `tests` directory or named
+  `<name>_test`.
+- Where the module's tests already have a check macro, use it rather than
+  adding another variant. Otherwise link `oa-test-support` and use
+  `OA_CHECK` from `oa/test/check.hpp`, which reports and counts failed
+  checks as above; `main()` returns `oa::test::check_exit_status()`. The
+  registry harness in `src/ui/frontend/tests/test_support.hpp` (`OA_TEST`,
+  `OA_GAME_DATA_TEST`, `OA_CHECK`) is the model a fuller shared one will
+  follow.
 - Test code may use the whole C++20 standard library, and may throw, for
   example from a fixture's checks, as long as the test reports the failure
   with its file and line and exits non-zero. The code under test keeps its
@@ -346,7 +368,15 @@ int main() {
   `--headless-check`, or with `SDL_VIDEO_DRIVER=dummy` and
   `SDL_AUDIO_DRIVER=dummy`.
 - Write temporary files under a fresh temporary directory, never into the
-  source tree or the installation.
+  source tree or the installation: `oa::test::make_scratch_directory()`
+  (`oa/test/scratch_directory.hpp`, in `oa-test-support`) creates one that
+  no other run shares, so test runs from several build trees at once never
+  touch each other's files. Never use a fixed name under the temporary
+  directory.
+- Never wait a fixed time for something to happen: a loaded machine can
+  stall a test for longer. Drive the clock the code reads where it takes
+  one, or poll with a generous limit, and make a check that something has
+  not happened yet hold however late it runs.
 
 ### Expected values
 
@@ -421,7 +451,7 @@ skipped and why; that stays a skip even under `OA_REQUIRE_GAME_DATA`.
 
 ## Not yet in place
 
-The engine does not yet have a shared test harness, ctest labels (such as
-unit, data, native and lint) or fuzz targets for its decoders. Until they
-arrive, use the registrations above and name tests after their module so
-that `-R` finds them.
+The engine does not yet have a shared test harness beyond `oa-test-support`,
+ctest labels other than `demo` (such as unit, data, native and lint) or fuzz
+targets for its decoders. Until they arrive, use the registrations above and
+name tests after their module so that `-R` finds them.

@@ -6,6 +6,7 @@
 #include "oa/audio/music_disc.hpp"
 #include "oa/audio/sdl_music.hpp"
 #include "oa/test/game_data.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -53,8 +54,7 @@ void generated_disc() {
     // Every music file, WAV included, plays through the decoder.
     if (!sdl_music_decoder_available())
         oa::test::skip_test("the generated music", "this build has no music decoder");
-    const auto root = std::filesystem::temp_directory_path() / "oa-sdl-music-test";
-    std::filesystem::remove_all(root);
+    const auto root = oa::test::make_scratch_directory("oa-sdl-music-test");
     std::filesystem::create_directories(root);
     write_tone(root / "2.wav", 22050 / 2);
     write_tone(root / "3.wav", 22050 * 2);

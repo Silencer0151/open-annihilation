@@ -306,7 +306,7 @@ void check_layout_rule(const oa::AssetStore& installed) {
     check(installed_archive.has_value(), "the installation's FrontendX comes from an archive");
     if (!installed_archive)
         return;
-    const auto layout = oa::HpiArchive(*installed_archive).read(kLayout);
+    const auto layout = oa::HpiArchive(*installed_archive).read(kLayout).value.value();
     const auto background = installed.read(kBackground).bytes;
     const auto overlay_layout = moved_layout(layout, 82, 464);
     const auto own_layout = moved_layout(layout, 100, 450);

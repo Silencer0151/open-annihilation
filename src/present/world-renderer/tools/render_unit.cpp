@@ -50,9 +50,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error(terrain.error->message);
 
         const auto model_bytes = read(argv[3]);
-        auto model = std::make_shared<oa::formats::objects3d::Model>(
-            oa::formats::objects3d::load_3do(std::as_bytes(std::span(model_bytes)))
-        );
+        auto loaded = oa::formats::objects3d::load_3do(std::as_bytes(std::span(model_bytes)));
+        if (!loaded.ok())
+            throw std::runtime_error(loaded.error.message);
+        auto model = std::make_shared<oa::formats::objects3d::Model>(std::move(*loaded.value));
         auto instance = oa::sim::model_runtime::make_instance(model);
         instance.rebuild_transforms();
         constexpr int32_t fixed = oa::formats::objects3d::kThreeDoUnitsPerWorldUnit;

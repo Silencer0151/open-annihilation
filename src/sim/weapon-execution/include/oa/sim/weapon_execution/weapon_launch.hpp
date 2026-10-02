@@ -21,17 +21,6 @@ namespace oa::sim::weapon_execution {
 
 using FixedVector = std::array<int32_t, 3>; // signed 16.16 world units
 
-/// Fills the canonical Game.weapon_defs table from the registry, one record per weapon ID.
-///
-/// The [DAMAGE] table stays on the registry entry and WeaponDef.damage_overrides stays
-/// 0; the sound indices are left at -1.
-///
-/// @param registry installed weapons
-/// @param[out] defs the canonical weapon records
-void store_weapon_defs(
-    const sim::combat_state::WeaponRegistry& registry, WeaponDef (&defs)[OA_WEAPON_DEF_COUNT]
-) noexcept;
-
 inline constexpr uint16_t vertical_launch_pitch = 0x4000;
 inline constexpr int32_t rock_unit_magnitude = 800;
 

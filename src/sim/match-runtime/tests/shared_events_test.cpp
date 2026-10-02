@@ -168,10 +168,12 @@ ID=3; lineofsight=1; range=1000; reloadtime=1; weaponvelocity=100; areaofeffect=
 )";
 
 void arm_interceptors(combat_fixture::Fixture& f) {
-    const auto parsed = data::unit_definitions::parse_tdf(interceptor_tdf);
-    CHECK(parsed);
-    CHECK(sim::combat_state::install_weapon_tdf(f.weapons, parsed.value) == 2);
-    sim::weapon_execution::store_weapon_defs(f.weapons, f.match->state().game.weapon_defs);
+    CHECK(sim::combat_state::install_weapon_text(f.weapons, interceptor_tdf) == 2);
+    std::copy(
+        f.weapons.records().begin(),
+        f.weapons.records().end(),
+        std::begin(f.match->state().game.weapon_defs)
+    );
 }
 
 constexpr int32_t fx(int32_t whole) {
@@ -519,8 +521,11 @@ struct Fixture {
                 fields[i].movement_class = 0;
         }
         loaded[tank_type].unit_name = "TANK";
-        weapons.install_tdf_section(1, "TESTGUN", "0.1");
-        weapons.install_target_fields(1, "400", "1", "0", "0", "0", "0", "10", "100", "", "1");
+        (void)sim::combat_state::install_weapon_text(
+            weapons,
+            "[TESTGUN]{id=1; reloadtime=0.1; range=400; lineofsight=1; weaponvelocity=100; "
+            "turret=1; [DAMAGE]{default=10;}}"
+        );
         // A 2x2 tank wreck at (20, 20) and a 1x1 one at (26, 26).
         std::strcpy(features[wreck_feature].name, "TANK_DEAD");
         features[wreck_feature].footprint_x = features[wreck_feature].footprint_z = 2;

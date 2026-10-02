@@ -23,6 +23,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -194,19 +195,69 @@ void Runtime::overlay_board_patch(
 }
 
 void Runtime::ensure_gui_font() {
-    if (!gui_font_.sequences.empty())
+    if (gui_fonts_loaded_)
         return;
-    try {
-        const auto bytes = assets_.read("anims/hattfont12.gaf").bytes;
-        const auto status = renderer::load_gui_font(bytes, gui_font_);
-        if (status != oa::present::GafStatus::ok) {
-            gui_font_ = {};
-            std::cerr << "hattfont12.gaf unavailable: " << oa::present::gaf_status_text(status)
-                      << '\n';
+    gui_fonts_loaded_ = true;
+    const auto load = [this](const char* path, oa::present::GafSprites& font) {
+        try {
+            const auto bytes = assets_.read(path).bytes;
+            const auto status = renderer::load_gui_font(bytes, font);
+            if (status != oa::present::GafStatus::ok) {
+                font = {};
+                std::cerr << path << " unavailable: " << oa::present::gaf_status_text(status)
+                          << '\n';
+            }
+        } catch (const std::exception& error) {
+            font = {};
+            std::cerr << path << " unavailable: " << error.what() << '\n';
         }
-    } catch (const std::exception& error) {
-        std::cerr << "hattfont12.gaf unavailable: " << error.what() << '\n';
-    }
+    };
+    load("anims/hattfont12.gaf", gui_font_);
+    load("anims/hattfont11.gaf", gui_label_font_);
+}
+
+void Runtime::overlay_gui_text(
+    const oa::present::GafSprites& font,
+    oa::ui::display_layout::Point pen,
+    std::string_view text,
+    int rows_below_pen
+) {
+    if (font.sequences.empty() || text.empty() || rows_below_pen <= 0)
+        return;
+    const std::string line(text);
+    const auto* glyphs = &font.sequences.front();
+    int width = 0;
+    for (const unsigned char byte : line)
+        if (const oa::Sprite* glyph = byte >= ' ' ? oa::present::gaf_frame(glyphs, byte) : nullptr)
+            width += glyph->width;
+
+    struct Run {
+        const oa::present::GafSprites* font;
+        const char* text;
+    } const run{&font, line.c_str()};
+
+    const int scale = hud_text_scale();
+    // The patch reaches a glyph's width left of the pen and a glyph's height
+    // above it; below, it stops where the caller cuts the text off.
+    overlay_patch(
+        {pen.x - kGlyphReach * scale, pen.y - kGlyphReach * scale},
+        width + 2 * kGlyphReach,
+        kGlyphReach + std::min(rows_below_pen, 2 * kGlyphReach),
+        width + 2 * kGlyphReach,
+        [](void* context, oa::Surface& surface) {
+            const auto& run = *static_cast<const Run*>(context);
+            renderer::draw_gadget_text(
+                &surface,
+                run.font,
+                run.text,
+                kGlyphReach,
+                kGlyphReach,
+                renderer::gadget_text_unbounded,
+                0
+            );
+        },
+        const_cast<Run*>(&run)
+    );
 }
 
 void Runtime::draw_match_kill_board() {

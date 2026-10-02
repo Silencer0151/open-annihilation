@@ -246,6 +246,14 @@ void warn(const std::string& text) {
     std::cerr << "open-annihilation: director: warning: " << text << '\n';
 }
 
+/// Reports that undoing a run's set-up failed: closing the replay, leaving
+/// director mode or leaving the match. The run then ends with status 1.
+///
+/// @param what the error's message
+void report_teardown_failure(const char* what) noexcept {
+    std::fprintf(stderr, "open-annihilation: director: teardown: %s\n", what);
+}
+
 /// Returns a script decoder's message as one line.
 ///
 /// @param source the script's name
@@ -618,6 +626,7 @@ int Runtime::run_render_script() {
     options_.mute = true;
     ReplayHooks replay{};
     bool replay_open = false;
+    bool teardown_failed = false;
     // The replay closes before its match is torn down, and director mode is
     // left before either (render_director_frames leaves it itself).
     ScopeExit teardown{[&]() noexcept {
@@ -628,7 +637,12 @@ int Runtime::run_render_script() {
             leave_director_mode();
             if (match_)
                 leave_match();
+        } catch (const std::exception& error) {
+            teardown_failed = true;
+            report_teardown_failure(error.what());
         } catch (...) {
+            teardown_failed = true;
+            report_teardown_failure("an error of unknown type");
         }
     }};
     try {
@@ -830,7 +844,7 @@ int Runtime::run_render_script() {
         if (render.output.joined)
             std::printf("director: sound %s\n", digest_text(render.pcm_digest).c_str());
         std::fflush(stdout);
-        return 0;
+        return teardown_failed ? 1 : 0;
     } catch (const std::exception& error) {
         teardown.run_now();
         std::cerr << "open-annihilation: director: " << error.what() << '\n';
@@ -844,6 +858,7 @@ int Runtime::run_generate_script() {
     options_.mute = true;
     ReplayHooks replay{};
     bool replay_open = false;
+    bool teardown_failed = false;
     ScopeExit teardown{[&]() noexcept {
         try {
             if (match_)
@@ -854,7 +869,12 @@ int Runtime::run_generate_script() {
             leave_director_mode();
             if (match_)
                 leave_match();
+        } catch (const std::exception& error) {
+            teardown_failed = true;
+            report_teardown_failure(error.what());
         } catch (...) {
+            teardown_failed = true;
+            report_teardown_failure("an error of unknown type");
         }
     }};
     try {
@@ -1052,7 +1072,7 @@ int Runtime::run_generate_script() {
             seconds_since(started)
         );
         std::fflush(stdout);
-        return 0;
+        return teardown_failed ? 1 : 0;
     } catch (const std::exception& error) {
         teardown.run_now();
         std::cerr << "open-annihilation: director: " << error.what() << '\n';

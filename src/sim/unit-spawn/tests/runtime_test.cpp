@@ -97,15 +97,8 @@ int main() {
                              "scripts/ARMCOM.COB"}
                         )
     );
-    auto moveinfo = oa::data::unit_definitions::parse_tdf(
-        "[CLASS31]{Name=KBOT;FootprintX=4;FootprintZ=5;}[CLASS0]{"
-        "Name=kbot;FootprintX=6;FootprintZ=7;}"
-    );
-    CHECK(moveinfo);
-    definition.movement_class = "KBOT";
-    CHECK((resolve_movement_footprint(definition, moveinfo.value) == std::array<int16_t, 2>{6, 7}));
-    definition.movement_class = "UNKNOWN";
-    CHECK((resolve_movement_footprint(definition, moveinfo.value) == std::array<int16_t, 2>{2, 3}));
+    // A unit with a movement class takes the class's footprint from the
+    // loaded MOVEINFO classes, so the caller must resolve it first.
     definition.movement_class = "KBOT";
     bool rejected = false;
     try {

@@ -4,6 +4,7 @@
 // Battleroom (LOUNGE2.GUI): slot rules, rows, options, start checks.
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
 
+#include "oa/base/game_loop.hpp"
 #include "oa/netgame/player_slots.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
@@ -567,7 +568,7 @@ PlayerSetupInfo& local_info(Lobby& lobby) noexcept {
 
 void lobby_reset(Lobby& lobby, Game& game) noexcept {
     lobby.game = &game;
-    std::memset(lobby.infos, 0, sizeof(lobby.infos));
+    std::memset(static_cast<void*>(lobby.infos), 0, sizeof(lobby.infos));
     for (int32_t slot = 0; slot < kSlotCount; ++slot) {
         auto& player = game.players[slot];
         std::memset(&player, 0, sizeof(player));
@@ -1431,7 +1432,9 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
                 lobby_session_players(game) = lobby_session_players(game) - 1;
             } else if (current != kSlotOpen && current != kSlotBlocked) {
                 if (player.in_use != 0 && current == kSlotComputer &&
-                    now(lobby) - lobby_player_join_tick(player) >= kComputerRejectTicks) {
+                    base::game_loop::scaled_clock_elapsed(
+                        now(lobby), lobby_player_join_tick(player)
+                    ) >= kComputerRejectTicks) {
                     lobby_reject(lobby, player.player_id, kRejectPlayer);
                     slot_set_status(lobby, player, kSlotOpen);
                     player.in_use = 0;
@@ -1858,14 +1861,18 @@ LobbyAction lobby_tick(Lobby& lobby, Panel& panel, LobbyFront front, Panel* view
             if (host_is_local(lobby)) {
                 const bool synced = unit_sync_complete(lobby);
                 const bool ready = lobby_ready_to_start(lobby);
+                const auto tick = now(lobby);
                 panel_set_grayed(panel, "SYNCHING", true);
-                if (lobby.start_frame > 0 && now(lobby) > lobby.start_frame_tick) {
+                if (lobby.start_frame > 0 && lobby_clock_passed(tick, lobby.start_frame_tick)) {
                     if (lobby.start_frame < kStartFrameStop) {
                         ++lobby.start_frame;
                         panel.dirty = true;
                         game.gui_flags |= 1U;
                     }
-                    lobby.start_frame_tick += kStartFrameTicks;
+                    // A reading below the step's time has turned over to 0
+                    // since it was set; the steps go on from that reading.
+                    lobby.start_frame_tick =
+                        std::min(tick, lobby.start_frame_tick) + kStartFrameTicks;
                     if (lobby.start_frame == kStartFrameSound)
                         play(lobby, "Panel");
                 }
@@ -1875,14 +1882,14 @@ LobbyAction lobby_tick(Lobby& lobby, Panel& panel, LobbyFront front, Panel* view
                     game.gui_flags |= 1U;
                     if (lobby.start_frame == 0) {
                         lobby.start_frame = 1;
-                        lobby.start_frame_tick = now(lobby);
+                        lobby.start_frame_tick = tick;
                         play(lobby, "Options");
                     }
                     // The doors open for good and no longer take START's clicks.
                     if (auto* doors = panel_control(panel, "battlestart"))
                         doors->hot = false;
                     if (auto* start = panel_control(panel, "START"))
-                        start->light_level = static_cast<uint8_t>(now(lobby) & kStartLightMask);
+                        start->light_level = static_cast<uint8_t>(tick & kStartLightMask);
                 }
                 if (auto* sprite = panel_control(panel, "battlestart"))
                     sprite->stage = static_cast<uint8_t>(lobby.start_frame);
@@ -1895,7 +1902,7 @@ LobbyAction lobby_tick(Lobby& lobby, Panel& panel, LobbyFront front, Panel* view
         }
     }
     unit_sync_tick(lobby);
-    if (now(lobby) > lobby.next_stats_tick) {
+    if (lobby_clock_passed(now(lobby), lobby.next_stats_tick)) {
         lobby.next_stats_tick = now(lobby) + kStatsInterval;
         auto& info = local_info(lobby);
         info.status = static_cast<uint16_t>(
@@ -1905,6 +1912,10 @@ LobbyAction lobby_tick(Lobby& lobby, Panel& panel, LobbyFront front, Panel* view
     }
     flush(lobby);
     return LobbyAction::none;
+}
+
+bool lobby_clock_passed(uint32_t tick, uint32_t due) noexcept {
+    return !base::game_loop::scaled_clock_before(tick, due + 1);
 }
 
 uint32_t lobby_check_timeouts(Lobby& lobby) noexcept {
@@ -1918,11 +1929,13 @@ uint32_t lobby_check_timeouts(Lobby& lobby) noexcept {
     }
     const auto limit = static_cast<uint32_t>(game.player_timeout_seconds) * kTicksPerSecond;
     // Silence counts from the later of the player's last word and the last
-    // pause; the difference wraps as the 32-bit clock does.
+    // pause, counting a turn of the clock to 0 between.
     const auto stalled = [&](const Player& player) {
-        const uint32_t last = player.last_update_time;
-        const uint32_t heard = last > lobby.timeout_baseline ? last : lobby.timeout_baseline;
-        return occupied_by(player, kSlotRemote) && tick - heard > limit;
+        const auto silent = std::min(
+            base::game_loop::scaled_clock_elapsed(tick, player.last_update_time),
+            base::game_loop::scaled_clock_elapsed(tick, lobby.timeout_baseline)
+        );
+        return occupied_by(player, kSlotRemote) && silent > limit;
     };
     int64_t group = -1;
     for (const auto& player : game.players) {

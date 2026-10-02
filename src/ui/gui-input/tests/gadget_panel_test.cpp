@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/gui_input/gadget_panel.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -600,10 +601,12 @@ void root_placement() {
 
 void truncation_edges() {
     require(
-        input::truncate_to_int64(2.9) == 2 && input::truncate_to_int64(-2.9) == -2, "truncation"
+        oa::base::game_math::truncate_to_int64(2.9) == 2 &&
+            oa::base::game_math::truncate_to_int64(-2.9) == -2,
+        "truncation"
     );
     require(
-        input::truncate_to_int64(1.0 / 0.0) == std::numeric_limits<int64_t>::min(),
+        oa::base::game_math::truncate_to_int64(1.0 / 0.0) == std::numeric_limits<int64_t>::min(),
         "infinity gives INT64_MIN"
     );
 }

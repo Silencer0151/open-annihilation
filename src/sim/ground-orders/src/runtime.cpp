@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/ground_orders/ground_runtime.hpp"
+#include "oa/base/bytes.hpp"
 #include <bit>
 #include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
+using base::bytes::load_le32;
+
 int16_t signed_half(uint32_t value) {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(value));
 }
@@ -110,10 +113,6 @@ void put32(uint8_t* out, uint32_t v) noexcept {
         out[i] = static_cast<uint8_t>(v >> (8 * i));
 }
 
-uint32_t get32(const uint8_t* in) noexcept {
-    return uint32_t{in[0]} | uint32_t{in[1]} << 8 | uint32_t{in[2]} << 16 | uint32_t{in[3]} << 24;
-}
-
 constexpr uint8_t saved_flag_mask =
     sim::unit_movement::occupancy_mask | sim::unit_movement::collision_blocked;
 } // namespace
@@ -135,13 +134,13 @@ std::array<uint8_t, mobility_record_size> GroundRuntime::save_mobility() const n
 
 void GroundRuntime::load_mobility(const std::array<uint8_t, mobility_record_size>& in) noexcept {
     for (std::size_t i = 0; i < 3; ++i) {
-        movement.velocity[i] = std::bit_cast<Fixed>(get32(&in[i * 4]));
-        previous_vector[i] = std::bit_cast<Fixed>(get32(&in[12 + i * 4]));
+        movement.velocity[i] = std::bit_cast<Fixed>(load_le32(&in[i * 4]));
+        previous_vector[i] = std::bit_cast<Fixed>(load_le32(&in[12 + i * 4]));
     }
-    movement.speed = std::bit_cast<Fixed>(get32(&in[24]));
+    movement.speed = std::bit_cast<Fixed>(load_le32(&in[24]));
     movement.turn =
         std::bit_cast<int16_t>(static_cast<uint16_t>(in[28] | static_cast<uint16_t>(in[29]) << 8));
-    occupancy_changed_tick = get32(&in[30]);
+    occupancy_changed_tick = load_le32(&in[30]);
     movement.flags =
         static_cast<uint8_t>((movement.flags & ~saved_flag_mask) | (in[34] & saved_flag_mask));
 }

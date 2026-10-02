@@ -18,6 +18,9 @@ namespace {
 
 /// Milliseconds in a second, the divisor scaled_clock takes the clock units by.
 constexpr uint32_t kMillisecondsPerSecond = 1000;
+/// A clock unit and a half, in thousandths of a unit: scaled_clock's
+/// product counts kMillisecondsPerSecond to a unit.
+constexpr uint32_t kUnitAndHalfThousandths = kMillisecondsPerSecond * 3 / 2;
 /// Runs of paced frames longer than this begin again from their last frame,
 /// so the frame count times a second stays far inside 64 bits.
 constexpr uint64_t kFramesPerRunLimit = 1'000'000;
@@ -173,6 +176,19 @@ paced_frame_due(uint64_t run_start_ns, uint64_t frame, uint32_t frames_per_secon
     return run_start_ns + frame * kNanosecondsPerSecond / frames_per_second;
 }
 
+uint64_t next_clock_unit_middle(uint64_t time_ns) noexcept {
+    const uint64_t milliseconds = time_ns / kNanosecondsPerMillisecond;
+    // How far into its unit the clock's millisecond lies, in thousandths of
+    // a unit: the remainder of scaled_clock's product, which wraps at 32 bits.
+    const uint32_t into =
+        static_cast<uint32_t>(milliseconds) * kTicksPerSecond % kMillisecondsPerSecond;
+    // The next unit's middle lies a unit and a half, less that far, after
+    // the millisecond; a thousandth of a unit is 1 / kTicksPerSecond ms.
+    const uint64_t to_middle = kUnitAndHalfThousandths - into;
+    return milliseconds * kNanosecondsPerMillisecond +
+           to_middle * kNanosecondsPerMillisecond / kTicksPerSecond;
+}
+
 uint64_t begin_paced_frame(FramePacer& pacer, uint64_t now_ns) noexcept {
     pacer.frame_start_ns = now_ns;
     const bool paced = pacer.started && pacer.frames_per_second != 0;
@@ -201,14 +217,22 @@ uint64_t end_paced_frame(FramePacer& pacer, uint64_t now_ns, uint32_t frames_per
         pacer.run_start_ns = pacer.started ? pacer.frame_start_ns : now_ns;
         pacer.frames_in_run = 0;
     }
-    if (pacer.frames_in_run >= kFramesPerRunLimit) {
-        pacer.run_start_ns =
-            paced_frame_due(pacer.run_start_ns, pacer.frames_in_run, frames_per_second);
+    uint64_t due = 0;
+    if (frames_per_second == kTicksPerSecond) {
+        // One frame a clock unit: the next is due at the middle of the unit
+        // after the frame's, as the first frame of a run of its own.
+        due = next_clock_unit_middle(pacer.started ? pacer.frame_start_ns : now_ns);
+        pacer.run_start_ns = due;
         pacer.frames_in_run = 0;
+    } else {
+        if (pacer.frames_in_run >= kFramesPerRunLimit) {
+            pacer.run_start_ns =
+                paced_frame_due(pacer.run_start_ns, pacer.frames_in_run, frames_per_second);
+            pacer.frames_in_run = 0;
+        }
+        ++pacer.frames_in_run;
+        due = paced_frame_due(pacer.run_start_ns, pacer.frames_in_run, frames_per_second);
     }
-    ++pacer.frames_in_run;
-    const uint64_t due =
-        paced_frame_due(pacer.run_start_ns, pacer.frames_in_run, frames_per_second);
     if (due <= now_ns) {
         pacer.run_start_ns = now_ns;
         pacer.frames_in_run = 0;
@@ -259,9 +283,13 @@ float next_presentation_alpha(
     const uint32_t whole_units = scaled / kMillisecondsPerSecond;
     const double within_ms = static_cast<double>(now_ns % kNanosecondsPerMillisecond) /
                              static_cast<double>(kNanosecondsPerMillisecond);
-    const double unit_fraction = (static_cast<double>(scaled % kMillisecondsPerSecond) +
-                                  within_ms * static_cast<double>(kTicksPerSecond)) /
-                                 static_cast<double>(kMillisecondsPerSecond);
+    // Drawn one a clock unit, a frame counts the current unit whole: the
+    // next frame is due at the next unit.
+    const double unit_fraction = ticks.unit_frames
+                                     ? 1.0
+                                     : (static_cast<double>(scaled % kMillisecondsPerSecond) +
+                                        within_ms * static_cast<double>(kTicksPerSecond)) /
+                                           static_cast<double>(kMillisecondsPerSecond);
     const uint32_t since = whole_units - timing.previous_clock;
     // A clock read before the step (a reset or a wrap) counts as no time.
     const double units = since > kTicksPerSecond ? 0.0 : static_cast<double>(since) + unit_fraction;

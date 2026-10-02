@@ -129,7 +129,8 @@ void send_channel_init(
 /// now_tick plus the channel's interval.
 ///
 /// @param[in,out] channel Channel to flush.
-/// @param now_tick Current game tick; below next_send_tick (unsigned) the channel is paced out.
+/// @param now_tick The connection's clock, in base::game_loop::scaled_clock units; before
+///        next_send_tick (base::game_loop::scaled_clock_before) the channel is paced out.
 /// @param force Flush even when paced out.
 /// @param sink Receiver of each emitted frame.
 /// @return True when the queue was flushed, false when paced out.

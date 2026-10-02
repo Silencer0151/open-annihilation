@@ -10,7 +10,7 @@ add_library(oa::ui::services ALIAS oa-ui-services)
 target_include_directories(oa-ui-services PUBLIC include)
 target_compile_features(oa-ui-services PUBLIC cxx_std_20)
 target_link_libraries(oa-ui-services PUBLIC oa-base-geometry oa-platform-preferences oa-platform-shims oa-present
-  oa-options PRIVATE oa-base-game-loop oa-formats-sqsh oa-formats-hpi ZLIB::ZLIB)
+  oa-options PRIVATE oa-base-bytes oa-base-game-loop oa-formats-sqsh oa-formats-hpi ZLIB::ZLIB)
 
 if(BUILD_TESTING)
   add_executable(oa-engine-services-test tests/services_test.cpp)

@@ -358,6 +358,7 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
         /// Ends the run's clock, its held scroll and its log.
         ~RunEnd() {
             runtime.frame_run_clock_ns_.reset();
+            runtime.frame_run_frames_per_second_ = 0;
             runtime.frame_run_scroll_ = 0;
             if (runtime.match_tracking_)
                 runtime.stop_match_tracking();
@@ -375,10 +376,17 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
             log, "frame,time_ms,tick,alpha,camera_x,camera_z,zoom,unit_x,unit_z,drawn_x,drawn_z\n"
         );
     }
-    // The run's clock starts at 0, where the match clock last stepped; its
-    // frames stand for the middle of each 1 / frames_per_second.
-    frame_run_clock_ns_ = 0;
-    match_timing_.previous_clock = oa::base::game_loop::scaled_clock(0, match_clock_scale());
+    // The run's clock starts at --frame-clock, or 0, where the match clock
+    // last stepped; its frames stand for the middle of each
+    // 1 / frames_per_second.
+    const uint64_t clock_start_ms = options_.frame_clock_ms.value_or(0);
+    const uint64_t clock_start_ns = clock_start_ms * frame_pacing::kNanosecondsPerMillisecond;
+    frame_run_clock_ns_ = clock_start_ns;
+    frame_run_frames_per_second_ = frames_per_second;
+    // The low 32 bits of the milliseconds, as the loop's clock keeps them.
+    match_timing_.previous_clock = oa::base::game_loop::scaled_clock(
+        static_cast<uint32_t>(clock_start_ms), match_clock_scale()
+    );
     tick_presentation_ = {};
     scroll_clock_ = 0;
     zoom_clock_valid_ = false;
@@ -408,8 +416,9 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
         // Each frame stands for the middle of its period, so frames at
         // the tick rate do not fall on the clock's whole milliseconds
         // where its units turn over.
-        frame_run_clock_ns_ =
-            (2 * frame + 1) * frame_pacing::kNanosecondsPerSecond / (2 * frames_per_second);
+        frame_run_clock_ns_ = clock_start_ns + (2 * frame + 1) *
+                                                   frame_pacing::kNanosecondsPerSecond /
+                                                   (2 * frames_per_second);
         // The frame's unit announcements, camera and clock step, in the
         // application loop's order: each frame presents at most one
         // announcement, as every frame of the game does.

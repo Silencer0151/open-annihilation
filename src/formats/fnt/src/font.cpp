@@ -17,53 +17,60 @@ constexpr std::size_t fnt_data_start = file_preamble_bytes;
 
 struct FileHeader {
     uint16_t height = 0;
-    uint16_t word_after_height = 0; // kept as read; nothing reads it
+    uint16_t word_after_height = 0; // low byte: rows a label's glyphs start above the pen
     std::array<uint16_t, limit::glyph_count> offsets{};
 };
 
 constexpr uint8_t first_printable = 0x20;
 constexpr uint8_t height_reference = 0x49;
 
-uint16_t le16(std::span<const uint8_t> b, std::size_t o) {
-    if (o > b.size() || b.size() - o < 2)
-        throw std::runtime_error("truncated FNT uint16");
-    return static_cast<uint16_t>(b[o]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(b[o + 1]) << 8U);
-}
-
-void validate(std::span<const uint8_t> b, std::string_view kind) {
-    if (b.size() > limit::input_bytes)
-        throw std::runtime_error(std::string(kind) + " font exceeds the 4 MiB safety limit");
-}
+using base::bytes::ByteReader;
+using base::bytes::DecodeCode;
+using base::bytes::DecodeError;
+using base::bytes::Decoded;
 } // namespace
 
-Font parse_fnt(std::span<const uint8_t> b) {
-    validate(b, "FNT");
+Decoded<Font> parse_fnt(std::span<const uint8_t> b) {
+    if (b.size() > limit::input_bytes)
+        return DecodeError{
+            DecodeCode::limit_exceeded,
+            limit::input_bytes,
+            "FNT font exceeds the 4 MiB safety limit"
+        };
     if (b.size() < fnt_data_start)
-        throw std::runtime_error("FNT is shorter than its 516-byte header");
+        return DecodeError{
+            DecodeCode::truncated, b.size(), "FNT is shorter than its 516-byte header"
+        };
+    ByteReader reader(b);
     FileHeader disk;
-    disk.height = le16(b, 0);
-    disk.word_after_height = le16(b, 2);
-    for (std::size_t c = 0; c < limit::glyph_count; ++c)
-        disk.offsets[c] = le16(b, fnt_header_bytes + c * sizeof(uint16_t));
+    disk.height = reader.u16();
+    disk.word_after_height = reader.u16();
+    for (auto& offset : disk.offsets)
+        offset = reader.u16();
     Font out;
     out.nominal_height = disk.height;
     out.word_after_height = disk.word_after_height;
     if (out.nominal_height == 0 || out.nominal_height > limit::glyph_height)
-        throw std::runtime_error("FNT glyph height is outside 1..128");
+        return DecodeError{DecodeCode::out_of_range, 0, "FNT glyph height is outside 1..128"};
     for (std::size_t c = 0; c < limit::glyph_count; ++c) {
         const std::size_t offset = disk.offsets[c];
         if (offset == 0)
             continue;
+        const auto offset_at = fnt_header_bytes + c * sizeof(uint16_t);
         if (offset < fnt_data_start || offset >= b.size())
-            throw std::runtime_error("FNT glyph offset lies outside glyph data");
+            return DecodeError{
+                DecodeCode::out_of_range, offset_at, "FNT glyph offset lies outside glyph data"
+            };
         const auto width = b[offset];
         if (width == 0 || width > limit::glyph_width)
-            throw std::runtime_error("FNT glyph width is outside 1..128");
+            return DecodeError{
+                DecodeCode::out_of_range, offset, "FNT glyph width is outside 1..128"
+            };
         const std::size_t count = static_cast<std::size_t>(width) * out.nominal_height;
         const std::size_t packed = (count + 7U) / 8U;
-        if (offset + 1 > b.size() || packed > b.size() - offset - 1)
-            throw std::runtime_error("truncated FNT glyph bitmap");
+        const auto bitmap = reader.bytes_at(offset + 1, packed);
+        if (!reader.ok())
+            return DecodeError{DecodeCode::truncated, offset + 1, "truncated FNT glyph bitmap"};
         Glyph glyph;
         glyph.width = width;
         glyph.height = out.nominal_height;
@@ -72,33 +79,52 @@ Font parse_fnt(std::span<const uint8_t> b) {
         glyph.pixels.assign(count, foreground_index);
         glyph.coverage.resize(count);
         for (std::size_t bit = 0; bit < count; ++bit)
-            glyph.coverage[bit] =
-                static_cast<uint8_t>((b[offset + 1 + bit / 8U] >> (7U - bit % 8U)) & 1U);
+            glyph.coverage[bit] = static_cast<uint8_t>((bitmap[bit / 8U] >> (7U - bit % 8U)) & 1U);
         out.glyphs[c] = std::move(glyph);
     }
     return out;
 }
 
-Font parse_gaf(std::span<const uint8_t> b) {
-    validate(b, "GAF");
+Decoded<Font> parse_gaf(std::span<const uint8_t> b) {
+    if (b.size() > limit::input_bytes)
+        return DecodeError{
+            DecodeCode::limit_exceeded,
+            limit::input_bytes,
+            "GAF font exceeds the 4 MiB safety limit"
+        };
     const auto parsed = formats::gaf::parse(b);
     if (!parsed.ok())
-        throw std::runtime_error("cannot parse GAF font: " + parsed.error->message);
+        return DecodeError{
+            DecodeCode::malformed,
+            parsed.error ? parsed.error->offset : 0,
+            "cannot parse GAF font",
+            parsed.error ? static_cast<uint16_t>(parsed.error->code) : uint16_t{}
+        };
     if (parsed.archive->sequences.empty())
-        throw std::runtime_error("GAF font contains no sequence");
+        return DecodeError{DecodeCode::malformed, 0, "GAF font contains no sequence"};
     const auto& frames = parsed.archive->sequences.front().frames;
     if (frames.size() > limit::glyph_count)
-        throw std::runtime_error("GAF font has more than 256 glyph frames");
+        return DecodeError{
+            DecodeCode::limit_exceeded, 0, "GAF font has more than 256 glyph frames"
+        };
     Font out;
     for (std::size_t c = 0; c < frames.size(); ++c) {
         const auto rendered = formats::gaf::render_normal(frames[c]);
         if (!rendered.ok())
-            throw std::runtime_error(
-                "cannot render GAF font glyph " + std::to_string(c) + ": " + rendered.error->message
-            );
+            return DecodeError{
+                DecodeCode::malformed,
+                rendered.error ? rendered.error->offset : 0,
+                "cannot render a GAF font glyph",
+                static_cast<uint16_t>(c)
+            };
         const auto& f = *rendered.frame;
         if (f.width > limit::glyph_width || f.height > limit::glyph_height)
-            throw std::runtime_error("GAF font glyph dimensions exceed 128 pixels");
+            return DecodeError{
+                DecodeCode::out_of_range,
+                0,
+                "GAF font glyph dimensions exceed 128 pixels",
+                static_cast<uint16_t>(c)
+            };
         out.glyphs[c] = Glyph{f.width, f.height, f.origin_x, f.origin_y, f.pixels, f.coverage};
     }
     if (out.glyphs[height_reference]) {
@@ -119,11 +145,11 @@ Font parse_gaf(std::span<const uint8_t> b) {
     return out;
 }
 
-Font load_fnt(AssetStore& a, std::string_view p) {
+Decoded<Font> load_fnt(AssetStore& a, std::string_view p) {
     return parse_fnt(a.read(p).bytes);
 }
 
-Font load_gaf(AssetStore& a, std::string_view p) {
+Decoded<Font> load_gaf(AssetStore& a, std::string_view p) {
     return parse_gaf(a.read(p).bytes);
 }
 
@@ -133,7 +159,9 @@ constexpr std::string_view disk_font_extension = "FNT";
 constexpr std::size_t disk_font_path_bytes = 0x100;
 
 /// Builds directory\name with its last dotted suffix replaced by ".FNT".
-std::string disk_font_path(std::string_view directory, std::string_view name) {
+///
+/// @return the path, or nullopt when it would not fit the font path limit
+std::optional<std::string> disk_font_path(std::string_view directory, std::string_view name) {
     std::string path;
     path.reserve(directory.size() + name.size() + disk_font_extension.size() + 2);
     path.append(directory);
@@ -147,7 +175,7 @@ std::string disk_font_path(std::string_view directory, std::string_view name) {
     path.push_back('.');
     path.append(disk_font_extension);
     if (path.size() >= disk_font_path_bytes)
-        throw std::runtime_error("font path exceeds the 256-byte font path limit");
+        return std::nullopt;
     return path;
 }
 
@@ -168,25 +196,33 @@ LocatedFont read_opened_font(AssetStore& assets, const std::string& path) {
     }
 }
 
-Font font_from_opened_file(const LocatedFont& located, const std::string& path) {
+Decoded<Font> font_from_opened_file(const LocatedFont& located) {
     // An empty or missing font file is fatal; no other path is tried.
     if (!located.found || located.bytes.empty())
-        throw std::runtime_error("missing font file: " + path);
+        return DecodeError{DecodeCode::not_found, 0, "missing font file"};
     return parse_fnt(located.bytes);
 }
+
+const DecodeError font_path_too_long{
+    DecodeCode::limit_exceeded, 0, "font path exceeds the 256-byte font path limit"
+};
 } // namespace
 
-Font load_named_fnt(AssetStore& assets, std::string_view name, std::string_view language) {
+Decoded<Font> load_named_fnt(AssetStore& assets, std::string_view name, std::string_view language) {
     // The language comes from the game's language setting. The alternate path
     // is fonts-<language>\<name>, kept only when it opens.
     if (!language.empty()) {
         const auto alternate = disk_font_path(std::string("fonts-") + std::string(language), name);
-        const auto located = read_opened_font(assets, alternate);
+        if (!alternate)
+            return font_path_too_long;
+        const auto located = read_opened_font(assets, *alternate);
         if (located.found)
-            return font_from_opened_file(located, alternate);
+            return font_from_opened_file(located);
     }
     const auto fallback = disk_font_path("fonts", name);
-    return font_from_opened_file(read_opened_font(assets, fallback), fallback);
+    if (!fallback)
+        return font_path_too_long;
+    return font_from_opened_file(read_opened_font(assets, *fallback));
 }
 
 uint32_t measure_text(const Font& f, std::string_view text) noexcept {
@@ -206,6 +242,10 @@ uint16_t line_height(const Font& f) noexcept {
     const auto& g = f.glyphs[height_reference];
     const auto height = g ? g->height : f.nominal_height;
     return static_cast<uint16_t>(height + 2U);
+}
+
+int32_t row_lift(const Font& f) noexcept {
+    return static_cast<int8_t>(static_cast<uint8_t>(f.word_after_height & 0xffU));
 }
 
 int32_t

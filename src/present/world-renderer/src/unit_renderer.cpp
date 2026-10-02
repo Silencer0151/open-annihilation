@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/world_renderer/unit_renderer.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,8 @@
 #include <cstdint>
 
 namespace oa::present::world_renderer {
+using base::game_math::truncate_low32;
+
 namespace {
 
 struct Point {
@@ -86,13 +89,6 @@ struct IndexedSprite {
     std::vector<uint8_t> pixels;
     std::vector<uint8_t> aux;
 };
-
-int32_t truncate_low32(double value) noexcept {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    return static_cast<int32_t>(static_cast<uint32_t>(static_cast<int64_t>(std::trunc(value))));
-}
 
 uint8_t nearest_palette_index(const PaletteBytes& palette, int r, int g, int b) {
     uint8_t best = 0;

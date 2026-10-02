@@ -63,21 +63,15 @@ void TickHost::movement_tick(oa::Unit& record) {
     const auto parent_index = link_parent(s.record);
     auto& driver = match.air_drivers_.at(s.unit_index);
     const auto host = air_host();
-    // Aircraft follow their air driver unless a mission still steers them
-    // through a ground navigator goal.
-    const bool air_driven =
-        driver.unit != nullptr && (driver.goal != nullptr || g.navigation.goal == nullptr);
-    if (driver.unit != nullptr && !air_driven) {
-        driver.position = s.record.position;
-        driver.velocity = {};
-        driver.heading = s.record.heading;
-    }
+    // A flying unit's movement object has the air driver, and the air driver
+    // alone moves it: its missions hand their goals to the driver, never to
+    // the ground navigator.
+    const bool air_driven = driver.unit != nullptr;
     // The driver's per-tick slot and the steering step run for carried units
     // too; the carried branch below then overrides their position, attitude,
     // velocity and speed but keeps the turn rate and filtered vector.
-    if (driver.unit != nullptr)
-        sim::air::air_driver_update(&driver, host, g.movement.flags & 3);
     if (air_driven) {
+        sim::air::air_driver_update(&driver, host, g.movement.flags & 3);
         if (const oa::UnitDef* def = oa::world_unit_def_of(&match.state(), &s.record)) {
             int16_t bank = 0;
             sim::air::air_flight_step(
@@ -109,71 +103,14 @@ void TickHost::movement_tick(oa::Unit& record) {
         );
     } else {
         sim::ground_orders::tick_navigation(view(s, g, flags), match.simulation_.tick, *this);
-        constexpr uint32_t can_fly = 0x800u;
-        if (u.type && (u.type->flags & can_fly) != 0) {
-            const bool airborne =
-                (g.navigation.flags & sim::ground_orders::route_present_flag) != 0;
-            if (airborne && (g.movement.flags & 3) != sim::air::layer_air)
-                match.set_movement_layer(s, g, sim::air::layer_air);
-            int16_t cruise = 80;
-            if (const auto* definition = match.fields(s).definition;
-                definition != nullptr && definition->cruise_altitude > 0)
-                cruise = definition->cruise_altitude;
-            const auto ground =
-                match.sample_terrain_height(s.unit->position[0], s.unit->position[2]);
-            const auto fly_y = ground + (airborne ? cruise : 0);
-            const auto target_y =
-                static_cast<sim::unit_movement::Fixed>(static_cast<uint32_t>(fly_y) << 16);
-            int16_t roll = 0;
-            // The navigator's next waypoint stands in for the air driver's
-            // point while a mission steers through a ground goal.
-            sim::air::AirSteeringTarget target{};
-            target.position = {g.geometry.position[0], target_y, g.geometry.position[2]};
-            target.heading = g.geometry.heading;
-            if (airborne && g.navigation.count > 0) {
-                const auto points = sim::ground_orders::steering_points(g.navigation);
-                target.position.x = points[1][0];
-                target.position.z = points[1][2];
-                target.heading = base::game_math::direction(
-                    g.geometry.position[0] - target.position.x,
-                    g.geometry.position[2] - target.position.z
-                );
-            }
-            if (const oa::UnitDef* def = oa::world_unit_def_of(&match.state(), &s.record)) {
-                sim::air::air_flight_step(
-                    g.geometry,
-                    g.movement,
-                    g.previous_vector,
-                    target,
-                    *def,
-                    match.state().game.gravity != 0 ? match.state().game.gravity
-                                                    : sim::ground_orders::default_gravity,
-                    false,
-                    &roll
-                );
-            }
-            if ((g.movement.flags & 3) == sim::air::layer_air) {
-                s.record.bank = static_cast<int16_t>(roll);
-                s.record.pitch = g.geometry.pitch;
-            }
-            // Land when the route is gone and the unit is down at ground height.
-            if (!airborne && (g.movement.flags & 3) == sim::air::layer_air) {
-                const auto height = static_cast<int32_t>(g.geometry.position[1] >> 16);
-                if (height <= ground + 2) {
-                    match.set_movement_layer(s, g, sim::air::layer_ground);
-                    g.geometry.position[1] =
-                        static_cast<sim::unit_movement::Fixed>(static_cast<uint32_t>(ground) << 16);
-                }
-            }
-        } else
-            sim::ground_orders::steer_ground(
-                g.geometry,
-                g.movement,
-                g.navigation,
-                g.acceleration,
-                g.deceleration,
-                match.simulation_.sea_level
-            );
+        sim::ground_orders::steer_ground(
+            g.geometry,
+            g.movement,
+            g.navigation,
+            g.acceleration,
+            g.deceleration,
+            match.simulation_.sea_level
+        );
     }
     if (parent_index) {
         auto& parent = match.slots_.at(parent_index);

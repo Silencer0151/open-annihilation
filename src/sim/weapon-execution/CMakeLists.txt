@@ -11,7 +11,7 @@ target_link_libraries(oa-sim-weapon-execution PUBLIC oa-core-types oa-base-game-
   oa-options)
 if(BUILD_TESTING)
   add_executable(oa-weapon-execution-test tests/weapon_execution_test.cpp)
-  target_link_libraries(oa-weapon-execution-test PRIVATE oa-sim-weapon-execution)
+  target_link_libraries(oa-weapon-execution-test PRIVATE oa-sim-weapon-execution oa-test-support)
   add_test(NAME weapon-execution COMMAND oa-weapon-execution-test)
   add_executable(oa-weapon-launch-test tests/weapon_launch_test.cpp)
   target_link_libraries(oa-weapon-launch-test PRIVATE oa-sim-weapon-execution)

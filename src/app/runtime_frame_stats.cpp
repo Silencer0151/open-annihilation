@@ -8,6 +8,7 @@
 // times and the latest frames' graph, with its console check.
 #include "oa/app/runtime.hpp"
 #include "frame_stats_panel.hpp"
+#include "match_clock.hpp"
 #include "oa/app/frame_pacing.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/ui/console/console.hpp"
@@ -18,7 +19,6 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -218,13 +218,13 @@ void Runtime::step_match_frame() {
     // On the loop's clock, a clock set past the frame's time during the
     // frame (a load, a screenshot or a film frame sets it to the moment it
     // ends) steps from there on the next frame, so the time it left out
-    // stays out. A check's fixed clock steps as it always has.
-    const auto behind = std::bit_cast<int32_t>(
-        oa::base::game_loop::scaled_clock(now_ms, match_clock_scale()) -
-        match_timing_.previous_clock
+    // stays out; a reading that has turned over to 0 steps, as in 3.1c. A
+    // check's fixed clock steps as it always has.
+    const bool behind = clock_reading_behind(
+        oa::base::game_loop::scaled_clock(now_ms, match_clock_scale()), match_timing_.previous_clock
     );
     const bool fixed = options_.fixed_clock && !frame_run_clock_ns_;
-    if (stepped && !fixed && behind < 0)
+    if (stepped && !fixed && behind)
         stepped = false;
     if (stepped)
         advance_match_clock(now_ms);
@@ -247,6 +247,11 @@ void Runtime::present_frame_between_ticks(bool stepped, uint32_t ticks_before) {
         whole = whole || (game.sim_run_flags & console::kSimRunPaused) != 0 || film_frame;
     }
     ticks.whole = whole;
+    // Frames one a clock unit: the loop paced at the tick rate, or a
+    // --frame-rate run at it.
+    const uint32_t frames_per_second =
+        frame_run_clock_ns_ ? frame_run_frames_per_second_ : frame_pacer_.frames_per_second;
+    ticks.unit_frames = frames_per_second == frame_pacing::kTicksPerSecond;
     presentation_alpha_ =
         next_presentation_alpha(tick_presentation_, match_timing_, ticks, frame_time_ns_);
 }

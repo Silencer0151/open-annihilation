@@ -37,6 +37,7 @@
 #include "oa/data/defs/unit_catalog.hpp"
 #include "oa/data/defs/unit_def_loader.hpp"
 #include "oa/data/defs/unit_header.hpp"
+#include "oa/data/defs/unit_records.hpp"
 #include "oa/data/defs/weapons.hpp"
 #include "oa/formats/fnt.hpp"
 #include "oa/formats/gaf.hpp"
@@ -51,7 +52,6 @@
 #include "oa/test/game_data.hpp"
 #include "oa/formats/objects3d.hpp"
 #include "oa/formats/tnt.hpp"
-#include "oa/data/unit_definitions.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -630,10 +630,9 @@ std::string decode_gaf(
         return "no frame of the GAF could be compared: every one needs the blended child draw";
     }
     if (is_gui_font(path)) {
-        try {
-            (void)oa::formats::fnt::parse_gaf(bytes);
-        } catch (const std::exception& error) {
-            return std::string("GUI font: ") + error.what();
+        const auto font = oa::formats::fnt::parse_gaf(bytes);
+        if (!font.ok()) {
+            return std::string("GUI font: ") + font.error.message;
         }
     }
     return {};
@@ -653,8 +652,12 @@ std::string decode_pcx(std::span<const uint8_t> bytes) {
     if (status != oa::present::PcxStatus::ok) {
         return std::string("PCX loader: ") + oa::present::pcx_status_text(status);
     }
-    try {
-        const auto decoded = oa::decode_pcx(bytes);
+    const auto read = oa::decode_pcx(bytes);
+    if (!read.ok()) {
+        return std::string("PCX image reader: ") + read.error.message;
+    }
+    {
+        const auto& decoded = *read.value;
         if (decoded.width != static_cast<uint32_t>(image.width) ||
             decoded.height != static_cast<uint32_t>(image.height)) {
             return "PCX readers disagree on the image size";
@@ -676,8 +679,6 @@ std::string decode_pcx(std::span<const uint8_t> bytes) {
                 }
             }
         }
-    } catch (const std::exception& error) {
-        return std::string("PCX image reader: ") + error.what();
     }
     return {};
 }
@@ -766,8 +767,17 @@ std::string decode_entry(
         if (!failure.empty()) {
             return failure;
         }
-        const auto definition = oa::data::unit_definitions::load_fbi(text, std::string(path));
-        return definition ? std::string() : "FBI loader: " + definition.error.message;
+        // The unit loaders read the [UNITINFO] section; the full loads run
+        // in the definitions sweep.
+        oa::formats::tdf::Document document;
+        oa::formats::tdf::document_init(&document);
+        const bool unit_info =
+            oa::formats::tdf::parse_text(
+                &document, text.data(), static_cast<uint32_t>(text.size()), true, nullptr
+            ) &&
+            oa::formats::tdf::select_section(&document, "UNITINFO");
+        oa::formats::tdf::document_free(&document);
+        return unit_info ? std::string() : "FBI loader: FBI has no [UNITINFO] section";
     }
     case Decoder::gui: {
         // Screens load layouts with the GUI reader alone, which keeps the
@@ -779,20 +789,14 @@ std::string decode_entry(
         const auto parsed = oa::formats::cob::parse_cob(bytes);
         return parsed ? std::string() : "COB reader: " + parsed.error;
     }
-    case Decoder::model:
-        try {
-            (void)oa::formats::objects3d::load_3do(std::as_bytes(bytes));
-        } catch (const std::exception& error) {
-            return std::string("3DO reader: ") + error.what();
-        }
-        return {};
-    case Decoder::fnt:
-        try {
-            (void)oa::formats::fnt::parse_fnt(bytes);
-        } catch (const std::exception& error) {
-            return std::string("FNT reader: ") + error.what();
-        }
-        return {};
+    case Decoder::model: {
+        const auto parsed = oa::formats::objects3d::load_3do(std::as_bytes(bytes));
+        return parsed.ok() ? std::string() : std::string("3DO reader: ") + parsed.error.message;
+    }
+    case Decoder::fnt: {
+        const auto parsed = oa::formats::fnt::parse_fnt(bytes);
+        return parsed.ok() ? std::string() : std::string("FNT reader: ") + parsed.error.message;
+    }
     case Decoder::palette:
         return bytes.size() >= oa::data::defs::palette_file_bytes
                    ? std::string()
@@ -876,13 +880,12 @@ void count_unread_extension(const std::string& extension, uint64_t bytes, SweepT
 std::unique_ptr<uint8_t[]> read_entry(const oa::HpiArchive& archive, uint32_t index) {
     const oa::ArchiveNode& node = archive.nodes()[index];
     auto bytes = std::make_unique_for_overwrite<uint8_t[]>(node.size);
-    const int64_t read =
-        archive.read_node_range(index, 0, std::span<uint8_t>(bytes.get(), node.size));
-    if (read < 0) {
-        throw std::runtime_error("truncated HPI entry: " + node.name);
+    const auto read = archive.read_node_range(index, 0, std::span<uint8_t>(bytes.get(), node.size));
+    if (!read.ok()) {
+        throw std::runtime_error(std::string(read.error.message) + ": " + node.name);
     }
-    if (static_cast<uint64_t>(read) < node.size) {
-        std::memset(bytes.get() + read, 0, node.size - static_cast<std::size_t>(read));
+    if (*read.value < node.size) {
+        std::memset(bytes.get() + *read.value, 0, node.size - *read.value);
     }
     return bytes;
 }
@@ -1011,47 +1014,6 @@ void definition_failure(const std::string& what, ItemOutcome& outcome) {
     print_to(outcome.report, Stream::err, "FAIL: definitions: %s\n", what.c_str());
 }
 
-// Lists and reads unit files through an asset store for the unit catalog.
-class StoreCatalogReader final : public oa::data::unit_definitions::CatalogAssetReader {
-  public:
-
-    /// Wraps a store.
-    ///
-    /// @param store asset store; must outlive the reader
-    explicit StoreCatalogReader(const oa::AssetStore& store) : store_(store) {}
-
-    /// Lists a directory's winning files with an extension.
-    ///
-    /// @param directory resource directory
-    /// @param extension required suffix
-    /// @return the logical paths, or the store's error
-    oa::data::unit_definitions::Result<std::vector<std::string>>
-    list_effective(std::string_view directory, std::string_view extension) const override {
-        try {
-            return {store_.list_effective(directory, extension), {}};
-        } catch (const std::exception& error) {
-            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
-        }
-    }
-
-    /// Reads a file's text.
-    ///
-    /// @param path logical path
-    /// @return the text, or the store's error
-    oa::data::unit_definitions::Result<std::string> read(std::string_view path) const override {
-        try {
-            const auto bytes = store_.read(path).bytes;
-            return {std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {}};
-        } catch (const std::exception& error) {
-            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
-        }
-    }
-
-  private:
-
-    const oa::AssetStore& store_;
-};
-
 // Counts what the line-of-sight table load hands over.
 struct LosTableCount {
     int32_t announced{};
@@ -1112,29 +1074,34 @@ void count_listed(void* user, const char* name) {
 
 /// Loads every unit of the catalog, header and definition, then the build lists and download menus.
 ///
-/// Each type takes its header from the enumerated FBI, then its definition
+/// Each enumerated FBI gives a header; the catalog drops the unavailable and
+/// sorts the rest by unit name, and each kept type then takes its definition
 /// from the FBI its unitname names.
 ///
 /// @param files file boundary over the game's mounts
-/// @param store the same mounts, for the catalog
 /// @param moves loaded movement classes
 /// @param weapons loaded weapon table
 /// @param sounds loaded sound categories
 /// @param[in,out] outcome the definitions' counts and report
 void load_units(
     const oa::data::defs::Files& files,
-    const oa::AssetStore& store,
     const oa::data::defs::MoveClassTable& moves,
     const oa::data::defs::WeaponTable& weapons,
     const oa::data::defs::SoundCategoryTable& sounds,
     ItemOutcome& outcome
 ) {
-    const StoreCatalogReader reader(store);
-    const auto catalog = oa::data::unit_definitions::load_unit_catalog(reader);
-    if (!catalog) {
-        definition_failure("unit catalog: " + catalog.error.message, outcome);
-        return;
-    }
+    // The header pass over every units/*.FBI, the catalog's compaction and
+    // name order, then each kept type's FBI by its unit name.
+    std::vector<std::string> unit_files;
+    files.list(
+        files.context,
+        "units",
+        "FBI",
+        [](void* user, const char* name) {
+            static_cast<std::vector<std::string>*>(user)->emplace_back(name);
+        },
+        &unit_files
+    );
     oa::data::defs::WeaponTdfSet weapon_files;
     oa::data::defs::weapon_tdf_set_init(&weapon_files);
     if (!oa::data::defs::load_weapon_tdf_set(&files, nullptr, false, &weapon_files)) {
@@ -1149,7 +1116,7 @@ void load_units(
     oa::data::defs::UnitDefTables tables;
     oa::data::defs::unit_def_tables_init(&tables);
     if (!oa::data::defs::unit_def_tables_allocate(
-            &tables, static_cast<uint32_t>(catalog.value.entries.size() + 1)
+            &tables, static_cast<uint32_t>(unit_files.size() + 1)
         )) {
         definition_failure("the unit catalog does not fit the unit table", outcome);
         oa::data::defs::weapon_tdf_set_free(&weapon_files);
@@ -1161,24 +1128,22 @@ void load_units(
     const oa::data::defs::UnitDefSources unit_sources{
         "", &moves, weapons.defs, &sounds, &tables.categories, &tables.blocks, nullptr
     };
-    uint32_t loaded = 0;
-    for (std::size_t index = 0; index < catalog.value.entries.size(); ++index) {
-        const auto& logical_path = catalog.value.entries[index].logical_path;
-        const auto type_id = static_cast<uint16_t>(index + 1);
-        oa::UnitDef& record = tables.records[type_id];
-        record.type_id = type_id;
-        const auto slash = logical_path.find_last_of("/\\");
-        const std::string file_name =
-            logical_path.substr(slash == std::string::npos ? 0 : slash + 1);
+    for (std::size_t index = 0; index < unit_files.size(); ++index) {
         char fbi_path[oa::data::defs::path_capacity];
         oa::data::defs::build_variant_path(
-            &files, fbi_path, sizeof fbi_path, "units", file_name.c_str(), "FBI", nullptr
+            &files, fbi_path, sizeof fbi_path, "units", unit_files[index].c_str(), "FBI", nullptr
         );
         bool refused = false;
-        if (!oa::data::defs::load_unit_header(&files, fbi_path, record, header_sources, &refused)) {
+        if (!oa::data::defs::load_unit_header(
+                &files, fbi_path, tables.records[index + 1], header_sources, &refused
+            ))
             definition_failure("unit header " + std::string(fbi_path), outcome);
-            continue;
-        }
+    }
+    tables.count = oa::data::defs::unit_defs_finalize_catalog(tables.records, tables.count);
+    uint32_t loaded = 0;
+    for (uint32_t type_id = 1; type_id < tables.count; ++type_id) {
+        oa::UnitDef& record = tables.records[type_id];
+        char fbi_path[oa::data::defs::path_capacity];
         oa::data::defs::build_variant_path(
             &files, fbi_path, sizeof fbi_path, "units", record.unit_name, "FBI", nullptr
         );
@@ -1204,7 +1169,7 @@ void load_units(
         "  %-26s %8u of %zu (%u builders with a build list, %u download menus)\n",
         "unit types",
         loaded,
-        catalog.value.entries.size(),
+        unit_files.size(),
         builders,
         tables.downloads.count
     );
@@ -1308,7 +1273,7 @@ void sweep_definitions(const oa::AssetStore& store, ItemOutcome& outcome) {
     }
     print_to(outcome.report, Stream::out, "  %-26s %8d\n", "line-of-sight tables", los.received);
 
-    load_units(files, store, *moves, *weapons, sounds, outcome);
+    load_units(files, *moves, *weapons, sounds, outcome);
     oa::data::defs::weapon_table_free(weapons.get());
     oa::data::defs::sound_category_table_free(&sounds);
 }

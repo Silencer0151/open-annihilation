@@ -76,8 +76,8 @@ void air_driver_init_mirrored(AirDriver* driver, Unit* unit) noexcept;
 
 /// Replaces the driver's goal.
 ///
-/// The replaced goal's order is told with event_goal_replaced; an owning-machine driver
-/// also becomes due to be sent.
+/// The replaced goal's order is told with ground_orders::goal_replaced_event; an
+/// owning-machine driver also becomes due to be sent.
 ///
 /// @param[in,out] driver the driver
 /// @param goal new goal, or null to clear it
@@ -93,8 +93,8 @@ void air_driver_set_goal(AirDriver* driver, AirGoal* goal) noexcept;
 ///
 /// Refreshes the point, its displacement and the heading: beyond 10 world units
 /// the point takes cruise altitude, and beyond 20 (or 1 when the goal leaves the
-/// heading free) the unit faces the point. Arrival raises event_arrived and drops a
-/// goal that is not tracking a unit.
+/// heading free) the unit faces the point. Arrival raises ground_orders::arrived_event
+/// and drops a goal that is not tracking a unit.
 ///
 /// @param[in,out] driver the driver
 /// @param host world queries for the goal

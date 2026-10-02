@@ -5,6 +5,7 @@
 #include "render_internal.hpp"
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
+#include "oa/base/game_math.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/ui/gui_layout.hpp"
 
@@ -598,7 +599,7 @@ void draw_scroll_bar(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index
         } else if (const int32_t scale = i32(bar, field::scroll_thickness); scale != 0) {
             const double value = static_cast<double>(knob_position) * scale /
                                  static_cast<double>(width - i16(bar, field::scroll_knob_size));
-            format_number(caption, static_cast<int32_t>(ui::gui_input::truncate_to_int64(value)));
+            format_number(caption, static_cast<int32_t>(base::game_math::truncate_to_int64(value)));
         } else {
             format_number(caption, knob_position + ((attrs & kValueFromOne) != 0 ? 1 : 0));
         }
@@ -683,7 +684,7 @@ void draw_progress(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) 
     const double filled = static_cast<double>(value) /
                           static_cast<double>(i32(bar, field::progress_scale)) *
                           static_cast<double>(width - kProgressTrack);
-    rect.x2 = static_cast<int32_t>(ui::gui_input::truncate_to_int64(filled)) + rect.x1;
+    rect.x2 = static_cast<int32_t>(base::game_math::truncate_to_int64(filled)) + rect.x1;
     fill_clipped(
         surface, rect, static_cast<uint8_t>(layout::record_u32(bar, field::color_foreground))
     );

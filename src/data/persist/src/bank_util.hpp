@@ -4,6 +4,8 @@
 // Small helpers shared by the persistence sources.
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -34,25 +36,10 @@ inline char* duplicate(const char* text) {
     return copy;
 }
 
-inline uint32_t load_le32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-}
-
-inline uint16_t load_le16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0] | (p[1] << 8));
-}
-
-inline void store_le32(uint8_t* p, uint32_t value) {
-    p[0] = static_cast<uint8_t>(value);
-    p[1] = static_cast<uint8_t>(value >> 8);
-    p[2] = static_cast<uint8_t>(value >> 16);
-    p[3] = static_cast<uint8_t>(value >> 24);
-}
-
-inline void store_le16(uint8_t* p, uint16_t value) {
-    p[0] = static_cast<uint8_t>(value);
-    p[1] = static_cast<uint8_t>(value >> 8);
-}
+// Little-endian fields of save files and banks.
+using base::bytes::load_le16;
+using base::bytes::load_le32;
+using base::bytes::store_le16;
+using base::bytes::store_le32;
 
 } // namespace oa::data::persist::detail

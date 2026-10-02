@@ -7,7 +7,7 @@
 
 #include <cstdio>
 #include <cstring>
-#include <exception>
+#include <new>
 
 namespace oa::netgame {
 namespace {
@@ -52,13 +52,16 @@ bool unseal(uint8_t* datagram, size_t length) noexcept {
 // it would not beat the stored form.
 size_t compress_staged(Condenser* c) noexcept {
     try {
-        const auto compressed =
+        const auto encoded =
             formats::sqsh::encode_lz77({c->staged, c->staged_length}, c->staged_length);
+        if (!encoded.ok())
+            return 0;
+        const auto& compressed = *encoded.value;
         if (compressed.size() + condenser_header_bytes >= c->staged_length)
             return 0;
         std::memcpy(c->frame + condenser_header_bytes, compressed.data(), compressed.size());
         return compressed.size();
-    } catch (const std::exception&) {
+    } catch (const std::bad_alloc&) {
         return 0;
     }
 }
@@ -67,10 +70,12 @@ size_t compress_staged(Condenser* c) noexcept {
 bool decompress_into(Condenser* c, const uint8_t* body, size_t size) noexcept {
     try {
         const auto decoded = formats::sqsh::decode_lz77({body, size}, condenser_decoded_bytes);
-        std::memcpy(c->decoded, decoded.data(), decoded.size());
-        c->decoded_length = static_cast<uint32_t>(decoded.size());
+        if (!decoded.ok())
+            return false;
+        std::memcpy(c->decoded, decoded.value->data(), decoded.value->size());
+        c->decoded_length = static_cast<uint32_t>(decoded.value->size());
         return true;
-    } catch (const std::exception&) {
+    } catch (const std::bad_alloc&) {
         return false;
     }
 }

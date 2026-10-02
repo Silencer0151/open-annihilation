@@ -134,11 +134,6 @@ void strip_comments(char* text) noexcept;
 /// @param text NUL-terminated value
 /// @return the value, or 0 when no digits are present
 [[nodiscard]] double parse_double(const char* text) noexcept;
-/// Truncates a double toward zero to a 64-bit integer, as 3.1c converts TDF numbers.
-///
-/// @param value value to convert
-/// @return the truncated value; out-of-range and NaN give INT64_MIN
-[[nodiscard]] int64_t truncate_to_int64(double value) noexcept;
 
 /// Finds the first child block whose name matches, ignoring ASCII case.
 ///

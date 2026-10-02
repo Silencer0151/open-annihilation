@@ -4,12 +4,15 @@ Weapon definitions, a unit's three weapon slots, automatic targeting, attack
 orders and the strength estimates computer players build from unit types.
 
 `WeaponRegistry` holds the 256 weapon records of a game, indexed by each
-`Weapons/*.tdf` section's `ID`. `install_weapon_tdf` fills it from a parsed TDF
-file: reload and other second-valued keys become 30 Hz ticks, velocities become
-16.16 world units per tick, and each boolean key sets one flag bit from its low
-bit. Unknown or empty weapon names fall back to record zero, as the game does,
-while `bind_unit_weapons` still reports whether any name resolved to a real
-weapon; that result sets `OA_UNIT_DEF_FLAG_HAS_WEAPONS` in `UnitDef.flags`.
+`Weapons/*.tdf` section's `ID`. The weapon files are read once, by
+`src/data/defs` (`load_weapon_defs`), into the `WeaponDef` table the game state
+holds; `install_weapon_table` then installs each loaded slot, keeping its
+`WeaponDef` record for `Game.weapon_defs` and the explosion and sound names its
+section gave. `install_weapon_files` and `install_weapon_text` do both steps,
+from the game's files or from TDF text. Unknown or empty weapon names fall back
+to record zero, as the game does, while `bind_unit_weapons` still reports
+whether any name resolved to a real weapon; that result sets
+`OA_UNIT_DEF_FLAG_HAS_WEAPONS` in `UnitDef.flags`.
 
 Call `initialize_spawn_combat` for a new unit with FBI weapon1/2/3 and a
 `SpawnGeometryHost` that runs QueryWeapon/AimFrom and converts the pieces to

@@ -81,7 +81,7 @@ void lz77_payload_matches_the_lz77_encoder() {
     for (std::size_t i = 0; i < input.size(); ++i)
         input[i] = static_cast<uint8_t>(i * i);
     const auto block = pack(input, SquashType::lz77, false);
-    const auto encoded = oa::formats::sqsh::encode_lz77(input, input.size() * 2);
+    const auto encoded = oa::formats::sqsh::encode_lz77(input, input.size() * 2).value.value();
     CHECK(block.size() == encoded.size() + squash_header_bytes);
     CHECK(std::equal(encoded.begin(), encoded.end(), block.begin() + squash_header_bytes));
     uint32_t sum = 0;

@@ -353,30 +353,24 @@ void Runtime::pan_match_camera() {
         --dz;
     if (keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S])
         ++dz;
+    // The pointer on the screen's outermost pixels scrolls toward that edge,
+    // and in a corner both ways, whatever panel lies under it, as in 3.1c: in
+    // full screen and in a window alike, while the pointer is in the window
+    // at a place SDL has reported on this screen.
     const auto flags = sdl_.window != nullptr ? SDL_GetWindowFlags(sdl_.window) : 0u;
-    if ((flags & SDL_WINDOW_MOUSE_FOCUS) != 0 && !hovered_) {
-        const int left = match_layout_.left;
-        const int top = match_layout_.top;
-        const int right = left + match_layout_.battlefield_width();
-        const int bottom = match_layout_.height - match_layout_.bottom;
-        const int mx = static_cast<int>(match_pointer_x_);
-        const int my = static_cast<int>(match_pointer_y_);
-        if (mx >= left && mx < right && my >= top && my < bottom) {
-            const auto lip = std::max(
-                4,
-                static_cast<int>(
-                    std::lround(static_cast<double>(kEdgeScrollLipSource) * match_layout_.scale)
-                )
-            );
-            if (mx < left + lip)
-                --dx;
-            if (mx >= right - lip)
-                ++dx;
-            if (my < top + lip)
-                --dz;
-            if (my >= bottom - lip)
-                ++dz;
-        }
+    if (match_pointer_known_ && (flags & SDL_WINDOW_MOUSE_FOCUS) != 0) {
+        // A window point covers several pixels on a high-density display, and
+        // the pointer rests on the outermost point, not the outermost pixel.
+        const auto edge = static_cast<int32_t>(std::ceil(SDL_GetWindowPixelDensity(sdl_.window)));
+        const auto way = oa::ui::hud::edge_scroll(
+            static_cast<int32_t>(std::floor(match_pointer_x_)),
+            static_cast<int32_t>(std::floor(match_pointer_y_)),
+            match_layout_.width,
+            match_layout_.height,
+            edge
+        );
+        dx += way.x;
+        dz += way.y;
     }
     if (dx == 0 && dz == 0) {
         scroll_zoom_carry_ = 0.0;
@@ -405,7 +399,7 @@ void Runtime::issue_resume_or_repair_from(uint16_t source, uint16_t id, bool que
     if (source == 0 || id == 0 || source == id)
         return;
     auto& slot = match_->world().slots[id];
-    const auto unfinished = slot.unit && std::bit_cast<float>(slot.build_remaining_bits) != 0.0F;
+    const auto unfinished = slot.unit && slot.build_remaining != 0.0F;
     if (unfinished) {
         (void)match_->issue_help_build(source, id, queue);
         status_ = "Resume construction";

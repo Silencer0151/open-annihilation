@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "gadget_internal.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -45,13 +46,6 @@ void set_bit0_u16(GadgetRecord& record, std::size_t offset, uint32_t value) {
 }
 
 } // namespace
-
-int64_t truncate_to_int64(double value) {
-    constexpr auto out_of_range = std::numeric_limits<int64_t>::min();
-    if (std::isnan(value) || value >= 9223372036854775808.0 || value < -9223372036854775808.0)
-        return out_of_range;
-    return static_cast<int64_t>(value);
-}
 
 void init_gadget_panel(GadgetPanel& panel) {
     panel.owner.reset();

@@ -13,6 +13,7 @@
 // checked pixel by pixel against the installed maps' minimaps.
 #include "oa/data/defs/asset_files.hpp"
 #include "oa/data/defs/locale.hpp"
+#include "oa/data/defs/unit_header.hpp"
 #include "oa/formats/hpi.hpp"
 #include "oa/formats/ota.hpp"
 #include "oa/formats/tnt.hpp"
@@ -25,7 +26,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -37,7 +37,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -250,14 +249,21 @@ struct Driver {
     }
 };
 
+/// Counts the installed units without norestrict, from their unit headers.
+///
+/// @param assets the installed game's store
+/// @return the count
 int32_t restrictable_units(oa::AssetStore& assets) {
+    const auto files = oa::data::defs::asset_store_files(&assets);
+    oa::data::defs::WeaponTdfSet weapons{};
+    oa::data::defs::weapon_tdf_set_init(&weapons);
+    const oa::data::defs::UnitHeaderSources sources{"", &weapons, 3, 1, false, false};
     int32_t count = 0;
     for (const auto& path : assets.list_effective("units", ".fbi")) {
-        const auto bytes = assets.read(path).bytes;
-        const auto parsed = oa::data::unit_definitions::load_fbi(
-            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path
-        );
-        if (parsed && !parsed.value.no_restrict)
+        auto header = std::make_unique<oa::UnitDef>();
+        bool refused = false;
+        if (oa::data::defs::load_unit_header(&files, path.c_str(), *header, sources, &refused) &&
+            (header->abilities & OA_UNIT_DEF_ABILITY_NO_RESTRICT) == 0)
             ++count;
     }
     return count;
@@ -1138,7 +1144,7 @@ bool check_player_timeout(Driver& d) {
     auto& wire = mp::multiplayer_loopback();
     lobby.services.tick = stepped_clock;
     stepped_tick = 100000;
-    lobby.next_stats_tick = std::numeric_limits<uint32_t>::max(); // no periodic block
+    lobby.next_stats_tick = stepped_tick + 1'000'000; // no periodic block
     expect(lobby.game->player_timeout_seconds == 30, "the battle room's player timeout is 30 s");
 
     // A computer player of this machine, seated as its arrival is applied.
@@ -2397,10 +2403,17 @@ int main() {
     room.game->gui_flags |= 1U;
     d.frame();
     expect(start->active != 0 && !start->grayed, "START shows once the units are synced");
-    for (int wait = 0; wait < 150 && door->stage < 8; ++wait) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // The doors open a frame at a time on the lobby's clock, which the test
+    // steps here from the tick the real clock reached, so they open however
+    // slowly the test runs.
+    const auto door_clock = room.services.tick;
+    stepped_tick = door_clock(room.services.context);
+    room.services.tick = stepped_clock;
+    for (int frame = 0; frame < 40 && door->stage < 8; ++frame) {
+        stepped_tick += 5;
         d.frame();
     }
+    room.services.tick = door_clock;
     expect(door->stage == 8, "the doors open");
     expect(shows_frame(d, art, doors, 8, door), "the open doors are drawn");
     d.snapshot("battleroom-start");

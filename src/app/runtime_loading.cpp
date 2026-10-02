@@ -3,6 +3,7 @@
 
 // Loading screen and entering/leaving a match.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/decoded.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
@@ -26,8 +27,9 @@ namespace {
 
 bool read_image_palette(void* context, const char* path, uint8_t* palette) {
     try {
-        const auto image =
-            oa::decode_pcx(static_cast<const oa::AssetStore*>(context)->read(path).bytes);
+        const auto image = oa::ui::decoded::require(
+            oa::decode_pcx(static_cast<const oa::AssetStore*>(context)->read(path).bytes), path
+        );
         if (!image.palette)
             return false;
         std::copy(image.palette->begin(), image.palette->end(), palette);

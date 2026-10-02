@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/audio/music_decoder.hpp"
+#include "oa/base/bytes.hpp"
 
 #include "music_codecs.h"
 
@@ -34,6 +35,8 @@ class MusicDecoder::Source {
 };
 
 namespace {
+using base::bytes::load_le16;
+using base::bytes::load_le32;
 
 // Bytes read to recognise an encoding.
 constexpr std::size_t signature_bytes = 36;
@@ -65,15 +68,6 @@ constexpr uint8_t unsigned_8_zero = 0x80;
 // Lowest and highest sample rates a music file may have, in hertz.
 constexpr uint32_t min_source_rate = resampler_min_rate;
 constexpr uint32_t max_source_rate = resampler_max_rate;
-
-uint16_t read_le16(const uint8_t* bytes) {
-    return static_cast<uint16_t>(bytes[0] | (bytes[1] << 8));
-}
-
-uint32_t read_le32(const uint8_t* bytes) {
-    return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
-           (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
-}
 
 // Opens a file for reading by its path, which may hold any characters the
 // file system allows.
@@ -160,7 +154,7 @@ class WaveSource final : public MusicDecoder::Source {
                 error = have_format ? "no data chunk" : "no format chunk";
                 return false;
             }
-            const uint32_t size = read_le32(chunk.data() + 4);
+            const uint32_t size = load_le32(chunk.data() + 4);
             if (std::memcmp(chunk.data(), "fmt ", 4) == 0) {
                 if (!read_format(file, size, error))
                     return false;
@@ -219,16 +213,16 @@ class WaveSource final : public MusicDecoder::Source {
             error = "truncated format chunk";
             return false;
         }
-        uint16_t tag = read_le16(format.data());
-        channels = read_le16(format.data() + 2);
-        rate = read_le32(format.data() + 4);
-        const uint16_t bits = read_le16(format.data() + 14);
+        uint16_t tag = load_le16(format.data());
+        channels = load_le16(format.data() + 2);
+        rate = load_le32(format.data() + 4);
+        const uint16_t bits = load_le16(format.data() + 14);
         if (tag == wave_format_extensible) {
             if (size < wave_format_extensible_bytes) {
                 error = "extensible format chunk too short";
                 return false;
             }
-            tag = read_le16(format.data() + wave_subformat_offset);
+            tag = load_le16(format.data() + wave_subformat_offset);
         }
         float_samples_ = tag == wave_format_float;
         if ((tag != wave_format_pcm && !float_samples_) ||
@@ -250,7 +244,7 @@ class WaveSource final : public MusicDecoder::Source {
         case 1:
             return static_cast<float>(static_cast<int32_t>(bytes[0]) - unsigned_8_zero) * scale_8;
         case 2:
-            return static_cast<float>(static_cast<int16_t>(read_le16(bytes))) * scale_16;
+            return static_cast<float>(static_cast<int16_t>(load_le16(bytes))) * scale_16;
         case 3:
             return static_cast<float>(static_cast<int32_t>(
                        (static_cast<uint32_t>(bytes[0]) << 8) |
@@ -260,12 +254,12 @@ class WaveSource final : public MusicDecoder::Source {
                    scale_32;
         default:
             if (float_samples_) {
-                const uint32_t word = read_le32(bytes);
+                const uint32_t word = load_le32(bytes);
                 float value = 0.0F;
                 std::memcpy(&value, &word, sizeof(value));
                 return value;
             }
-            return static_cast<float>(static_cast<int32_t>(read_le32(bytes))) * scale_32;
+            return static_cast<float>(static_cast<int32_t>(load_le32(bytes))) * scale_32;
         }
     }
 

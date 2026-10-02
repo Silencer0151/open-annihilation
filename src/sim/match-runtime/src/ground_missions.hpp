@@ -6,12 +6,14 @@
 #pragma once
 
 #include "tick_internal.hpp"
+#include "oa/base/game_math.hpp"
 
 #include <memory>
 #include <optional>
 #include <vector>
 
 namespace oa::sim::match_runtime {
+using base::game_math::truncate_low32;
 
 namespace ground {
 
@@ -159,15 +161,6 @@ inline int32_t sub_fixed(int32_t a, int32_t b) {
 // The high 32 bits of a squared 16.16 delta: squared world units.
 inline int32_t squared_high(int32_t delta) {
     return static_cast<int32_t>((static_cast<int64_t>(delta) * delta) >> 32);
-}
-
-// Truncates toward zero at 64 bits and keeps the low 32 bits; zero for a value
-// outside the signed 64-bit range or not finite.
-inline int32_t truncate_word(double value) {
-    constexpr double limit = 9223372036854775808.0;
-    if (!std::isfinite(value) || value >= limit || value < -limit)
-        return 0;
-    return static_cast<int32_t>(static_cast<uint32_t>(static_cast<int64_t>(std::trunc(value))));
 }
 
 /// Returns the heading from `to` back toward `from`.
@@ -964,7 +957,7 @@ class TickHost::GroundMissions {
 
     // trunc(hypot(x, z) * scale): a footprint's reach in world units.
     static int32_t footprint_reach(int16_t x, int16_t z, double scale) {
-        return ground::truncate_word(base::game_math::planar_length(x, z) * scale);
+        return truncate_low32(base::game_math::planar_length(x, z) * scale);
     }
 
     // World units between this unit and `at`, less both footprint reaches,
@@ -1013,9 +1006,8 @@ class TickHost::GroundMissions {
             static_cast<int32_t>(static_cast<uint16_t>(def().worker_time)) *
             static_cast<int32_t>(other_def.max_damage) * static_cast<int32_t>(ticks)
         );
-        const auto bite = ground::truncate_word(
-            static_cast<double>(work) / static_cast<double>(metal * metal_scale)
-        );
+        const auto bite =
+            truncate_low32(static_cast<double>(work) / static_cast<double>(metal * metal_scale));
         return bite > 1 ? bite : 1;
     }
 

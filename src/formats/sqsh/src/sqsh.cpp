@@ -5,7 +5,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 
 namespace oa::formats::sqsh {
 namespace {
@@ -18,11 +17,13 @@ constexpr std::size_t max_output_per_input_byte =
 
 } // namespace
 
-std::vector<uint8_t> decode_lz77(
+base::bytes::Decoded<std::vector<uint8_t>> decode_lz77(
     std::span<const uint8_t> input,
     std::size_t output_limit,
     std::span<const uint8_t> initial_dictionary
 ) {
+    using base::bytes::DecodeCode;
+    using base::bytes::DecodeError;
     const std::size_t most = input.size() > output_limit / max_output_per_input_byte
                                  ? output_limit
                                  : input.size() * max_output_per_input_byte;
@@ -32,11 +33,13 @@ std::vector<uint8_t> decode_lz77(
     case Lz77Status::ok:
         break;
     case Lz77Status::truncated:
-        throw std::runtime_error("truncated LZ77 stream");
+        return DecodeError{DecodeCode::truncated, decoded.consumed, "truncated LZ77 stream"};
     case Lz77Status::output_full:
-        throw std::runtime_error("LZ77 output limit exceeded");
+        return DecodeError{
+            DecodeCode::limit_exceeded, decoded.consumed, "LZ77 output limit exceeded"
+        };
     case Lz77Status::bad_dictionary:
-        throw std::invalid_argument("LZ77 dictionary must contain 4096 bytes");
+        return DecodeError{DecodeCode::out_of_range, 0, "LZ77 dictionary must contain 4096 bytes"};
     }
     output.resize(decoded.written);
     return output;
@@ -50,7 +53,7 @@ Lz77Decoded decode_lz77_into(
     std::array<uint8_t, lz77::dictionary_bytes> window{};
     if (!initial_dictionary.empty()) {
         if (initial_dictionary.size() != window.size())
-            return {0, Lz77Status::bad_dictionary};
+            return {0, Lz77Status::bad_dictionary, 0};
         std::memcpy(window.data(), initial_dictionary.data(), window.size());
     }
     // Plain pointers keep the per-byte loop free of calls in unoptimised builds.
@@ -64,14 +67,14 @@ Lz77Decoded decode_lz77_into(
     std::size_t write = lz77::initial_write_offset;
     for (;;) {
         if (cursor == in_size)
-            return {written, Lz77Status::truncated};
+            return {written, Lz77Status::truncated, cursor};
         const uint8_t flags = in[cursor++];
         for (unsigned mask = 1; mask <= lz77::last_flag_bit; mask <<= 1) {
             if ((flags & mask) == 0) {
                 if (cursor == in_size)
-                    return {written, Lz77Status::truncated};
+                    return {written, Lz77Status::truncated, cursor};
                 if (written == out_size)
-                    return {written, Lz77Status::output_full};
+                    return {written, Lz77Status::output_full, cursor};
                 const uint8_t value = in[cursor++];
                 out[written++] = value;
                 dictionary[write] = value;
@@ -79,18 +82,18 @@ Lz77Decoded decode_lz77_into(
                 continue;
             }
             if (in_size - cursor < 2)
-                return {written, Lz77Status::truncated};
+                return {written, Lz77Status::truncated, cursor};
             const auto token =
                 static_cast<uint16_t>(in[cursor] | (static_cast<unsigned>(in[cursor + 1]) << 8));
             cursor += 2;
             const std::size_t offset = token >> lz77::token_length_bits;
             if (offset == lz77::terminator_offset)
-                return {written, Lz77Status::ok};
+                return {written, Lz77Status::ok, cursor};
             const std::size_t count = (token & lz77::token_length_mask) + lz77::minimum_match_bytes;
             // Read after each preceding write: overlapping copies are intentional.
             for (std::size_t i = 0; i < count; ++i) {
                 if (written == out_size)
-                    return {written, Lz77Status::output_full};
+                    return {written, Lz77Status::output_full, cursor - 2};
                 const uint8_t value = dictionary[(offset + i) & lz77::dictionary_mask];
                 out[written++] = value;
                 dictionary[write] = value;

@@ -1038,10 +1038,4 @@ void clear_blink_words(GadgetPanel& panel);
 /// @param[in,out] panel GUI context.
 void update_blink_words(GadgetPanel& panel);
 
-/// Truncates a double toward zero to a signed 64-bit integer.
-///
-/// @param value Value to convert; rounds toward zero.
-/// @return The integer; out-of-range and NaN inputs give INT64_MIN.
-[[nodiscard]] int64_t truncate_to_int64(double value);
-
 } // namespace oa::ui::gui_input

@@ -4,7 +4,6 @@
 #include "oa/ui/frontend_renderer.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -489,12 +488,12 @@ void test_shade_panel_below() {
 
 int main() {
     using oa::ui::frontend_renderer::staged_caption;
-    assert(staged_caption("Easy|Medium|Hard", 0) == "Easy");
-    assert(staged_caption("Easy|Medium|Hard", 1) == "Medium");
-    assert(staged_caption("Easy|Medium|Hard", 2) == "Hard");
-    assert(staged_caption("Easy|Medium|Hard", 3).empty());
-    assert(staged_caption("Select Map", 2) == "Select Map");
-    assert(staged_caption("", 1).empty());
+    CHECK(staged_caption("Easy|Medium|Hard", 0) == "Easy");
+    CHECK(staged_caption("Easy|Medium|Hard", 1) == "Medium");
+    CHECK(staged_caption("Easy|Medium|Hard", 2) == "Hard");
+    CHECK(staged_caption("Easy|Medium|Hard", 3).empty());
+    CHECK(staged_caption("Select Map", 2) == "Select Map");
+    CHECK(staged_caption("", 1).empty());
 
     oa::ui::frontend_renderer::MainMenuResources resources;
     resources.background.width = 8;
@@ -506,9 +505,9 @@ int main() {
     resources.layout.gadgets.push_back(button("PLAIN", 1, 1, 5, 5));
 
     const auto raised = oa::ui::frontend_renderer::render_main_menu(resources);
-    assert(red_at(raised, 1, 1) == 17);
-    assert(red_at(raised, 5, 5) == 0);
-    assert(red_at(raised, 3, 3) == 20);
+    CHECK(red_at(raised, 1, 1) == 17);
+    CHECK(red_at(raised, 5, 5) == 0);
+    CHECK(red_at(raised, 3, 3) == 20);
 
     const oa::ui::frontend_renderer::ButtonPresentation pressed{
         "plain",
@@ -518,8 +517,8 @@ int main() {
         std::nullopt
     };
     const auto sunken = oa::ui::frontend_renderer::render_main_menu(resources, {&pressed, 1});
-    assert(red_at(sunken, 1, 1) == 0);
-    assert(red_at(sunken, 5, 5) == 17);
+    CHECK(red_at(sunken, 1, 1) == 0);
+    CHECK(red_at(sunken, 5, 5) == 17);
 
     // A button under the pointer draws exactly as it does without it.
     const oa::ui::frontend_renderer::ButtonPresentation hovered{
@@ -539,9 +538,9 @@ int main() {
         std::nullopt
     };
     const auto grayed = oa::ui::frontend_renderer::render_main_menu(resources, {&disabled, 1});
-    assert(red_at(grayed, 1, 1) == 0);
-    assert(red_at(grayed, 5, 5) == 19);
-    assert(red_at(grayed, 3, 3) == 19);
+    CHECK(red_at(grayed, 1, 1) == 0);
+    CHECK(red_at(grayed, 5, 5) == 19);
+    CHECK(red_at(grayed, 3, 3) == 19);
 
     oa::formats::gaf::Sequence sequence;
     sequence.name = "PLAIN";
@@ -556,8 +555,8 @@ int main() {
     const auto sprite = oa::ui::frontend_renderer::render_main_menu(resources);
     // A covered literal equal to the transparency index must still draw, and
     // an uncovered non-transparent value must not draw.
-    assert(red_at(sprite, 1, 1) == 7);
-    assert(red_at(sprite, 2, 1) == 99);
+    CHECK(red_at(sprite, 1, 1) == 7);
+    CHECK(red_at(sprite, 2, 1) == 99);
 
     oa::ui::frontend_renderer::ScreenResources controls;
     controls.background.width = 24;
@@ -606,19 +605,19 @@ int main() {
     const oa::ui::frontend_renderer::ListPresentation list_data{"mapnames", names, 0, 1};
     const auto controls_rendered =
         oa::ui::frontend_renderer::render_screen(controls, {}, {&list_data, 1});
-    assert(red_at(controls_rendered, 1, 2) == 42);
-    assert(red_at(controls_rendered, 3, 2) == 99); // label clip
+    CHECK(red_at(controls_rendered, 1, 2) == 42);
+    CHECK(red_at(controls_rendered, 3, 2) == 99); // label clip
 
     // A single-line label authored with no height is limited by width only.
     auto flat_controls = controls;
     flat_controls.layout.gadgets[0].common.height = 0;
     const auto flat_rendered =
         oa::ui::frontend_renderer::render_screen(flat_controls, {}, {&list_data, 1});
-    assert(red_at(flat_rendered, 1, 2) == 42);
-    assert(red_at(flat_rendered, 3, 2) == 99);
-    assert(red_at(controls_rendered, 10, 4) == 42);
+    CHECK(red_at(flat_rendered, 1, 2) == 42);
+    CHECK(red_at(flat_rendered, 3, 2) == 99);
+    CHECK(red_at(controls_rendered, 10, 4) == 42);
     // line_height is glyph-I height+2; default item spacing adds one.
-    assert(red_at(controls_rendered, 10, 9) == 77); // selected row lit at level 0x1E
+    CHECK(red_at(controls_rendered, 10, 9) == 77); // selected row lit at level 0x1E
 
     // The list drawing stops when the remaining gadget height falls below one font
     // line, even if another row's top would still lie inside the rectangle.
@@ -695,12 +694,12 @@ int main() {
     };
     const auto image_rendered =
         oa::ui::frontend_renderer::render_screen(controls, {&image_state, 1});
-    assert(red_at(image_rendered, 20, 1) == 55);
+    CHECK(red_at(image_rendered, 20, 1) == 55);
     // Without a frame the hot surface is left to whoever draws it.
     auto unframed_state = image_state;
     unframed_state.gaf_frame.reset();
     const auto unframed = oa::ui::frontend_renderer::render_screen(controls, {&unframed_state, 1});
-    assert(red_at(unframed, 20, 1) != 55);
+    CHECK(red_at(unframed, 20, 1) != 55);
 
     oa::ui::frontend_renderer::ScreenResources setup_screen = controls;
     setup_screen.background.width = 80;
@@ -733,10 +732,10 @@ int main() {
     };
     const auto patch_rendered =
         oa::ui::frontend_renderer::render_screen(setup_screen, {&patch_state, 1});
-    assert(red_at(patch_rendered, 8, 8) == 77);
-    assert(red_at(patch_rendered, 27, 27) == 77);
-    assert(red_at(patch_rendered, 28, 8) == 99);
-    assert(red_at(patch_rendered, 8, 28) == 99);
+    CHECK(red_at(patch_rendered, 8, 8) == 77);
+    CHECK(red_at(patch_rendered, 27, 27) == 77);
+    CHECK(red_at(patch_rendered, 28, 8) == 99);
+    CHECK(red_at(patch_rendered, 8, 28) == 99);
 
     oa::Image circuit;
     circuit.width = oa::ui::frontend_renderer::menu_spark_width;
@@ -756,7 +755,7 @@ int main() {
     spark_surface.rgb = circuit.rgb;
     oa::ui::frontend_renderer::MenuSparks sparks;
     oa::ui::frontend_renderer::reset_menu_sparks(sparks, circuit);
-    assert(sparks.sparks.size() == oa::ui::frontend_renderer::menu_spark_count);
+    CHECK(sparks.sparks.size() == oa::ui::frontend_renderer::menu_spark_count);
     bool drew = false;
     for (int step = 0; step < 400 && !drew; ++step) {
         spark_surface.rgb.assign(pixels * 3U, 0);
@@ -764,8 +763,8 @@ int main() {
         for (const auto& spark : sparks.sparks) {
             if (spark.active == 0)
                 continue;
-            assert(spark.x >= 0 && spark.x < oa::ui::frontend_renderer::menu_spark_width);
-            assert(spark.y >= 0 && spark.y < oa::ui::frontend_renderer::menu_spark_height);
+            CHECK(spark.x >= 0 && spark.x < oa::ui::frontend_renderer::menu_spark_width);
+            CHECK(spark.y >= 0 && spark.y < oa::ui::frontend_renderer::menu_spark_height);
             if (spark.y == 10) {
                 const auto offset = (static_cast<std::size_t>(spark.y) * spark_surface.width +
                                      static_cast<std::size_t>(spark.x)) *
@@ -775,7 +774,7 @@ int main() {
             }
         }
     }
-    assert(drew);
+    CHECK(drew);
 
     // A spark spawned on a vertical course moves down from an even row and
     // up from an odd one; a horizontal one right from an even column.
@@ -786,15 +785,15 @@ int main() {
     oa::ui::frontend_renderer::step_menu_sparks(born, spark_surface, traces);
     int vertical = 0;
     for (const auto& spark : born.sparks) {
-        assert(spark.active == 1);
+        CHECK(spark.active == 1);
         if (spark.dx == 0) {
-            assert(spark.dy == ((spark.y & 1) == 0 ? 3 : -3));
+            CHECK(spark.dy == ((spark.y & 1) == 0 ? 3 : -3));
             ++vertical;
         } else {
-            assert(spark.dx == ((spark.x & 1) == 0 ? 3 : -3));
+            CHECK(spark.dx == ((spark.x & 1) == 0 ? 3 : -3));
         }
     }
-    assert(vertical > 0);
+    CHECK(vertical > 0);
 
     test_grayed_art_frame();
     test_grayed_art_cost();

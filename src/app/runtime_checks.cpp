@@ -1221,7 +1221,8 @@ void Runtime::check_navigation() {
     }
     if (enemy_commander != 0) {
         try {
-            (void)match_->issue_attack(local_commander, enemy_commander, false);
+            if (!match_->issue_attack(local_commander, enemy_commander, false))
+                std::cerr << "navigation check attack: refused\n";
         } catch (const std::exception& error) {
             std::cerr << "navigation check attack: " << error.what() << '\n';
         }

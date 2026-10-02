@@ -374,6 +374,36 @@ void send_frames_group_by_head_sender() {
     CHECK(ch->frame_number == -2);
 }
 
+void send_pacing_across_the_clock_turn() {
+    // The connection's clock reads 30 units a second, from 0 through
+    // 4,294,967, and then turns over to 0, about every 39.8 hours.
+    constexpr uint32_t kLargestReading = 4'294'967;
+    auto ch = std::make_unique<SendChannel>();
+    send_channel_init(ch.get(), 77, 6);
+    Capture cap;
+    FrameSink sink{&cap, Capture::emit};
+    const uint8_t a1[] = {0x06};
+    // A send just before the turn sets the next send past the largest reading.
+    CHECK(send_channel_queue(ch.get(), 11, a1, 1, kLargestReading - 2, sink) == WireError::ok);
+    CHECK(send_channel_flush(ch.get(), kLargestReading - 2, false, sink));
+    CHECK(ch->next_send_tick == kLargestReading + 4);
+    CHECK(send_channel_queue(ch.get(), 11, a1, 1, kLargestReading, sink) == WireError::ok);
+    CHECK(!send_channel_flush(ch.get(), kLargestReading, false, sink));
+    // After the turn the queued packet goes out at the next paced flush,
+    // and the pacing goes on from there.
+    CHECK(send_channel_flush(ch.get(), 1, false, sink));
+    CHECK(ch->queue_count == 0 && ch->next_send_tick == 7 && cap.frames.size() == 2);
+    CHECK(send_channel_queue(ch.get(), 11, a1, 1, 3, sink) == WireError::ok);
+    CHECK(!send_channel_flush(ch.get(), 6, false, sink));
+    CHECK(send_channel_flush(ch.get(), 7, false, sink));
+    CHECK(cap.frames.size() == 3);
+    // A send due well before the turn goes out at the first flush after it.
+    ch->next_send_tick = kLargestReading - 30;
+    CHECK(send_channel_queue(ch.get(), 11, a1, 1, 0, sink) == WireError::ok);
+    CHECK(send_channel_flush(ch.get(), 0, false, sink));
+    CHECK(cap.frames.size() == 4);
+}
+
 void send_forces_flush_at_threshold() {
     auto ch = std::make_unique<SendChannel>();
     send_channel_init(ch.get(), broadcast_destination_id, 6);
@@ -927,6 +957,7 @@ int main() {
         {"sequence_numbering_wraps_to_minus_two", sequence_numbering_wraps_to_minus_two},
         {"send_pacing_values", send_pacing_values},
         {"send_frames_group_by_head_sender", send_frames_group_by_head_sender},
+        {"send_pacing_across_the_clock_turn", send_pacing_across_the_clock_turn},
         {"send_forces_flush_at_threshold", send_forces_flush_at_threshold},
         {"split_zero_length_record_is_reported", split_zero_length_record_is_reported},
         {"delivery_window_holds_future_records", delivery_window_holds_future_records},

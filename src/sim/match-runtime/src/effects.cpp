@@ -102,12 +102,10 @@ Match::weapon_effect_sequence(std::string_view archive, std::string_view entry) 
 }
 
 // The water slot (WeaponDef.water_explosion_art) holds the lava art on lava
-// worlds.
+// worlds: the weapons were loaded with the lava keys there.
 const formats::gaf::Sequence*
 Match::water_effect_sequence(const sim::combat_state::WeaponDefinition& weapon) const {
-    return effects_->lava_world
-               ? weapon_effect_sequence(weapon.lava_explosion_gaf, weapon.lava_explosion_art)
-               : weapon_effect_sequence(weapon.water_explosion_gaf, weapon.water_explosion_art);
+    return weapon_effect_sequence(weapon.water_explosion_gaf, weapon.water_explosion_art);
 }
 
 int32_t Match::effect_lcg_rand(void* match) {

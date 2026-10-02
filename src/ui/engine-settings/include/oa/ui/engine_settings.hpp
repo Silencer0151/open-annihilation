@@ -61,8 +61,9 @@ inline constexpr uint16_t default_unit_limit = 250;
 /// lowest an installation's totala.ini can set, below the setting's stops.
 inline constexpr uint16_t lowest_stored_unit_limit = 21;
 
-/// The lowest maximum frame rate the setting offers, in frames a second.
-inline constexpr uint32_t lowest_frame_rate = 40;
+/// The lowest maximum frame rate the setting offers, in frames a second:
+/// the simulation's ticks a second, a frame for each tick.
+inline constexpr uint32_t lowest_frame_rate = 30;
 /// The highest maximum frame rate the setting offers, and its default, in frames a second.
 inline constexpr uint32_t highest_frame_rate = 120;
 /// The maximum frame rate setting's step, in frames a second.

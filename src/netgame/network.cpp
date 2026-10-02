@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 
 namespace oa::netgame::network {
 std::array<uint8_t, unit_created_bytes> encode_unit_created(const UnitCreated& unit) noexcept {
@@ -66,6 +67,16 @@ void wrap(std::vector<uint8_t>& out) {
     out[checksum_at] = static_cast<uint8_t>(sum);
     out[checksum_at + 1] = static_cast<uint8_t>(sum >> 8);
 }
+
+/// Returns the bytes an LZ77 call produced, or throws its error.
+///
+/// @param decoded the call's result
+/// @return the bytes
+std::vector<uint8_t> decoded_or_throw(base::bytes::Decoded<std::vector<uint8_t>>&& decoded) {
+    if (!decoded.ok())
+        throw std::runtime_error(decoded.error.message);
+    return std::move(*decoded.value);
+}
 } // namespace
 
 std::vector<uint8_t> decode_frame(std::span<const uint8_t> packet) {
@@ -73,7 +84,7 @@ std::vector<uint8_t> decode_frame(std::span<const uint8_t> packet) {
     const auto header = read_frame_header(out);
     const auto body = std::span<const uint8_t>(out).subspan(header_bytes);
     if (header.type == compressed_frame)
-        return formats::sqsh::decode_lz77(body, maximum_frame_bytes);
+        return decoded_or_throw(formats::sqsh::decode_lz77(body, maximum_frame_bytes));
     return {body.begin(), body.end()};
 }
 
@@ -98,7 +109,8 @@ std::vector<uint8_t> encode_frame(std::span<const uint8_t> payload, bool compres
     if (payload.empty() || payload.size() > maximum_payload_bytes)
         throw std::runtime_error("condenser: payload length outside 1..65533");
     if (payload.size() >= compression_minimum_payload_bytes && compression_enabled) {
-        auto compressed = formats::sqsh::encode_lz77(payload, payload.size() * 2 + 16);
+        auto compressed =
+            decoded_or_throw(formats::sqsh::encode_lz77(payload, payload.size() * 2 + 16));
         if (compressed.size() + header_bytes < payload.size()) {
             std::vector<uint8_t> result(header_bytes, 0);
             result[offsetof(FrameHeader, type)] = compressed_frame;
@@ -147,7 +159,9 @@ CondenserReceiver::receive(ReceiveTransport& transport, std::span<uint8_t> buffe
         const auto body =
             std::span<const uint8_t>(buffer).subspan(header_bytes, size - header_bytes);
         if (header.type == compressed_frame) {
-            decoded_ = formats::sqsh::decode_lz77(body, receive_storage_bytes, dictionary_seed_);
+            decoded_ = decoded_or_throw(
+                formats::sqsh::decode_lz77(body, receive_storage_bytes, dictionary_seed_)
+            );
         } else {
             if (body.size() > receive_storage_bytes)
                 throw std::runtime_error("condenser: decoded message exceeds receive storage");

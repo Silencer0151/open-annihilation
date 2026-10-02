@@ -100,32 +100,10 @@ struct Fixture {
         script->scripts = {{"Create", 0}};
         script->entry_points = {0};
         script->piece_names = {"root"};
-        weapons.install_tdf_section(1, "AIRGUN", "0.1");
-        weapons.install_target_fields(
-            1,
-            "300",
-            "1",
-            "0",
-            "0",
-            "0",
-            "0",
-            "10",
-            "100",
-            "",
-            "1",
-            "0",
-            "0",
-            "0",
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
-            "1",
-            "1",
-            "1"
+        (void)sim::combat_state::install_weapon_text(
+            weapons,
+            "[AIRGUN]{id=1; reloadtime=0.1; range=300; lineofsight=1; weaponvelocity=100; "
+            "turret=1; unitsonly=1; groundbounce=1; interceptor=1; [DAMAGE]{default=10;}}"
         );
         for (size_t i = 1; i < type_count; ++i) {
             auto& type = types[i];
@@ -514,6 +492,93 @@ void attack_ground_resolves_by_type() {
     CHECK(!f.match->issue_attack_ground(pad.unit_index, at, false) && !pad.unit->primary);
 }
 
+// VTOL_Evade breaks a quarter turn to one side of the heading it starts on:
+// a first leg one weapon range out and a second leg two ranges out, each
+// arriving within 128 world units, on the same side; then it finishes.
+void evade_flies_two_legs() {
+    Fixture f;
+    auto& fighter = f.spawn(0, fighter_type, 500, 500);
+    auto& enemy = f.spawn(1, fighter_type, 800, 800);
+    auto& order = f.attack(fighter, enemy, 48);
+    fighter.record.heading = 0;
+    const auto x = fighter.record.position.x;
+    const auto z = fighter.record.position.z;
+    constexpr int32_t range = 300 << 16;
+    // The point a leg reaches: `reach` along heading `turn`.
+    const auto leg = [&](uint16_t turn, int32_t reach) {
+        return std::array<int32_t, 2>{
+            x - sim::unit_movement::sine_scaled(turn, reach),
+            z - sim::unit_movement::cosine_scaled(turn, reach)
+        };
+    };
+    CHECK(f.dispatch(fighter, order, 0) == 1 && order.wait_events == wait_attack);
+    const auto& first = air_goal(f, fighter);
+    CHECK(point_goal(first, 0x80));
+    const std::array<int32_t, 2> reached{first.point.x, first.point.z};
+    const uint16_t turn = reached == leg(0x4000, range) ? 0x4000 : 0xc000;
+    CHECK(reached == leg(turn, range));
+    step(order, 1);
+    order.wait_events = 0;
+    CHECK(f.dispatch(fighter, order, 0) == 1 && order.wait_events == wait_attack);
+    const auto& second = air_goal(f, fighter);
+    CHECK(point_goal(second, 0x80));
+    CHECK((std::array<int32_t, 2>{second.point.x, second.point.z} == leg(turn, 2 * range)));
+    step(order, 1);
+    CHECK(f.dispatch(fighter, order, 0) == 5);
+}
+
+// An aircraft attack taken up on manoeuvre orders carries the type's
+// manoeuvre leash from where the unit stood; the attack ends once the
+// aircraft has strayed that far from there.
+void air_attack_ends_at_its_leash() {
+    Fixture f;
+    f.defs[fighter_type].can_attack = true;
+    f.defs[fighter_type].can_move = true;
+    f.defs[fighter_type].can_fly = true;
+    f.defs[fighter_type].maneuver_leash_length = 200;
+    auto& fighter = f.spawn(0, fighter_type, 100, 100);
+    auto& enemy = f.spawn(1, fighter_type, 400, 400);
+    constexpr uint32_t manoeuvre = 1;
+    fighter.unit->flags =
+        (fighter.unit->flags & ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK)) |
+        OA_UNIT_FLAG_HAS_WEAPONS | (manoeuvre << OA_UNIT_FLAG_MOVE_ORDER_SHIFT) |
+        (fire_at_will << OA_UNIT_FLAG_FIRE_ORDER_SHIFT);
+    CHECK(f.match->issue_attack(fighter.unit_index, enemy.unit_index, false));
+    auto* order = fighter.unit->primary;
+    CHECK(order && order->kind == sim::match_runtime::air_to_air_kind);
+    step(*order, f.dispatch(fighter, *order, 0));
+    order->wait_events = 0;
+    fighter.record.position.x += 199 << 16;
+    CHECK(f.dispatch(fighter, *order, 0) == 2);
+    fighter.record.position.x += 1 << 16;
+    CHECK(f.dispatch(fighter, *order, 0) == 5);
+}
+
+// A fighter that has strayed off the map during its attack turns back: it
+// flies 0x320 world units along the bearing to the map's centre, arriving
+// within 128, and keeps its attack.
+void off_map_attack_turns_back() {
+    Fixture f;
+    auto& fighter = f.spawn(0, fighter_type, -40, 512);
+    auto& enemy = f.spawn(1, fighter_type, 400, 400);
+    auto& order = f.attack(fighter, enemy, sim::match_runtime::air_to_air_kind);
+    order.phase = 1;
+    order.wait_events = 0;
+    CHECK(f.dispatch(fighter, order, 0) == 2);
+    CHECK((order.wait_events & 0xe0) == 0xe0);
+    const auto& back = air_goal(f, fighter);
+    CHECK(point_goal(back, 0x80));
+    const auto x = fighter.record.position.x;
+    const auto z = fighter.record.position.z;
+    const auto& game = f.match->state().game;
+    const auto toward = base::game_math::direction(
+        x - static_cast<int32_t>(game.map_pixel_width / 2 << 16),
+        z - static_cast<int32_t>(game.map_pixel_height / 2 << 16)
+    );
+    CHECK(back.point.x == x - sim::unit_movement::sine_scaled(toward, 0x320 << 16));
+    CHECK(back.point.z == z - sim::unit_movement::cosine_scaled(toward, 0x320 << 16));
+}
+
 void evade() {
     Fixture f;
     auto& fighter = f.spawn(0, fighter_type, 100, 100);
@@ -538,6 +603,9 @@ int main() {
     seek_attack();
     seek_guard();
     evade();
+    evade_flies_two_legs();
+    air_attack_ends_at_its_leash();
+    off_map_attack_turns_back();
     hover_flies_air_goals();
     strike_and_seek_fly_air_goals();
     dogfight_flies_seek_goals();

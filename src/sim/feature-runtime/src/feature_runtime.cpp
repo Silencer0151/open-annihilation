@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/feature_runtime.hpp"
+#include "oa/base/bytes.hpp"
 
 #include <cstring>
 #include <initializer_list>
@@ -17,10 +18,12 @@ constexpr int32_t lcg_rand_range = 0x8000;
 constexpr int32_t plot_world_units = 16;
 constexpr const char* treeburn_sound = "treeburn";
 
+/// Reads a 32-bit little-endian two's-complement value.
+///
+/// @param bytes the first of four bytes
+/// @return the value
 int32_t load_i32(const uint8_t* bytes) noexcept {
-    int32_t value;
-    std::memcpy(&value, bytes, sizeof(value));
-    return value;
+    return static_cast<int32_t>(base::bytes::load_le32(bytes));
 }
 
 oa_fixed wrap_add(oa_fixed left, oa_fixed right) noexcept {
