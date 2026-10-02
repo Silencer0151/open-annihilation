@@ -556,6 +556,35 @@ int main() {
             "--check-engine-settings",
         "--force-capable with another check is refused"
     );
+    // --native-density opens the render tiers check's window at the
+    // display's own density, and goes with that check alone.
+    const auto density = parse(
+        {"--check-render-tiers", "--hardware-acceleration", "--force-capable", "--native-density"}
+    );
+    expect(
+        density.native_density && density.check_render_tiers && density.unattended,
+        "--native-density goes with the render tiers check"
+    );
+    expect(
+        !tiers.native_density && !parse({}).native_density &&
+            !parse({"--hardware-acceleration"}).native_density,
+        "no native density unasked"
+    );
+    expect(
+        rejection({"--native-density"}) ==
+            "--native-density is accepted only with --check-render-tiers",
+        "--native-density alone is refused"
+    );
+    for (const auto& other : std::vector<std::vector<const char*>>{
+             {"--check-engine-settings", "--native-density"},
+             {"--check-renderer-ladder", "--native-density"},
+             {"--hardware-acceleration", "--native-density"},
+             {"--headless-check", "--native-density"},
+         })
+        expect(
+            rejection(other) == "--native-density is accepted only with --check-render-tiers",
+            "--native-density with another run is refused"
+        );
 
     // The director view check runs headless on the fixed clock, past the
     // intro, with nobody there.

@@ -1,15 +1,17 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Full screen and a window: the flags the game's window opens with, the
-// Alt+Enter key that switches between them, the mode the player last asked
-// for while the window system is still switching to it, the pointer kept on
-// the game's screen in full screen, and the window brought back onto its
-// display when it leaves full screen.
+// Full screen and a window: the flags the game's window opens with, among
+// them the display's own pixel density, and what a window at that density
+// changes; the Alt+Enter key that switches between full screen and a window,
+// the mode the player last asked for while the window system is still
+// switching to it, the pointer kept on the game's screen in full screen, and
+// the window brought back onto its display when it leaves full screen.
 #pragma once
 
 #include <SDL3/SDL.h>
 
+#include <cmath>
 #include <cstdint>
 
 namespace oa::app {
@@ -57,11 +59,45 @@ enum class FullScreenKey {
 
 /// Returns the window flags the game's window is created with.
 ///
+/// A window's pixel density is fixed when it opens: one opened at native
+/// density keeps the display's own pixels for the run, and any other the
+/// window system's density, which on a high-density display enlarges the
+/// game's frame.
+///
 /// @param start_full_screen whether the run opens full screen
 ///        (Options::start_full_screen)
-/// @return a resizable window, full screen on the desktop's mode when asked
-[[nodiscard]] inline SDL_WindowFlags game_window_flags(bool start_full_screen) {
-    return SDL_WINDOW_RESIZABLE | (start_full_screen ? SDL_WINDOW_FULLSCREEN : 0);
+/// @param native_density whether the window opens at the display's own
+///        pixel density (render_policy::decide_native_density)
+/// @return a resizable window, full screen on the desktop's mode when asked,
+///         at native density when asked
+[[nodiscard]] inline SDL_WindowFlags
+game_window_flags(bool start_full_screen, bool native_density) {
+    return SDL_WINDOW_RESIZABLE | (start_full_screen ? SDL_WINDOW_FULLSCREEN : 0) |
+           (native_density ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0);
+}
+
+/// Tells whether a window opened at native density, where a pixel of the
+/// match's layout is a window point and the renderer enlarges what is drawn
+/// to the display's pixels.
+///
+/// @param window_flags the window's flags, as SDL_GetWindowFlags reports them
+/// @return true for a window game_window_flags opened at native density
+[[nodiscard]] inline bool at_native_density(SDL_WindowFlags window_flags) {
+    return (window_flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) != 0;
+}
+
+/// Returns how deep the band along the screen's edges is in which the
+/// pointer scrolls the battlefield: the layout pixels one window point
+/// covers, since the pointer rests on the outermost point, not the outermost
+/// pixel.
+///
+/// @param native_density the window opened at native density
+///        (at_native_density), where a layout pixel is a window point
+/// @param pixel_density the window's pixels per window point
+///        (SDL_GetWindowPixelDensity)
+/// @return 1 at native density; otherwise the pixel density rounded up
+[[nodiscard]] inline int32_t edge_scroll_depth(bool native_density, float pixel_density) {
+    return native_density ? 1 : static_cast<int32_t>(std::ceil(pixel_density));
 }
 
 /// Tells whether an event is the Alt+Enter that switches full screen.

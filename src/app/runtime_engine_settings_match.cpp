@@ -495,7 +495,8 @@ void Runtime::present_engine_settings_layer() {
         static_cast<float>(host.layer_bounds.width),
         static_cast<float>(host.layer_bounds.height)
     };
-    host.layer.draw(sdl_.renderer, &bounds, &bounds);
+    // At the display's pixels with the match's other layers laid out 1:1.
+    draw_one_to_one(sdl_.renderer, host.layer, &bounds, &bounds, one_to_one_scale_mode());
 }
 
 void Runtime::destroy_engine_settings_textures() {

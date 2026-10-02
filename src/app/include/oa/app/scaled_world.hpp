@@ -422,6 +422,52 @@ struct CardScale {
     uint32_t factor{1}; ///< prescale target pixels per source pixel; 1 for none
 };
 
+/// Returns the scale mode the card draws a filter with straight from its
+/// source, with no prescale target: NEAREST; PIXELART, or plain LINEAR in a
+/// build of SDL older than 3.4, which lacks it; and plain LINEAR for
+/// sharp-bilinear and LINEAR.
+///
+/// @param filter the filter
+/// @return the scale mode
+[[nodiscard]] SDL_ScaleMode direct_scale_mode(render_policy::ScaleFilter filter) noexcept;
+
+/// Draws a layer laid out 1:1 in layout pixels, whose scale mode is NEAREST,
+/// with a scale mode, and sets it back to NEAREST after, as the standard
+/// tier draws it; at NEAREST it is the one draw the standard tier makes.
+/// On a window at native density the renderer scales the layer by the
+/// density with that mode.
+///
+/// Throws PresentError when SDL refuses the draw, and AccelerationError when
+/// it refuses a scale mode other than NEAREST.
+///
+/// @param renderer the renderer
+/// @param texture the layer
+/// @param destination where it goes, in layout pixels; null for the whole target
+/// @param mode the scale mode
+void draw_one_to_one(
+    SDL_Renderer* renderer, SDL_Texture* texture, const SDL_FRect* destination, SDL_ScaleMode mode
+);
+
+/// Draws a layer of tiles laid out 1:1 in layout pixels (TiledTexture::draw)
+/// with a scale mode, and sets it back to NEAREST after, as the standard tier
+/// draws it; at NEAREST it is the one draw the standard tier makes.
+///
+/// Throws as TiledTexture::draw throws, and AccelerationError when SDL
+/// refuses a scale mode other than NEAREST.
+///
+/// @param renderer the renderer the layer was made on
+/// @param layer the layer, whose scale mode is NEAREST
+/// @param source the part of the picture to draw; null for all of it
+/// @param destination where it goes, in layout pixels; null as TiledTexture::draw takes it
+/// @param mode the scale mode
+void draw_one_to_one(
+    SDL_Renderer* renderer,
+    TiledTexture& layer,
+    const SDL_FRect* source,
+    const SDL_FRect* destination,
+    SDL_ScaleMode mode
+);
+
 /// Probes whether the renderer's pixel-art scale mode works: a 2x1 black
 /// and white texture drawn at 2.5 times into a 5x1 target must read back
 /// pure black in its second pixel and a level between black and white in

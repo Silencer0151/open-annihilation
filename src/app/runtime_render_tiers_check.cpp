@@ -11,7 +11,12 @@
 // The tier comes from the game's own decision: --hardware-acceleration
 // switches it on after the start-up function test passed, and the check
 // switches it off and on again as --no-hardware-acceleration and
-// --hardware-acceleration would.
+// --hardware-acceleration would. With --native-density the window opened at
+// the display's own density, and after the main menu and the loading screen
+// the check runs its density case alone: the match laid out in window
+// points, read back at the display's size, at zoom 1 and a whole-number
+// density the processor's composition enlarged by nearest replication, and
+// the unit under the pointer the one drawn there.
 #include "oa/app/runtime.hpp"
 
 #include "render_host.hpp"
@@ -101,6 +106,10 @@ constexpr int most_software_difference = 2;
 constexpr double most_mean_scaled_difference = 0.5;
 /// Most a channel of the HUD may differ from the composition at a whole-number scale.
 constexpr int most_hud_difference = 1;
+/// Most a window point may lie from a layout pixel's place at native
+/// density, in window points: the view maps one onto the other exactly but
+/// for the rounding of floats.
+constexpr float window_point_tolerance = 0.01F;
 
 /// A rectangle of a frame.
 struct Area {
@@ -175,6 +184,31 @@ void write_png(const fs::path& path, const renderer::Surface& frame) {
     );
     if (!output)
         throw std::runtime_error("render tiers check: cannot write " + path.string());
+}
+
+/// Returns a frame enlarged by nearest replication: each pixel a square
+/// block of a whole number of pixels on a side.
+///
+/// @param frame the frame
+/// @param factor pixels on a side of each block, at least 1
+/// @return the enlarged frame
+renderer::Surface enlarged(const renderer::Surface& frame, uint32_t factor) {
+    renderer::Surface result{
+        frame.width * factor,
+        frame.height * factor,
+        std::vector<uint8_t>(std::size_t{frame.width} * factor * frame.height * factor * 3U)
+    };
+    for (uint32_t y = 0; y < result.height; ++y)
+        for (uint32_t x = 0; x < result.width; ++x)
+            std::copy_n(
+                frame.rgb.begin() + static_cast<std::ptrdiff_t>(
+                                        (std::size_t{y / factor} * frame.width + x / factor) * 3U
+                                    ),
+                3,
+                result.rgb.begin() +
+                    static_cast<std::ptrdiff_t>((std::size_t{y} * result.width + x) * 3U)
+            );
+    return result;
 }
 
 /// Returns a name's text for a zoom: "0.5", "1", "2.5".
@@ -383,12 +417,6 @@ int Runtime::check_render_tiers() {
         fail("the loading screen was not drawn by the card's filter");
     std::cout << "render tiers check: the loading screen drew "
               << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
-    switch_tier(false);
-    resize(whole_scale_width, whole_scale_height);
-    // The cursor waits in the blank corner right of the bottom bar.
-    update_pointer(
-        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
-    );
     uint16_t anchor = 0;
     for (const auto& slot : match_->world().slots)
         if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
@@ -399,18 +427,6 @@ int Runtime::check_render_tiers() {
         }
     if (anchor == 0)
         fail("found no local unit");
-    // A fight beside the commander, played until lasers fire, where the
-    // game's data has its units; otherwise the match's own units, played as
-    // long.
-    const bool fight = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMPW") != 0 &&
-                       oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORAK") != 0;
-    if (fight)
-        spawn_combat_armies(fight_units_per_side);
-    else
-        std::cout
-            << "render tiers check: the data has no fight's units; the match's own are drawn\n";
-    for (int tick = 0; tick < fight_ticks; ++tick)
-        step_match_simulation();
     const auto at_zoom = [&](float zoom) {
         match_zoom_ = match_zoom_target_ = zoom;
         center_camera_on_unit(anchor);
@@ -436,6 +452,133 @@ int Runtime::check_render_tiers() {
         compose_match_frame(frame);
         return frame;
     };
+
+    // --native-density: the window opened at the display's own density, and
+    // this case alone runs, since every other compares the read-back with
+    // the processor's composition pixel for pixel.
+    if (options_.native_density) {
+        if (!native_density_window())
+            fail("--native-density did not open the window at native density");
+        // The match is laid out in window points.
+        int points_w = 0;
+        int points_h = 0;
+        int pixels_w = 0;
+        int pixels_h = 0;
+        if (!SDL_GetWindowSize(sdl_.window, &points_w, &points_h) ||
+            !SDL_GetWindowSizeInPixels(sdl_.window, &pixels_w, &pixels_h))
+            fail(std::string("SDL window size: ") + SDL_GetError());
+        const auto in_points = oa::ui::display_layout::make_match_layout(points_w, points_h);
+        if (match_layout_.width != in_points.width || match_layout_.height != in_points.height ||
+            match_layout_.left != in_points.left || match_layout_.top != in_points.top ||
+            match_layout_.bottom != in_points.bottom || match_layout_.scale != in_points.scale)
+            fail("the match is not laid out in window points");
+        const double density = match_display_density();
+        // The read-back has the display's size.
+        update_pointer(
+            static_cast<float>(match_layout_.width - 1),
+            static_cast<float>(match_layout_.height - 1)
+        );
+        at_zoom(1.0F);
+        const auto read = presented();
+        if (!accelerated_presentation())
+            fail("the accelerated presentation stopped at native density");
+        if (accelerated_.frame.method != SceneMethod::none)
+            fail("zoom 1 was split from the world layer at native density");
+        if (read.width != static_cast<uint32_t>(pixels_w) ||
+            read.height != static_cast<uint32_t>(pixels_h))
+            fail("the read-back at native density is not the display's size");
+        std::cout << "render tiers check: native density " << density << ", " << points_w << 'x'
+                  << points_h << " points on " << pixels_w << 'x' << pixels_h << " pixels\n";
+        // At zoom 1 and a whole-number density the battlefield is the
+        // processor's enlarged by nearest replication, and the chrome too
+        // where its own scale is a whole number.
+        if (std::floor(density) == density && density >= 1.0) {
+            const auto factor = static_cast<int>(density);
+            const auto on_display = [&](const Area& area) {
+                return Area{area.x * factor, area.y * factor, area.w * factor, area.h * factor};
+            };
+            const auto expected = enlarged(composed(), static_cast<uint32_t>(factor));
+            const auto world =
+                compare(read, expected, on_display(battlefield()), on_display(cursor()));
+            const bool chrome_whole = std::floor(match_layout_.scale) == match_layout_.scale;
+            const auto whole = compare(
+                read,
+                expected,
+                on_display({0, 0, match_layout_.width, match_layout_.height}),
+                on_display(cursor())
+            );
+            std::cout << "render tiers check: zoom 1 at native density: battlefield most "
+                      << world.most << ", whole frame most " << whole.most << '\n';
+            if (world.pixels == 0 || world.most != 0 ||
+                (chrome_whole && whole.most > most_hud_difference)) {
+                write_png(report_directory / "native-render-tiers-density-presented.png", read);
+                write_png(report_directory / "native-render-tiers-density-composed.png", expected);
+                fail(
+                    "zoom 1 at native density is not the composition enlarged by nearest "
+                    "replication"
+                );
+            }
+        } else {
+            std::cout << "render tiers check: the density is not a whole number; the frame is "
+                         "drawn by the chrome's filter\n";
+        }
+        // The unit under the pointer is the one drawn there: its place in
+        // layout pixels is its place in window points, and SDL maps the
+        // pointer back through the view.
+        const auto& slots = match_->world().slots;
+        const auto point = project_match_point(
+            live_viewport(
+                static_cast<uint32_t>(std::max(0, match_camera_x_)),
+                static_cast<uint32_t>(std::max(0, match_camera_z_))
+            ),
+            slots[anchor].unit->position
+        );
+        float window_x = 0.0F;
+        float window_y = 0.0F;
+        if (!SDL_RenderCoordinatesToWindow(
+                sdl_.renderer,
+                static_cast<float>(point.x),
+                static_cast<float>(point.y),
+                &window_x,
+                &window_y
+            ))
+            fail(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());
+        if (std::abs(window_x - static_cast<float>(point.x)) > window_point_tolerance ||
+            std::abs(window_y - static_cast<float>(point.y)) > window_point_tolerance)
+            fail("a layout pixel is not a window point at native density");
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.windowID = SDL_GetWindowID(sdl_.window);
+        motion.motion.x = window_x;
+        motion.motion.y = window_y;
+        bool running = true;
+        dispatch_event(motion, running);
+        if (hovered_match_unit_ != anchor)
+            fail("the unit under the pointer at native density is not the one drawn there");
+        std::cout << "render tiers check: at native density the match is laid out in window "
+                     "points, read back at the display's size, and picks the unit drawn under "
+                     "the pointer\n";
+        return 0;
+    }
+
+    switch_tier(false);
+    resize(whole_scale_width, whole_scale_height);
+    // The cursor waits in the blank corner right of the bottom bar.
+    update_pointer(
+        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
+    );
+    // A fight beside the commander, played until lasers fire, where the
+    // game's data has its units; otherwise the match's own units, played as
+    // long.
+    const bool fight = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMPW") != 0 &&
+                       oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORAK") != 0;
+    if (fight)
+        spawn_combat_armies(fight_units_per_side);
+    else
+        std::cout
+            << "render tiers check: the data has no fight's units; the match's own are drawn\n";
+    for (int tick = 0; tick < fight_ticks; ++tick)
+        step_match_simulation();
 
     // The pictures for the maintainer: one moment at each zoom in both tiers.
     for (const float zoom : picture_zooms)

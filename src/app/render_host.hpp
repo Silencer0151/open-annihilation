@@ -232,6 +232,39 @@ struct FunctionTestResult {
 [[nodiscard]] FunctionTestResult
 run_function_test(SDL_Renderer* renderer, const FunctionTestFaults& faults = {});
 
+/// What the command line, the settings and the renderer records ask of the
+/// window's pixel density as the game starts, before the window opens.
+struct DensityRequest {
+    /// --hardware-acceleration (true) or --no-hardware-acceleration (false);
+    /// empty for neither.
+    std::optional<bool> flag{};
+    bool asked{};      ///< --native-density, which only the render tiers check passes
+    bool setting_on{}; ///< the Hardware acceleration setting read before the window opens
+    bool unattended{}; ///< a check, a benchmark or another scripted run
+    bool capture{};    ///< the run captures video (--capture-video)
+    /// The driver the native-density record names under the running
+    /// engine's version (renderer_state::native_density_driver); empty
+    /// when there is none, as while the start reads no records before the
+    /// window opens.
+    std::string record_driver{};
+    /// The step-down rung remembered for that driver; none when none is.
+    std::optional<render_policy::LadderState> remembered{};
+};
+
+/// Decides whether the game's window opens at the display's own pixel
+/// density (render_policy::decide_native_density), from the request and
+/// what the machine reports: its physical memory, the scene budget it
+/// starts at with the record's driver, SDL_RENDER_DRIVER and the video
+/// driver. The class of no machine has been measured at native density yet
+/// (render_policy::native_density_measured), so only --native-density opens
+/// the window at native density. A window that does is logged.
+///
+/// SDL's video must be started, and the window not yet made.
+///
+/// @param request what the command line, the settings and the records ask
+/// @return whether the window opens at native density, and why
+[[nodiscard]] render_policy::DensityDecision decide_window_density(const DensityRequest& request);
+
 /// What the command line and the settings ask of the tier as the game
 /// starts.
 struct TierRequest {

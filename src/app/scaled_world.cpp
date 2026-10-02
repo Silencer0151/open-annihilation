@@ -23,6 +23,60 @@ void throw_present_error(const std::string& what) {
     throw PresentError(what + ": " + SDL_GetError());
 }
 
+SDL_ScaleMode direct_scale_mode(render_policy::ScaleFilter filter) noexcept {
+    switch (filter) {
+    case render_policy::ScaleFilter::nearest:
+        return SDL_SCALEMODE_NEAREST;
+    case render_policy::ScaleFilter::pixelart:
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+        return SDL_SCALEMODE_PIXELART;
+#else
+        return SDL_SCALEMODE_LINEAR;
+#endif
+    case render_policy::ScaleFilter::sharp_bilinear:
+    case render_policy::ScaleFilter::linear:
+        return SDL_SCALEMODE_LINEAR;
+    }
+    return SDL_SCALEMODE_NEAREST;
+}
+
+void draw_one_to_one(
+    SDL_Renderer* renderer, SDL_Texture* texture, const SDL_FRect* destination, SDL_ScaleMode mode
+) {
+    const bool filtered = mode != SDL_SCALEMODE_NEAREST;
+    if (filtered && !SDL_SetTextureScaleMode(texture, mode))
+        throw AccelerationError(std::string("SDL_SetTextureScaleMode: ") + SDL_GetError());
+    const bool drawn = SDL_RenderTexture(renderer, texture, nullptr, destination);
+    if (filtered)
+        std::ignore = SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    if (!drawn)
+        throw_present_error("SDL_RenderTexture");
+}
+
+void draw_one_to_one(
+    SDL_Renderer* renderer,
+    TiledTexture& layer,
+    const SDL_FRect* source,
+    const SDL_FRect* destination,
+    SDL_ScaleMode mode
+) {
+    if (mode == SDL_SCALEMODE_NEAREST) {
+        layer.draw(renderer, source, destination);
+        return;
+    }
+    if (!layer.set_scale_mode(mode)) {
+        std::ignore = layer.set_scale_mode(SDL_SCALEMODE_NEAREST);
+        throw AccelerationError(std::string("SDL_SetTextureScaleMode: ") + SDL_GetError());
+    }
+    try {
+        layer.draw(renderer, source, destination);
+    } catch (...) {
+        std::ignore = layer.set_scale_mode(SDL_SCALEMODE_NEAREST);
+        throw;
+    }
+    std::ignore = layer.set_scale_mode(SDL_SCALEMODE_NEAREST);
+}
+
 namespace {
 
 namespace policy = render_policy;
@@ -149,27 +203,6 @@ bool draw_tiles(
                 return false;
         }
     return true;
-}
-
-/// Returns the scale mode the card draws a filter with straight from its source.
-///
-/// @param filter the filter; sharp-bilinear without a prescale target is plain LINEAR
-/// @return the scale mode
-[[nodiscard]] SDL_ScaleMode direct_mode(policy::ScaleFilter filter) noexcept {
-    switch (filter) {
-    case policy::ScaleFilter::nearest:
-        return SDL_SCALEMODE_NEAREST;
-    case policy::ScaleFilter::pixelart:
-#if SDL_VERSION_ATLEAST(3, 4, 0)
-        return SDL_SCALEMODE_PIXELART;
-#else
-        return SDL_SCALEMODE_LINEAR;
-#endif
-    case policy::ScaleFilter::sharp_bilinear:
-    case policy::ScaleFilter::linear:
-        return SDL_SCALEMODE_LINEAR;
-    }
-    return SDL_SCALEMODE_NEAREST;
 }
 
 /// A texture a picture drawn into a prescale target comes from: the whole
@@ -785,7 +818,7 @@ void draw_scaled_world(
         };
         draw_prescaled(renderer, final_target, prescale, corner, landed);
     } else {
-        if (!scene.set_scale_mode(direct_mode(scale.filter)))
+        if (!scene.set_scale_mode(direct_scale_mode(scale.filter)))
             fail(renderer, final_target, "SDL_SetTextureScaleMode");
         if (!SDL_SetRenderClipRect(renderer, &clip))
             fail(renderer, final_target, "SDL_SetRenderClipRect");
@@ -814,7 +847,7 @@ void sharp_draw(
     ScaledWorldCounts& counts
 ) {
     if (scale.filter != policy::ScaleFilter::sharp_bilinear || scale.factor <= 1) {
-        const SDL_ScaleMode mode = direct_mode(scale.filter);
+        const SDL_ScaleMode mode = direct_scale_mode(scale.filter);
         if (mode != SDL_SCALEMODE_NEAREST && !SDL_SetTextureScaleMode(source, mode))
             fail(renderer, final_target, "SDL_SetTextureScaleMode");
         bool drawn = true;

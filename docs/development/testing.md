@@ -78,16 +78,33 @@ its default, the seeded skirmish writes the same trace stream and draws the
 same frame as with no file, and the director render keeps its pinned frames
 and sound. With a named file Hardware acceleration and Vertical sync are
 Off, and the windowed checks' `SDL_RENDER_DRIVER=software` locks both, so no
-check draws through the graphics card or waits for the display. Three
+check draws through the graphics card or waits for the display. Four
 checks pass `--force-capable`, which lifts those locks:
 `native-engine-settings`, so that it can turn Vertical sync On and read it
 back, and turn Hardware acceleration On and Off through the dialog in one
 step of its own, which from 2 GiB draws in the accelerated tier on SDL's
 software renderer and retries it after a drop or a function test forced to
-fail, every other step leaving it Off; and `native-render-tiers` and
-`native-demo-render-tiers`, which with `--hardware-acceleration` run the
-start-up function test on SDL's software renderer and draw in the
-accelerated tier, switching it off and on as the flags would.
+fail, every other step leaving it Off; and `native-render-tiers`,
+`native-render-tiers-density` and `native-demo-render-tiers`, which with
+`--hardware-acceleration` run the start-up function test on SDL's software
+renderer and draw in the accelerated tier, switching it off and on as the
+flags would.
+
+No window of a check opens at the display's own pixel density but
+`native-render-tiers-density`'s, which `--native-density` opens so: on the
+dummy video driver its density is 1, and the check holds the match laid out
+in window points, read back at the display's size, at zoom 1 equal to the
+processor's composition, and picking the unit drawn under the pointer. On a
+display above density 1, such as a laptop's built-in display, run the same
+check by hand, without `SDL_VIDEO_DRIVER`, to hold the read-back at zoom 1
+to the composition enlarged by nearest replication:
+
+```sh
+SDL_RENDER_DRIVER=software build/open-annihilation.app/Contents/MacOS/open-annihilation \
+    --game-dir "/path/to/Total Annihilation" --skip-intro --mute \
+    --check-render-tiers --hardware-acceleration --force-capable --native-density \
+    --preferences-file /tmp/render-density.conf
+```
 
 ### Threads
 

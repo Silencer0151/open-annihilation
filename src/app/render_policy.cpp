@@ -887,6 +887,38 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
 }
 
 // ---------------------------------------------------------------------------
+// Native pixel density
+
+DensityDecision decide_native_density(const DensityInputs& inputs) noexcept {
+    const auto window_system = [](DensityReason reason) { return DensityDecision{false, reason}; };
+    // Memory that is not reported counts as less, and no flag lifts it.
+    if (inputs.memory < smallest_accelerated_memory)
+        return window_system(DensityReason::memory);
+    if (inputs.flag == AccelerationFlag::off)
+        return window_system(DensityReason::flag_off);
+    if (inputs.asked)
+        return DensityDecision{true, DensityReason::asked};
+    if (inputs.render_driver_named || inputs.virtual_video_driver)
+        return window_system(DensityReason::environment);
+    if (inputs.unattended)
+        return window_system(DensityReason::unattended);
+    if (inputs.capture)
+        return window_system(DensityReason::capture);
+    if (!inputs.setting_on && inputs.flag != AccelerationFlag::on)
+        return window_system(DensityReason::setting_off);
+    if (!inputs.class_measured)
+        return window_system(DensityReason::class_unmeasured);
+    if (inputs.budget == SceneBudget::none)
+        return window_system(DensityReason::budget_none);
+    // A rung at or below the magnify-off rung has magnify off.
+    if (inputs.remembered && (!inputs.remembered->magnify || inputs.remembered->standard))
+        return window_system(DensityReason::remembered_rung);
+    if (!inputs.record)
+        return window_system(DensityReason::no_record);
+    return DensityDecision{true, DensityReason::native};
+}
+
+// ---------------------------------------------------------------------------
 // Chrome filtering and the prescale budget
 
 uint64_t prescale_budget(CardFilter card) noexcept {

@@ -282,6 +282,40 @@ logs it.
   drawn once a painted frame; it writes pictures of one moment at zoom
   0.5, 1 and 2.5 in both tiers. The records, the step-down's feed and the
   memory guard are not wired yet.
+- Native pixel density: a window's density is fixed when it opens.
+  `decide_window_density` (`render_host.cpp`) decides it before the window
+  opens by the render policy's rule (`decide_native_density`): from 2 GiB,
+  with neither `--no-hardware-acceleration`, `SDL_RENDER_DRIVER`, a dummy
+  or offscreen video driver, an unattended run nor a capture, with the
+  setting On or `--hardware-acceleration`, in a class of machine measured
+  at native density, from a start above budget none and a remembered rung
+  above magnify off, and with the `native-density` record an earlier run
+  left (`note_density_run_end`, `forget_native_density`). No class has
+  been measured (`native_density_measured`), and the start reads no records
+  before the window opens yet, so only `--native-density`, which the
+  render tiers check alone takes, opens a window at native density; every
+  other opens at the window system's density, as before. On a window at
+  native density (`at_native_density`) `apply_output_mode` lays the match
+  out in window points and stretches it over the display's pixels by
+  logical presentation, so the processor draws what it draws on any other
+  window of that size, and the scene and its budget do not grow; the front
+  end's letterbox is unchanged. The standard tier's layers are enlarged
+  NEAREST; the accelerated tier draws its scaled layers at the display's
+  scale, the layout's scale times the density, with NEAREST kept where that
+  product is a whole number (`world_display_scale`, `chrome_filter`), and
+  its layers laid out 1:1 NEAREST at a whole-number density and by the
+  chrome's filter at any other, plain LINEAR where that filter would need a
+  prescale target (`one_to_one_scale_mode`). Below zoom 1 the area pass,
+  where it runs, still runs at the layout's size at every density, and the
+  card enlarges its result by the density: the scene is not yet magnified
+  there by the zoom times the density over the draw scale. Pointer events
+  reach the layout through SDL's view, so picking is unchanged; the edge
+  scroll is one layout pixel deep there (`edge_scroll_depth`); screenshots,
+  film frames and snapshots keep the layout's size. With
+  `--native-density`, `--check-render-tiers` runs its density case alone
+  after the main menu and the loading screen (`native-render-tiers-density`
+  on the dummy video driver, whose density is 1, and by hand on a display
+  above density 1).
 - The tier each frame is drawn in (`runtime_render_tier.cpp`): at start,
   once the renderer is made, `RendererHost::decide_start_tier` fills the
   render policy's facts (the flags, the Hardware acceleration setting read
@@ -532,8 +566,10 @@ logs it.
   is let go. While macOS, X11 or Wayland is
   still switching the window, a second press switches from the mode last
   asked for. The window opens with `game_window_flags`: full screen on
-  Windows unless `-d` is given. In full screen, whether on the desktop's
-  display mode or on the one the Screen size setting picks, and while the
+  Windows unless `-d` is given, and at the display's own pixel density only
+  where `decide_window_density` allows it (`render_host.hpp`). In full
+  screen, whether on the desktop's display mode or on the one the Screen
+  size setting picks, and while the
   window has the input focus, the pointer is kept on the game's screen, as
   in 3.1c (`keeps_pointer_on_screen`, `keep_pointer_on_screen`): it stops at
   the screen's edges, can rest on their last row or column of pixels, and

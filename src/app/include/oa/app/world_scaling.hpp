@@ -130,6 +130,24 @@ inline constexpr double area_cut_off = 0.9;
     bool magnify
 ) noexcept;
 
+/// Returns the scale the graphics card draws a frame's battlefield at on
+/// the display: display pixels per pixel of the picture it draws.
+///
+/// The draw scale, the scene and its budget come from the layout alone,
+/// which on a window at native density is in window points, so they are the
+/// same at every density. A magnified scene is drawn at the zoom times the
+/// density over its draw scale; the world layer, 1:1 in layout pixels, at
+/// the density. The whole-number test that keeps NEAREST
+/// (render_policy::chrome_filter) is made on this scale.
+///
+/// @param scaling how the frame draws the battlefield (accelerated_world_scaling)
+/// @param zoom layout pixels per map pixel
+/// @param density display pixels per layout pixel: 1 on a window at the
+///        window system's density
+/// @return display pixels per pixel drawn
+[[nodiscard]] double
+world_display_scale(const WorldScaling& scaling, float zoom, double density) noexcept;
+
 /// The size of a scene.
 struct SceneExtent {
     int32_t width{};  ///< scene columns

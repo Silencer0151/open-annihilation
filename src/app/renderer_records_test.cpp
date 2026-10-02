@@ -9,7 +9,10 @@
 // in a row, or at once for a left-over trial where the first counts; clean
 // passes clearing strikes, software's through a list of one included; under
 // 2 GiB nothing of the accelerated tier made and what a larger machine left
-// kept; the adapter, the told mark and clearing; and the sentinel and the
+// kept; the native-density key, written only by a run that kept the
+// accelerated tier above the magnify-off rung where the flag does something,
+// and erased by any drop and by a run that ended at or below that rung; the
+// adapter, the told mark and clearing; and the sentinel and the
 // trial through a run, with none under SDL_RENDER_DRIVER. The drivers are
 // named "alpha", "beta" and "gamma", and SDL's own "software".
 #include "oa/app/renderer_records.hpp"
@@ -1199,6 +1202,105 @@ void accelerated_unusable_takes_away_native_density() {
     OA_CHECK(!records.native_density.has_value());
 }
 
+/// A run that writes the native-density key as it ends: it drew in the
+/// accelerated tier above the magnify-off rung, on a window system that
+/// honours the flag, in a measured class above budget none.
+rs::DensityRunEnd density_run() {
+    rs::DensityRunEnd run;
+    run.flag_honoured = true;
+    run.class_measured = true;
+    run.above_budget_none = true;
+    run.function_test_passed = true;
+    run.accelerated = true;
+    return run;
+}
+
+void the_native_density_key_follows_the_runs() {
+    // Written by a run that ends above the magnify-off rung, read back under
+    // the same engine version and not under another.
+    rs::Records records = adapter_records();
+    rs::Change change =
+        rs::note_density_run_end(records, "alpha", version, density_run(), from_two_gib);
+    OA_CHECK(change.changed && !change.new_record);
+    OA_CHECK(rs::native_density_driver(records, version) == std::string_view("alpha"));
+    OA_CHECK(!rs::native_density_driver(records, "0.6.3").has_value());
+    OA_CHECK(!rs::native_density_driver(adapter_records(), version).has_value());
+    const rs::ParsedRecords parsed =
+        rs::parse_records(rs::format_records(records, version), version);
+    OA_CHECK(rs::native_density_driver(parsed.records, version) == std::string_view("alpha"));
+    // The same run again changes nothing.
+    change = rs::note_density_run_end(records, "alpha", version, density_run(), from_two_gib);
+    OA_CHECK(!change.changed);
+
+    // Never written where the flag does nothing, in a class not measured,
+    // at budget none, without a passed function test, on software, under a
+    // name that cannot be kept or by a run in the standard tier.
+    const auto not_written = [](void (*change_run)(rs::DensityRunEnd&), std::string_view driver) {
+        rs::Records fresh = adapter_records();
+        rs::DensityRunEnd run = density_run();
+        change_run(run);
+        const rs::Change made = rs::note_density_run_end(fresh, driver, version, run, from_two_gib);
+        return !made.changed && !fresh.native_density.has_value();
+    };
+    OA_CHECK(not_written([](rs::DensityRunEnd& run) { run.flag_honoured = false; }, "alpha"));
+    OA_CHECK(not_written([](rs::DensityRunEnd& run) { run.class_measured = false; }, "alpha"));
+    OA_CHECK(not_written([](rs::DensityRunEnd& run) { run.above_budget_none = false; }, "alpha"));
+    OA_CHECK(
+        not_written([](rs::DensityRunEnd& run) { run.function_test_passed = false; }, "alpha")
+    );
+    OA_CHECK(not_written([](rs::DensityRunEnd& run) { run.accelerated = false; }, "alpha"));
+    OA_CHECK(not_written([](rs::DensityRunEnd&) {}, "software"));
+    OA_CHECK(not_written([](rs::DensityRunEnd&) {}, "not a name"));
+
+    // A run in the standard tier, with nothing dropped, leaves the key: it
+    // is a fact of the machine, not of the setting.
+    rs::DensityRunEnd standard_run = density_run();
+    standard_run.accelerated = false;
+    standard_run.ended_at_or_below_magnify_off = true;
+    change = rs::note_density_run_end(records, "alpha", version, standard_run, from_two_gib);
+    OA_CHECK(!change.changed);
+    OA_CHECK(records.native_density.has_value());
+
+    // Erased by a drop, the memory guard's and the last rung's included, and
+    // by a run that ends at or below the magnify-off rung, whatever else
+    // holds.
+    const auto erased = [](void (*change_run)(rs::DensityRunEnd&)) {
+        rs::Records kept = adapter_records();
+        kept.native_density = rs::NativeDensity{"alpha", std::string(version)};
+        rs::DensityRunEnd run = density_run();
+        change_run(run);
+        const rs::Change made = rs::note_density_run_end(kept, "beta", version, run, from_two_gib);
+        return made.changed && !kept.native_density.has_value();
+    };
+    OA_CHECK(erased([](rs::DensityRunEnd& run) { run.dropped = true; }));
+    OA_CHECK(erased([](rs::DensityRunEnd& run) {
+        run.dropped = true;
+        run.accelerated = false;
+        run.flag_honoured = false;
+    }));
+    OA_CHECK(erased([](rs::DensityRunEnd& run) { run.ended_at_or_below_magnify_off = true; }));
+
+    // A start whose probe rejects the renderer, or whose function test
+    // fails, forgets it; a start with none changes nothing.
+    OA_CHECK(rs::forget_native_density(records, from_two_gib).changed);
+    OA_CHECK(!records.native_density.has_value());
+    OA_CHECK(!rs::forget_native_density(records, from_two_gib).changed);
+
+    // Under 2 GiB, where the accelerated tier never runs, the key a larger
+    // machine left stays, and none is written.
+    rs::Records small = adapter_records();
+    small.native_density = rs::NativeDensity{"alpha", std::string(version)};
+    rs::DensityRunEnd dropped = density_run();
+    dropped.dropped = true;
+    OA_CHECK(!rs::note_density_run_end(small, "alpha", version, dropped, below_two_gib).changed);
+    OA_CHECK(!rs::forget_native_density(small, below_two_gib).changed);
+    OA_CHECK(small.native_density.has_value());
+    rs::Records none = adapter_records();
+    change = rs::note_density_run_end(none, "alpha", version, density_run(), below_two_gib);
+    OA_CHECK(!change.changed);
+    OA_CHECK(!none.native_density.has_value());
+}
+
 void the_adapter_clears_records_when_it_changes() {
     rs::Records records;
     rs::driver_entry(records, "alpha").failed_driver =
@@ -1562,6 +1664,7 @@ int main() {
     a_failure_while_running_is_recorded_in_the_next_run();
     under_two_gib_nothing_of_the_accelerated_tier_is_made();
     accelerated_unusable_takes_away_native_density();
+    the_native_density_key_follows_the_runs();
     the_adapter_clears_records_when_it_changes();
     the_told_mark_and_clearing();
     a_left_over_trial_decides_alone();

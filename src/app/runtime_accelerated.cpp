@@ -161,12 +161,16 @@ CardScale Runtime::accelerated_card_scale(
 
 void Runtime::ensure_accelerated_match_textures() {
     auto& state = accelerated_;
-    // A new layout remakes the card's textures and the overlay; the base and
-    // the area pass's weights belong to the frame just drawn for it, and stay.
-    if (state.layout_width != match_layout_.width || state.layout_height != match_layout_.height) {
+    // A new layout, or a display of another density, remakes the card's
+    // textures and the overlay; the base and the area pass's weights belong
+    // to the frame just drawn for it, and stay.
+    const double density = match_display_density();
+    if (state.layout_width != match_layout_.width || state.layout_height != match_layout_.height ||
+        state.layout_density != density) {
         free_accelerated_layout_textures();
         state.layout_width = match_layout_.width;
         state.layout_height = match_layout_.height;
+        state.layout_density = density;
     }
     const int battlefield_width = match_layout_.battlefield_width();
     const int battlefield_height = match_layout_.battlefield_height();
@@ -175,9 +179,9 @@ void Runtime::ensure_accelerated_match_textures() {
     const auto bf_w = static_cast<uint32_t>(battlefield_width);
     const auto bf_h = static_cast<uint32_t>(battlefield_height);
     const uint32_t limit = state.texture_limit;
-    // The HUD layer's prescale target, at the chrome's scale, made larger
-    // only when a taller build page needs it.
-    const double chrome = match_layout_.scale;
+    // The HUD layer's prescale target, at the chrome's scale on the
+    // display, made larger only when a taller build page needs it.
+    const double chrome = match_layout_.scale * density;
     const uint32_t hud_w = match_hud_cpu_.width;
     const uint32_t hud_h = match_hud_cpu_.height;
     if (hud_w != 0 && hud_h != 0 &&
@@ -214,9 +218,9 @@ void Runtime::ensure_accelerated_match_textures() {
         state.uploaded_bands.assign(bands, 0);
         state.overlay.assign(std::size_t{bf_w} * bf_h * 4U, 0);
     }
-    // The scene's prescale target, at the largest any zoom above 1 needs
-    // within what the HUD's target leaves of the budget, in tiles beyond
-    // the renderer's limit as the scene is.
+    // The scene's prescale target, at the largest any zoom above 1 needs on
+    // the display within what the HUD's target leaves of the budget, in
+    // tiles beyond the renderer's limit as the scene is.
     const bool prescaled = state.rung.card == policy::CardFilter::prescale_full ||
                            state.rung.card == policy::CardFilter::prescale_quarter;
     if (!prescaled || state.world_prescale.made())
@@ -226,12 +230,13 @@ void Runtime::ensure_accelerated_match_textures() {
     for (int step = 1; step <= prescale_zoom_steps; ++step) {
         const float zoom = 1.0F + (kMaxBattlefieldZoom - 1.0F) * static_cast<float>(step) /
                                       static_cast<float>(prescale_zoom_steps);
-        if (std::floor(zoom) == zoom)
+        const double scale = static_cast<double>(zoom) * density;
+        if (std::floor(scale) == scale)
             continue;
         const uint32_t region_w = std::min(magnified_corner(bf_w, zoom, scene_w) + 1, scene_w);
         const uint32_t region_h = std::min(magnified_corner(bf_h, zoom, scene_h) + 1, scene_h);
         const uint32_t factor =
-            accelerated_prescale_factor(zoom, region_w, region_h, state.hud_prescale.pixels());
+            accelerated_prescale_factor(scale, region_w, region_h, state.hud_prescale.pixels());
         if (factor <= 1)
             continue;
         widest = std::max(widest, factor * region_w);
@@ -336,6 +341,9 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     phase_times_.upload += nanoseconds_since(upload_start);
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL_RenderClear");
+    // Every scale is the one at the display's pixels: on a window at native
+    // density the layout's scale times the density.
+    const double density = match_display_density();
     // The HUD strips by the chrome's filter.
     std::vector<SharpPart> strips;
     for (const auto& strip : match_hud_strips())
@@ -357,7 +365,10 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         match_hud_cpu_.height,
         strips,
         accelerated_card_scale(
-            match_layout_.scale, match_hud_cpu_.width, match_hud_cpu_.height, state.hud_prescale
+            match_layout_.scale * density,
+            match_hud_cpu_.width,
+            match_hud_cpu_.height,
+            state.hud_prescale
         ),
         state.hud_revision,
         state.hud_prescale,
@@ -373,7 +384,10 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         static_cast<float>(bf_h)
     };
     if (!magnified) {
-        match_world_tex_.draw(sdl_.renderer, nullptr, &world);
+        // 1:1 in layout pixels, at the density on the display; below zoom
+        // 1, where the area pass runs, its result, made at the layout's
+        // size at every density.
+        draw_one_to_one(sdl_.renderer, match_world_tex_, nullptr, &world, one_to_one_scale_mode());
     } else {
         const float zoom = match_zoom();
         const uint32_t scene_w = match_scene_cpu_.width;
@@ -397,7 +411,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             destination,
             battlefield,
             accelerated_card_scale(
-                zoom,
+                world_display_scale(frame, zoom, density),
                 std::min(width + 1, scene_w),
                 std::min(height + 1, scene_h),
                 state.world_prescale
@@ -405,7 +419,9 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             state.world_prescale,
             state.counts
         );
-        state.overlay_texture.draw(sdl_.renderer, nullptr, &world);
+        draw_one_to_one(
+            sdl_.renderer, state.overlay_texture, nullptr, &world, one_to_one_scale_mode()
+        );
     }
     finish_match_layers(frame_format, dialogs, upload_start, present_start);
 }

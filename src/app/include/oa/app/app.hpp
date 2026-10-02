@@ -348,6 +348,12 @@ struct Options {
     // nor SDL's software renderer locks Hardware acceleration or Vertical
     // sync. It never lifts the 2 GiB rule.
     bool force_capable = false;
+    // --native-density, which only --check-render-tiers takes: the window
+    // opens at the display's own pixel density whatever the rule for it
+    // says (render_policy::decide_native_density), except under 2 GiB of
+    // memory or with --no-hardware-acceleration, and the check runs its
+    // density case.
+    bool native_density = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
     // advances a frame at a time, each frame between two ticks as the

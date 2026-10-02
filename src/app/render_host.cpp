@@ -671,6 +671,22 @@ uint64_t physical_memory() noexcept {
     return oa::platform::read_machine_traits().memory;
 }
 
+/// Fills what the starting rung is sized from that the machine itself
+/// reports: its logical processors, its memory, whether it is a light
+/// machine or a Raspberry Pi, and whether its processor is an ARM one that
+/// has not been run on the accelerated tier.
+///
+/// @param[out] start the facts filled; the others are left as they are
+/// @param memory the machine's physical memory in bytes (physical_memory)
+void take_machine(render_policy::StartInputs& start, uint64_t memory) {
+    const oa::platform::MachineTraits machine = oa::platform::read_machine_traits();
+    start.processors = machine.processors;
+    start.memory = memory;
+    start.light_machine = oa::platform::light_machine(machine);
+    start.raspberry_pi = oa::platform::running_on_raspberry_pi();
+    start.other_arm = render_probe::untried_arm_processor();
+}
+
 /// The line logged when the start-up function test fails.
 ///
 /// @param failure what failed
@@ -683,6 +699,41 @@ std::string function_test_log_line(std::string_view failure) {
 }
 
 } // namespace
+
+render_policy::DensityDecision decide_window_density(const DensityRequest& request) {
+    render_policy::DensityInputs inputs;
+    inputs.asked = request.asked;
+    inputs.memory = physical_memory();
+    inputs.flag = render_policy::acceleration_flag(request.flag);
+    inputs.setting_on = request.setting_on;
+    const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    inputs.render_driver_named = named != nullptr && named[0] != '\0';
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    inputs.virtual_video_driver =
+        render_policy::windowless_video_driver(video_driver != nullptr ? video_driver : "");
+    inputs.unattended = request.unattended;
+    inputs.capture = request.capture;
+    inputs.class_measured = render_policy::native_density_measured;
+    // The budget the machine starts at with the driver the record names,
+    // the one an earlier run passed the function test on.
+    render_policy::StartInputs machine;
+    take_machine(machine, inputs.memory);
+    machine.legacy_windows = oa::platform::running_on_windows_before_vista();
+    machine.run_class = render_probe::accelerated_tier_run(request.record_driver)
+                            ? render_policy::ClassTesting::tested
+                            : render_policy::ClassTesting::untested;
+    inputs.budget = render_policy::start_budget(machine);
+    inputs.remembered = request.remembered;
+    inputs.record = !request.record_driver.empty();
+    const render_policy::DensityDecision decision = render_policy::decide_native_density(inputs);
+    if (decision.native)
+        std::cout << graphics_log_prefix << "the window opens at the display's own pixel density"
+                  << (decision.reason == render_policy::DensityReason::asked ? " (--native-density)"
+                                                                             : "")
+                  << '\n'
+                  << std::flush;
+    return decision;
+}
 
 FunctionTestResult run_function_test(SDL_Renderer* renderer, const FunctionTestFaults& faults) {
     FunctionTestResult result;
@@ -873,12 +924,7 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
     tier_.players_own_profile = request.players_own_profile;
     tier_.setting_on = request.setting_on;
     tier_.memory = physical_memory();
-    const oa::platform::MachineTraits machine = oa::platform::read_machine_traits();
-    machine_.processors = machine.processors;
-    machine_.memory = tier_.memory;
-    machine_.light_machine = oa::platform::light_machine(machine);
-    machine_.raspberry_pi = oa::platform::running_on_raspberry_pi();
-    machine_.other_arm = render_probe::untried_arm_processor();
+    take_machine(machine_, tier_.memory);
     // No trial is written before the test yet, so on the player's own
     // profile it waits for the player or a flag.
     tier_.function_test = render_policy::start_function_test(tier_);

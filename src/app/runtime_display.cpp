@@ -224,7 +224,7 @@ void Runtime::present_indexed_frame(
     }
     if (!drawn && !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))
         throw_present_error("SDL render");
-    present_software_cursor();
+    present_software_cursor(false);
     capture_render_target();
     if (render_fault_due(RenderFaultPoint::present))
         throw PresentError("injected present error");

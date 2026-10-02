@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Alt+Enter: which keys switch full screen, the Enter key it holds until that
-// key comes up, the mode a press asks for while the window is still switching
-// (as a macOS full-screen space, an X11 window manager or a Wayland
-// compositor leaves it for a while), when the pointer is kept on the game's
-// screen, where a window that leaves full screen goes on its display, and
-// windows of SDL's dummy video driver switched to full screen and back,
-// losing and regaining the focus and coming back onto the display.
+// The flags the game's window opens with, at native density among them, and
+// the edge scroll's depth there; Alt+Enter: which keys switch full screen,
+// the Enter key it holds until that key comes up, the mode a press asks for
+// while the window is still switching (as a macOS full-screen space, an X11
+// window manager or a Wayland compositor leaves it for a while), when the
+// pointer is kept on the game's screen, where a window that leaves full
+// screen goes on its display, and windows of SDL's dummy video driver
+// switched to full screen and back, losing and regaining the focus and
+// coming back onto the display, and one opened at native density.
 #include "oa/app/full_screen.hpp"
 
 #include <SDL3/SDL.h>
@@ -123,8 +125,34 @@ void test_held_enter() {
 
 void test_window_flags() {
     using oa::app::game_window_flags;
-    CHECK(game_window_flags(false) == SDL_WINDOW_RESIZABLE);
-    CHECK(game_window_flags(true) == (SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN));
+    CHECK(game_window_flags(false, false) == SDL_WINDOW_RESIZABLE);
+    CHECK(game_window_flags(true, false) == (SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN));
+    // At native density the window holds the display's own pixels.
+    CHECK(game_window_flags(false, true) == (SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY));
+    CHECK(
+        game_window_flags(true, true) ==
+        (SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+    );
+    CHECK(oa::app::at_native_density(game_window_flags(false, true)));
+    CHECK(oa::app::at_native_density(game_window_flags(true, true) | SDL_WINDOW_INPUT_FOCUS));
+    CHECK(!oa::app::at_native_density(game_window_flags(false, false)));
+    CHECK(!oa::app::at_native_density(game_window_flags(true, false)));
+}
+
+// The band along the screen's edges that scrolls is one window point deep:
+// at native density one layout pixel, elsewhere the window's density rounded
+// up, as before.
+void test_edge_scroll_depth() {
+    using oa::app::edge_scroll_depth;
+    CHECK(edge_scroll_depth(true, 1.0F) == 1);
+    CHECK(edge_scroll_depth(true, 1.5F) == 1);
+    CHECK(edge_scroll_depth(true, 2.0F) == 1);
+    CHECK(edge_scroll_depth(true, 3.0F) == 1);
+    CHECK(edge_scroll_depth(false, 1.0F) == 1);
+    CHECK(edge_scroll_depth(false, 1.25F) == 2);
+    CHECK(edge_scroll_depth(false, 1.5F) == 2);
+    CHECK(edge_scroll_depth(false, 2.0F) == 2);
+    CHECK(edge_scroll_depth(false, 3.0F) == 3);
 }
 
 // A window system that switches at once: every press switches from the mode
@@ -343,7 +371,7 @@ void test_pointer_bounds() {
     using oa::app::keeps_pointer_on_screen;
     constexpr SDL_WindowFlags focused = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MOUSE_FOCUS;
     CHECK(keeps_pointer_on_screen(SDL_WINDOW_FULLSCREEN | SDL_WINDOW_INPUT_FOCUS));
-    CHECK(keeps_pointer_on_screen(oa::app::game_window_flags(true) | focused));
+    CHECK(keeps_pointer_on_screen(oa::app::game_window_flags(true, false) | focused));
     // Already held, it stays held.
     CHECK(keeps_pointer_on_screen(SDL_WINDOW_FULLSCREEN | focused | SDL_WINDOW_MOUSE_GRABBED));
     // Switched away from (Alt+Tab, Command+Tab, a dialog of the system's).
@@ -351,7 +379,7 @@ void test_pointer_bounds() {
     CHECK(!keeps_pointer_on_screen(SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MOUSE_FOCUS));
     CHECK(!keeps_pointer_on_screen(SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED));
     // A window, focused or not, held before or not.
-    CHECK(!keeps_pointer_on_screen(oa::app::game_window_flags(false) | focused));
+    CHECK(!keeps_pointer_on_screen(oa::app::game_window_flags(false, false) | focused));
     CHECK(!keeps_pointer_on_screen(focused | SDL_WINDOW_MOUSE_GRABBED));
     CHECK(!keeps_pointer_on_screen(0));
 }
@@ -428,7 +456,7 @@ void test_pointer_window() {
         return;
     }
     SDL_Window* window =
-        SDL_CreateWindow("pointer test", 640, 480, oa::app::game_window_flags(false));
+        SDL_CreateWindow("pointer test", 640, 480, oa::app::game_window_flags(false, false));
     CHECK(window != nullptr);
     if (window == nullptr) {
         SDL_Quit();
@@ -492,7 +520,7 @@ void test_pointer_window() {
     SDL_DestroyWindow(window);
 
     // A window created full screen holds the pointer from its first events.
-    window = SDL_CreateWindow("pointer test", 640, 480, oa::app::game_window_flags(true));
+    window = SDL_CreateWindow("pointer test", 640, 480, oa::app::game_window_flags(true, false));
     CHECK(window != nullptr);
     if (window != nullptr) {
         FullScreenSwitch started{};
@@ -527,7 +555,7 @@ void test_window_back_on_display() {
         return;
     }
     SDL_Window* window =
-        SDL_CreateWindow("window place test", 640, 480, oa::app::game_window_flags(false));
+        SDL_CreateWindow("window place test", 640, 480, oa::app::game_window_flags(false, false));
     CHECK(window != nullptr);
     if (window == nullptr) {
         SDL_Quit();
@@ -644,7 +672,7 @@ void test_window() {
         return;
     }
     SDL_Window* window =
-        SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(false));
+        SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(false, false));
     CHECK(window != nullptr);
     if (window == nullptr) {
         SDL_Quit();
@@ -699,7 +727,8 @@ void test_window() {
     SDL_DestroyWindow(window);
 
     // A window created full screen starts in it, and Alt+Enter leaves it.
-    window = SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(true));
+    window =
+        SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(true, false));
     CHECK(window != nullptr);
     if (window != nullptr) {
         FullScreenSwitch started{};
@@ -713,6 +742,27 @@ void test_window() {
         CHECK(!shows_full_screen(window));
         SDL_DestroyWindow(window);
     }
+
+    // A window opened at native density keeps the flag, which says so for
+    // the run; the dummy display's density is 1, so its pixels are its
+    // points, as every windowed check's are.
+    window =
+        SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(false, true));
+    CHECK(window != nullptr);
+    if (window != nullptr) {
+        CHECK(oa::app::at_native_density(SDL_GetWindowFlags(window)));
+        CHECK(SDL_GetWindowSizeInPixels(window, &width, &height));
+        CHECK(width == 640 && height == 480);
+        CHECK(SDL_GetWindowPixelDensity(window) == 1.0F);
+        SDL_DestroyWindow(window);
+    }
+    window =
+        SDL_CreateWindow("full screen test", 640, 480, oa::app::game_window_flags(false, false));
+    CHECK(window != nullptr);
+    if (window != nullptr) {
+        CHECK(!oa::app::at_native_density(SDL_GetWindowFlags(window)));
+        SDL_DestroyWindow(window);
+    }
     SDL_Quit();
 }
 
@@ -722,6 +772,7 @@ int main() {
     test_keys();
     test_held_enter();
     test_window_flags();
+    test_edge_scroll_depth();
     test_switch_at_once();
     test_switch_while_changing();
     test_unanswered_request();
@@ -738,9 +789,9 @@ int main() {
         return 1;
     }
     std::puts(
-        "full screen: Alt+Enter switches, the mode asked for is kept, the pointer stays on the "
-        "screen while the window has the focus, and a window leaving full screen comes back onto "
-        "its display"
+        "full screen: the window opens at native density only when asked, Alt+Enter switches, "
+        "the mode asked for is kept, the pointer stays on the screen while the window has the "
+        "focus, and a window leaving full screen comes back onto its display"
     );
     return 0;
 }

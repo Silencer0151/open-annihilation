@@ -7,8 +7,9 @@
 // to even sizes; and over the zoom range and the battlefields of every
 // window, the scene holds every pixel the nearest resample reads from it.
 // The accelerated tier's draw scale within each scene budget, its method at
-// each zoom, the area pass's scale and the scene it reads, and the largest
-// magnified scene.
+// each zoom, the area pass's scale and the scene it reads, the largest
+// magnified scene, and the scale the card draws the battlefield at on a
+// window at native density.
 #include "oa/app/world_scaling.hpp"
 
 #include "oa/present/world_renderer.hpp"
@@ -296,6 +297,66 @@ void the_area_scale_is_the_zoom_over_the_draw_scale() {
     OA_CHECK(oa::app::area_scale(0.6F, 1.0F) == 39322);
 }
 
+// On a window at native density the layout is in window points, so the
+// draw scale, the scene and its budget are those of the layout at every
+// density; the card draws the world layer at the density and a magnified
+// scene at the zoom times the density, and NEAREST is kept where that
+// product is a whole number. Below zoom 1 the method does not take the
+// density yet: where the area pass runs, it runs at the layout's size at
+// every density, and the card enlarges its result by the density, so the
+// scene is not magnified there by the zoom times the density over the
+// draw scale.
+void the_display_scale_is_the_zoom_times_the_density() {
+    using oa::app::accelerated_world_scaling;
+    using oa::app::world_display_scale;
+    namespace policy = oa::app::render_policy;
+    constexpr std::array<double, 4> densities{1.0, 1.5, 2.0, 3.0};
+    constexpr std::array<float, 7> zooms{0.5F, 0.75F, 1.0F, 1.37F, 1.5F, 2.0F, 4.0F};
+    for (const auto& battlefield : battlefields)
+        for (const float zoom : zooms)
+            for (const SceneBudget budget :
+                 {SceneBudget::none, SceneBudget::reduced, SceneBudget::full})
+                for (const bool magnify : {false, true}) {
+                    const WorldScaling scaling = accelerated_world_scaling(
+                        zoom, battlefield.width, battlefield.height, budget, magnify
+                    );
+                    for (const double density : densities) {
+                        const double scale = world_display_scale(scaling, zoom, density);
+                        if (scaling.method == SceneMethod::magnify)
+                            OA_CHECK(scale == static_cast<double>(zoom) * density);
+                        else
+                            OA_CHECK(scale == density);
+                    }
+                    // At density 1 the card draws at the scales it drew at
+                    // before: the zoom for a magnified scene, 1 for the
+                    // world layer.
+                    OA_CHECK(
+                        world_display_scale(scaling, zoom, 1.0) ==
+                        (scaling.method == SceneMethod::magnify ? static_cast<double>(zoom) : 1.0)
+                    );
+                }
+    // The whole-number test is made on the display's scale.
+    policy::LadderState rung;
+    rung.magnify = true;
+    rung.filtered_chrome = true;
+    rung.card = policy::CardFilter::pixelart;
+    const auto filter = [&](float zoom, double density) {
+        const WorldScaling scaling =
+            accelerated_world_scaling(zoom, 1161, 666, SceneBudget::full, true);
+        return policy::chrome_filter(rung, world_display_scale(scaling, zoom, density));
+    };
+    OA_CHECK(filter(1.5F, 2.0) == policy::ScaleFilter::nearest);
+    OA_CHECK(filter(1.5F, 1.0) == policy::ScaleFilter::pixelart);
+    OA_CHECK(filter(1.37F, 2.0) == policy::ScaleFilter::pixelart);
+    OA_CHECK(filter(2.0F, 1.5) == policy::ScaleFilter::nearest);
+    OA_CHECK(filter(4.0F, 1.25) == policy::ScaleFilter::nearest);
+    OA_CHECK(filter(2.0F, 1.25) == policy::ScaleFilter::pixelart);
+    // Zoom 1 is not split: the world layer at the density, NEAREST at a
+    // whole-number density and filtered at any other.
+    OA_CHECK(filter(1.0F, 2.0) == policy::ScaleFilter::nearest);
+    OA_CHECK(filter(1.0F, 1.5) == policy::ScaleFilter::pixelart);
+}
+
 } // namespace
 
 int main() {
@@ -308,5 +369,6 @@ int main() {
     the_accelerated_method_follows_the_zoom();
     the_largest_magnified_scene_is_the_battlefield_with_its_margin();
     the_area_scale_is_the_zoom_over_the_draw_scale();
+    the_display_scale_is_the_zoom_times_the_density();
     return oa::test::check_exit_status();
 }

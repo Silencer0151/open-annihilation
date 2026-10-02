@@ -395,7 +395,8 @@ if(BUILD_TESTING)
   set_tests_properties(demo-installer-data PROPERTIES TIMEOUT 300)
   oa_demo_installer_tests(demo-installer-data)
   # The renderer records by table: the text of every key and value, values
-  # that cannot be read, strikes that become records and what clears them.
+  # that cannot be read, strikes that become records and what clears them,
+  # and the native-density key a run writes or erases as it ends.
   add_executable(oa-app-renderer-records-test src/app/renderer_records_test.cpp)
   target_link_libraries(oa-app-renderer-records-test PRIVATE oa-app-renderer-records oa-test-support
     oa-options)
@@ -445,10 +446,11 @@ if(BUILD_TESTING)
   # How a frame draws the battlefield: without a draw scale, and at the
   # zoom, the scene is the battlefield; at another scale it covers the
   # battlefield's map pixels with a margin, in even sizes, and holds every
-  # pixel the nearest resample reads over the zoom range.
+  # pixel the nearest resample reads over the zoom range; on a window at
+  # native density the card draws it at the zoom times the density.
   add_executable(oa-app-world-scaling-test src/app/world_scaling_test.cpp src/app/world_scaling.cpp)
   target_link_libraries(oa-app-world-scaling-test PRIVATE oa-app-headers oa-present-world-renderer
-    oa-test-support oa-options)
+    oa-app-render-policy oa-test-support oa-options)
   add_test(NAME app-world-scaling COMMAND oa-app-world-scaling-test)
   # The battlefield's thin lines drawn band by band: lines of the frame and
   # selection lines of the model bridge, 2 pixels thick as a reduced scene
@@ -482,7 +484,8 @@ if(BUILD_TESTING)
   # driver walk and its framebuffer hint, strikes and records, their values
   # written and read back, the sentinel and the trial through a run, present
   # stalls, the starting rung and the step-down fed synthetic frames, the
-  # chrome's filter, the prescale budget and the tile grids; and acting on
+  # window's density, the chrome's filter at the display's scale, the
+  # prescale budget and the tile grids; and acting on
   # the tier as the game does: a player's run through the setting, a shared
   # game and a failed function test, beside the runs that stay standard.
   add_executable(oa-app-render-policy-test src/app/render_policy_test.cpp)
@@ -498,8 +501,10 @@ if(BUILD_TESTING)
     target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool SDL3::SDL3
       oa-options)
     add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
-    # Alt+Enter: the key, the mode it asks for while the window is still
-    # switching, and a window of SDL's dummy video driver switched and back;
+    # The window's flags, at native density among them, and the edge
+    # scroll's depth there; Alt+Enter: the key, the mode it asks for while
+    # the window is still switching, and a window of SDL's dummy video
+    # driver switched and back;
     # the pointer held on the window in full screen with the focus and let go
     # in a window or without the focus; a window that leaves full screen
     # brought back onto its display.
@@ -689,6 +694,23 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_render_tiers_check_dir}/render-tiers.conf")
       set_tests_properties(native-render-tiers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_render_tiers_check_dir}" SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same check with --native-density: the window opens at the
+      # display's own density, which on the dummy video driver is 1, and the
+      # match is laid out in window points, stretched over the display by
+      # logical presentation, read back at the display's size, at zoom 1 the
+      # processor's composition enlarged by nearest replication, and picking
+      # the unit drawn under the pointer. On a display above density 1 the
+      # same case runs by hand, without SDL_VIDEO_DRIVER. Skips under 2 GiB.
+      set(oa_render_density_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-density")
+      file(MAKE_DIRECTORY "${oa_render_density_check_dir}")
+      add_test(NAME native-render-tiers-density COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-render-tiers --hardware-acceleration --force-capable
+        --native-density
+        --preferences-file "${oa_render_density_check_dir}/render-density.conf")
+      set_tests_properties(native-render-tiers-density PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_render_density_check_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # LOADGAME.GUI from Single Player and, through the SDL presenter, as the
       # save and load dialogs over a paused skirmish: each placed as its loader

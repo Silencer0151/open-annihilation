@@ -149,7 +149,8 @@ struct HostDisplay {
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
-    /// (start_settings, starting_screen_size), and its renderer
+    /// (start_settings, starting_screen_size), at the display's own pixel
+    /// density only where decide_window_density allows it, and its renderer
     /// (RendererHost::create), which it describes and logs with the tier its
     /// first frame is drawn in, from the flags and the Hardware acceleration
     /// setting read before the window opens (RendererHost::decide_start_tier).
@@ -178,6 +179,20 @@ struct HostDisplay {
         const auto start = start_settings(options, desktop_size());
         const auto screen = starting_screen_size(options, start);
         const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
+        // The window's pixel density is fixed once it opens: the display's
+        // own only where the rule allows it (decide_window_density).
+        DensityRequest density;
+        density.flag = options.hardware_acceleration;
+        density.asked = options.native_density;
+        density.setting_on = start.hardware_acceleration;
+        density.unattended = options.unattended;
+        density.capture = !options.capture_video.empty();
+        // The renderer records are not read before the window opens yet, so
+        // no native-density record and no remembered rung reach the rule,
+        // and only --native-density opens the window at native density.
+        // Once they are, the record's driver
+        // (renderer_state::native_density_driver) and the rung remembered
+        // for it go here.
         window = SDL_CreateWindow(
             "Open Annihilation",
             options.window_resolution ? options.match_width
@@ -186,7 +201,9 @@ struct HostDisplay {
             options.window_resolution ? options.match_height
             : sized                   ? screen.height
                                       : kDefaultWindowHeight,
-            game_window_flags(options.start_full_screen && !sized)
+            game_window_flags(
+                options.start_full_screen && !sized, decide_window_density(density).native
+            )
         );
         if (window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());

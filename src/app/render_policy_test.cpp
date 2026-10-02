@@ -14,7 +14,10 @@
 // stalls; device resets; the layers' texture formats; the starting budget,
 // the same at any memory, and the starting rung of every kind of machine,
 // with the blend only above 4 GiB; the remembered rung and the step-down
-// fed synthetic frames; the chrome's filter; the prescale budget; the
+// fed synthetic frames; the window's density over every input, never native
+// under 2 GiB and, as the game fills it today, only for --native-density;
+// the chrome's filter, at the display's scale on a window at native
+// density; the prescale budget; the
 // tiles of textures beyond the renderer's limit; and acting on the tier as
 // the game does: the windowless video drivers, the flags, what the host
 // does for each decision, what Off then On forgets, one frame's step with
@@ -1924,6 +1927,275 @@ void test_chrome_filter() {
     OA_CHECK(!function_test_may_run(floor));
 }
 
+// On a window at native density every scale is the one at the display's
+// pixels, the layout's scale times the density, and the whole-number test
+// is made on that product.
+void test_chrome_filter_at_the_display() {
+    LadderState state;
+    state.filtered_chrome = true;
+    state.card = CardFilter::pixelart;
+
+    struct Case {
+        double layout_scale;
+        double density;
+        ScaleFilter expected;
+    };
+
+    const Case cases[] = {
+        // A display of 1440x900 points: the chrome's 1.875 is 3.75 at density 2.
+        {1.875, 2.0, ScaleFilter::pixelart},
+        {1.875, 1.0, ScaleFilter::pixelart},
+        // Not whole in layout pixels, whole at the display.
+        {1.5, 2.0, ScaleFilter::nearest},
+        {1.6, 1.25, ScaleFilter::nearest},
+        {1.25, 2.0, ScaleFilter::pixelart},
+        // Whole in layout pixels, not at the display.
+        {1.0, 1.5, ScaleFilter::pixelart},
+        {2.0, 1.25, ScaleFilter::pixelart},
+        {2.0, 1.5, ScaleFilter::nearest},
+        // The 1:1 layers are drawn at the density itself.
+        {1.0, 1.0, ScaleFilter::nearest},
+        {1.0, 2.0, ScaleFilter::nearest},
+        {1.0, 3.0, ScaleFilter::nearest},
+        {1.0, 1.75, ScaleFilter::pixelart},
+    };
+    for (const Case& test : cases)
+        OA_CHECK(chrome_filter(state, test.layout_scale * test.density) == test.expected);
+    // The NEAREST-chrome rung keeps NEAREST at any density.
+    state.filtered_chrome = false;
+    OA_CHECK(chrome_filter(state, 1.875 * 2.0) == ScaleFilter::nearest);
+    OA_CHECK(chrome_filter(state, 1.0 * 1.5) == ScaleFilter::nearest);
+}
+
+// ---------------------------------------------------------------------------
+// Native pixel density
+
+/// A start that the rule opens at native density, every condition holding.
+DensityInputs native_start() {
+    DensityInputs in;
+    in.memory = 16 * gibibyte;
+    in.setting_on = true;
+    in.class_measured = true;
+    in.budget = SceneBudget::reduced;
+    in.record = true;
+    return in;
+}
+
+/// A rung the step-down remembered: the reduced budget, with magnify and
+/// the filtered chrome on or off, or the standard tier.
+LadderState remembered_rung(bool magnify, bool filtered_chrome, bool standard) {
+    LadderState rung;
+    rung.budget = SceneBudget::reduced;
+    rung.magnify = magnify;
+    rung.filtered_chrome = filtered_chrome;
+    rung.card = CardFilter::pixelart;
+    rung.standard = standard;
+    return rung;
+}
+
+void test_native_density_by_table() {
+    struct Case {
+        const char* name;
+        void (*change)(DensityInputs&);
+        bool native;
+        DensityReason reason;
+    };
+
+    const Case cases[] = {
+        {"every condition", [](DensityInputs&) {}, true, DensityReason::native},
+        {"--hardware-acceleration with the setting Off",
+         [](DensityInputs& in) {
+             in.setting_on = false;
+             in.flag = AccelerationFlag::on;
+         },
+         true,
+         DensityReason::native},
+        {"a remembered rung above magnify off",
+         [](DensityInputs& in) { in.remembered = remembered_rung(true, true, false); },
+         true,
+         DensityReason::native},
+        {"one byte under the 2 GiB threshold",
+         [](DensityInputs& in) { in.memory = 1792 * mebibyte - 1; },
+         false,
+         DensityReason::memory},
+        {"at the 2 GiB threshold",
+         [](DensityInputs& in) { in.memory = 1792 * mebibyte; },
+         true,
+         DensityReason::native},
+        {"memory not reported",
+         [](DensityInputs& in) { in.memory = 0; },
+         false,
+         DensityReason::memory},
+        {"--native-density under 2 GiB",
+         [](DensityInputs& in) {
+             in.asked = true;
+             in.memory = 1 * gibibyte;
+         },
+         false,
+         DensityReason::memory},
+        {"--no-hardware-acceleration",
+         [](DensityInputs& in) { in.flag = AccelerationFlag::off; },
+         false,
+         DensityReason::flag_off},
+        {"--native-density with --no-hardware-acceleration",
+         [](DensityInputs& in) {
+             in.asked = true;
+             in.flag = AccelerationFlag::off;
+         },
+         false,
+         DensityReason::flag_off},
+        {"--native-density on the dummy driver under SDL_RENDER_DRIVER, with nothing recorded",
+         [](DensityInputs& in) {
+             in = DensityInputs{};
+             in.memory = 2 * gibibyte;
+             in.asked = true;
+             in.flag = AccelerationFlag::on;
+             in.render_driver_named = true;
+             in.virtual_video_driver = true;
+             in.unattended = true;
+         },
+         true,
+         DensityReason::asked},
+        {"SDL_RENDER_DRIVER",
+         [](DensityInputs& in) { in.render_driver_named = true; },
+         false,
+         DensityReason::environment},
+        {"SDL_RENDER_DRIVER with --hardware-acceleration",
+         [](DensityInputs& in) {
+             in.render_driver_named = true;
+             in.flag = AccelerationFlag::on;
+         },
+         false,
+         DensityReason::environment},
+        {"the dummy video driver",
+         [](DensityInputs& in) { in.virtual_video_driver = true; },
+         false,
+         DensityReason::environment},
+        {"an unattended run",
+         [](DensityInputs& in) { in.unattended = true; },
+         false,
+         DensityReason::unattended},
+        {"a video capture",
+         [](DensityInputs& in) { in.capture = true; },
+         false,
+         DensityReason::capture},
+        {"the setting Off",
+         [](DensityInputs& in) { in.setting_on = false; },
+         false,
+         DensityReason::setting_off},
+        {"a class not measured",
+         [](DensityInputs& in) { in.class_measured = false; },
+         false,
+         DensityReason::class_unmeasured},
+        {"budget none",
+         [](DensityInputs& in) { in.budget = SceneBudget::none; },
+         false,
+         DensityReason::budget_none},
+        {"budget full",
+         [](DensityInputs& in) { in.budget = SceneBudget::full; },
+         true,
+         DensityReason::native},
+        {"a remembered magnify-off rung",
+         [](DensityInputs& in) { in.remembered = remembered_rung(false, true, false); },
+         false,
+         DensityReason::remembered_rung},
+        {"a remembered NEAREST-chrome rung",
+         [](DensityInputs& in) { in.remembered = remembered_rung(false, false, false); },
+         false,
+         DensityReason::remembered_rung},
+        {"a remembered standard tier",
+         [](DensityInputs& in) { in.remembered = remembered_rung(true, true, true); },
+         false,
+         DensityReason::remembered_rung},
+        {"no record, as at a first start",
+         [](DensityInputs& in) { in.record = false; },
+         false,
+         DensityReason::no_record},
+    };
+    for (const Case& test : cases) {
+        DensityInputs in = native_start();
+        test.change(in);
+        const DensityDecision decision = decide_native_density(in);
+        if (decision.native != test.native || decision.reason != test.reason) {
+            std::fprintf(stderr, "native density case: %s\n", test.name);
+            OA_CHECK(decision.native == test.native);
+            OA_CHECK(decision.reason == test.reason);
+        }
+    }
+}
+
+// Tells whether the window opens at native density by the rule, written out again.
+bool native_by_the_rules(const DensityInputs& in) {
+    if (in.memory < 1792 * mebibyte || in.flag == AccelerationFlag::off)
+        return false;
+    if (in.asked)
+        return true;
+    return !in.render_driver_named && !in.virtual_video_driver && !in.unattended && !in.capture &&
+           (in.setting_on || in.flag == AccelerationFlag::on) && in.class_measured &&
+           in.budget != SceneBudget::none &&
+           (!in.remembered || (in.remembered->magnify && !in.remembered->standard)) && in.record;
+}
+
+void test_native_density_every_combination() {
+    const AccelerationFlag flags[] = {
+        AccelerationFlag::none, AccelerationFlag::on, AccelerationFlag::off
+    };
+    const SceneBudget budgets[] = {SceneBudget::none, SceneBudget::reduced, SceneBudget::full};
+    const uint64_t memories[] = {0, 1792 * mebibyte - 1, 1792 * mebibyte, 16 * gibibyte};
+    LadderState above;
+    above.magnify = true;
+    LadderState magnify_off;
+    const std::optional<LadderState> remembered[] = {std::nullopt, above, magnify_off};
+    uint32_t combinations = 0;
+    uint32_t mismatches = 0;
+    uint32_t native = 0;
+    uint32_t native_under_2_gib = 0;
+    uint32_t native_by_the_shipped_rule = 0;
+    for (uint32_t bits = 0; bits < (1u << 8); ++bits)
+        for (const AccelerationFlag flag : flags)
+            for (const SceneBudget budget : budgets)
+                for (const uint64_t memory : memories)
+                    for (const auto& rung : remembered) {
+                        DensityInputs in;
+                        in.asked = (bits & 1u) != 0;
+                        in.setting_on = (bits & 2u) != 0;
+                        in.render_driver_named = (bits & 4u) != 0;
+                        in.virtual_video_driver = (bits & 8u) != 0;
+                        in.unattended = (bits & 16u) != 0;
+                        in.capture = (bits & 32u) != 0;
+                        in.class_measured = (bits & 64u) != 0;
+                        in.record = (bits & 128u) != 0;
+                        in.flag = flag;
+                        in.budget = budget;
+                        in.memory = memory;
+                        in.remembered = rung;
+                        ++combinations;
+                        const DensityDecision decision = decide_native_density(in);
+                        if (decision.native != native_by_the_rules(in))
+                            ++mismatches;
+                        if (decision.native != (decision.reason == DensityReason::native ||
+                                                decision.reason == DensityReason::asked))
+                            ++mismatches;
+                        if (decision.native) {
+                            ++native;
+                            if (memory < 1792 * mebibyte)
+                                ++native_under_2_gib;
+                        }
+                        // As the game fills it today, the class is never
+                        // measured: only --native-density opens a window at
+                        // native density.
+                        in.class_measured = native_density_measured;
+                        if (decide_native_density(in).native && !in.asked)
+                            ++native_by_the_shipped_rule;
+                    }
+    OA_CHECK(combinations == (1u << 8) * 3 * 3 * 4 * 3);
+    OA_CHECK(mismatches == 0);
+    OA_CHECK(native > 0);
+    OA_CHECK(native_under_2_gib == 0);
+    OA_CHECK(native_by_the_shipped_rule == 0);
+    OA_CHECK(!native_density_measured);
+}
+
 // ---------------------------------------------------------------------------
 // Tiled textures
 
@@ -2466,6 +2738,9 @@ int main() {
     test_step_down_costs();
     test_prescale();
     test_chrome_filter();
+    test_chrome_filter_at_the_display();
+    test_native_density_by_table();
+    test_native_density_every_combination();
     test_tiles_by_table();
     test_tiles_cover_every_texel();
     test_windowless_and_flag();

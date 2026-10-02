@@ -6,9 +6,10 @@
 // facts. Which renderer to create, and in what order to try SDL's drivers;
 // whether a renderer can be accelerated; whether a frame is drawn in the
 // standard tier (today's renderer) or the accelerated one; where a machine
-// starts on the step-down ladder and when slow frames move it down; how the
-// chrome is filtered; and how a texture larger than the renderer allows is
-// split into tiles. What a crash or a failure left behind counts for at the
+// starts on the step-down ladder and when slow frames move it down; whether
+// the window opens at the display's own pixel density; how the chrome is
+// filtered; and how a texture larger than the renderer allows is split into
+// tiles. What a crash or a failure left behind counts for at the
 // next start, and the sentinel and the trial through a run, are the
 // renderer records' (renderer_records.hpp). Nothing here calls SDL, reads a
 // file or a clock, or names a graphics interface: the host hands it what the
@@ -896,6 +897,95 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
 /// @return the rung one step down
 [[nodiscard]] LadderState
 step_down(const LadderState& state, FrameKind pool, bool blend_favoured) noexcept;
+
+// ---------------------------------------------------------------------------
+// Native pixel density
+
+/// No class of machine, an operating system, a processor and a render
+/// driver together, has yet been measured at native density against the
+/// standard tier on the same machine and found to cost no more frame time,
+/// so the rule (decide_native_density) opens no window at native density
+/// by itself; --native-density still asks for it for a check.
+inline constexpr bool native_density_measured = false;
+
+/// Everything decide_native_density reads, known before the window opens.
+struct DensityInputs {
+    /// --native-density, which only the render tiers check takes: native
+    /// density whatever the rest of the rule says, but for the machine's
+    /// memory and --no-hardware-acceleration.
+    bool asked{};
+    /// The machine's physical memory in bytes, as the system reports it; 0
+    /// when it does not say.
+    uint64_t memory{};
+    AccelerationFlag flag{AccelerationFlag::none};
+    bool setting_on{};           ///< the Hardware acceleration setting read before the window opens
+    bool render_driver_named{};  ///< the SDL_RENDER_DRIVER environment variable is set
+    bool virtual_video_driver{}; ///< the video driver is dummy or offscreen
+    bool unattended{};           ///< a check, a benchmark or another scripted run
+    bool capture{};              ///< the run captures video, sized from the window's pixels
+    /// The machine's class, with the render driver the native-density
+    /// record names, has been measured at native density and costs no more
+    /// frame time (native_density_measured).
+    bool class_measured{};
+    /// The scene budget the machine starts at with the record's driver
+    /// (start_budget).
+    SceneBudget budget{SceneBudget::none};
+    /// The step-down rung remembered for the record's driver, which the run
+    /// would start from (resume_rung); none when none is remembered.
+    std::optional<LadderState> remembered{};
+    /// The native-density record is there: an earlier run on this profile
+    /// passed the function test on a hardware driver, ended cleanly above
+    /// the magnify-off rung and dropped nothing, under the running engine's
+    /// version.
+    bool record{};
+};
+
+/// Why decide_native_density chose the window's density. The order of the
+/// enumerators is the order it tests the conditions in.
+enum class DensityReason : uint8_t {
+    native, ///< every condition holds
+    /// Physical memory under smallest_accelerated_memory, or not reported,
+    /// whatever the flags.
+    memory,
+    flag_off, ///< --no-hardware-acceleration
+    asked,    ///< --native-density: native density
+    /// SDL_RENDER_DRIVER or a dummy or offscreen video driver.
+    environment,
+    unattended,       ///< an unattended run
+    capture,          ///< a video capture
+    setting_off,      ///< the setting is Off and --hardware-acceleration was not given
+    class_unmeasured, ///< the machine's class has not been measured at native density
+    budget_none,      ///< the machine starts at budget none
+    remembered_rung,  ///< the remembered rung is at or below the magnify-off rung
+    no_record,        ///< no earlier run left the native-density record
+};
+
+/// The window's density and the reason for it.
+struct DensityDecision {
+    /// The window opens at the display's own pixel density; otherwise at
+    /// the window system's.
+    bool native{};
+    DensityReason reason{DensityReason::no_record};
+};
+
+/// Decides whether the game's window opens at the display's own pixel
+/// density, which is fixed for the run once it opens.
+///
+/// A window opens at native density only with every condition: physical
+/// memory of at least smallest_accelerated_memory, which no flag lifts; no
+/// --no-hardware-acceleration; neither SDL_RENDER_DRIVER nor a dummy or
+/// offscreen video driver; a run that is not unattended and captures no
+/// video; the setting On or --hardware-acceleration; a class measured at
+/// native density; a start above budget none, from a remembered rung, if
+/// any, above the magnify-off rung; and the native-density record.
+/// --native-density opens it at native density whatever the conditions
+/// after --no-hardware-acceleration say. Every other window opens at the
+/// window system's density, as a first start does.
+///
+/// @param inputs what is known before the window opens
+/// @return the density, and the first reason in DensityReason's order that
+///     decided it; DensityReason::native or asked exactly when it is native
+[[nodiscard]] DensityDecision decide_native_density(const DensityInputs& inputs) noexcept;
 
 // ---------------------------------------------------------------------------
 // Chrome filtering and the prescale budget

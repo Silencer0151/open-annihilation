@@ -109,6 +109,12 @@ WorldScaling accelerated_world_scaling(
     return scaling;
 }
 
+double world_display_scale(const WorldScaling& scaling, float zoom, double density) noexcept {
+    if (scaling.method != SceneMethod::magnify || !(scaling.draw_scale > 0.0F))
+        return density;
+    return static_cast<double>(zoom) * density / static_cast<double>(scaling.draw_scale);
+}
+
 SceneExtent
 largest_magnified_scene(int32_t battlefield_width, int32_t battlefield_height) noexcept {
     const auto extent = [](int32_t battlefield) {

@@ -390,6 +390,8 @@ namespace {
             acceleration_off = true;
         } else if (argument == "--force-capable")
             result.force_capable = true;
+        else if (argument == "--native-density")
+            result.native_density = true;
         else if (argument == "--frame-rate")
             result.frame_rate = parse_frame_rate(
                 value(argument),
@@ -542,7 +544,7 @@ namespace {
                    "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
-                   "[--check-render-tiers [--force-capable]] "
+                   "[--check-render-tiers [--force-capable] [--native-density]] "
                    "[--check-match-orders] [--check-factory-orders] "
                    "[--check-download-builds] [--check-side-column] [--check-kill-board] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
@@ -675,6 +677,8 @@ namespace {
             "--force-capable is accepted only with --check-render-tiers and "
             "--check-engine-settings"
         );
+    if (result.native_density && !result.check_render_tiers)
+        throw std::runtime_error("--native-density is accepted only with --check-render-tiers");
     if (result.render_fault && !result.check_renderer_ladder)
         throw std::runtime_error("--render-fault needs --check-renderer-ladder");
     result.fixed_clock =

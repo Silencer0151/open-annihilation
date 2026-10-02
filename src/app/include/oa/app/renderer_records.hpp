@@ -538,6 +538,79 @@ Change mark_told(Records& records, std::string_view driver);
 Change clear_failures(Records& records) noexcept;
 
 // ---------------------------------------------------------------------------
+// Native density
+
+/// Returns the driver the native-density key lets a window open at native
+/// density under, for render_policy::DensityInputs::record.
+///
+/// @param records the records
+/// @param engine_version the running engine's version
+/// @return the driver the key names when it was written under
+///     engine_version; empty when there is no such key
+[[nodiscard]] std::optional<std::string_view>
+native_density_driver(const Records& records, std::string_view engine_version) noexcept;
+
+/// What a run that ends cleanly tells of native density.
+struct DensityRunEnd {
+    /// The window system honours the high-density window flag; where it
+    /// does not, the key is never written.
+    bool flag_honoured{};
+    /// The machine's class with the run's driver has been measured at native
+    /// density (render_policy::native_density_measured).
+    bool class_measured{};
+    /// The machine started above budget none (render_policy::start_budget).
+    bool above_budget_none{};
+    /// The run's function test passed on its driver.
+    bool function_test_passed{};
+    /// The run drew frames in the accelerated tier.
+    bool accelerated{};
+    /// The run dropped acceleration, for any reason: a driver's failure, the
+    /// memory guard, a stall or the step-down's last rung.
+    bool dropped{};
+    /// The run ended at or below the step-down's magnify-off rung.
+    bool ended_at_or_below_magnify_off{};
+};
+
+/// Writes or erases the native-density key as a run ends cleanly, so that a
+/// machine that cannot keep the accelerated tier above the magnify-off rung
+/// opens at the window system's density from the next start.
+///
+/// A run that dropped acceleration, or that drew in the accelerated tier and
+/// ended at or below the magnify-off rung, erases the key. A run that drew
+/// in the accelerated tier, ended above that rung, and passed the function
+/// test on a hardware driver, never on software, writes the key with its
+/// driver and the running engine's version, but only where the window
+/// system honours the flag, the class has been measured and the machine
+/// started above budget none. Any other run leaves the key as it is, a run
+/// in the standard tier among them, since the key is a fact of the machine
+/// and not of the setting. Under 2 GiB, where the accelerated tier never
+/// runs, the key is neither written nor erased.
+///
+/// @param[in,out] records the records
+/// @param driver the run's driver
+/// @param engine_version the running engine's version
+/// @param run what the run did
+/// @param rules whether the machine is under 2 GiB
+/// @return what changed
+Change note_density_run_end(
+    Records& records,
+    std::string_view driver,
+    std::string_view engine_version,
+    const DensityRunEnd& run,
+    const RecordRules& rules
+);
+
+/// Erases the native-density key, as a start whose probe rejects its
+/// renderer, or whose function test fails, does; recording
+/// accelerated-unusable against the key's driver erases it too. Under
+/// 2 GiB, where no function test runs, the key stays.
+///
+/// @param[in,out] records the records
+/// @param rules whether the machine is under 2 GiB
+/// @return what changed
+Change forget_native_density(Records& records, const RecordRules& rules) noexcept;
+
+// ---------------------------------------------------------------------------
 // The sentinel and the trial through a run
 
 /// The frames a start presents, at the menus, loading screens and matches

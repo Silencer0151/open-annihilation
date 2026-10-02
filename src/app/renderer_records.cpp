@@ -908,6 +908,52 @@ Change clear_failures(Records& records) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Native density
+
+std::optional<std::string_view>
+native_density_driver(const Records& records, std::string_view engine_version) noexcept {
+    if (!records.native_density || records.native_density->version != engine_version)
+        return std::nullopt;
+    return std::string_view(records.native_density->driver);
+}
+
+Change note_density_run_end(
+    Records& records,
+    std::string_view driver,
+    std::string_view engine_version,
+    const DensityRunEnd& run,
+    const RecordRules& rules
+) {
+    if (rules.below_two_gib)
+        return {};
+    if (run.dropped || (run.accelerated && run.ended_at_or_below_magnify_off))
+        return forget_native_density(records, rules);
+    // A key that would not be read back as written is not written.
+    const bool readable = valid_driver_name(driver) && !engine_version.empty() &&
+                          engine_version.size() <= max_version_bytes &&
+                          engine_version.find(' ') == std::string_view::npos;
+    if (!run.accelerated || !run.function_test_passed || driver == software_driver ||
+        !run.flag_honoured || !run.class_measured || !run.above_budget_none || !readable)
+        return {};
+    if (records.native_density && records.native_density->driver == driver &&
+        records.native_density->version == engine_version)
+        return {};
+    records.native_density = NativeDensity{std::string(driver), std::string(engine_version)};
+    Change change;
+    change.changed = true;
+    return change;
+}
+
+Change forget_native_density(Records& records, const RecordRules& rules) noexcept {
+    Change change;
+    if (rules.below_two_gib || !records.native_density)
+        return change;
+    records.native_density.reset();
+    change.changed = true;
+    return change;
+}
+
+// ---------------------------------------------------------------------------
 // The sentinel and the trial through a run
 
 bool start_stage_passed(uint32_t frames, uint64_t elapsed_ns) noexcept {

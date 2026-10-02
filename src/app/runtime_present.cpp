@@ -56,9 +56,18 @@ void Runtime::apply_output_mode() {
     if (sdl_.renderer == nullptr)
         return;
     if (screen_ == Screen::match) {
+        // On a window at native density a layout pixel is a window point,
+        // which logical presentation stretches over the display's pixels,
+        // so the processor lays out and draws what it does on any other
+        // window of that size; elsewhere a layout pixel is a window pixel.
+        const bool native_density = native_density_window();
         int width = kCanvasWidth, height = kCanvasHeight;
-        if (sdl_.window != nullptr)
-            SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+        if (sdl_.window != nullptr) {
+            if (native_density)
+                SDL_GetWindowSize(sdl_.window, &width, &height);
+            else
+                SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+        }
         const auto laid_out = match_layout_;
         match_layout_ = oa::ui::display_layout::make_match_layout(width, height);
         // On a screen of another size the pointer's place is known again
@@ -70,7 +79,8 @@ void Runtime::apply_output_mode() {
                     sdl_.renderer,
                     match_layout_.width,
                     match_layout_.height,
-                    SDL_LOGICAL_PRESENTATION_DISABLED
+                    native_density ? SDL_LOGICAL_PRESENTATION_STRETCH
+                                   : SDL_LOGICAL_PRESENTATION_DISABLED
                 ))
                 throw_present_error("SDL logical presentation");
             // A match never draws the front end's texture: beyond the
@@ -198,11 +208,13 @@ void Runtime::initialize_sdl() {
             throw std::runtime_error("SDL last-window quit hint was rejected");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
+        // A window the runtime makes itself has no renderer host, and opens
+        // at the window system's density.
         sdl_.window = SDL_CreateWindow(
             "Open Annihilation",
             kDefaultWindowWidth,
             kDefaultWindowHeight,
-            game_window_flags(options_.start_full_screen)
+            game_window_flags(options_.start_full_screen, false)
         );
         if (sdl_.window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
@@ -590,6 +602,10 @@ void Runtime::finish_match_layers(
     std::chrono::steady_clock::time_point upload_start,
     std::chrono::steady_clock::time_point present_start
 ) {
+    // The layers laid out 1:1 reach the display's pixels on a window at
+    // native density: NEAREST, but in the accelerated tier at a density
+    // that is not a whole number.
+    const SDL_ScaleMode one_to_one = one_to_one_scale_mode();
     // A placed dialog's part over the side column goes over the HUD layer.
     if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
         ensure_streaming_texture(
@@ -607,13 +623,12 @@ void Runtime::finish_match_layers(
             static_cast<float>(match_dialog_side_.width),
             static_cast<float>(match_dialog_side_.height)
         };
-        if (!SDL_RenderTexture(sdl_.renderer, match_dialog_side_tex_, nullptr, &side))
-            throw_present_error("SDL_RenderTexture");
+        draw_one_to_one(sdl_.renderer, match_dialog_side_tex_, &side, one_to_one);
     }
     present_engine_settings_layer();
     if (dialogs)
-        match_dialog_tex_.draw(sdl_.renderer, nullptr, nullptr);
-    present_software_cursor();
+        draw_one_to_one(sdl_.renderer, match_dialog_tex_, nullptr, nullptr, one_to_one);
+    present_software_cursor(true);
     capture_render_target();
     if (render_fault_due(RenderFaultPoint::present))
         throw PresentError("injected present error");
@@ -656,7 +671,7 @@ void Runtime::capture_render_target() {
     SDL_DestroySurface(rgb);
 }
 
-void Runtime::present_software_cursor() {
+void Runtime::present_software_cursor(bool match_layers) {
     if (!cursors_loaded_ || cursor_image_ == nullptr)
         return;
     const auto rendered = oa::formats::gaf::render_normal(*cursor_image_);
@@ -721,9 +736,38 @@ void Runtime::present_software_cursor() {
         static_cast<float>(frame.width),
         static_cast<float>(frame.height)
     };
+    // On a window at native density the cursor over the match goes to the
+    // display's pixels with the match's layers; a mode the texture refuses
+    // leaves it as it was.
+    if (native_density_window())
+        std::ignore = SDL_SetTextureScaleMode(
+            match_cursor_tex_, match_layers ? one_to_one_scale_mode() : SDL_SCALEMODE_LINEAR
+        );
     // A cursor the renderer refuses is missing from this frame alone: the
     // next frame draws it again.
     std::ignore = SDL_RenderTexture(sdl_.renderer, match_cursor_tex_, nullptr, &dest);
+}
+
+bool Runtime::native_density_window() const noexcept {
+    return sdl_.window != nullptr && at_native_density(SDL_GetWindowFlags(sdl_.window));
+}
+
+double Runtime::match_display_density() const {
+    if (!native_density_window() || sdl_.renderer == nullptr || match_layout_.width <= 0)
+        return 1.0;
+    int output_width = 0;
+    int output_height = 0;
+    if (!SDL_GetRenderOutputSize(sdl_.renderer, &output_width, &output_height) || output_width <= 0)
+        return 1.0;
+    return static_cast<double>(output_width) / static_cast<double>(match_layout_.width);
+}
+
+SDL_ScaleMode Runtime::one_to_one_scale_mode() const {
+    if (!accelerated_presentation() || !native_density_window())
+        return SDL_SCALEMODE_NEAREST;
+    return direct_scale_mode(
+        render_policy::chrome_filter(accelerated_.rung, match_display_density())
+    );
 }
 
 void Runtime::render() {

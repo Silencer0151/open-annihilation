@@ -2374,7 +2374,8 @@ class Runtime final : public menu::Host,
     void compose_engine_settings_layer(renderer::Surface& frame);
 
     /// Draws the match's settings layer over the presented layers, under the
-    /// message boxes and the cursor.
+    /// message boxes and the cursor, as the other layers laid out 1:1 are
+    /// drawn (one_to_one_scale_mode).
     void present_engine_settings_layer();
 
     /// Destroys the match's settings layer's textures.
@@ -4429,6 +4430,10 @@ class Runtime final : public menu::Host,
         PrescaleTarget screen_prescale; ///< the front end's and loading screen's, freed in a match
         int layout_width{};             ///< the match layout the match textures were made for
         int layout_height{};            ///< its height
+        /// The display pixels per layout pixel the match textures were made
+        /// for (match_display_density), which a window moved to another
+        /// display changes.
+        double layout_density{1.0};
         /// Bumped at each paint of the HUD layer, which every match frame
         /// paints, so that the HUD's prescale target is drawn again on every
         /// frame the loop presents and on none presented without a paint.
@@ -4455,6 +4460,31 @@ class Runtime final : public menu::Host,
     ///
     /// @return true when the accelerated presentation draws the frame
     [[nodiscard]] bool accelerated_presentation() const noexcept;
+
+    /// Tells whether the game's window opened at native density
+    /// (at_native_density), where a pixel of the match's layout is a window
+    /// point that the renderer stretches over the display's pixels.
+    ///
+    /// @return true for such a window; false without a window
+    [[nodiscard]] bool native_density_window() const noexcept;
+
+    /// Returns the display pixels one pixel of the match's layout covers
+    /// across: on a window at native density the renderer's output width
+    /// over the layout's, which logical presentation stretches it to, and
+    /// on any other window 1, where a layout pixel is a window pixel.
+    ///
+    /// @return display pixels per layout pixel
+    [[nodiscard]] double match_display_density() const;
+
+    /// Returns the scale mode a match layer laid out 1:1 in layout pixels
+    /// is drawn with: NEAREST, as the standard tier draws every one; in the
+    /// accelerated tier on a window at native density the chrome's filter
+    /// at the density (render_policy::chrome_filter), so NEAREST at a
+    /// whole-number density and otherwise PIXELART, or plain LINEAR where
+    /// the filter would need a prescale target of its own.
+    ///
+    /// @return the scale mode
+    [[nodiscard]] SDL_ScaleMode one_to_one_scale_mode() const;
 
     /// Drops the accelerated presentation for the rest of the run after a
     /// call only it makes failed: logs the reason once and frees every texture
@@ -4562,8 +4592,15 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error when the world cannot be drawn.
     void ensure_screen_world();
 
-    /// Presents the software cursor over the match layers at the pointer.
-    void present_software_cursor();
+    /// Presents the software cursor at the pointer.
+    ///
+    /// On a window at native density the cursor over the match's layers is
+    /// drawn with them at the display's pixels (one_to_one_scale_mode), and
+    /// over any other frame with SDL's own LINEAR; on any other window its
+    /// texture keeps SDL's own filter.
+    ///
+    /// @param match_layers the cursor goes over the match's layers
+    void present_software_cursor(bool match_layers);
 
     /// Composes the current screen and presents it.
     ///
@@ -5866,7 +5903,14 @@ class Runtime final : public menu::Host,
     /// back no scene, overlay or prescale target is made or destroyed and
     /// none is drawn at zoom 2. Pictures of one moment at zoom 0.5, 1 and 2.5
     /// in both tiers go to the report directory as native-render-tiers-*.png.
-    /// Switched off again, every frame equals the standard tier's. Throws
+    /// Switched off again, every frame equals the standard tier's. With
+    /// --native-density, whose window opened at the display's own density,
+    /// the main menu and the loading screen are checked as above and then
+    /// the density case alone: the match is laid out in window points, the
+    /// read-back has the display's size, at zoom 1 and a whole-number
+    /// density it equals compose_match_frame enlarged by nearest
+    /// replication in the battlefield, and in the HUD too at a whole-number
+    /// chrome scale, and a pointer at a unit's place picks that unit. Throws
     /// std::runtime_error on a failure.
     ///
     /// @return 0 when it passed; 77 when it skipped
