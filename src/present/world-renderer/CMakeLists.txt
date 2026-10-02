@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_library(oa-present-world-renderer src/world_renderer.cpp src/unit_renderer.cpp src/camera.cpp src/radar.cpp src/display_modes.cpp
-  src/overlays.cpp src/fog.cpp src/terrain_view.cpp src/draw_order.cpp)
+  src/overlays.cpp src/fog.cpp src/terrain_view.cpp src/draw_order.cpp src/scene_filter.cpp src/scene_filter_reference.cpp)
 add_library(oa::present::world_renderer ALIAS oa-present-world-renderer)
 target_link_libraries(oa-present-world-renderer PRIVATE oa-base-game-math)
 target_include_directories(oa-present-world-renderer PUBLIC include)
@@ -36,6 +36,12 @@ if(BUILD_TESTING)
   add_executable(oa-world-draw-bands-test tests/world_draw_bands_test.cpp)
   target_link_libraries(oa-world-draw-bands-test PRIVATE oa-present-world-renderer oa-platform-job-pool)
   add_test(NAME world-draw-bands COMMAND oa-world-draw-bands-test)
+  # The area pass against its references, across band splits and pools of
+  # 1 to 8 threads, with a pinned digest; it logs its time at 1080p.
+  add_executable(oa-world-scene-filter-test tests/world_scene_filter_test.cpp)
+  target_link_libraries(oa-world-scene-filter-test PRIVATE oa-present-world-renderer oa-platform-job-pool
+    oa-test-support)
+  add_test(NAME world-scene-filter COMMAND oa-world-scene-filter-test)
   add_executable(oa-world-draw-order-test tests/world_draw_order_test.cpp)
   target_link_libraries(oa-world-draw-order-test PRIVATE oa-present-world-renderer)
   add_test(NAME world-draw-order COMMAND oa-world-draw-order-test)
