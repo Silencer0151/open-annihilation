@@ -15,9 +15,9 @@ namespace oa::ui::services {
 
 // Clock boundary: host millisecond tick count (wrapping at 32 bits) and sleep.
 struct Clock {
-    void* context;
-    uint32_t (*tick_ms)(void* context);
-    void (*sleep_ms)(void* context, uint32_t milliseconds);
+    void* context{};
+    uint32_t (*tick_ms)(void* context){};
+    void (*sleep_ms)(void* context, uint32_t milliseconds){};
 };
 
 /// Returns the clock boundary backed by the platform tick count and sleep.
@@ -27,7 +27,7 @@ struct Clock {
 
 struct EngineClock {
     Clock clock;
-    uint32_t rate; // engine ticks per 1000 ms, kept in the display context
+    uint32_t rate{}; // engine ticks per 1000 ms, kept in the display context
 };
 
 /// Returns the current engine tick.
@@ -45,17 +45,17 @@ using TimerCallback = void (*)(void* argument);
 // One slot of the ten-slot timer table.
 struct TimerSlot {
     TimerCallback callback;
-    void* argument;    // passed to callback
-    int32_t interval;  // engine ticks; reload value, negative when the slot is free
-    int32_t remaining; // engine ticks until callback runs
+    void* argument{};    // passed to callback
+    int32_t interval{};  // engine ticks; reload value, negative when the slot is free
+    int32_t remaining{}; // engine ticks until callback runs
 };
 
 struct TimerTable {
     TimerSlot slots[timer_slot_count];
     // Successful adds since the last reset. It never decreases on removal, so
     // it only bounds which indices timers_remove accepts.
-    int32_t added;
-    uint32_t last_tick; // engine tick of the previous poll
+    int32_t added{};
+    uint32_t last_tick{}; // engine tick of the previous poll
 };
 
 /// Stores a new clock rate and restarts all timers (see timers_reset).
@@ -109,10 +109,10 @@ void timers_reset(TimerTable* timers, const EngineClock* clock) noexcept;
 
 // Frames-per-second counter kept in the display context.
 struct FrameRate {
-    int32_t accumulated_ms; // milliseconds counted toward the current second
-    uint32_t last_tick_ms;  // host millisecond tick count of the previous frame
-    int32_t frames;         // frames counted toward the current second
-    int32_t rate;           // frames counted over the last full second
+    int32_t accumulated_ms{}; // milliseconds counted toward the current second
+    uint32_t last_tick_ms{};  // host millisecond tick count of the previous frame
+    int32_t frames{};         // frames counted toward the current second
+    int32_t rate{};           // frames counted over the last full second
 };
 
 /// Counts one frame.

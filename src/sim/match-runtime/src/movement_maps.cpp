@@ -39,8 +39,10 @@ void Match::build_movement_maps() {
         if (!type.movement_class || *type.movement_class == 0 || !type.runtime_metadata ||
             movement_class_map(*type.movement_class))
             continue;
-        if (count == movement_classes_.size())
-            throw std::length_error("more movement classes than the class table holds");
+        if (count == movement_classes_.size()) {
+            fault_.note("more movement classes than the class table holds");
+            break;
+        }
         const auto& metadata = *type.runtime_metadata;
         auto& klass = movement_classes_[count++];
         klass.match = this;

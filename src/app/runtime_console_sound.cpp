@@ -9,9 +9,9 @@
 
 #include "oa/sim/match_runtime.hpp"
 #include "oa/platform/preferences.hpp"
+#include "match_fault.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -94,16 +94,7 @@ void Runtime::check_console_sound_commands(const std::function<void(const char*)
         if (!ok)
             throw std::runtime_error(std::string("console sound check: ") + what);
     };
-    const auto saved = [&](const char* key) -> int64_t {
-        const auto values = oa::platform::preferences::load(preference_path_);
-        const auto found = values.find(preference_key(init::general_section, key));
-        int64_t value = -1;
-        if (found != values.end())
-            (void)std::from_chars(
-                found->second.data(), found->second.data() + found->second.size(), value
-            );
-        return value;
-    };
+    const auto saved = [&](const char* key) { return saved_general_number(key); };
     const oa::sim::unit_spawn::Slot* commander = nullptr;
     for (const auto& slot : match_->world().slots)
         if (commander == nullptr && slot.unit != nullptr && slot.record.type_index != 0 &&
@@ -203,7 +194,7 @@ void Runtime::check_console_sound_commands(const std::function<void(const char*)
                     return *event.sound_resource;
             ++match_timing_.tick;
             match_->simulation().tick = match_timing_.tick;
-            match_->tick();
+            tick_or_raise(*match_);
         }
         return {};
     };

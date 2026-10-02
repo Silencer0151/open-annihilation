@@ -6,6 +6,7 @@
 // which it accepts alike; and of the ghost's outline over the map's edges and
 // at several zooms.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -325,7 +326,6 @@ void Runtime::check_build_site_pointer(uint16_t builder, uint16_t type) {
 void Runtime::check_build_site_edges(uint16_t type) {
     // Map pixels across a terrain tile and a footprint cell.
     constexpr uint32_t tile_pixels = 32;
-    constexpr int32_t cell_pixels = 16;
     // Map pixels the pointer stands inside an edge of the battlefield.
     constexpr int pointer_inset = 2;
     const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * tile_pixels);
@@ -398,10 +398,10 @@ void Runtime::check_build_site_edges(uint16_t type) {
         const auto scale = static_cast<double>(zoom);
         const auto raise = std::lround(static_cast<double>(site->world[1] >> 16) * 0.5 * scale);
         const auto frame_x = [&](int32_t cell) {
-            return std::llround((cell * cell_pixels - match_camera_x_) * scale);
+            return std::llround((cell * OA_MAP_CELL_PIXELS - match_camera_x_) * scale);
         };
         const auto frame_y = [&](int32_t cell) {
-            return std::llround((cell * cell_pixels - match_camera_z_) * scale) - raise;
+            return std::llround((cell * OA_MAP_CELL_PIXELS - match_camera_z_) * scale) - raise;
         };
         const auto left = frame_x(site->cell_x);
         const auto right = frame_x(site->cell_x + site->footprint_x);
@@ -504,9 +504,9 @@ void Runtime::check_build_site_edges(uint16_t type) {
     // a footprint of 0 counts as 2.
     const auto corner_cell = [&](int16_t size) {
         const auto cells = static_cast<double>(size > 0 ? size : 2);
-        return static_cast<int32_t>(
-            std::floor((pointer_inset - (cells - 1.0) * cell_pixels / 2.0) / cell_pixels)
-        );
+        return static_cast<int32_t>(std::floor(
+            (pointer_inset - (cells - 1.0) * OA_MAP_CELL_PIXELS / 2.0) / OA_MAP_CELL_PIXELS
+        ));
     };
     const auto corner_x = corner_cell(spawn_types_[type].footprint_x);
     const auto corner_z = corner_cell(spawn_types_[type].footprint_z);
@@ -520,12 +520,12 @@ void Runtime::check_build_site_edges(uint16_t type) {
     const auto corner_view = live_viewport(0, 0);
     const auto above_left = project_match_point(
         corner_view,
-        {static_cast<uint32_t>(corner_x * cell_pixels) << 16,
+        {static_cast<uint32_t>(corner_x * OA_MAP_CELL_PIXELS) << 16,
          0,
-         static_cast<uint32_t>(corner_z * cell_pixels) << 16}
+         static_cast<uint32_t>(corner_z * OA_MAP_CELL_PIXELS) << 16}
     );
-    if (above_left.x != corner_view.destination_x + corner_x * cell_pixels ||
-        above_left.y != corner_view.destination_y + corner_z * cell_pixels)
+    if (above_left.x != corner_view.destination_x + corner_x * OA_MAP_CELL_PIXELS ||
+        above_left.y != corner_view.destination_y + corner_z * OA_MAP_CELL_PIXELS)
         failures.push_back(
             "the site at the top left corner is placed at " + std::to_string(above_left.x) + ',' +
             std::to_string(above_left.y) + " on the frame"
@@ -568,7 +568,7 @@ void Runtime::check_build_site_edges(uint16_t type) {
          camera_x += camera_step)
         for (int pointer_x = top_inset;
              !low_top && pointer_x < match_layout_.battlefield_width() - top_inset;
-             pointer_x += cell_pixels) {
+             pointer_x += OA_MAP_CELL_PIXELS) {
             match_camera_x_ = camera_x;
             match_camera_z_ = 0;
             const auto site = build_site_under(

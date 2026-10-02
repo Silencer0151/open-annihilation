@@ -7,6 +7,7 @@
 // active; "Compression" and "Senderror" are read by the packet layer's sender
 // and "Drop" by the stall check.
 #include "oa/app/runtime.hpp"
+#include "network_play.hpp"
 #include "launch_binding.hpp"
 #include "net_state.hpp"
 
@@ -43,8 +44,8 @@ constexpr int kCompressionSteps = 3;
 // Longer than two transport time ticks (1/30 s each).
 constexpr auto kSilence = std::chrono::milliseconds(100);
 
-Runtime* runtime_of(void* context) noexcept {
-    return static_cast<Runtime*>(context);
+NetworkPlay* play_of(void* context) noexcept {
+    return static_cast<NetworkPlay*>(context);
 }
 
 bool logged(const std::vector<std::string>& lines, std::string_view text) {
@@ -82,12 +83,15 @@ const Player* player_with_id(const oa::World& world, uint32_t net_id) {
 
 } // namespace
 
-void Runtime::bind_console_network_hooks(console::ConsoleHost& host) {
-    host.player_info_changed = [](void* context) { runtime_of(context)->net_send_player_status(); };
+void NetworkPlay::bind_console_network_hooks(console::ConsoleHost& host) {
+    // The host's context is the runtime; the commands' is this network play.
+    host.player_info_changed = [](void* context) {
+        NetworkPlay::of(*static_cast<Runtime*>(context)).net_send_player_status();
+    };
     oa::netgame::console::CommandHost& commands = net_->console_commands;
     commands.context = this;
     commands.reset_traffic_stats = [](void* context) {
-        runtime_of(context)->net_reset_traffic_stats();
+        play_of(context)->net_reset_traffic_stats();
     };
     // Page sends while a launch is active and an extension pages
     // (oa::app::netgame::extension_api::Hooks::page); otherwise the console refuses it.
@@ -108,8 +112,10 @@ void Runtime::bind_console_network_hooks(console::ConsoleHost& host) {
 // nothing. "Drop" sets its bit for 0 (or no value) and clears it for
 // anything else, "Page" says what it needs, and the developer command
 // "Senderror" takes 0..100 from a single value, any other value as 0.
-void Runtime::check_console_network_commands(const std::function<void(const char*)>& enter_line) {
-    oa::World& world = match_->state();
+void NetworkPlay::check_console_network_commands(
+    const std::function<void(const char*)>& enter_line
+) {
+    oa::World& world = runtime_.match_->state();
     oa::Game& game = world.game;
     const auto require = [](bool ok, const char* what) {
         if (!ok)
@@ -126,7 +132,7 @@ void Runtime::check_console_network_commands(const std::function<void(const char
     enter_line("+compression");
     require(console::share_flags(*info) == shares, "a share toggle changed the lobby block");
     require(game.compression_off == uncompressed, "+compression changed the send option");
-    const auto lines = match_message_lines();
+    const auto lines = runtime_.match_message_lines();
     require(
         !logged_part(lines, "Toggled Share") && !logged_part(lines, "packet compression"),
         "a network toggle posted a notice"
@@ -147,16 +153,21 @@ void Runtime::check_console_network_commands(const std::function<void(const char
 
     enter_line("+page");
     require(
-        posted(match_message_lines(), "Syntax: page <user> <text>"), "+page posted no syntax line"
+        posted(runtime_.match_message_lines(), "Syntax: page <user> <text>"),
+        "+page posted no syntax line"
     );
     enter_line("+page someone hello there");
     require(
-        posted(match_message_lines(), "Page command requires game launch from the Boneyards."),
+        posted(
+            runtime_.match_message_lines(), "Page command requires game launch from the Boneyards."
+        ),
         "+page did not ask for an active launch"
     );
     enter_line("+p someone hello");
     require(
-        posted(match_message_lines(), "Page command requires game launch from the Boneyards."),
+        posted(
+            runtime_.match_message_lines(), "Page command requires game launch from the Boneyards."
+        ),
         "+p is not the page command"
     );
 
@@ -180,22 +191,25 @@ void Runtime::check_console_network_commands(const std::function<void(const char
 // "Compression" sends every frame stored, "Senderror 100" drops every frame
 // before the transport (still counted as sent) and "Drop 0" keeps the stall
 // check from naming a silent peer.
-void Runtime::check_console_network_session(Runtime& peer, const std::function<void(bool)>& step) {
+void NetworkPlay::check_console_network_session(
+    Runtime& peer, const std::function<void(bool)>& step
+) {
     const auto require = [](bool ok, const std::string& what) {
         if (!ok)
             throw std::runtime_error("console network session check: " + what);
     };
     const nm::NetMatch* match =
         session_net_match() != nullptr ? session_net_match()->net.get() : nullptr;
-    require(match != nullptr && match_ && peer.match_, "no network match");
-    oa::World& world = match_->state();
+    require(match != nullptr && runtime_.match_ && peer.match_, "no network match");
+    oa::World& world = runtime_.match_->state();
     oa::Game& game = world.game;
     const oa::World& peer_world = peer.match_->state();
     require((game.session_flags & nm::kNetFlagLive) != 0, "the game is not live");
     const Player& local = game.players[game.local_player_index];
     const auto local_id = local.player_id;
-    const auto* peer_match =
-        peer.session_net_match() != nullptr ? peer.session_net_match()->net.get() : nullptr;
+    const auto* peer_match = NetworkPlay::of(peer).session_net_match() != nullptr
+                                 ? NetworkPlay::of(peer).session_net_match()->net.get()
+                                 : nullptr;
     require(peer_match != nullptr, "the peer has no network match");
     const auto peer_id = peer_world.game.players[peer_world.game.local_player_index].player_id;
     PlayerSetupInfo* info = local_lobby_info(world);
@@ -231,20 +245,21 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
     };
     uint16_t expected = original;
     for (const auto& toggle : toggles) {
-        enter_console_check_line(toggle.line);
+        runtime_.enter_console_check_line(toggle.line);
         expected = static_cast<uint16_t>(expected ^ toggle.bit);
         require(shares(info) == expected, std::string(toggle.line) + " did not toggle its bit");
         const std::string notice = std::string("Toggled ") + toggle.name +
                                    " to: " + ((expected & toggle.bit) != 0 ? "ON" : "OFF");
         require(
-            logged(match_message_lines(), notice), std::string(toggle.line) + " posted no notice"
+            logged(runtime_.match_message_lines(), notice),
+            std::string(toggle.line) + " posted no notice"
         );
         wait(
             [&] { return shares(copy_on_peer()) == expected; },
             "a share toggle did not reach the peer"
         );
     }
-    enter_console_check_line("+shareall");
+    runtime_.enter_console_check_line("+shareall");
     require(shares(info) == original, "+shareall did not toggle all four bits");
     wait([&] { return shares(copy_on_peer()) == original; }, "+shareall did not reach the peer");
 
@@ -258,20 +273,20 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
             step(true);
         return std::pair{traffic.sent_bytes - raw, traffic.condensed_bytes - wire};
     };
-    enter_console_check_line("+compression");
+    runtime_.enter_console_check_line("+compression");
     require(game.compression_off != 0, "+compression did not turn compression off");
     require(
-        posted(match_message_lines(), "Ok.  Outgoing packet compression turned OFF"),
+        posted(runtime_.match_message_lines(), "Ok.  Outgoing packet compression turned OFF"),
         "+compression posted no OFF notice"
     );
     const auto [stored_raw, stored_wire] = send_chat();
     require(
         stored_raw != 0 && stored_wire == stored_raw, "a frame was compressed with compression off"
     );
-    enter_console_check_line("+compression");
+    runtime_.enter_console_check_line("+compression");
     require(game.compression_off == 0, "+compression did not turn compression on");
     require(
-        posted(match_message_lines(), "Ok.  Outgoing packet compression turned ON"),
+        posted(runtime_.match_message_lines(), "Ok.  Outgoing packet compression turned ON"),
         "+compression posted no ON notice"
     );
     const auto [packed_raw, packed_wire] = send_chat();
@@ -289,19 +304,21 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
         step(false);
         return match->timeout_player;
     };
-    enter_console_check_line("+drop 0");
+    runtime_.enter_console_check_line("+drop 0");
     require(no_drop(), "+drop 0 did not set the no-drop bit");
     game.player_timeout_seconds = 0;
     require(silent_peer() == nm::no_player_id, "the stall check ran with Drop 0");
-    enter_console_check_line("+drop 1");
+    runtime_.enter_console_check_line("+drop 1");
     require(!no_drop(), "+drop 1 did not clear the no-drop bit");
     require(silent_peer() == peer_id, "the stall check did not name the silent peer");
     game.player_timeout_seconds = seconds;
     wait([&] { return match->timeout_player == nm::no_player_id; }, "the stall did not clear");
 
-    enter_console_check_line("+page someone hello");
+    runtime_.enter_console_check_line("+page someone hello");
     require(
-        posted(match_message_lines(), "Page command requires game launch from the Boneyards."),
+        posted(
+            runtime_.match_message_lines(), "Page command requires game launch from the Boneyards."
+        ),
         "+page did not ask for an active launch"
     );
 
@@ -310,8 +327,8 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
     std::string speaker = "<";
     speaker += field_text(local.name, sizeof local.name);
     speaker += "> ";
-    enter_console_check_line("+Now Film Chris Include Reload Assert");
-    enter_console_check_line("+senderror 100");
+    runtime_.enter_console_check_line("+Now Film Chris Include Reload Assert");
+    runtime_.enter_console_check_line("+senderror 100");
     require(game.send_error_percent == 100, "+senderror 100 did not set 100%");
     // Frames already on their way arrive first.
     for (int i = 0; i < kLossSteps; ++i)
@@ -323,7 +340,7 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
         step(true);
     require(traffic.sent_datagrams > sent_frames, "the dropped frames were not counted as sent");
     require(local_on_peer->last_update_time == heard_at, "a frame reached the peer at 100% loss");
-    enter_console_check_line("+senderror 0");
+    runtime_.enter_console_check_line("+senderror 0");
     require(game.send_error_percent == 0, "+senderror 0 did not clear the loss");
     net_say("through again");
     wait(
@@ -334,7 +351,7 @@ void Runtime::check_console_network_session(Runtime& peer, const std::function<v
         !logged(peer.match_message_lines(), speaker + "lost in transit"),
         "a dropped chat line reached the peer"
     );
-    enter_console_check_line("+Now");
+    runtime_.enter_console_check_line("+Now");
     std::cout << "console network session check: share toggles reached the peer, +compression "
                  "sent stored frames, +drop 0 held the stall check, +senderror 100 dropped every "
                  "frame\n";

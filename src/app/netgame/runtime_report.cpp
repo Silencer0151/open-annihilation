@@ -7,6 +7,7 @@
 // match and when the report ends. The report rides with the network
 // session and is used once the end-of-game screen's state exists.
 #include "oa/app/runtime.hpp"
+#include "network_play.hpp"
 #include "launch_binding.hpp"
 #include "net_state.hpp"
 
@@ -26,14 +27,14 @@ constexpr std::size_t kSessionNameBytes = 0x11;
 
 } // namespace
 
-oa::World* Runtime::reporter_world() {
-    if (match_)
-        return &match_->state();
-    return endgame_world();
+oa::World* NetworkPlay::reporter_world() {
+    if (runtime_.match_)
+        return &runtime_.match_->state();
+    return runtime_.endgame_world();
 }
 
-void Runtime::start_reporter(oa::World& world, const oa::Game* lobby_game) {
-    (void)endgame_state();
+void NetworkPlay::start_reporter(oa::World& world, const oa::Game* lobby_game) {
+    (void)runtime_.endgame_state();
     auto& state = *net_;
     if (lobby_game != nullptr && lobby_game != &world.game) {
         std::memcpy(
@@ -50,14 +51,14 @@ void Runtime::start_reporter(oa::World& world, const oa::Game* lobby_game) {
     }
     const api::Hooks& hooks = extension_hooks();
     if (hooks.report_start != nullptr)
-        hooks.report_start(hooks.context, world, game_options());
+        hooks.report_start(hooks.context, world, runtime_.game_options());
     state.report_started = true;
     report_game_event(api::report_event::battleroom_opened);
     report_game_event(api::report_event::game_launched);
 }
 
-void Runtime::report_game_event(int32_t event) {
-    if (!endgame_ || !net_ || !net_->report_started)
+void NetworkPlay::report_game_event(int32_t event) {
+    if (!runtime_.endgame_ || !net_ || !net_->report_started)
         return;
     const api::Hooks& hooks = extension_hooks();
     if (hooks.report_event == nullptr)
@@ -66,9 +67,9 @@ void Runtime::report_game_event(int32_t event) {
         hooks.report_event(hooks.context, *world, event);
 }
 
-void Runtime::report_chat_line(const char* line) {
+void NetworkPlay::report_chat_line(const char* line) {
     reported_chat_ = line != nullptr ? line : "";
-    if (!endgame_ || !net_ || !net_->report_started)
+    if (!runtime_.endgame_ || !net_ || !net_->report_started)
         return;
     const api::Hooks& hooks = extension_hooks();
     if (hooks.report_chat == nullptr)
@@ -77,16 +78,16 @@ void Runtime::report_chat_line(const char* line) {
         hooks.report_chat(hooks.context, *world, line);
 }
 
-void Runtime::step_reporter_frame() {
-    if (!endgame_ || !net_ || !match_ || !net_->report_started)
+void NetworkPlay::step_reporter_frame() {
+    if (!runtime_.endgame_ || !net_ || !runtime_.match_ || !net_->report_started)
         return;
     const api::Hooks& hooks = extension_hooks();
     if (hooks.report_step != nullptr)
-        hooks.report_step(hooks.context, match_->state());
+        hooks.report_step(hooks.context, runtime_.match_->state());
 }
 
-void Runtime::close_reporter() {
-    if (!endgame_ || !net_ || !net_->report_started)
+void NetworkPlay::close_reporter() {
+    if (!runtime_.endgame_ || !net_ || !net_->report_started)
         return;
     report_game_event(api::report_event::session_closed);
     net_->report_started = false;
@@ -95,8 +96,8 @@ void Runtime::close_reporter() {
         hooks.report_close(hooks.context);
 }
 
-void Runtime::release_match_report() {
-    if (!endgame_ || !net_)
+void NetworkPlay::release_match_report() {
+    if (!runtime_.endgame_ || !net_)
         return;
     const api::Hooks& hooks = extension_hooks();
     if (hooks.report_release != nullptr)

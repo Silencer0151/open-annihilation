@@ -9,7 +9,6 @@
 #include <bit>
 #include <cmath>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
@@ -61,9 +60,9 @@ Fixed square_high(Fixed v) noexcept {
     return low((int64_t(v) * v) >> 32);
 }
 
-void validate(const Navigation& n) {
-    if (n.count > n.points.size())
-        throw std::invalid_argument("Navigator point count exceeds capacity");
+// A navigator holds no more points than its capacity.
+bool count_fits(const Navigation& n) noexcept {
+    return n.count <= n.points.size();
 }
 
 /// Raises events on the order the goal reports to.
@@ -87,14 +86,11 @@ int16_t facing(Fixed x, Fixed z) noexcept {
 }
 } // namespace
 
-void SearchController::begin(SearchRecord record) {
-    if (!record.unit || !record.navigation || !record.goal || !record.movement_map)
-        throw std::invalid_argument(
-            "path search record requires its unit, navigator, goal and map"
-        );
-    if (!idle())
-        throw std::logic_error("path search controller already has an active navigator");
+bool SearchController::begin(SearchRecord record) noexcept {
+    if (!record.unit || !record.navigation || !record.goal || !record.movement_map || !idle())
+        return false;
     active_ = record;
+    return true;
 }
 
 void SearchController::cancel(Navigation& navigation) noexcept {
@@ -115,7 +111,8 @@ void SearchController::complete(OccupancyRectangle rectangle, uint32_t changed_t
 
 void install_goal(UnitView u, Goal* goal, uint32_t tick, Host& host) {
     auto& n = u.navigation;
-    validate(n);
+    if (!count_fits(n))
+        return;
     host.cancel_search(n);
     signal(n.goal, goal_replaced_event);
     n.flags &= uint8_t(~route_bit);
@@ -170,9 +167,8 @@ void accept_path(UnitView u, std::span<const RoutePoint> points) {
 }
 
 void advance_path(Navigation& n, uint32_t count) {
-    validate(n);
-    if (count > n.count)
-        throw std::invalid_argument("Path advance exceeds available points");
+    if (!count_fits(n) || count > n.count)
+        return;
     if (count) {
         std::move(n.points.begin() + count, n.points.begin() + n.count, n.points.begin());
         n.count -= count;
@@ -184,7 +180,8 @@ void advance_path(Navigation& n, uint32_t count) {
 
 void tick_navigation(UnitView u, uint32_t tick, Host& host) {
     auto& n = u.navigation;
-    validate(n);
+    if (!count_fits(n))
+        return;
     if (n.goal && goal_contains_unit(*n.goal, u.geometry)) {
         signal(n.goal, arrived_event);
         install_goal(u, nullptr, tick, host);
@@ -208,10 +205,10 @@ bool search_ready(Navigation& navigation, uint32_t tick) noexcept {
     return true;
 }
 
-std::array<Point, 3> steering_points(const Navigation& n) {
-    if (n.count == 0 || n.count > n.points.size())
-        throw std::invalid_argument("Invalid navigator point count");
+std::array<Point, 3> steering_points(const Navigation& n) noexcept {
     std::array<Point, 3> out{};
+    if (n.count == 0 || !count_fits(n))
+        return out;
     for (std::size_t i = 0; i < out.size(); ++i) {
         const auto& p = n.points[std::min(i, std::size_t(n.count - 1))];
         out[i] = {Fixed(p[0]) * one_world_unit, 0, Fixed(p[1]) * one_world_unit};
@@ -260,7 +257,7 @@ uint32_t move_ground(
                 extra.goal.reset();
             }
             if (next) {
-                order.raised_events &= ~0x3e0u;
+                order.raised_events &= ~goal_event_mask;
                 install_goal(u, next.get(), tick, host);
                 extra.goal = std::move(next);
             }
@@ -340,11 +337,14 @@ void steer_along(
     const auto requested = short_bits(uint32_t(heading) - u.heading);
     const auto angle = abs32(requested);
     sim::unit_movement::turn(u, m, requested);
-    if (u.type.maximum_turn == 0)
-        throw std::domain_error("Ground turn divisor is zero");
+    const auto braking = sim::unit_movement::braking_distance(m.speed, deceleration);
+    if (u.type.maximum_turn == 0 || !braking) {
+        sim::unit_movement::accelerate(u, m, adjustment, sea_level);
+        return;
+    }
     const auto turn_distance =
         low(int64_t(m.speed) * (uint32_t(angle) & 0xffffu) / u.type.maximum_turn);
-    const auto stop = low(sim::unit_movement::braking_distance(m.speed, deceleration));
+    const auto stop = low(*braking);
     if (mul(square_high(turn_distance), 4) < add(square_high(dx), square_high(dz))) {
         const auto end_x = sub(points[2][0], u.position[0]),
                    end_z = sub(points[2][2], u.position[2]);
@@ -363,7 +363,7 @@ void steer_ground(
     Fixed deceleration,
     uint8_t sea_level
 ) {
-    const bool has_route = route_present(n);
+    const bool has_route = route_present(n) && n.count != 0 && count_fits(n);
     steer_along(
         u,
         m,

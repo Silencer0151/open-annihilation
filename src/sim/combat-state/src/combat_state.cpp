@@ -263,8 +263,10 @@ SpawnCombatResult initialize_spawn_combat(
         const auto aim = host.aim_from_world(slot);
         weapons.slots[i].muzzle_offset = calculate_muzzle_offset({muzzle[2], aim[2]});
         const auto* current_definition = weapons.slots[i].definition;
-        if (!current_definition)
-            throw std::runtime_error("geometry callback cleared weapon definition");
+        if (!current_definition) {
+            result.definition_cleared = true;
+            return result;
+        }
         maximum_reload_ticks =
             std::max(maximum_reload_ticks, current_definition->reload_time_ticks);
     }
@@ -316,8 +318,7 @@ UnitIdentity select_automatic_target(
         const auto& candidate = *candidates[index];
         candidates[index] = candidates.back();
         candidates.pop_back();
-        if ((candidate.unit_flags & unit_targetable_flag) == 0 ||
-            (candidate.unit_flags & unit_excluded_from_auto_target_flag) != 0 ||
+        if (!unit_is_live_target(candidate.unit_flags) ||
             ((candidate.type_auto_target_flags & candidate_type_auto_target_flag) == 0 &&
              !owner_override && !host.global_target_override()) ||
             ((source.type_flags & source_range_check_bypass_flag) == 0 &&

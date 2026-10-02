@@ -63,6 +63,7 @@ class MovementMap {
     /// Sizes the packed grid for a movement class.
     ///
     /// The grid holds ((height + 15) / 16) * width words, none when a side is 0.
+    /// A grid whose words would not fit in the address space is made 0 by 0.
     /// The footprint and sampler come from the movement class the grid belongs
     /// to.
     ///

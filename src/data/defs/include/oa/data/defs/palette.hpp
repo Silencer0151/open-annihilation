@@ -15,8 +15,8 @@ inline constexpr uint32_t palette_file_bytes = 0x400; // 256 four-byte entries
 // Reads the palette of an image file into palette_file_bytes bytes; false
 // when the image is missing or has no palette.
 struct PaletteImageReader {
-    void* context;
-    bool (*read)(void* context, const char* path, uint8_t* palette);
+    void* context{};
+    bool (*read)(void* context, const char* path, uint8_t* palette) = nullptr;
 };
 
 /// Loads a named palette from PALETTES\<name>.PAL, or from PALETTES\<name>.PCX

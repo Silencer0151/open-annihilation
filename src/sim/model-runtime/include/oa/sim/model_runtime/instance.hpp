@@ -28,7 +28,8 @@ struct RotationWords {
 /// Rotates a vector through the three angle-word pairs in the game's order.
 ///
 /// The xy pair turns first, then yz, then xz, each on the already rotated
-/// values; results round to nearest as the game's rotation does.
+/// values; results round to nearest as the game's rotation does, and keep
+/// their low 32 bits.
 ///
 /// @param value signed 16.16 vector to rotate
 /// @param words angle words, 65536 per turn
@@ -90,18 +91,30 @@ class Instance {
     /// Returns whether a piece moved or turned since the last rebuild_transforms.
     [[nodiscard]] bool transforms_dirty() const noexcept { return transforms_dirty_; }
 
-    /// Returns the piece a COB piece operand names.
+    /// Returns the piece a COB piece operand names, when the instance has it.
     ///
     /// COB piece operands index the reordered prefix make_instance produces.
     ///
-    /// Throws std::out_of_range for an index past the pieces.
+    /// @param index COB piece index
+    /// @return the piece state, or null for an index past the pieces
+    [[nodiscard]] PieceState* find_piece(uint32_t index) noexcept;
+    /// Returns the piece a COB piece operand names, when the instance has it.
+    ///
+    /// @param index COB piece index
+    /// @return the piece state, or null for an index past the pieces
+    [[nodiscard]] const PieceState* find_piece(uint32_t index) const noexcept;
+    /// Returns the piece a COB piece operand names.
+    ///
+    /// COB piece operands index the reordered prefix make_instance produces.
+    /// An index past the pieces gives a spare piece outside the model, cleared
+    /// at each such call: what is written to it is drawn nowhere.
     ///
     /// @param index COB piece index
     /// @return the piece state
     [[nodiscard]] PieceState& piece_for_script_index(uint32_t index);
     /// Returns the piece a COB piece operand names.
     ///
-    /// Throws std::out_of_range for an index past the pieces.
+    /// An index past the pieces gives a cleared piece outside the model.
     ///
     /// @param index COB piece index
     /// @return the piece state
@@ -113,9 +126,10 @@ class Instance {
     /// sum by each ancestor's angle words on the way up, the root's turned by
     /// root_rotation.
     ///
-    /// Throws std::out_of_range for an index past the pieces, std::overflow_error on 32-bit overflow.
+    /// A sum outside 32 bits keeps its low 32 bits, and a negated -2^31 stays
+    /// -2^31.
     ///
-    /// @param piece_index piece to locate
+    /// @param piece_index piece to locate; one past the pieces is at the origin
     /// @param root_rotation angle words added to the root piece's rotation
     /// @return signed 16.16 position; Z carries the game's final sign inversion
     [[nodiscard]] oa::formats::objects3d::FixedVector3
@@ -125,7 +139,7 @@ class Instance {
     /// rebuild_transforms transforms them, from the pieces' translations and
     /// rotations alone, without changing the instance.
     ///
-    /// Throws std::overflow_error on 32-bit overflow.
+    /// Coordinates wrap at 32 bits, as in attachment_position.
     ///
     /// @param piece_index piece whose vertices the box takes in; one past the
     ///        pieces leaves the box as it is
@@ -143,7 +157,7 @@ class Instance {
     /// the pieces under the instance root through their ancestors, the root turned
     /// by root_rotation, then clears transforms_dirty.
     ///
-    /// Throws std::overflow_error on 32-bit overflow.
+    /// Coordinates wrap at 32 bits, as in attachment_position.
     ///
     /// @param root_rotation angle words added to the root piece's rotation
     /// @quirk Root-level siblings of the root piece are reset but not transformed, as in 3.1c.
@@ -160,6 +174,7 @@ class Instance {
     [[nodiscard]] bool under_root(uint32_t piece_index) const;
 
     friend class ModelHost;
+    /// Makes a model's instance; declared below.
     friend Instance make_instance(
         std::shared_ptr<const oa::formats::objects3d::Model> model,
         uintptr_t owner_token,
@@ -167,6 +182,7 @@ class Instance {
     );
     std::shared_ptr<const oa::formats::objects3d::Model> model_;
     std::vector<PieceState> pieces_;
+    PieceState spare_piece_{}; // what piece_for_script_index gives for an index past the pieces
     uint32_t root_piece_{kNoPiece};
     uintptr_t owner_token_{};
     bool transforms_dirty_{true};
@@ -177,13 +193,23 @@ class Instance {
 /// A missing link adds nothing. The instance is sized from the count at the
 /// model root.
 ///
-/// Throws std::out_of_range for an index past the model's objects.
-///
 /// @param model the model
-/// @param object_index object to start from
+/// @param object_index object to start from; one past the objects counts 0
 /// @return the number of objects reached
 [[nodiscard]] uint32_t
 count_linked_objects(const oa::formats::objects3d::Model& model, uint32_t object_index);
+
+/// Says what keeps a model from being instanced.
+///
+/// A model is instanced when it holds objects whose links stay inside it,
+/// name each parent before its children, and reach every object exactly
+/// once from the root through child and sibling links, each child's parent
+/// link naming the object it hangs from.
+///
+/// @param model the model
+/// @return a static description of the first fault, or null when the model can be instanced
+[[nodiscard]] const char*
+model_hierarchy_error(const std::shared_ptr<const oa::formats::objects3d::Model>& model);
 
 /// Makes a model's instance.
 ///
@@ -192,9 +218,10 @@ count_linked_objects(const oa::formats::objects3d::Model& model, uint32_t object
 /// with three or more vertices. Given script piece names, the matching pieces
 /// are then moved, case-insensitively, into COB order and the links rebuilt.
 ///
-/// Throws std::invalid_argument for an empty model or broken hierarchy links.
+/// A model that model_hierarchy_error refuses gives an instance with no pieces
+/// and no root piece, which keeps the model and the owner token.
 ///
-/// @param model the model; must be non-empty with consistent parent-before-child links
+/// @param model the model; null gives an instance whose model() must not be read
 /// @param owner_token opaque owner association kept on the instance
 /// @param script_piece_names COB piece names; names beyond the piece count are ignored
 /// @return the instance

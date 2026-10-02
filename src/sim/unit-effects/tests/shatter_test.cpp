@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -25,17 +26,13 @@ using namespace oa;
 
 namespace {
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Records the synced stream as the explode instruction reaches the effects,
 // and the explosion table as the debris request leaves them, before the
 // tick's explosion step moves anything. A walking unit's movement object is
 // given its velocity as the explode starts.
-struct Services : sim::match_runtime::OfflineServices,
+struct Services : oa::test::QuietServices,
                   sim::unit_effects::OfflineLifecycle,
                   sim::unit_effects::Sink {
     sim::unit_effects::OfflineEffects* effects{};
@@ -47,14 +44,6 @@ struct Services : sim::match_runtime::OfflineServices,
     uint32_t explodes{};
     std::vector<sim::effect_particles::ExplosionRecord> records;
     std::vector<sim::effect_particles::ShatterFragment> fragments;
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
 
     void emit_sfx(sim::unit_spawn::Slot& s, uint32_t p, int32_t e) override {
         effects->emit_sfx(s, p, e);
@@ -75,12 +64,6 @@ struct Services : sim::match_runtime::OfflineServices,
     }
 
     void drop_unit(sim::unit_spawn::Slot& s, int32_t c) override { effects->drop_unit(s, c); }
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 
     void effect(const sim::unit_effects::Event& e) override {
         if (e.kind != sim::unit_effects::EventKind::debris_piece)
@@ -343,9 +326,9 @@ void peewee_torso(AssetStore& assets, present::model::ModelLibrary& library) {
 // The records built for three of the base's fragments: flung,
 // leaned and spun from the synced stream at the shatter.
 struct BaseShard {
-    size_t record;
+    size_t record{};
     FixedVec3 velocity;
-    int32_t rates[3];
+    int32_t rates[3]{};
 };
 
 constexpr BaseShard base_shards[]{

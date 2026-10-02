@@ -22,8 +22,9 @@ same order as `tnt::Map::features`; TNT records contain names rather than
 these runtime fields. `resolve_feature_terrain` reads the effective
 `features/**/*.tdf` documents recursively, as 3.1c does, and searches their
 top-level sections case-insensitively for each TNT name, retaining document
-order. It reads signed `footprintx` and `footprintz`, stores `metal` as
-`(atoi(value) & 0xffff)` converted to float, and sets
+order. It reads the fields with the TDF reader's number getters, so a field
+without digits reads 0. It reads signed `footprintx` and `footprintz`, stores
+`metal` as `(atoi(value) & 0xffff)` converted to float, and sets
 `OA_FEATURE_FLAG_INDESTRUCTIBLE`, the metal-overlay bit, from
 `(indestructible & 1)` and `OA_FEATURE_FLAG_BLOCKING` from `(blocking & 1)`.
 Each collision plot's `high_height`/`low_height` comes from the four

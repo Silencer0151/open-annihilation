@@ -7,6 +7,7 @@
 // multiplayer screens MULTI opens (network play's check_multiplayer_menu).
 #include "oa/app/runtime.hpp"
 
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 
 #include <SDL3/SDL.h>
@@ -110,7 +111,7 @@ void Runtime::multiplayer_check_settle() {
 void Runtime::check_multiplayer_menu() {
     // Over data with no multiplayer map MULTI asks no extension.
     if (!eligible_map_names_.empty() && extension_.check_multiplayer_menu != nullptr) {
-        extension_.check_multiplayer_menu(extension_.context, *this);
+        call_hook_or_raise<&Extension::check_multiplayer_menu>(extension_, *this);
         return;
     }
     check_multiplayer_unavailable();

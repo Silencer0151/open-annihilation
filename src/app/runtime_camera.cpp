@@ -3,6 +3,7 @@
 
 // Radar interaction, zoom, camera panning and move/patrol orders.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "engine_settings_state.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
@@ -14,6 +15,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace oa::app {
 
@@ -66,8 +68,8 @@ void Runtime::bind_match_view() {
     auto& game = match_->state().game;
     game.camera_x = static_cast<uint32_t>(match_camera_x_);
     game.camera_y = static_cast<uint32_t>(match_camera_z_);
-    game.view_cells_width = visible_map_width() / wr::map_cell_pixels;
-    game.view_cells_height = visible_map_height() / wr::map_cell_pixels;
+    game.view_cells_width = visible_map_width() / OA_MAP_CELL_PIXELS;
+    game.view_cells_height = visible_map_height() / OA_MAP_CELL_PIXELS;
     // The off-screen surface is the screen: the visible battlefield with the
     // side column and bars around it (640x480 unzoomed).
     game.offscreen_width = static_cast<uint32_t>(layout::kSourceLeft + visible_map_width());
@@ -107,7 +109,7 @@ bool Runtime::issue_radar_orders(float x, float y) {
                 return false;
             for_each_selected([&](uint16_t id) {
                 if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, world, queueing()))
-                    (void)match_->issue_patrol(id, *world, queueing());
+                    match_->issue_patrol(id, *world, queueing());
             });
             finish_issued_command();
             status_ = "Patrol";
@@ -147,6 +149,7 @@ bool Runtime::issue_radar_orders(float x, float y) {
                 for_each_selected([&](uint16_t source) {
                     if (cancels_queued_command(source, armed, enemy, world, queueing()))
                         return;
+                    // A unit no attack resolves for is given no order.
                     if (match_command_ == MatchCommand::dgun) {
                         if (!blasts(source))
                             return;
@@ -160,9 +163,9 @@ bool Runtime::issue_radar_orders(float x, float y) {
                                 std::bit_cast<int32_t>(position[2])
                             };
                         }
-                        (void)match_->issue_attack_special(source, dest, queueing(), enemy);
+                        match_->issue_attack_special(source, dest, queueing(), enemy);
                     } else
-                        (void)match_->issue_attack_command(
+                        std::ignore = match_->issue_attack_command(
                             source, enemy, queueing(), world ? &*world : nullptr
                         );
                 });
@@ -173,9 +176,9 @@ bool Runtime::issue_radar_orders(float x, float y) {
                         return;
                     if (match_command_ == MatchCommand::dgun) {
                         if (blasts(source))
-                            (void)match_->issue_attack_special(source, *world, queueing());
+                            match_->issue_attack_special(source, *world, queueing());
                     } else
-                        (void)match_->issue_attack_ground(source, *world, queueing());
+                        std::ignore = match_->issue_attack_ground(source, *world, queueing());
                 });
                 status_ = match_command_ == MatchCommand::dgun ? "D-Gun ground" : "Attack ground";
             } else
@@ -186,7 +189,7 @@ bool Runtime::issue_radar_orders(float x, float y) {
         if (enemy != 0) {
             for_each_selected([&](uint16_t id) {
                 if (!cancels_queued_command(id, armed, enemy, world, queueing()))
-                    (void)match_->issue_attack_command(
+                    std::ignore = match_->issue_attack_command(
                         id, enemy, queueing(), world ? &*world : nullptr
                     );
             });
@@ -401,10 +404,10 @@ void Runtime::issue_resume_or_repair_from(uint16_t source, uint16_t id, bool que
     auto& slot = match_->world().slots[id];
     const auto unfinished = slot.unit && slot.build_remaining != 0.0F;
     if (unfinished) {
-        (void)match_->issue_help_build(source, id, queue);
+        match_->issue_help_build(source, id, queue);
         status_ = "Resume construction";
     } else {
-        (void)match_->issue_repair(source, id, queue);
+        match_->issue_repair(source, id, queue);
         status_ = "Repair";
     }
 }
@@ -413,7 +416,8 @@ void Runtime::issue_match_move(float x, float y, bool queue) {
     if (!match_ || !selected_tnt_ || selected_match_unit_ == 0)
         return;
     if (radar_contains(x, y)) {
-        (void)issue_radar_orders(x, y);
+        // A press on the radar is the radar's whether or not it gave orders.
+        std::ignore = issue_radar_orders(x, y);
         return;
     }
     const auto viewport = live_viewport(
@@ -474,7 +478,7 @@ void Runtime::issue_match_patrol(float x, float y, bool queue) {
             if (!cancels_queued_command(
                     id, oa::sim::gameplay_input::OrderCommand::patrol, 0, point, queue
                 ))
-                (void)match_->issue_patrol(id, point, queue);
+                match_->issue_patrol(id, point, queue);
         });
         status_ = "Patrol";
     } catch (const std::exception& error) {

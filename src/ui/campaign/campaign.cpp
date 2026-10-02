@@ -6,6 +6,7 @@
 
 #include "oa/core/unit_def.h"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
+#include "oa/base/text.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -61,7 +62,7 @@ std::size_t briefing_planet_index(const char* planet, int32_t side) {
     char name[oa::data::campaign::kCampaignShortTextBytes + 2];
     std::snprintf(name, sizeof(name), "%s", planet != nullptr ? planet : "");
     if (std::strcmp(name, "Lunar") == 0 && side != 0)
-        std::strcat(name, "2");
+        oa::base::text::append_terminated(name, "2");
     for (std::size_t i = 0; i < kPlanetCount; ++i)
         if (std::strcmp(name, kPlanets[i].planet) == 0)
             return i;

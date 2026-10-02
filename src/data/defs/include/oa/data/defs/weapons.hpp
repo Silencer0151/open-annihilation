@@ -62,23 +62,23 @@ inline constexpr uint32_t weapon_damage_name_capacity = 32;
 inline constexpr uint32_t weapon_asset_name_capacity = 64;
 
 struct WeaponDamage {
-    char unit[weapon_damage_name_capacity];
-    int32_t damage;
+    char unit[weapon_damage_name_capacity]{};
+    int32_t damage{};
 };
 
 // Per-unit DAMAGE overrides of one weapon, sorted by case-insensitive name.
 struct WeaponDamageTable {
-    WeaponDamage* entries;
-    uint32_t count;
-    uint32_t capacity;
+    WeaponDamage* entries{};
+    uint32_t count{};
+    uint32_t capacity{};
 };
 
 // Asset lookups made while loading; any callback may be null (result 0 / -1).
 struct WeaponResolver {
-    void* context;
-    oa_ref32 (*model)(void* context, const char* name);
-    oa_ref32 (*animation)(void* context, const char* gaf, const char* sequence);
-    int16_t (*sound)(void* context, const char* name);
+    void* context{};
+    oa_ref32 (*model)(void* context, const char* name) = nullptr;
+    oa_ref32 (*animation)(void* context, const char* gaf, const char* sequence) = nullptr;
+    int16_t (*sound)(void* context, const char* name) = nullptr;
 };
 
 // The asset names one weapon section's keys gave, kept whatever the resolver
@@ -102,14 +102,14 @@ struct WeaponTable {
     // DAMAGE overrides per slot; WeaponDef.damage_overrides holds index + 1 when set.
     WeaponDamageTable damage[OA_WEAPON_DEF_COUNT];
     WeaponAssetNames assets[OA_WEAPON_DEF_COUNT]; // the names each slot's section gave
-    uint32_t rejected_ids;                        // sections whose ID is outside 0..255
+    uint32_t rejected_ids{};                      // sections whose ID is outside 0..255
 };
 
 struct WeaponLoadOptions {
-    const WeaponResolver* resolver;
-    const char* variant;
-    bool lava_world;   // use lavaexplosion* instead of waterexplosion* keys
-    bool archive_only; // ignore loose weapon files, as when archive scanning is on
+    const WeaponResolver* resolver{};
+    const char* variant{};
+    bool lava_world{};   // use lavaexplosion* instead of waterexplosion* keys
+    bool archive_only{}; // ignore loose weapon files, as when archive scanning is on
 };
 
 /// Returns the slot index a weapon record carries in WeaponDef.weapon_id.

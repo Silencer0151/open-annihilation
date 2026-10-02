@@ -56,12 +56,14 @@ int main() {
     root.vertices = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}};
     auto fitted = ground_quad(model);
     CHECK(fitted && (*fitted)[0][0] == -1 && (*fitted)[3][1] == -12);
-    bool threw = false;
     root.primitives[0].vertex_indices.pop_back();
-    try {
-        (void)ground_quad(model);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    CHECK(threw);
+    CHECK(!ground_quad(model));
+    // A grid smaller than 2x2 gives an empty view.
+    oa::formats::tnt::Map tiny;
+    tiny.attribute_width = 1;
+    tiny.attribute_height = 1;
+    tiny.attributes.resize(1);
+    const Terrain empty(tiny);
+    CHECK(!terrain_grid_valid(tiny) && !empty.holds_grid());
+    CHECK(empty.height(0, 0) == -1 && empty.sea_level() == 0);
 }

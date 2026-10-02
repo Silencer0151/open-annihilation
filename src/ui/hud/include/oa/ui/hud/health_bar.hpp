@@ -69,9 +69,9 @@ panel_shows_damage(const World& world, const Unit& unit, const UnitDef& def) noe
 /// Two solid rectangles with inclusive corners, the fill drawn over the trough.
 struct HealthBar {
     Rect32 trough;
-    uint8_t trough_color;
+    uint8_t trough_color{};
     Rect32 fill;
-    uint8_t fill_color;
+    uint8_t fill_color{};
 };
 
 /// Lays out the health bar for a unit centred on (x, y).

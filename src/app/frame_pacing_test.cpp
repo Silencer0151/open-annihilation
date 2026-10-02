@@ -143,7 +143,10 @@ LoopRun run_loop(
         previous_time = time;
         last_time = time;
         const uint32_t units_before = timing.previous_clock;
-        oa::base::game_loop::update_timing(timing, clock_units(time));
+        CHECK(
+            oa::base::game_loop::update_timing(timing, clock_units(time)) ==
+            oa::base::game_loop::LoopError::none
+        );
         const auto owed = timing.pending_steps;
         timing.tick += static_cast<uint32_t>(owed);
         run.ticks += static_cast<uint64_t>(owed);
@@ -545,7 +548,10 @@ void test_presentation_holds() {
     const uint64_t boundary =
         static_cast<uint64_t>(clock_units(now) + 1) * kNanosecondsPerSecond / kUnits +
         kNanosecondsPerMillisecond;
-    oa::base::game_loop::update_timing(timing, clock_units(boundary));
+    CHECK(
+        oa::base::game_loop::update_timing(timing, clock_units(boundary)) ==
+        oa::base::game_loop::LoopError::none
+    );
     CHECK(timing.pending_steps == 1);
     const float first = oa::app::frame_pacing::next_presentation_alpha(
         presentation, timing, {false, 1, 1}, boundary
@@ -611,7 +617,10 @@ void test_presentation_holds() {
     // Double speed runs two ticks a batch, shown across the unit.
     Timing fast = started_timing(2 * oa::base::game_loop::normal_game_speed, now);
     TickPresentation fast_presentation{};
-    oa::base::game_loop::update_timing(fast, clock_units(boundary));
+    CHECK(
+        oa::base::game_loop::update_timing(fast, clock_units(boundary)) ==
+        oa::base::game_loop::LoopError::none
+    );
     CHECK(fast.pending_steps == 2);
     CHECK(
         oa::app::frame_pacing::next_presentation_alpha(
@@ -624,7 +633,10 @@ void test_presentation_holds() {
     TickPresentation wrapped_presentation{};
     // The clock's reading goes back to 0 as the product wraps, as 3.1c's
     // does, so no tick is owed; the fraction stays whole and in range.
-    oa::base::game_loop::update_timing(wrapped, clock_units(wrap + unit));
+    CHECK(
+        oa::base::game_loop::update_timing(wrapped, clock_units(wrap + unit)) ==
+        oa::base::game_loop::LoopError::none
+    );
     const float wrapped_alpha = oa::app::frame_pacing::next_presentation_alpha(
         wrapped_presentation,
         wrapped,

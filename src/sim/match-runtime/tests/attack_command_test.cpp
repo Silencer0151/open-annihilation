@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include "oa/test/match_services.hpp"
 
 using namespace combat_fixture;
 
@@ -216,29 +217,7 @@ constexpr uint32_t approach_ticks = 900;
 // Where a unit commanded from rest starts: beyond the reach of every weapon here.
 constexpr int32_t distant_start = 700;
 
-struct LandServices : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
+using LandServices = oa::test::QuietServices;
 
 struct LandScenario : sim::scenario::DefinitionHost {
     // The map's gravity; 0 leaves the key unset.

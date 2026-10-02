@@ -123,6 +123,21 @@ void test_resource_bar() {
     CHECK(picture.y == 0 && picture.height == 126 && picture.width == 31 && picture.x == 47);
 }
 
+// A side's keys are read as the game reads TDF numbers: a key that is present
+// reads its digits, 0 when it has none, and only a missing key keeps the
+// layout's value.
+void test_side_layout_numbers() {
+    SideLayout layout;
+    CHECK(parse_side_layout(
+        "[side1]{metalcolor=+5; energycolor=; [METALNUM]{x1=12abc; y1=;} [ENERGYNUM]{x1=7;}}",
+        1,
+        layout
+    ));
+    CHECK(layout.metal_color == 5 && layout.energy_color == 0);
+    CHECK(layout.metal_num_x == 12 && layout.metal_num_y == 0);
+    CHECK(layout.energy_num_x == 7 && layout.energy_num_y == 18);
+}
+
 // Both sides' bar layouts in the installed game's sidedata.tdf.
 void test_installed_side_layouts(const AssetStore& assets) {
     const auto bytes = test::read_game_file(assets, "gamedata/sidedata.tdf");
@@ -157,5 +172,6 @@ int main(int argc, char** argv) {
     }
     test_kill_count();
     test_resource_bar();
+    test_side_layout_numbers();
     return 0;
 }

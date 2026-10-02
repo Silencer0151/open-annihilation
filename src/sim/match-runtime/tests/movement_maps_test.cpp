@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -29,26 +30,8 @@ constexpr sim::unit_spawn::AssetHandle tank_class = 1, kbot_class = 2;
 // Blocking sprite features: a 2x2 rock and a 1x3 wall.
 constexpr uint16_t rock = 0, wall_feature = 1;
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     uint32_t footprint_changes{}, object_removals{};
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 
     void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {
         ++object_removals;
@@ -59,11 +42,7 @@ struct Services : sim::match_runtime::OfflineServices {
     }
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // A flat 32x32-cell land map with a two-cell tank class, a one-cell kbot
 // class and a 3x3 building. `wall` marks blocking-feature cells present from
@@ -217,9 +196,9 @@ struct Fixture {
     }
 
     const sim::ground_orders::MovementMap& class_map(sim::unit_spawn::AssetHandle handle) const {
-        const auto* map = match->movement_map(handle);
-        CHECK(map != nullptr);
-        return *map;
+        const auto* found_map = match->movement_map(handle);
+        CHECK(found_map != nullptr);
+        return *found_map;
     }
 };
 

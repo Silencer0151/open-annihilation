@@ -14,7 +14,7 @@ target_link_libraries(oa-hpi-inspect PRIVATE oa-formats-hpi oa-options)
 
 if(BUILD_TESTING)
   add_executable(oa-hpi-test tests/hpi_test.cpp)
-  target_link_libraries(oa-hpi-test PRIVATE oa-formats-hpi oa-formats-sqsh ZLIB::ZLIB oa-test-game-data oa-options)
+  target_link_libraries(oa-hpi-test PRIVATE oa-formats-hpi oa-base-bytes oa-formats-sqsh ZLIB::ZLIB oa-test-game-data oa-options)
   add_test(NAME hpi COMMAND oa-hpi-test)
   # The installed game's archives mount by the discovery rules the
   # synthetic layouts pin.

@@ -22,6 +22,7 @@
 #include "oa/ui/services/timers.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
+#include "match_fault.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -33,6 +34,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 namespace oa::app {
 
@@ -75,6 +77,8 @@ int32_t view_y(int32_t y) {
 
 wr::OverlayRaster battlefield_raster() {
     wr::OverlayRaster raster = wr::present_overlay_raster();
+    // The debug overlay is drawn again every frame, so whether a shape was
+    // drawn does not matter.
     raster.line = [](void*,
                      oa::Surface* surface,
                      int32_t x0,
@@ -82,12 +86,12 @@ wr::OverlayRaster battlefield_raster() {
                      int32_t x1,
                      int32_t y1,
                      uint8_t color) {
-        (void)oa::present::draw_clipped_line(
+        std::ignore = oa::present::draw_clipped_line(
             surface, view_x(x0), view_y(y0), view_x(x1), view_y(y1), color
         );
     };
     raster.fill_rect = [](void*, oa::Surface* surface, const oa::Rect32& rect, uint8_t color) {
-        (void)oa::present::fill_clipped_rect(
+        std::ignore = oa::present::fill_clipped_rect(
             surface, {view_x(rect.x1), view_y(rect.y1), view_x(rect.x2), view_y(rect.y2)}, color
         );
     };
@@ -99,7 +103,7 @@ wr::OverlayRaster battlefield_raster() {
                 vertices[static_cast<std::size_t>(i)] = {
                     view_x(points[i * 2]), view_y(points[i * 2 + 1])
                 };
-            (void)oa::present::fill_polygon(surface, vertices.data(), count, color);
+            std::ignore = oa::present::fill_polygon(surface, vertices.data(), count, color);
         };
     raster.text = [](void*, oa::Surface* surface, const char* text, int32_t x, int32_t y) {
         oa::present::draw_text(
@@ -368,7 +372,9 @@ void Runtime::run_console_crash_test(console::CrashTest test) {
         break;
     }
     if (sdl_.window != nullptr && (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0) {
-        (void)SDL_SetWindowFullscreen(sdl_.window, false);
+        // A window that stays full screen still breaks into the debugger;
+        // only the desktop is harder to reach.
+        std::ignore = SDL_SetWindowFullscreen(sdl_.window, false);
         SDL_Delay(kDebugBreakSettleMs);
     }
     release_pointer(sdl_.window);
@@ -502,7 +508,7 @@ void Runtime::check_console_debug_commands(const std::function<void(const char*)
     begin_profile_window();
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
     begin_profile_window();
     options_.fixed_clock = fixed;
     if (game.profile_times.shown[OA_PROFILE_UNITS] != static_cast<int32_t>(kFixedClockMsPerTick) ||

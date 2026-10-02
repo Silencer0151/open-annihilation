@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/app/netgame/launch_switches.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstring>
 
@@ -39,8 +40,7 @@ int32_t decode_int(const char* text) noexcept {
 /// @param[out] destination Field receiving the text.
 /// @param source Text to copy.
 void copy_text(char (&destination)[kTextBytes], const char* source) noexcept {
-    destination[0] = '\0';
-    std::strncat(destination, source, kTextBytes - 1);
+    oa::base::text::copy_terminated(destination, source);
 }
 
 /// Appends text to a text field, stopping at the end of the field.
@@ -51,8 +51,7 @@ void copy_text(char (&destination)[kTextBytes], const char* source) noexcept {
 /// @param[in,out] destination Field the text is appended to.
 /// @param source Text to append.
 void append_text(char (&destination)[kTextBytes], const char* source) noexcept {
-    const size_t used = std::strlen(destination);
-    std::strncat(destination, source, kTextBytes - 1 - used);
+    oa::base::text::append_terminated(destination, source);
 }
 
 /// Returns a switch's argument: the text after the two switch characters, or the next token when none follows.

@@ -52,6 +52,7 @@
 #include "oa/test/game_data.hpp"
 #include "oa/formats/objects3d.hpp"
 #include "oa/formats/tnt.hpp"
+#include "oa/platform/system.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -264,8 +265,9 @@ enum class ItemKind : uint8_t {
 /// sweep meets them, which is the order their reports print in.
 struct SweepItem {
     ItemKind kind{};
-    const oa::HpiArchive* archive{}; ///< archive of an entry or a directory
-    uint32_t index{};                ///< file node index of an entry
+    const oa::HpiArchive* archive{};             ///< archive of an entry or a directory
+    const std::filesystem::path* archive_path{}; ///< host path of that archive
+    uint32_t index{};                            ///< file node index of an entry
     /// '/'-joined path of an entry; '/'-terminated path of a directory.
     std::string path{};
     uint64_t cost{}; ///< estimated work, in the units of ContentType::cost_per_byte
@@ -787,7 +789,7 @@ std::string decode_entry(
     }
     case Decoder::cob: {
         const auto parsed = oa::formats::cob::parse_cob(bytes);
-        return parsed ? std::string() : "COB reader: " + parsed.error;
+        return parsed.ok() ? std::string() : std::string("COB reader: ") + parsed.error.message;
     }
     case Decoder::model: {
         const auto parsed = oa::formats::objects3d::load_3do(std::as_bytes(bytes));
@@ -915,7 +917,7 @@ void sweep_entry(const SweepItem& item, WorkPool& pool, ItemOutcome& outcome) {
     } catch (const std::exception& error) {
         failure = std::string("archive read: ") + error.what();
     }
-    const std::string archive_name = archive.path().filename().string();
+    const std::string archive_name = item.archive_path->filename().string();
     const KnownRejection* known = known_rejection(archive_name, path);
     if (failure.empty()) {
         outcome.decoded = true;
@@ -973,6 +975,7 @@ uint64_t estimated_cost(std::string_view path, uint32_t size) {
 /// Lists the records below one directory node, depth first in stored order.
 ///
 /// @param archive mounted archive
+/// @param archive_path host path of the archive
 /// @param directory directory node index; 0 is the root
 /// @param prefix '/'-terminated path of the directory, empty for the root
 /// @param depth directories above this one, bounded by the node count
@@ -980,6 +983,7 @@ uint64_t estimated_cost(std::string_view path, uint32_t size) {
 ///        records outside the archive
 void list_directory(
     const oa::HpiArchive& archive,
+    const std::filesystem::path& archive_path,
     uint32_t directory,
     const std::string& prefix,
     std::size_t depth,
@@ -989,17 +993,24 @@ void list_directory(
     const auto& node = nodes[directory];
     if (depth > nodes.size() || node.first_child > nodes.size() ||
         node.child_count > nodes.size() - node.first_child) {
-        items.push_back({ItemKind::broken_directory, &archive, directory, prefix, 0});
+        items.push_back(
+            {ItemKind::broken_directory, &archive, &archive_path, directory, prefix, 0}
+        );
         return;
     }
     for (uint32_t i = 0; i < node.child_count; ++i) {
         const uint32_t child = node.first_child + i;
         const std::string path = prefix + nodes[child].name;
         if (nodes[child].directory()) {
-            list_directory(archive, child, path + "/", depth + 1, items);
+            list_directory(archive, archive_path, child, path + "/", depth + 1, items);
         } else {
             items.push_back(
-                {ItemKind::entry, &archive, child, path, estimated_cost(path, nodes[child].size)}
+                {ItemKind::entry,
+                 &archive,
+                 &archive_path,
+                 child,
+                 path,
+                 estimated_cost(path, nodes[child].size)}
             );
         }
     }
@@ -1356,7 +1367,7 @@ void run_item(const SweepPlan& plan, std::size_t item, WorkPool& pool, ItemOutco
             outcome.report,
             Stream::err,
             "FAIL: %s: directory %s lists records outside the archive\n",
-            work.archive->path().filename().string().c_str(),
+            work.archive_path->filename().string().c_str(),
             work.path.c_str()
         );
         return;
@@ -1542,7 +1553,7 @@ void report_item(const SweepItem& item, const ItemOutcome& outcome, SweepTotals&
             std::fprintf(
                 stderr,
                 "FAIL: %s: %s: its sweep ended with an exception%s\n",
-                item.archive->path().filename().string().c_str(),
+                item.archive_path->filename().string().c_str(),
                 item.path.c_str(),
                 said.c_str()
             );
@@ -1648,7 +1659,8 @@ void print_summary(const SweepTotals& totals) {
 ///        least 1
 /// @return false when OA_TEST_THREADS holds anything but a count from 0 to max_threads
 bool sweep_thread_count(unsigned& count) {
-    const char* named = std::getenv(threads_variable);
+    const auto named_value = oa::platform::environment_value(threads_variable);
+    const char* named = named_value ? named_value->c_str() : nullptr;
     unsigned long requested = 0;
     if (named != nullptr && *named != '\0') {
         char* end = nullptr;
@@ -1702,12 +1714,19 @@ int main() {
     }
     for (std::size_t mount = 0; mount < store.mount_paths().size(); ++mount) {
         ++totals.archives;
-        list_directory(store.mounted(mount), 0, std::string(), 0, plan.items);
+        list_directory(
+            store.mounted(mount), store.mount_paths()[mount], 0, std::string(), 0, plan.items
+        );
     }
     // The game's scan and the definition loaders read a store of their own
     // and start first, beside the entries.
     plan.items.push_back(
-        {ItemKind::game_mounts, nullptr, 0, std::string(), std::numeric_limits<uint64_t>::max()}
+        {ItemKind::game_mounts,
+         nullptr,
+         nullptr,
+         0,
+         std::string(),
+         std::numeric_limits<uint64_t>::max()}
     );
     const std::vector<ItemOutcome> outcomes = run_sweep(plan, thread_count);
     const std::size_t game_mounts = plan.items.size() - 1;

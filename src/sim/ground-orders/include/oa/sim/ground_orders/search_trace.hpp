@@ -12,9 +12,8 @@ namespace oa::sim::ground_orders {
 /// Rebuilds a route from the finish cell back to the start through the predecessor directions.
 ///
 /// Only cells where the direction changes are kept, in a ring of the last 64,
-/// and the route is returned start first as footprint centres. Throws
-/// std::invalid_argument for a truncated map, a direction past 7, a path leaving
-/// the map or a cycle.
+/// and the route is returned start first as footprint centres. A truncated map,
+/// a direction past 7, a path leaving the map or a cycle gives no route.
 ///
 /// @param width search map width in cells
 /// @param height search map height in cells
@@ -23,7 +22,7 @@ namespace oa::sim::ground_orders {
 /// @param footprint_x unit footprint width in cells
 /// @param footprint_z unit footprint depth in cells
 /// @param predecessor_direction SearchMapCell::predecessor of each cell, 0..7
-/// @return route points in integer world X/Z, at most 64
+/// @return route points in integer world X/Z, at most 64; none for a broken map
 std::vector<std::array<int16_t, 2>> reconstruct_search_path(
     uint32_t width,
     uint32_t height,

@@ -22,13 +22,15 @@ namespace oa::ui::gadget_render {
 using ui::gui_input::GadgetOwner;
 using ui::gui_input::GadgetPanel;
 
-// Flags of the whole-panel draw beyond ui::gui_input::panel_flag.
+// Flags of the whole-panel draw beyond ui::gui_input::panel_flag; no_save_under
+// and redraw are the panel_flag bits of the same names.
 namespace draw_flag {
 inline constexpr uint32_t release = 0x2; // restore the screen under the panel and free its surfaces
 inline constexpr uint32_t records = 0x4; // redraw the records without the panel face
 inline constexpr uint32_t buttons = 0x8; // with `records`, buttons are redrawn too
-inline constexpr uint32_t no_save_under = 0x20;
-inline constexpr uint32_t redraw = 0x40; // redraw the face and every record
+inline constexpr uint32_t no_save_under = ui::gui_input::panel_flag::no_save_under;
+// Redraw the face and every record.
+inline constexpr uint32_t redraw = ui::gui_input::panel_flag::redraw;
 } // namespace draw_flag
 
 // Slots of the panel colour map (GadgetPanel::colors) the draws use.

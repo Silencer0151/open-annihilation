@@ -276,7 +276,8 @@ void burst_children() {
     const auto child =
         burst_child(weapon, units(64), units(8), 0x1000, 0, velocity, 500, scripted, &random);
     check(
-        child.lifetime_tick == 500 + (units(64) + 0x100000) / units(8) + 10 - 15,
+        child.lifetime_tick ==
+            static_cast<uint32_t>(500 + (units(64) + 0x100000) / units(8) + 10 - 15),
         "decayed child expiry"
     );
     check(child.sprayed && child.parent_velocity[1] == units(2), "spray keeps vertical velocity");

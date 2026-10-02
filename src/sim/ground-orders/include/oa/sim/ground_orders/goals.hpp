@@ -12,6 +12,19 @@ namespace oa::sim::ground_orders {
 using Fixed = sim::unit_movement::Fixed;
 using Point = std::array<Fixed, 3>;
 
+// Order events a goal raises on its order (Order::raised_events): the
+// navigator's, then the path search's.
+inline constexpr uint32_t arrived_event = 0x20, path_failed_event = 0x40,
+                          goal_replaced_event = 0x80;
+inline constexpr uint32_t search_goal_contact_flag = 0x100; // order event: start inside goal
+// Order event: the start is off the grid, or the wall-follow seed missed the goal.
+inline constexpr uint32_t search_seed_unresolved_flag = 0x200;
+// Every event a goal raises on its order. Installing a new goal on an order
+// clears them, so the order only hears from the goal it now follows.
+inline constexpr uint32_t goal_event_mask = arrived_event | path_failed_event |
+                                            goal_replaced_event | search_goal_contact_flag |
+                                            search_seed_unresolved_flag;
+
 // Ground movement goals. Each shape is one of the game's goal kinds and its
 // value the kind number the goal reports (the air goals are kinds 2 and 3).
 // The navigator and path search only use goals through the functions below.

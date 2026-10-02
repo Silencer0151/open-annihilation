@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace oa::sim::feature_runtime {
 
@@ -65,11 +66,11 @@ enum class FeatureChange : uint8_t {
 
 // GAF sequence cursor (the sprite-animation cursor layout).
 struct FeatureCursor {
-    uint16_t frame;
-    uint16_t remaining; // ticks left on this frame
-    uint8_t repeat;
-    uint8_t unused_after_repeat[3]; // never written or read
-    oa_ref32 sequence;              // FeatureDef seq_name_*; 0 once a one-shot sequence completes
+    uint16_t frame{};
+    uint16_t remaining{}; // ticks left on this frame
+    uint8_t repeat{};
+    uint8_t unused_after_repeat[3]{}; // never written or read
+    oa_ref32 sequence;                // FeatureDef seq_name_*; 0 once a one-shot sequence completes
 };
 
 // Object (3DO) feature: its model state and falling motion.
@@ -83,33 +84,40 @@ struct PlacedFeatureModel {
 struct PlacedFeatureSprite {
     FeatureCursor animation;
     FeatureCursor shadow;
-    uint8_t unused_tail[4]; // pads this view to the 3DO view's size; never written or read
+    uint8_t unused_tail[4]{}; // pads this view to the 3DO view's size; never written or read
 };
 
 // One record of the placed-feature pool; MapPlot.feature_record indexes it
 // while the plot has OA_PLOT_FLAG_ANIMATING_FEATURE.
 struct PlacedFeature {
-    int16_t next;
-    int16_t prev;
+    /// Builds a cleared record, its union cleared through the 3DO view.
+    ///
+    /// Spelled out because some compilers delete the implicit constructor of
+    /// a class whose anonymous union holds a member with initialisers.
+    PlacedFeature() noexcept : model{} {}
+
+    int16_t next{};
+    int16_t prev{};
 
     union {
         PlacedFeatureModel model;
         PlacedFeatureSprite sprite;
     };
 
-    int16_t orientation[3];
-    uint16_t damage;
-    int16_t cell_x;
-    int16_t cell_z;
-    uint16_t def_index; // FeatureDef table index
-    uint8_t spread_countdown;
-    uint8_t state; // state_*
+    int16_t orientation[3]{};
+    uint16_t damage{};
+    int16_t cell_x{};
+    int16_t cell_z{};
+    uint16_t def_index{}; // FeatureDef table index
+    uint8_t spread_countdown{};
+    uint8_t state{}; // state_*
 };
 
 #pragma pack(pop)
 
 static_assert(sizeof(FeatureCursor) == 0xc);
 static_assert(sizeof(PlacedFeature) == 0x30);
+static_assert(std::is_trivially_copyable_v<PlacedFeature>);
 static_assert(offsetof(PlacedFeature, model) == 0x4);
 static_assert(offsetof(PlacedFeature, orientation) == 0x20);
 static_assert(offsetof(PlacedFeature, damage) == 0x26);
@@ -128,13 +136,13 @@ enum class FeatureList : uint8_t {
 
 // One frame of a feature GAF sequence as the host resolves it.
 struct FeatureSequenceFrame {
-    uint16_t frame_count;
-    uint8_t repeat;
-    uint16_t duration;
-    int16_t width;
-    int16_t height;
-    int16_t origin_x;
-    int16_t origin_y;
+    uint16_t frame_count{};
+    uint8_t repeat{};
+    uint16_t duration{};
+    int16_t width{};
+    int16_t height{};
+    int16_t origin_x{};
+    int16_t origin_y{};
 };
 
 // Platform and cross-system calls made by the feature code. Null entries are
@@ -142,18 +150,18 @@ struct FeatureSequenceFrame {
 // fills frame_count and repeat even when the frame is past the end, and
 // returns false then.
 struct FeatureHost {
-    void* context;
+    void* context{};
     /// Draws from the shared deterministic stream.
     ///
     /// @param context FeatureHost::context
     /// @param limit exclusive upper bound
     /// @return a value in 0..limit-1
-    uint32_t (*random)(void* context, uint32_t limit);
+    uint32_t (*random)(void* context, uint32_t limit){};
     /// Draws from the match's linear congruential stream; used for smoke jitter only.
     ///
     /// @param context FeatureHost::context
     /// @return a value in 0..0x7fff
-    int32_t (*lcg_random)(void* context);
+    int32_t (*lcg_random)(void* context){};
     /// Resolves one frame of a GAF sequence.
     ///
     /// @param context FeatureHost::context
@@ -163,18 +171,18 @@ struct FeatureHost {
     /// @return false when the frame is past the end
     bool (*sequence_frame)(
         void* context, oa_ref32 sequence, uint16_t frame, FeatureSequenceFrame* out
-    );
+    ){};
     /// Creates the model state of a 3DO feature.
     ///
     /// @param context FeatureHost::context
     /// @param def the feature's definition
     /// @return the model object ref
-    oa_ref32 (*create_object)(void* context, const FeatureDef* def);
+    oa_ref32 (*create_object)(void* context, const FeatureDef* def){};
     /// Destroys a 3DO feature's model state.
     ///
     /// @param context FeatureHost::context
     /// @param object ref create_object returned
-    void (*destroy_object)(void* context, oa_ref32 object);
+    void (*destroy_object)(void* context, oa_ref32 object){};
     /// Refreshes the movement maps over a changed feature footprint.
     ///
     /// @param context FeatureHost::context
@@ -184,38 +192,38 @@ struct FeatureHost {
     /// @param height footprint depth in cells
     void (*footprint_changed)(
         void* context, int16_t cell_x, int16_t cell_z, int16_t width, int16_t height
-    );
+    ){};
     /// Starts a geothermal vent's endless smoke on an effect layer.
     ///
     /// @param context FeatureHost::context
     /// @param position signed 16.16 world position of the vent
     /// @param layer effect layer (geothermal_smoke_layer)
-    void (*emit_feature_fx)(void* context, const FixedVec3* position, uint32_t layer);
+    void (*emit_feature_fx)(void* context, const FixedVec3* position, uint32_t layer){};
     /// Emits one light smoke puff on an effect layer.
     ///
     /// @param context FeatureHost::context
     /// @param position signed 16.16 world position of the puff
     /// @param layer effect layer (burning_smoke_layer)
-    void (*emit_smoke)(void* context, const FixedVec3* position, uint32_t layer);
+    void (*emit_smoke)(void* context, const FixedVec3* position, uint32_t layer){};
     /// Plays a named sound at a world position.
     ///
     /// @param context FeatureHost::context
     /// @param name sound name, such as "treeburn"
     /// @param position signed 16.16 world position
-    void (*play_sound)(void* context, const char* name, const FixedVec3* position);
+    void (*play_sound)(void* context, const char* name, const FixedVec3* position){};
     /// Fires a feature's burn weapon, damaging what stands around the fire.
     ///
     /// @param context FeatureHost::context
     /// @param weapon WeaponDef ref of the feature's burnweapon
     /// @param position signed 16.16 world position of the fire
-    void (*burn_weapon)(void* context, oa_ref32 weapon, const FixedVec3* position);
+    void (*burn_weapon)(void* context, oa_ref32 weapon, const FixedVec3* position){};
     /// Credits the economy when a unit finishes reclaiming a feature.
     ///
     /// @param context FeatureHost::context
     /// @param unit the reclaiming unit
     /// @param energy the feature's energy
     /// @param metal the feature's metal
-    void (*credit_reclaim)(void* context, Unit* unit, float energy, float metal);
+    void (*credit_reclaim)(void* context, Unit* unit, float energy, float metal){};
     /// Reports whether another player's simulation settles this weapon hit on a feature.
     ///
     /// @param context FeatureHost::context
@@ -223,7 +231,9 @@ struct FeatureHost {
     /// @param cell_x hit plot column
     /// @param cell_z hit plot row
     /// @return true when nothing is to be applied here
-    bool (*feature_hit_elsewhere)(void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z);
+    bool (*feature_hit_elsewhere)(
+        void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z
+    ){};
     /// Reports a feature change settled here to the other players.
     ///
     /// @param context FeatureHost::context
@@ -488,9 +498,9 @@ void tick_features(World& world, const FeatureHost& host) noexcept;
 
 // One map-placed feature from the mission script (0x88 bytes each).
 struct FeaturePlacement {
-    char name[0x80];
-    int32_t x;
-    int32_t z;
+    char name[0x80]{};
+    int32_t x{};
+    int32_t z{};
 };
 
 static_assert(sizeof(FeaturePlacement) == 0x88);

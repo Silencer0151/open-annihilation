@@ -26,8 +26,12 @@ and script attachment read from that record:
   no-chase mask out of the category registry once every type has joined its
   categories.
 
-The library also keeps a bounded TDF reader, `parse_tdf`, which other formats
-(scenario, side and feature files) are read with.
+Every other TDF text the engine reads, scenario (OTA), side, sound, meteor
+and feature files among them, goes through the same reader, `oa::formats::tdf`,
+and its number getters; `OwnedDocument` holds a parsed document and frees it
+when it goes out of scope. An entry missing its closing `;` runs on to the
+next `;` there too: the shipped `CORALS.TDF` gives Coral20 no height, and
+`BARRIERS.TDF` gives Barrier13 a shadow sequence name no archive holds.
 
 Build and test independently:
 

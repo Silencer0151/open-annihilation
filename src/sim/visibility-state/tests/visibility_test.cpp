@@ -483,6 +483,15 @@ int main() {
     const std::string_view signed_los_line = "+1, +2, -3";
     const auto signed_pattern = build_altitude_pattern(std::span(&signed_los_line, 1));
     CHECK(signed_pattern.rays[0].offsets[0][0] == 2 && signed_pattern.rays[0].offsets[0][1] == 3);
+    CHECK(!signed_pattern.error);
+    // A line with fewer pairs than its count, or a value that is not an
+    // integer, refuses the table.
+    const std::string_view short_los_line = "2, 1, 2";
+    const auto short_pattern = build_altitude_pattern(std::span(&short_los_line, 1));
+    CHECK(short_pattern.error && short_pattern.rays.empty());
+    const std::string_view word_los_line = "1, x, 2";
+    CHECK(build_altitude_pattern(std::span(&word_los_line, 1)).error);
+    CHECK(build_altitude_cells(flat_heights, 4, 3, 3).empty());
     TerrainGrid terrain{3, 3, cells};
     SpeedUnit speed{2.5F, 1, 1, 2, 2, 0, true};
     SpeedRecorder h;

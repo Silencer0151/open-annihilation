@@ -9,8 +9,8 @@
 
 #include "oa/core/feature_def.h"
 #include "oa/sim/map_runtime.hpp"
+#include "oa/formats/tdf.hpp"
 #include "oa/formats/tnt.hpp"
-#include "oa/data/unit_definitions.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -28,18 +28,18 @@ inline constexpr std::string_view reused_animation_name = "reuse";
 // Asset references the definition loader stores into a FeatureDef. A null
 // entry stores 0, which the feature code treats as "no sequence/object".
 struct FeatureDefHost {
-    void* context;
+    void* context{};
     // Archive ref for anims/<gaf_name>.gaf.
-    oa_ref32 (*load_animation)(void* context, const char* gaf_name);
+    oa_ref32 (*load_animation)(void* context, const char* gaf_name){};
     // Sequence ref within a loaded archive; one_shot marks a die/burn/reclaim
     // sequence that must not loop.
     oa_ref32 (*find_sequence)(
         void* context, oa_ref32 animation, const char* sequence, bool one_shot
-    );
+    ){};
     // Model ref for objects3d/<object_name>.
-    oa_ref32 (*load_object)(void* context, const char* object_name);
+    oa_ref32 (*load_object)(void* context, const char* object_name){};
     // WeaponDef ref by name, 0 when unknown.
-    oa_ref32 (*find_weapon)(void* context, const char* weapon_name);
+    oa_ref32 (*find_weapon)(void* context, const char* weapon_name){};
     // Frame count, repeat flag and duration of one frame of a sequence, for
     // the looping cursor an animating sprite starts at load time.
     void (*sequence_frame)(
@@ -49,7 +49,7 @@ struct FeatureDefHost {
         uint16_t* frame_count,
         uint8_t* repeat,
         uint16_t* duration
-    );
+    ){};
 };
 
 struct FeatureDefTable {
@@ -69,9 +69,8 @@ struct FeatureIndexResult {
 /// @param documents feature documents in listing order
 /// @param name feature name to look up
 /// @return the section, or null when no document has it
-[[nodiscard]] const data::unit_definitions::TdfSection* find_feature_section(
-    std::span<const data::unit_definitions::TdfDocument> documents, std::string_view name
-);
+[[nodiscard]] const formats::tdf::Block*
+find_feature_section(std::span<const formats::tdf::OwnedDocument> documents, std::string_view name);
 
 /// Finds the table index of the definition named `name`, case-insensitively.
 ///
@@ -110,7 +109,7 @@ find_feature_index(const FeatureDefTable& table, std::string_view name) {
 /// @return the new index, ErrorCode::missing_feature_definition for an unknown name or ErrorCode::feature_table_mismatch for a full table
 [[nodiscard]] FeatureIndexResult load_feature_def(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     std::string_view name,
     const FeatureDefHost* host
 );
@@ -124,7 +123,7 @@ find_feature_index(const FeatureDefTable& table, std::string_view name) {
 /// @return the index, or the load_feature_def error
 [[nodiscard]] FeatureIndexResult find_or_load_feature(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     std::string_view name,
     const FeatureDefHost* host
 );
@@ -141,7 +140,7 @@ find_feature_index(const FeatureDefTable& table, std::string_view name) {
 [[nodiscard]] std::optional<Error> init_feature_table(
     FeatureDefTable& table,
     const formats::tnt::Map& map,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     const FeatureDefHost* host
 );
 
@@ -155,7 +154,7 @@ find_feature_index(const FeatureDefTable& table, std::string_view name) {
 /// @return the first missing section or load error, or nullopt
 [[nodiscard]] std::optional<Error> load_feature_links(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     const FeatureDefHost* host
 );
 

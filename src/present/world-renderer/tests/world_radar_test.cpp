@@ -288,6 +288,7 @@ struct RadarScene {
     SurfacePool pool;
     wr::RadarSurfaces surfaces{};
     std::vector<oa::RadarHotUnit> hot = std::vector<oa::RadarHotUnit>(8);
+    uint32_t listed_count{};
     bool point_seen = false;
 
     RadarScene() {
@@ -346,10 +347,10 @@ struct RadarScene {
         host.point_visible = [](void* user, const oa::FixedVec3&) {
             return static_cast<RadarScene*>(user)->point_seen;
         };
-        wr::radar_compose_final(*world, surfaces, blips.sprites(), host, hot);
+        listed_count = wr::radar_compose_final(*world, surfaces, blips.sprites(), host, hot);
     }
 
-    [[nodiscard]] int32_t listed() const { return world->game.hot_radar_unit_count; }
+    [[nodiscard]] uint32_t listed() const { return listed_count; }
 };
 
 void compose_units() {
@@ -370,6 +371,8 @@ void compose_units() {
     OA_CHECK(scene.at(30, 30) == 0xb0); // the cursor marker drawn over the contact blip
     OA_CHECK(scene.at(0, 0) == mapped_fill);
     OA_CHECK(scene.listed() == 2);
+    // The count goes to the caller; the game block's copy is left alone.
+    OA_CHECK(game.hot_radar_unit_count == 0);
     OA_CHECK(scene.hot[0].unit_id == 1 && scene.hot[0].x == 10 && scene.hot[0].y == 13 + 19);
     OA_CHECK(scene.hot[1].unit_id == 3 && scene.hot[1].x == 30 && scene.hot[1].y == 13 + 30);
     OA_CHECK((game.radar_blink_flags & wr::radar_flag_redraw) != 0);

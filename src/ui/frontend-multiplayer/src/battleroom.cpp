@@ -8,6 +8,7 @@
 #include "oa/netgame/player_slots.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1228,7 +1229,7 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
                     unit_sync_peer_complete(
                         lobby, netgame::player_slot_id(*lobby.game, static_cast<uint8_t>(slot))
                     ))
-                    std::strncat(text, ":s", sizeof(text) - std::strlen(text) - 1);
+                    oa::base::text::append_terminated(text, ":s");
                 set_control_text(*ping, text);
                 if (static_cast<uint32_t>(value) <= lowest_latency)
                     lowest_latency = static_cast<uint32_t>(value);
@@ -2737,7 +2738,7 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
     case netgame::RecordType::unit_def_handshake:
         unit_sync_receive(
             lobby,
-            event.data,
+            {event.data, event.size},
             static_cast<uint8_t>(std::max(0, slot_for_player_id(lobby, event.player_id)))
         );
         return true;

@@ -37,48 +37,48 @@ inline constexpr const char* kMultiplayerDiscMessage =
     "Please insert the Multiplayer CD (Disc 1) and try again";
 
 struct FrontendHost {
-    void* context;
-    void (*play_sound)(void* context, const char* name);
-    void (*select_cursor_animation)(void* context, int32_t index);
-    void (*message_box)(void* context, const char* text, int32_t width);
-    bool (*disc_present)(void* context);
-    void (*discover_archives)(void* context);
-    void (*signal)(void* context, uint8_t signal);
-    void (*open_load_game)(void* context);
-    void (*open_options)(void* context);
-    void (*clear_selection)(void* context);
+    void* context{};
+    void (*play_sound)(void* context, const char* name){};
+    void (*select_cursor_animation)(void* context, int32_t index){};
+    void (*message_box)(void* context, const char* text, int32_t width){};
+    bool (*disc_present)(void* context){};
+    void (*discover_archives)(void* context){};
+    void (*signal)(void* context, uint8_t signal){};
+    void (*open_load_game)(void* context){};
+    void (*open_options)(void* context){};
+    void (*clear_selection)(void* context){};
     // Sets the active byte of the named button or list.
-    void (*set_control_value)(void* context, const char* name, int32_t value);
+    void (*set_control_value)(void* context, const char* name, int32_t value){};
     // Selects the named button of a radio group: its status becomes 1 and the
     // other buttons of its group are cleared.
-    void (*select_group)(void* context, const char* name);
-    void (*mark_dirty)(void* context);
+    void (*select_group)(void* context, const char* name){};
+    void (*mark_dirty)(void* context){};
     // Fills a scrollable list from NUL-separated entries.
-    void (*set_list)(void* context, const char* name, const char* entries, int32_t count);
+    void (*set_list)(void* context, const char* name, const char* entries, int32_t count){};
     // Keyboard shortcut character of a named control.
-    void (*set_quick_key)(void* context, const char* name, char key);
-    void (*write_all_missions)(void* context, bool unlocked);
-    void (*save_game_options)(void* context);
-    const char* (*translate)(void* context, const char* text);
-    void (*stop_narration)(void* context);
+    void (*set_quick_key)(void* context, const char* name, char key){};
+    void (*write_all_missions)(void* context, bool unlocked){};
+    void (*save_game_options)(void* context){};
+    const char* (*translate)(void* context, const char* text){};
+    void (*stop_narration)(void* context){};
     // Streams a narration file `delay` engine clock ticks (30 a second) later.
-    void (*play_narration)(void* context, const char* path, uint32_t delay);
-    void (*redraw_frame)(void* context);
+    void (*play_narration)(void* context, const char* path, uint32_t delay){};
+    void (*redraw_frame)(void* context){};
     // Sets a button's stage byte, which picks a staged caption.
-    void (*set_stage)(void* context, const char* name, uint8_t stage);
+    void (*set_stage)(void* context, const char* name, uint8_t stage){};
     // Clears bits of a control's attribute word (attribs).
-    void (*clear_attributes)(void* context, const char* name, uint32_t bits);
+    void (*clear_attributes)(void* context, const char* name, uint32_t bits){};
     // Named background for the panel just loaded (nothing deferred).
-    void (*load_background)(void* context, const char* name);
+    void (*load_background)(void* context, const char* name){};
     // Sets the y or the height of the first control of `type` with this name.
-    void (*set_control_y)(void* context, const char* name, uint8_t type, int16_t y);
-    void (*set_control_height)(void* context, const char* name, uint8_t type, int16_t height);
+    void (*set_control_y)(void* context, const char* name, uint8_t type, int16_t y){};
+    void (*set_control_height)(void* context, const char* name, uint8_t type, int16_t height){};
     // Zeroes the hotspot of every frame of the panel's named GAF sequence.
-    void (*zero_sequence_origins)(void* context, const char* sequence);
+    void (*zero_sequence_origins)(void* context, const char* sequence){};
     // Gives a named control the keyboard focus.
-    void (*focus_control)(void* context, const char* name);
+    void (*focus_control)(void* context, const char* name){};
     // Whether a Campaign list selection refills the Missions list.
-    void (*set_campaign_refills_missions)(void* context, bool refills);
+    void (*set_campaign_refills_missions)(void* context, bool refills){};
 };
 
 // Null-safe wrappers used by the panels: a null host or member does nothing.

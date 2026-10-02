@@ -20,7 +20,6 @@ namespace oa::app {
 namespace {
 
 constexpr uint16_t first_reserved_feature_word = OA_PLOT_FEATURE_RESERVED;
-constexpr int32_t cell_pixels = 16;
 
 } // namespace
 
@@ -41,8 +40,10 @@ void Runtime::begin_reclaim_check() {
     const auto width = static_cast<std::size_t>(spatial.terrain_width);
     if (width == 0 || spatial.plots.empty())
         throw std::runtime_error("reclaim check needs the map plots");
-    const auto unit_x = static_cast<int32_t>(commander->unit->position[0] >> 16) / cell_pixels;
-    const auto unit_z = static_cast<int32_t>(commander->unit->position[2] >> 16) / cell_pixels;
+    const auto unit_x =
+        static_cast<int32_t>(commander->unit->position[0] >> 16) / OA_MAP_CELL_PIXELS;
+    const auto unit_z =
+        static_cast<int32_t>(commander->unit->position[2] >> 16) / OA_MAP_CELL_PIXELS;
     std::optional<ReclaimCheck> best;
     int64_t best_distance = 0;
     const oa::FeatureDef* best_def = nullptr;
@@ -71,9 +72,9 @@ void Runtime::begin_reclaim_check() {
     best->produced_last = player.metal_produced_total;
     best->store_before = player.metal;
     const oa::sim::ground_orders::Point destination{
-        (best->cell_x * cell_pixels + best_def->footprint_x * cell_pixels / 2) << 16,
+        (best->cell_x * OA_MAP_CELL_PIXELS + best_def->footprint_x * OA_MAP_CELL_PIXELS / 2) << 16,
         0,
-        (best->cell_z * cell_pixels + best_def->footprint_z * cell_pixels / 2) << 16
+        (best->cell_z * OA_MAP_CELL_PIXELS + best_def->footprint_z * OA_MAP_CELL_PIXELS / 2) << 16
     };
     (void)match_->issue_feature_reclaim(best->builder, destination, false);
     reclaim_check_ = best;

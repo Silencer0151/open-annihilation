@@ -4,6 +4,7 @@
 #include "oa/data/persist/save_sections.hpp"
 
 #include "bank_util.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -106,7 +107,7 @@ void save_write_features(const SaveContext* save, Bank* bank) {
     if (names == nullptr)
         return;
     for (int32_t i = 0; i < def_count; ++i)
-        std::strncpy(
+        oa::base::text::copy_padded(
             names + static_cast<std::size_t>(i) * type_name_bytes, defs[i].name, type_name_bytes
         );
     bank_open_blob_name(bank, type_names_blob);

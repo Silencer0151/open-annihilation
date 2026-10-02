@@ -18,6 +18,7 @@
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/surface.hpp"
 #include "oa/sim/speed.hpp"
+#include "match_fault.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstddef>
@@ -30,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -428,8 +430,8 @@ std::size_t radar_mismatches(
     const int32_t bottom = radar.height - 1;
     auto stretched = oa::present::create_surface(radar.width, radar.height);
     oa::Sprite texture{};
-    texture.width = picture.surface.width;
-    texture.height = picture.surface.height;
+    texture.width = static_cast<uint16_t>(picture.surface.width);
+    texture.height = static_cast<uint16_t>(picture.surface.height);
     texture.encoding = OA_SPRITE_RAW;
     texture.data = const_cast<uint8_t*>(picture.pixels.data());
     const oa::present::PolygonVertex quad[4] = {{0, 0}, {right, 0}, {right, bottom}, {0, bottom}};
@@ -1171,7 +1173,8 @@ void Runtime::check_match_dialogs() {
             preferences_.game_speed == oa::sim::speed::fastest,
         "Enter did not leave the preferences as OK does"
     );
-    (void)oa::sim::speed::set_speed(match_->state(), speed, message_hooks());
+    // The speed set is read back from the Game block below.
+    std::ignore = oa::sim::speed::set_speed(match_->state(), speed, message_hooks());
     match_timing_.requested_rate = game.requested_speed;
     match_timing_.actual_rate = game.current_speed;
     preferences_.game_speed = game.requested_speed;
@@ -1270,10 +1273,10 @@ void Runtime::check_match_dialogs() {
             enemy = slot.unit_index;
     }
     require(commander != 0 && enemy != 0, "the skirmish has no two commanders");
-    (void)match_->issue_capture(commander, enemy, false);
+    match_->issue_capture(commander, enemy, false);
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
     const auto* definition = definition_for(commander);
     const std::string caption = (definition != nullptr ? definition->display_name : std::string()) +
                                 ": That unit cannot be captured";
@@ -1348,7 +1351,7 @@ void Runtime::check_match_dialogs() {
         for (uint32_t step = 0; step < kVictoryTicks && !match_finished_; ++step) {
             ++match_timing_.tick;
             match_->simulation().tick = match_timing_.tick;
-            match_->tick();
+            tick_or_raise(*match_);
             present_match_outcome();
         }
         require(match_finished_, "the skirmish swept of its opponents did not end");
@@ -1358,20 +1361,20 @@ void Runtime::check_match_dialogs() {
             "the skirmish did not end on ENDMSN.GUI"
         );
         const auto* main_menu = widget("MainMenu");
-        const auto* caption =
+        const auto* main_menu_button =
             main_menu != nullptr ? std::get_if<oa::ui::gui_layout::ButtonFields>(&main_menu->fields)
                                  : nullptr;
         require(
-            caption != nullptr && caption->text == "Portal",
+            main_menu_button != nullptr && main_menu_button->text == "Portal",
             "ENDMSN.GUI's MAIN MENU does not read the return label"
         );
-        const auto cursor = cursor_index_;
+        const auto cursor_before_click = cursor_index_;
         click_end_panel(static_cast<std::size_t>(main_menu - resources_.layout.gadgets.data()));
         require(
             screen_ == Screen::main_menu, "ENDMSN.GUI's MAIN MENU did not leave for the main menu"
         );
         require(
-            cursor_index_ == cursor && cursor_index_ != kLeavingPanelCursor,
+            cursor_index_ == cursor_before_click && cursor_index_ != kLeavingPanelCursor,
             "ENDMSN.GUI's MAIN MENU changed the pointer's picture with a return label"
         );
     } catch (...) {
@@ -2033,19 +2036,19 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
             );
             const auto question_root = match_hud_->layout.gadgets.front().common;
             const auto no = control("CHOICE2");
-            const auto no_x = static_cast<float>(
+            const auto asked_no_x = static_cast<float>(
                 asked.x + (no.x - question_root.x) * asked.width / question_root.width +
                 no.width * asked.width / question_root.width / 2
             );
-            const auto no_y = static_cast<float>(
+            const auto asked_no_y = static_cast<float>(
                 asked.y + (no.y - question_root.y) * asked.height / question_root.height +
                 no.height * asked.height / question_root.height / 2
             );
             require(
-                point_at(no_x, no_y) == "CHOICE2",
+                point_at(asked_no_x, asked_no_y) == "CHOICE2",
                 "the pointer over the question's No is not over it"
             );
-            click_at(no_x, no_y);
+            click_at(asked_no_x, asked_no_y);
             require(
                 team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI" &&
                     match_panels_keyboard_,
@@ -2148,7 +2151,8 @@ void Runtime::check_load_save() {
         oa::ui::frontend::SaveDialogContext saves;
         saves.files = oa::ui::frontend::savegame_host_files(&save_root);
         saves.reader = oa::ui::frontend::savegame_persist_reader(&save_root);
-        (void)oa::ui::frontend::savegame_build_list(saves);
+        // The list is read from the context; its length is not needed.
+        std::ignore = oa::ui::frontend::savegame_build_list(saves);
         return saves;
     };
 
@@ -2374,7 +2378,8 @@ void Runtime::check_load_save() {
         return shown;
     };
     const oa::ui::display_layout::Point authored{header.x, header.y};
-    (void)open_over_match("SAVEGAME", true);
+    // What the dialog shows is checked by clicking it.
+    std::ignore = open_over_match("SAVEGAME", true);
     click_record("CANCEL");
     if (screen_ != Screen::match || save_dialog_open())
         throw std::runtime_error(

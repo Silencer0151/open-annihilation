@@ -150,15 +150,27 @@ constexpr int32_t cell_shift = 20;
 constexpr int32_t half_cell_shift = 19;
 constexpr int64_t feature_sample_step = 0x300000;
 
+/// Returns a unit's position as a ground-order point.
+///
+/// @param unit the unit
+/// @return its signed 16.16 x, y, z
 inline sim::ground_orders::Point position_of(const oa::Unit& unit) {
     return {unit.position.x, unit.position.y, unit.position.z};
 }
 
+/// Subtracts one signed 16.16 value from another, wrapping at 32 bits.
+///
+/// @param a value subtracted from
+/// @param b value subtracted
+/// @return the low 32 bits of the difference
 inline int32_t sub_fixed(int32_t a, int32_t b) {
     return std::bit_cast<int32_t>(std::bit_cast<uint32_t>(a) - std::bit_cast<uint32_t>(b));
 }
 
-// The high 32 bits of a squared 16.16 delta: squared world units.
+/// Returns the high 32 bits of a squared 16.16 delta: squared world units.
+///
+/// @param delta signed 16.16 delta
+/// @return bits 32..63 of delta * delta, read as signed
 inline int32_t squared_high(int32_t delta) {
     return static_cast<int32_t>((static_cast<int64_t>(delta) * delta) >> 32);
 }
@@ -194,16 +206,36 @@ class TickHost::GroundMissions {
     Match::RuntimeOrder& record;
     uint32_t events;
 
+    /// Returns the match the unit plays in.
+    ///
+    /// @return the match
     Match& match() { return host.match; }
 
+    /// Returns the match's canonical world.
+    ///
+    /// @return the world
     oa::World& world() { return host.match.state(); }
 
+    /// Returns a unit's type record.
+    ///
+    /// @param unit the unit
+    /// @return its type; reserved type 0, which is noted, for a unit without one
     const oa::UnitDef& def_of(const oa::Unit& unit) { return match_unit_def(host.match, unit); }
 
+    /// Returns the type record of the unit running the order.
+    ///
+    /// @return its type
     const oa::UnitDef& def() { return def_of(s.record); }
 
+    /// Returns the current game tick.
+    ///
+    /// @return Game.tick
     uint32_t tick() { return world().game.tick; }
 
+    /// Draws from the match's shared random stream.
+    ///
+    /// @param limit exclusive upper limit
+    /// @return a value below limit, or 0 for a limit below 2
     uint32_t random(uint32_t limit) { return host.match.random_bounded(limit); }
 
     /// Plays a speech category for the unit.
@@ -219,7 +251,9 @@ class TickHost::GroundMissions {
         host.play_sound(*s.unit, category, caption);
     }
 
-    // Waits `ticks` ticks for the timer event.
+    /// Makes the order wait for the timer event.
+    ///
+    /// @param ticks ticks from now until the order wakes
     void wait_ticks(uint32_t ticks) {
         order.wait_events |= ground::timer_event;
         order.wake_tick = tick() + ticks;
@@ -235,6 +269,12 @@ class TickHost::GroundMissions {
         }
     }
 
+    /// Tells whether one player counts another as an ally: the match's alliance
+    /// row when it has one, else the player record's.
+    ///
+    /// @param owner player index whose row is read
+    /// @param other player index looked up in it
+    /// @return true for an ally
     bool allied(uint8_t owner, uint8_t other) {
         if (owner < host.match.player_alliances_.size() && host.match.player_alliances_[owner])
             return other < 10 && (*host.match.player_alliances_[owner])[other] != 0;
@@ -250,20 +290,33 @@ class TickHost::GroundMissions {
         return record.construction.target ? record.construction.target : record.attack.target;
     }
 
+    /// Replaces this order's target, keeping the observer chain in step.
+    ///
+    /// @param unit new target, or null for none
     void set_target(sim::simulation_state::Unit* unit) { host.retarget(record, unit); }
 
+    /// Replaces an order's target, keeping the observer chain in step.
+    ///
+    /// @param[in,out] entry order whose target changes
+    /// @param unit new target, or null for none
     void retarget(Match::RuntimeOrder& entry, sim::simulation_state::Unit* unit) {
         host.retarget(entry, unit);
     }
 
+    /// Returns the unit in a pool slot.
+    ///
+    /// @param slot unit slot
+    /// @return its view, or null for slot 0 or one outside the pool
     sim::simulation_state::Unit* unit_at(int32_t slot) {
         if (slot <= 0 || static_cast<size_t>(slot) >= host.match.slots_.size())
             return nullptr;
         return host.match.slots_[static_cast<size_t>(slot)].unit;
     }
 
-    // Replaces the navigator goal of the order. A structure has no movement
-    // controller; its goals go nowhere.
+    /// Replaces the order's navigator goal; a structure has no movement object, so
+    /// its goals go nowhere.
+    ///
+    /// @param goal new goal, or null to leave the order without one
     void install_goal(std::unique_ptr<sim::ground_orders::Goal> goal) {
         auto* movement = host.match.ground_runtime(s.unit_index);
         if (!movement)
@@ -276,17 +329,22 @@ class TickHost::GroundMissions {
             record.extra.goal.reset();
         }
         if (goal) {
-            order.raised_events &= ~0x3e0u;
+            order.raised_events &= ~sim::ground_orders::goal_event_mask;
             sim::ground_orders::install_goal(host.view(s, g, flags), goal.get(), tick(), host);
             record.extra.goal = std::move(goal);
         }
         host.write_flags(s, flags);
     }
 
+    /// Tells whether the unit's type can fly.
+    ///
+    /// @return true for OA_UNIT_DEF_FLAG_CAN_FLY
     bool can_fly() { return (def().flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0; }
 
-    // Whether the unit has a movement object (Unit.movement; bmcode 1 types
-    // only).
+    /// Tells whether the unit has a movement object (Unit.movement; bmcode 1 types
+    /// only).
+    ///
+    /// @return true when it has one
     bool has_movement_object() const { return host.match.ground_runtime(s.unit_index) != nullptr; }
 
     /// Replaces the order's goal with arriving within `tolerance` world units
@@ -340,6 +398,10 @@ class TickHost::GroundMissions {
         return ground::keep_waiting;
     }
 
+    /// Starts StartBuilding with the heading from the unit to a point, relative to
+    /// the unit's own heading.
+    ///
+    /// @param point signed 16.16 point built at
     void start_building_toward(const sim::ground_orders::Point& point) {
         const auto heading = static_cast<int16_t>(
             ground::bearing_between(ground::position_of(s.record), point) -
@@ -360,15 +422,26 @@ class TickHost::GroundMissions {
         return ground::keep_waiting;
     }
 
+    /// Tells whether the unit's type can carry units.
+    ///
+    /// @return true for OA_UNIT_DEF_ABILITY_CAN_LOAD
     bool can_load() { return (def().abilities & OA_UNIT_DEF_ABILITY_CAN_LOAD) != 0; }
 
+    /// Starts a transport script with four locals, the first passed as its
+    /// argument, stepping it at once; nothing happens without a script.
+    ///
+    /// @param name script name; the lookup is case-sensitive
+    /// @param locals values of the four locals
     void start_transport_script(const char* name, const std::array<int32_t, 4>& locals) {
         auto* instance = host.match.instance(s.unit_index);
         if (instance && instance->script())
             (void)instance->script()->call_with_locals(name, locals, 1, true);
     }
 
-    // The unit the weapon slot is aimed at, when it aims at a unit.
+    /// Returns the unit a weapon slot aims at.
+    ///
+    /// @param slot weapon slot 0..2
+    /// @return the target, or null when the slot aims at none
     sim::simulation_state::Unit* weapon_target(uint32_t slot) {
         const auto* target = sim::weapon_execution::slot_target_unit(
             host.match.state(), s.record, static_cast<uint8_t>(slot)
@@ -378,6 +451,10 @@ class TickHost::GroundMissions {
 
     // --- Orders -------------------------------------------------------------
 
+    /// Gives an order a kind and the flags of the kind's descriptor.
+    ///
+    /// @param[in,out] entry the order
+    /// @param kind mission kind
     void apply_descriptor(Match::RuntimeOrder& entry, uint8_t kind) {
         const auto descriptor = mission_descriptor_table.at(kind);
         entry.order.kind = kind;
@@ -437,6 +514,11 @@ class TickHost::GroundMissions {
         return created;
     }
 
+    /// Returns the head link of the queue an order belongs in: the secondary queue
+    /// for an order whose flags carry order_secondary, else the primary.
+    ///
+    /// @param queued the order
+    /// @return the unit's head link of that queue
     sim::simulation_state::Order*& queue_head(const sim::simulation_state::Order& queued) {
         return (queued.flags & ground::order_secondary) ? s.unit->secondary : s.unit->primary;
     }
@@ -514,7 +596,9 @@ class TickHost::GroundMissions {
         return can_fly() ? ground::vtol_help_build_kind : ground::help_build_kind;
     }
 
-    // Order kind the command resolver picks for command 2 (move) to a point.
+    /// Returns the order kind the command resolver picks for a move to a point.
+    ///
+    /// @return QMove for a unit without a movement object, the move kind, or 0
     uint8_t move_command_kind() {
         CommandSource source;
         source.can_move = (def().abilities & OA_UNIT_DEF_ABILITY_CAN_MOVE) != 0;
@@ -618,7 +702,11 @@ class TickHost::GroundMissions {
         return found;
     }
 
-    // Live units of the player's sightings within `radius` of `centre`.
+    /// Lists the live units of the player's sightings within a radius.
+    ///
+    /// @param centre signed 16.16 centre
+    /// @param radius radius in world units
+    /// @return the units, in sightings order
     std::vector<sim::simulation_state::Unit*>
     known_units_near(const sim::ground_orders::Point& centre, int32_t radius) {
         struct CacheHost final : sim::combat_state::IntelligenceHost {
@@ -630,8 +718,7 @@ class TickHost::GroundMissions {
             bool unit_active(sim::combat_state::UnitIdentity id) override {
                 if (id == 0 || id >= match.slots_.size())
                     return false;
-                const auto flags = match.slots_[id].record.flags;
-                return (flags & OA_UNIT_FLAG_LIVE) && !(flags & OA_UNIT_FLAG_DEATH_PENDING);
+                return unit_is_live_target(match.slots_[id].record.flags);
             }
 
             const sim::combat_state::TargetUnit*
@@ -673,6 +760,11 @@ class TickHost::GroundMissions {
 
     // --- Map features --------------------------------------------------------
 
+    /// Returns the index of a map plot.
+    ///
+    /// @param cell_x plot column
+    /// @param cell_z plot row
+    /// @return the row-major index, or nothing off the map
     std::optional<size_t> plot_index(int32_t cell_x, int32_t cell_z) {
         const auto& spatial = host.match.spatial_;
         if (cell_x < 0 || cell_z < 0 || static_cast<uint32_t>(cell_x) >= spatial.terrain_width ||
@@ -685,7 +777,10 @@ class TickHost::GroundMissions {
         return index;
     }
 
-    // The plot a footprint continuation cell leads back to.
+    /// Returns the plot a footprint continuation cell leads back to.
+    ///
+    /// @param index plot index, row-major
+    /// @return the origin plot's index; the plot itself when it is no continuation
     size_t feature_origin(size_t index) {
         const auto& plots = host.match.spatial_.plots;
         if (plots[index].feature_word != ground::feature_continuation)
@@ -696,6 +791,10 @@ class TickHost::GroundMissions {
         return back <= index ? index - back : index;
     }
 
+    /// Returns the feature definition a plot's feature word names.
+    ///
+    /// @param word plot feature word
+    /// @return the definition, or null for a reserved word
     const oa::FeatureDef* feature_def(uint16_t word) {
         if (word >= ground::first_reserved_feature)
             return nullptr;
@@ -753,11 +852,19 @@ class TickHost::GroundMissions {
         return site;
     }
 
+    /// Tells whether a feature site can be reclaimed.
+    ///
+    /// @param site the site
+    /// @return true for a definition carrying OA_FEATURE_FLAG_RECLAIMABLE
     static bool reclaimable(const ground::FeatureSite& site) {
         return site.def && (site.def->flags & OA_FEATURE_FLAG_RECLAIMABLE);
     }
 
-    // 16.16 centre of the site on the ground, raised by up to the feature's height.
+    /// Returns the point a worker sprays a feature at: the site's centre on the
+    /// ground, raised by a random part of the feature's height.
+    ///
+    /// @param site the site
+    /// @return signed 16.16 point
     sim::ground_orders::Point work_point(const ground::FeatureSite& site) {
         sim::ground_orders::Point point{
             (site.footprint_x + site.cell_x * 2) << ground::half_cell_shift,
@@ -938,6 +1045,7 @@ class TickHost::GroundMissions {
         );
     }
 
+    /// Runs StopBuilding when the order started building (TickHost::stop_building).
     void stop_building() { host.stop_building(s, order); }
 
     /// Flags the build panel for a redraw when the viewpoint player has the
@@ -945,23 +1053,37 @@ class TickHost::GroundMissions {
     void refresh_selection() {
         if (s.record.owner_index == world().game.viewpoint_player &&
             (s.record.flags & OA_UNIT_FLAG_SELECTED))
-            host.match.selection_.frame_flags |= 0x10;
+            host.match.selection_.frame_flags |= OA_FRAME_FLAG_REFRESH_ORDER_PANEL;
     }
 
-    // Worker time per tick, as the build and repair steps pass it.
+    /// Returns a worker's time per tick, as the build and repair steps pass it.
+    ///
+    /// @param worker the worker's type
+    /// @return worker_time / 30, divided as integers
     float work_rate(const oa::UnitDef& worker) {
         return static_cast<float>(
             static_cast<int32_t>(static_cast<uint16_t>(worker.worker_time)) / 30
         );
     }
 
-    // trunc(hypot(x, z) * scale): a footprint's reach in world units.
+    /// Returns a footprint's reach: trunc(hypot(x, z) * scale).
+    ///
+    /// @param x footprint width in cells
+    /// @param z footprint depth in cells
+    /// @param scale world units per cell, signed
+    /// @return the reach in world units, its low 32 bits
     static int32_t footprint_reach(int16_t x, int16_t z, double scale) {
         return truncate_low32(base::game_math::planar_length(x, z) * scale);
     }
 
-    // World units between this unit and `at`, less both footprint reaches,
-    // as the build, capture and repair orders compare it with build_distance.
+    /// Returns the world units between this unit and a point, less both footprint
+    /// reaches, as the build, capture and repair orders compare it with
+    /// build_distance.
+    ///
+    /// @param at signed 16.16 point
+    /// @param footprint_x width of the footprint at the point, in cells
+    /// @param footprint_z depth of the footprint at the point, in cells
+    /// @return the gap in world units
     int32_t
     build_gap(const sim::ground_orders::Point& at, int16_t footprint_x, int16_t footprint_z) {
         const auto centre = base::game_math::distance(
@@ -973,6 +1095,10 @@ class TickHost::GroundMissions {
                footprint_reach(footprint_x, footprint_z, -8.0);
     }
 
+    /// Tells whether a unit lies within this unit's build distance.
+    ///
+    /// @param target the unit
+    /// @return true when the build gap is at most UnitDef.build_distance
     bool within_build_distance(const oa::Unit& target) {
         return build_gap(ground::position_of(target), target.footprint_x, target.footprint_z) <=
                static_cast<int32_t>(static_cast<uint16_t>(def().build_distance));
@@ -1011,7 +1137,10 @@ class TickHost::GroundMissions {
         return bite > 1 ? bite : 1;
     }
 
-    // Order kind the command resolver picks for command 9 (patrol).
+    /// Returns the order kind the command resolver picks for a patrol.
+    ///
+    /// @return QPatrol, the patrol or repair patrol kind, or 0 for a unit that
+    ///     cannot patrol
     uint8_t patrol_command_kind() {
         const auto& d = def();
         if (!(d.abilities & OA_UNIT_DEF_ABILITY_CAN_PATROL))
@@ -1024,9 +1153,14 @@ class TickHost::GroundMissions {
         return flies ? ground::vtol_repair_patrol_kind : ground::repair_patrol_kind;
     }
 
-    // A new order for this unit behind its queued orders, or at the head of
-    // its queue when the descriptor asks (the order insert with the queue
-    // flag set).
+    /// Queues a new order for this unit behind its queued orders, or at the head
+    /// of its queue when the descriptor asks.
+    ///
+    /// Inherited orders ahead of a primary order are dropped first; never the
+    /// order being dispatched.
+    ///
+    /// @param kind mission kind
+    /// @param point signed 16.16 point, or null for none
     void queue_order(uint8_t kind, const sim::ground_orders::Point* point) {
         auto& entry = create_order(kind, nullptr, point, 0, 0, 0);
         const bool secondary = (entry.order.flags & ground::order_secondary) != 0;
@@ -1036,7 +1170,7 @@ class TickHost::GroundMissions {
             while (s.unit->primary && s.unit->primary != &order && steps-- > 0 &&
                    (host.owned(*s.unit->primary).extra.command_flags & ground::order_inherited)) {
                 auto* head = s.unit->primary;
-                sim::simulation_state::remove_order(*s.unit, *head, host);
+                host.match.note_step(sim::simulation_state::remove_order(*s.unit, *head, host));
                 if (s.unit->primary == head)
                     break;
             }
@@ -1045,10 +1179,8 @@ class TickHost::GroundMissions {
         if (!secondary && !(entry.order.preserve_flags & ground::order_at_head)) {
             entry.extra.command_flags |= ground::order_queue_tail;
             insert_after_queue_tail(
-                *s.unit,
-                entry.order,
-                [&](sim::simulation_state::Order* queued) -> sim::ground_orders::OrderState& {
-                    return host.owned(*queued).extra;
+                *s.unit, entry.order, [&](sim::simulation_state::Order* queued) {
+                    return host.match.owned_extra(queued);
                 }
             );
             return;
@@ -1058,6 +1190,12 @@ class TickHost::GroundMissions {
 
   public:
 
+    /// Binds the handlers to one unit's order for one step.
+    ///
+    /// @param h the tick host
+    /// @param slot the unit
+    /// @param o the order
+    /// @param e events that woke the order
     GroundMissions(
         TickHost& h, sim::unit_spawn::Slot& slot, sim::simulation_state::Order& o, uint32_t e
     )
@@ -1285,10 +1423,11 @@ class TickHost::GroundMissions {
     /// bounds moves by the offset from the teleporter to the order point,
     /// trailing flame.
     ///
-    /// A teleporter whose type has no bounds throws. Empty slots are passed
+    /// A teleporter whose type has no bounds is noted and ends the order (8).
+    /// Empty slots are passed
     /// over; 3.1c also moves the records of dead units.
     ///
-    /// @return 5 (done).
+    /// @return 5 (done), or 8 without type bounds.
     uint32_t teleport();
 
     // tick_missions_build.cpp

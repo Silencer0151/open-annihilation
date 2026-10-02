@@ -8,6 +8,7 @@
 #include <atomic>
 #include <iostream>
 #include <string>
+#include <tuple>
 
 namespace oa::app {
 namespace {
@@ -26,9 +27,11 @@ struct NativeDialogs {
     ~NativeDialogs() {
         if (video_started)
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        // SDL refuses only a hint it does not hold, which has nothing to
+        // reset.
         if (video_started || video_failed) {
-            (void)SDL_ResetHint(SDL_HINT_MAC_BACKGROUND_APP);
-            (void)SDL_ResetHint(SDL_HINT_NO_SIGNAL_HANDLERS);
+            std::ignore = SDL_ResetHint(SDL_HINT_MAC_BACKGROUND_APP);
+            std::ignore = SDL_ResetHint(SDL_HINT_NO_SIGNAL_HANDLERS);
         }
     }
 };
@@ -58,12 +61,14 @@ void SDLCALL folder_chosen(void* userdata, const char* const* filelist, int) {
 bool start_video(NativeDialogs& dialogs) {
     if (dialogs.video_started || dialogs.video_failed)
         return dialogs.video_started;
+    // Both hints are comforts: refused, the dialogs still open with SDL's
+    // own behaviour.
     // From macOS 14 SDL leaves a terminal-launched process in the background,
     // and the panel with it.
-    (void)SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "0");
+    std::ignore = SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "0");
     // Nothing reads SDL's quit event while a dialog is open, so Ctrl+C keeps
     // ending the process.
-    (void)SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    std::ignore = SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         dialogs.video_failed = true;
         dialogs.video_error = SDL_GetError();
@@ -92,14 +97,17 @@ FolderPick pick_folder(void* context, const fs::path& start, fs::path* chosen, s
         *error = SDL_GetError();
         return FolderPick::unavailable;
     }
-    (void)SDL_SetStringProperty(properties, SDL_PROP_FILE_DIALOG_TITLE_STRING, kDialogTitle);
+    // A property SDL cannot store leaves the dialog with SDL's own title,
+    // starting folder or choice of one folder; it still opens.
+    std::ignore =
+        SDL_SetStringProperty(properties, SDL_PROP_FILE_DIALOG_TITLE_STRING, kDialogTitle);
     const auto location = dialog_location(start);
     if (!location.empty()) {
-        (void)SDL_SetStringProperty(
+        std::ignore = SDL_SetStringProperty(
             properties, SDL_PROP_FILE_DIALOG_LOCATION_STRING, location.c_str()
         );
     }
-    (void)SDL_SetBooleanProperty(properties, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false);
+    std::ignore = SDL_SetBooleanProperty(properties, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false);
     DialogWait wait;
     SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, folder_chosen, &wait, properties);
     SDL_DestroyProperties(properties);
@@ -126,7 +134,8 @@ FolderPick pick_folder(void* context, const fs::path& start, fs::path* chosen, s
 void tell_user(void* context, Notice kind, std::string_view text) {
     const std::string message(text);
     std::cerr << message << '\n';
-    (void)start_video(*static_cast<NativeDialogs*>(context));
+    // Without video the box below fails, and that is reported.
+    std::ignore = start_video(*static_cast<NativeDialogs*>(context));
     const SDL_MessageBoxFlags flags =
         kind == Notice::information ? SDL_MESSAGEBOX_INFORMATION : SDL_MESSAGEBOX_WARNING;
     if (!SDL_ShowSimpleMessageBox(flags, kMessageTitle, message.c_str(), nullptr))

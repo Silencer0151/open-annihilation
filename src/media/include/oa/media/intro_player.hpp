@@ -77,10 +77,18 @@ struct OpenPlayerResult;
 class IntroPlayer {
   public:
 
+    /// Takes over another player's open movie and decoders.
     IntroPlayer(IntroPlayer&&) noexcept;
+
+    /// Closes this player's movie and takes over another player's.
+    ///
+    /// @return this player
     IntroPlayer& operator=(IntroPlayer&&) noexcept;
+
     IntroPlayer(const IntroPlayer&) = delete;
     IntroPlayer& operator=(const IntroPlayer&) = delete;
+
+    /// Closes the movie file and frees its decoders.
     ~IntroPlayer();
 
     /// Opens a movie file and its decoders.
@@ -117,6 +125,10 @@ class IntroPlayer {
   private:
 
     struct Impl;
+
+    /// Wraps an opened movie and records its dimensions, frame count, rate and audio format.
+    ///
+    /// @param implementation the opened movie and its decoders
     explicit IntroPlayer(std::unique_ptr<Impl> implementation);
     std::unique_ptr<Impl> implementation_;
     VideoInfo info_;

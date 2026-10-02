@@ -91,22 +91,25 @@ struct SpawnSubsystems {
 
 // The unit-spawn host of a match: owns each slot's model instance and
 // COB interpreter and forwards the remaining engine operations to
-// SpawnSubsystems.
+// SpawnSubsystems. A callback that meets a broken invariant notes it in the
+// match's fault record and does nothing more.
 class SpawnBridge final : public sim::unit_spawn::Host {
   public:
 
     /// Binds the bridge to a world, its spawn tables and the loaded assets.
     ///
-    /// @param state Canonical world; its type count must equal the tables'.
+    /// @param state Canonical world; its type count equals the tables'.
     /// @param tables Unit-spawn type and asset tables.
     /// @param views Legacy views over `state`.
     /// @param loaded Loaded model/COB assets per type, as many as the tables'
-    ///     types, or construction throws.
+    ///     types; when the counts differ, the refusal is noted and no asset
+    ///     is found.
     /// @param values Unit-value services for the unit scripts.
     /// @param effects Effect and attachment services for the unit scripts.
     /// @param subsystems Engine operations unit creation calls out to.
     /// @param random Shared stream.
     /// @param clock_scale SLEEP multiplier for the unit scripts.
+    /// @param fault The match's fault record; must outlive the bridge.
     SpawnBridge(
         oa::World& state,
         sim::unit_spawn::Tables& tables,
@@ -116,13 +119,15 @@ class SpawnBridge final : public sim::unit_spawn::Host {
         Effects& effects,
         SpawnSubsystems& subsystems,
         SharedRandom& random,
-        int32_t clock_scale
+        int32_t clock_scale,
+        MatchFault& fault
     );
     /// Creates a unit through the unit-spawn sequence.
     ///
     /// @param request Type, player, slot and state of the new unit.
     /// @return The new unit's slot, or null for an ordinary refusal
-    ///     (disabled type, exhausted limit, no free slot).
+    ///     (disabled type, exhausted limit, no free slot) or a spawn fault,
+    ///     which is noted.
     sim::unit_spawn::Slot* create(const sim::unit_spawn::Request& request);
     /// Records the player's side, grants its start storage, creates the
     /// side's commander at a start marker and centres the local view on it.
@@ -136,7 +141,7 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     /// @param viewport_height View height in pixels.
     /// @param start Commander type, missing-start and camera services.
     /// @return Whether the start position was found, and the commander (null
-    ///     when its creation was refused).
+    ///     when its creation was refused or met a fault, which is noted).
     sim::unit_spawn::StartResult start_player(
         uint8_t player,
         const sim::unit_spawn::PlayerSetup& setup,
@@ -149,7 +154,8 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     );
     /// Returns a slot's match-side state.
     ///
-    /// @param slot A slot of this match's pool; another throws.
+    /// @param slot A slot of this match's pool; another is noted and gets a
+    ///     spare state outside the pool, cleared at each such call.
     /// @return The slot's state.
     SlotRuntime& runtime(sim::unit_spawn::Slot& slot);
     /// Returns a unit's match-side state.
@@ -159,7 +165,7 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     SlotRuntime& runtime(const oa::Unit& unit);
     /// Steps one unit's script contexts.
     ///
-    /// @param slot Unit whose instance must exist, or this throws.
+    /// @param slot Unit; one without an instance is noted and not stepped.
     /// @param elapsed Clock time since the last step.
     void tick_script(sim::unit_spawn::Slot& slot, uint32_t elapsed);
     /// Draws from the shared stream for unit creation.
@@ -171,20 +177,20 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     /// unit-target marker in target_b.
     ///
     /// @param unit New unit.
-    /// @param index Weapon slot 0..2; another throws.
+    /// @param index Weapon slot 0..2; another is noted and changes nothing.
     void init_weapon_target(oa::Unit& unit, uint32_t index) override;
     /// Stands an enabled weapon slot down and drops its target, unless it
     /// already stands down.
     ///
     /// @param unit Unit owning the weapon.
     /// @param index Weapon slot 0..2, or 3 for all three with slot 2 last;
-    ///     another throws.
+    ///     another is noted and changes nothing.
     void reset_weapon_targets(oa::Unit& unit, uint8_t index) override;
     /// Clears a new unit's economy block and ties it to its owner's
     /// resources.
     ///
     /// @param unit New unit.
-    /// @param owner Owning player index 0..9; another throws.
+    /// @param owner Owning player index 0..9; another is noted and changes nothing.
     void init_unit_economy(oa::Unit& unit, uint8_t owner) override;
     /// Moves the unit into a squad (SpawnSubsystems::assign_squad).
     ///
@@ -196,13 +202,13 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     /// The instance replaces the slot's SlotRuntime::instance and advances its
     /// instance_generation.
     ///
-    /// @param model Handle of the loaded model; must be one of the loaded
-    ///     assets.
-    /// @return Handle of the new unit instance.
+    /// @param model Handle of the loaded model.
+    /// @return Handle of the new unit instance; 0, which is noted, outside a
+    ///     unit's creation or for a model that is not one of the loaded assets.
     sim::unit_spawn::AssetHandle create_model_instance(sim::unit_spawn::AssetHandle model) override;
     /// Checks that the unit's plain model instance belongs to the unit.
     ///
-    /// @param unit Unit just given a plain model; a mismatch throws.
+    /// @param unit Unit just given a plain model; a mismatch is noted.
     void model_owner(oa::Unit& unit) override;
     /// Allocates a pending script record for a unit being created.
     ///
@@ -223,21 +229,24 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     /// @param model Handle of the loaded model.
     /// @param cob Handle of the loaded COB program.
     /// @param unit Unit being created.
-    /// @return Handle of the new unit instance.
+    /// @return Handle of the new unit instance; 0, which is noted, for a model
+    ///     that is not one of the loaded assets.
     sim::unit_spawn::AssetHandle create_scripted_model(
         sim::unit_spawn::AssetHandle model, sim::unit_spawn::AssetHandle cob, oa::Unit& unit
     ) override;
     /// Records the scripted model instance on its pending script.
     ///
     /// @param script Pending script handle.
-    /// @param model Handle of the unit instance; its COB program must be the
-    ///     one staged on the script, or this throws.
+    /// @param model Handle of the unit instance; one this match does not own,
+    ///     or whose COB program is not the one staged on the script, is noted
+    ///     and binds nothing.
     void bind_script_model(
         sim::unit_spawn::AssetHandle script, sim::unit_spawn::AssetHandle model
     ) override;
     /// Runs Create on the instance bound to a pending script.
     ///
-    /// @param script Pending script handle; it must be bound first.
+    /// @param script Pending script handle; one not bound yet is noted and
+    ///     runs nothing.
     void call_script_create(sim::unit_spawn::AssetHandle script) override;
     /// Clears the unit's model state word.
     ///
@@ -298,7 +307,12 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     };
 
     /// Returns the pool slot of a unit.
-    sim::unit_spawn::Slot& slot(const oa::Unit& unit) { return views_.slot(unit); }
+    sim::unit_spawn::Slot& slot(const oa::Unit& unit) noexcept { return views_.slot(unit); }
+
+    /// Notes a spawn fault in the match's fault record.
+    ///
+    /// @param fault The fault, or none.
+    void note(sim::unit_spawn::SpawnFault fault) noexcept;
 
     oa::World& state_;
     sim::unit_spawn::Tables& tables_;
@@ -309,23 +323,26 @@ class SpawnBridge final : public sim::unit_spawn::Host {
     SpawnSubsystems& subsystems_;
     SharedRandom& random_;
     int32_t clock_scale_;
+    MatchFault& fault_;
     sim::unit_spawn::Slot* active_{};
     std::vector<SlotRuntime> runtime_;
+    SlotRuntime spare_runtime_; // what runtime() gives for a slot outside the pool
     std::vector<std::unique_ptr<PendingScript>> scripts_;
     /// Finds a pending script by its handle.
     ///
-    /// @param handle Handle allocate_script returned; another throws.
-    /// @return The pending script.
-    PendingScript& pending(sim::unit_spawn::AssetHandle handle);
+    /// @param handle Handle allocate_script returned.
+    /// @return The pending script, or null, which is noted, for another handle.
+    PendingScript* pending(sim::unit_spawn::AssetHandle handle) noexcept;
     /// Finds the loaded type whose model a handle names.
     ///
-    /// @param handle Model handle; one not loaded throws.
-    /// @return The loaded type.
-    const sim::unit_spawn::LoadedType& asset_model(sim::unit_spawn::AssetHandle handle) const;
+    /// @param handle Model handle.
+    /// @return The loaded type, or null, which is noted, for one not loaded.
+    const sim::unit_spawn::LoadedType*
+    asset_model(sim::unit_spawn::AssetHandle handle) const noexcept;
     /// Finds the loaded COB program a handle names.
     ///
-    /// @param handle COB handle; one not loaded throws.
-    /// @return The program.
+    /// @param handle COB handle.
+    /// @return The program, or null, which is noted, for one not loaded.
     std::shared_ptr<const formats::cob::CobProgram>
     asset_script(sim::unit_spawn::AssetHandle handle) const;
 };

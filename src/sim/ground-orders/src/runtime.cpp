@@ -4,7 +4,6 @@
 #include "oa/sim/ground_orders/ground_runtime.hpp"
 #include "oa/base/bytes.hpp"
 #include <bit>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
@@ -22,12 +21,17 @@ GroundRuntime::GroundRuntime(
     ConstructorStorage storage
 )
     : movement_class(class_handle), acceleration(definition.acceleration_fixed),
-      deceleration(definition.brake_rate_fixed), slot_(slot) {
+      deceleration(definition.brake_rate_fixed), slot_(&slot) {
     if (!slot.unit || !slot.unit->type)
-        throw std::invalid_argument("Ground movement requires a bound unit and type");
+        return;
     // Aircraft use this ground object until their own driver is wired in;
     // they still spawn and accept Move_Ground.
-    movement.flags = uint8_t((storage.movement_flags & 0xf9u) | 1u);
+    // On the ground (occupancy 1) and not blocked.
+    movement.flags = uint8_t(
+        (storage.movement_flags &
+         ~(sim::unit_movement::occupancy_mask | sim::unit_movement::collision_blocked)) |
+        sim::unit_spawn::ground_occupancy_state
+    );
     movement.last_motion_tick = storage.last_motion_tick;
     mirrored_driver = slot.unit->owner && slot.unit->owner->present &&
                       slot.unit->owner->status == mirrored_player_status;
@@ -42,28 +46,32 @@ GroundRuntime::GroundRuntime(
 }
 
 void GroundRuntime::project_slot() {
-    const auto& u = *slot_.unit;
+    if (!slot_ || !slot_->unit || !slot_->unit->type)
+        return;
+    const auto& u = *slot_->unit;
     const std::array<uint32_t, 3> position = u.position;
     for (std::size_t i = 0; i < 3; ++i)
         geometry.position[i] = std::bit_cast<Fixed>(position[i]);
-    geometry.cell = {slot_.record.cell_x, slot_.record.cell_z};
-    geometry.footprint = {slot_.record.footprint_x, slot_.record.footprint_z};
-    geometry.heading = slot_.record.heading;
-    geometry.pitch = slot_.record.pitch;
+    geometry.cell = {slot_->record.cell_x, slot_->record.cell_z};
+    geometry.footprint = {slot_->record.footprint_x, slot_->record.footprint_z};
+    geometry.heading = slot_->record.heading;
+    geometry.pitch = slot_->record.pitch;
     geometry.flags = u.flags;
-    geometry.id = signed_half(slot_.unit_index);
+    geometry.id = signed_half(slot_->unit_index);
     geometry.type.flags = u.type->flags;
 }
 
 void GroundRuntime::write_slot() {
-    auto& u = *slot_.unit;
+    if (!slot_ || !slot_->unit)
+        return;
+    auto& u = *slot_->unit;
     for (std::size_t i = 0; i < 3; ++i)
         u.position[i] = static_cast<uint32_t>(geometry.position[i]);
     u.flags = geometry.flags;
-    slot_.record.heading = geometry.heading;
-    slot_.record.pitch = geometry.pitch;
-    slot_.record.cell_x = geometry.cell[0];
-    slot_.record.cell_z = geometry.cell[1];
+    slot_->record.heading = geometry.heading;
+    slot_->record.pitch = geometry.pitch;
+    slot_->record.cell_x = geometry.cell[0];
+    slot_->record.cell_z = geometry.cell[1];
 }
 
 bool GroundRuntime::fit_height(
@@ -71,13 +79,15 @@ bool GroundRuntime::fit_height(
     const formats::objects3d::Model& model,
     const sim::unit_movement::GroundClock& clock
 ) {
+    if (!slot_ || !slot_->unit || !slot_->unit->type)
+        return false;
     project_slot();
     sim::unit_movement::GroundPose pose;
     pose.position = geometry.position;
     pose.heading = geometry.heading;
     pose.pitch = geometry.pitch;
-    pose.roll = slot_.record.bank;
-    pose.bob_phase = slot_.record.bob_phase;
+    pose.roll = slot_->record.bank;
+    pose.bob_phase = slot_->record.bob_phase;
     pose.flags = geometry.flags;
     pose.type_flags = geometry.type.flags;
     pose.maximum_speed = geometry.type.maximum_speed;
@@ -87,7 +97,7 @@ bool GroundRuntime::fit_height(
     if (fitted) {
         geometry.position = pose.position;
         geometry.pitch = pose.pitch;
-        slot_.record.bank = pose.roll;
+        slot_->record.bank = pose.roll;
         write_slot();
     }
     return fitted;

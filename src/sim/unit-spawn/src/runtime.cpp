@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
+#include <optional>
 #include <utility>
 
 namespace oa::sim::unit_spawn {
@@ -13,19 +14,35 @@ namespace {
 constexpr uint32_t enabled_mask = 0x00800000;
 constexpr uint32_t gui_zero_mask = 0x80000000;
 
-std::string base_name(std::string_view source) {
+// The asset basename of a name with its extension stripped, or nothing for a
+// name that is not a bounded basename or is empty once stripped.
+std::optional<std::string> base_name(std::string_view source) {
     if (source.empty() || source.size() > 31 ||
         source.find_first_of("/\\:\0", 0, 4) != std::string_view::npos || source == "." ||
         source == "..")
-        throw std::invalid_argument("unit asset name is not a bounded basename");
+        return std::nullopt;
     auto result = std::string(source);
     // The extension is stripped before the asset's own extension is added.
     const auto dot = result.find_last_of('.');
     if (dot != std::string::npos)
         result.resize(dot);
     if (result.empty())
-        throw std::invalid_argument("empty unit asset basename");
+        return std::nullopt;
     return result;
+}
+
+// A type that did not load: its names and paths so far, no assets, and why,
+// with the detail after a colon when there is one.
+LoadedType refused(LoadedType& partial, std::string_view error, std::string_view detail = {}) {
+    partial.type = {};
+    partial.model.reset();
+    partial.script.reset();
+    partial.load_error = error;
+    if (!detail.empty()) {
+        partial.load_error += ": ";
+        partial.load_error += detail;
+    }
+    return std::move(partial);
 }
 
 char lower(char value) {
@@ -47,11 +64,11 @@ LoadedType load_runtime_type(
     const RuntimeBindings& bindings,
     AssetReader& assets
 ) {
-    if (!bindings.resolved_weapon_present)
-        throw std::invalid_argument("unit runtime requires resolved weapon presence");
-    const auto fields = data::unit_definitions::project_for_spawn(definition);
     LoadedType result;
     result.unit_name = definition.unit_name;
+    if (!bindings.resolved_weapon_present)
+        return refused(result, "unit runtime requires resolved weapon presence");
+    const auto fields = data::unit_definitions::project_for_spawn(definition);
     auto& t = result.type;
     t.simulation.flags = fields.unit_flags | (bindings.enabled ? enabled_mask : 0u) |
                          (*bindings.resolved_weapon_present ? 0x00010000u : 0u);
@@ -64,15 +81,19 @@ LoadedType load_runtime_type(
     t.footprint_z = fields.footprint_z;
     if (!definition.movement_class.empty()) {
         if (!bindings.movement_footprint)
-            throw std::invalid_argument("unit runtime requires resolved movement-class footprint");
+            return refused(result, "unit runtime requires resolved movement-class footprint");
         t.footprint_x = (*bindings.movement_footprint)[0];
         t.footprint_z = (*bindings.movement_footprint)[1];
     }
     t.player_limit = bindings.player_limit;
     t.build_angle = std::bit_cast<uint16_t>(fields.build_angle);
     t.bm_code = std::bit_cast<uint8_t>(fields.bm_code);
-    const auto object = base_name(definition.object_name);
-    const auto unit = base_name(definition.unit_name);
+    const auto object_base = base_name(definition.object_name);
+    const auto unit_base = base_name(definition.unit_name);
+    if (!object_base || !unit_base)
+        return refused(result, "unit asset name is not a bounded basename");
+    const auto& object = *object_base;
+    const auto& unit = *unit_base;
     result.model_path = "objects3d/" + object + ".3DO";
     const auto model_bytes = assets.read(result.model_path);
     auto model = model_bytes
@@ -81,7 +102,11 @@ LoadedType load_runtime_type(
                            base::bytes::DecodeCode::not_found, 0, "required unit model not found"
                        });
     if (!model.ok())
-        throw std::runtime_error(model.error.message + (": " + result.model_path));
+        return refused(
+            result,
+            model.error.message ? model.error.message : "unit model is invalid",
+            result.model_path
+        );
     result.model = std::make_shared<const formats::objects3d::Model>(std::move(*model.value));
     t.model = reinterpret_cast<AssetHandle>(result.model.get());
     // Page zero is probed first, then consecutive pages starting at one.
@@ -96,30 +121,29 @@ LoadedType load_runtime_type(
             break;
         ++page;
         if (page > 4096)
-            throw std::length_error("unit GUI page search limit exceeded");
+            return refused(result, "unit GUI page search limit exceeded");
     }
     t.gui_page_count = static_cast<uint8_t>(page > 1 ? page : (page_zero ? 1 : 0));
     result.script_path = "scripts/" + unit + ".COB";
     if (auto bytes = assets.read(result.script_path)) {
         auto parsed = formats::cob::parse_cob(*bytes);
-        if (!parsed)
-            throw std::runtime_error(
-                "invalid unit script " + result.script_path + ": " + parsed.error
+        if (!parsed.ok())
+            return refused(
+                result, "invalid unit script " + result.script_path, parsed.error.message
             );
         // The loaded file's hash is recorded for the script checks.
-        parsed.program->file_hash =
+        parsed.value->file_hash =
             formats::tdf::buffer_hash(bytes->data(), static_cast<int32_t>(bytes->size()));
-        result.script =
-            std::make_shared<const formats::cob::CobProgram>(std::move(*parsed.program));
+        result.script = std::make_shared<const formats::cob::CobProgram>(std::move(*parsed.value));
         t.cob = reinterpret_cast<AssetHandle>(result.script.get());
     }
     return result;
 }
 
-uint16_t find_type_index(std::span<const std::string> names, std::string_view name) {
-    if (names.size() > 65536)
-        throw std::length_error("unit type indices exceed the 16-bit representation");
-    for (std::size_t i = 1; i < names.size(); ++i)
+uint16_t find_type_index(std::span<const std::string> names, std::string_view name) noexcept {
+    // Only the first 65536 names have a 16-bit index.
+    const auto count = std::min<std::size_t>(names.size(), 65536);
+    for (std::size_t i = 1; i < count; ++i)
         if (equal_name(names[i], name))
             return static_cast<uint16_t>(i);
     return 0;

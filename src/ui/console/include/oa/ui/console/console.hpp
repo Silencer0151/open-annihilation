@@ -47,66 +47,66 @@ struct Console;
 // Systems owned outside the console. Every pointer may be null; the command
 // then only performs its own state changes.
 struct ConsoleHost {
-    void* context;
+    void* context{};
     // Option persistence and presentation.
-    void (*save_game_options)(void* context);
+    void (*save_game_options)(void* context){};
     /// Posts `text` to the match's message log as a line of `kind` sent by
     /// the player whose Player.index is `sender`, or by no player with
     /// kMessageNoSender; a line with a sender starts with that player's logo
     /// and plays the arrival sound. Null posts nothing.
-    void (*post_message)(void* context, const char* text, uint8_t kind, uint8_t sender);
-    void (*compact_render_cache)(void* context);
-    void (*set_gamma)(void* context, float gamma);
-    void (*set_lighting)(void* context, int32_t a, int32_t b, int32_t c);
-    void (*reset_sight_buffers)(void* context, bool refill_grid);
-    uint16_t (*logo_count)(void* context);
+    void (*post_message)(void* context, const char* text, uint8_t kind, uint8_t sender){};
+    void (*compact_render_cache)(void* context){};
+    void (*set_gamma)(void* context, float gamma){};
+    void (*set_lighting)(void* context, int32_t a, int32_t b, int32_t c){};
+    void (*reset_sight_buffers)(void* context, bool refill_grid){};
+    uint16_t (*logo_count)(void* context){};
     // Audio.
-    void (*play_cd_track)(void* context, int32_t track);
-    void (*stop_cd)(void* context);
-    void (*set_music_mode)(void* context, int32_t mode);
-    void (*toggle_sound_3d)(void* context);
-    void (*toggle_novelty_voice)(void* context);
+    void (*play_cd_track)(void* context, int32_t track){};
+    void (*stop_cd)(void* context){};
+    void (*set_music_mode)(void* context, int32_t mode){};
+    void (*toggle_sound_3d)(void* context){};
+    void (*toggle_novelty_voice)(void* context){};
     // A share toggle changed the local player's info record.
-    void (*player_info_changed)(void* context);
+    void (*player_info_changed)(void* context){};
     // Simulation actions.
-    void (*transfer_metal)(void* context, uint8_t from, uint8_t to, float amount);
-    void (*transfer_energy)(void* context, uint8_t from, uint8_t to, float amount);
-    void (*kill_player_units)(void* context, uint8_t player);
-    void (*kill_all_units)(void* context);
-    void (*disable_mission_conditions)(void* context);
-    void (*snap_build_position)(void* context, uint16_t unit_type, FixedVec3* position);
+    void (*transfer_metal)(void* context, uint8_t from, uint8_t to, float amount){};
+    void (*transfer_energy)(void* context, uint8_t from, uint8_t to, float amount){};
+    void (*kill_player_units)(void* context, uint8_t player){};
+    void (*kill_all_units)(void* context){};
+    void (*disable_mission_conditions)(void* context){};
+    void (*snap_build_position)(void* context, uint16_t unit_type, FixedVec3* position){};
     void (*create_unit)(
         void* context, uint8_t player, uint16_t unit_type, const FixedVec3* position
-    );
-    uint16_t (*find_unit_type)(void* context, const char* name); // 0: unknown
-    void (*kill_units_of_type)(void* context, uint16_t unit_type);
-    void (*reload_unit_type)(void* context, uint16_t unit_type);
+    ){};
+    uint16_t (*find_unit_type)(void* context, const char* name){}; // 0: unknown
+    void (*kill_units_of_type)(void* context, uint16_t unit_type){};
+    void (*reload_unit_type)(void* context, uint16_t unit_type){};
     // The group order issuer with a mission-table kind and no position: every
     // selected local unit gets the mission with the two parameter words.
     void (*issue_group_mission)(
         void* context, uint8_t mission, int32_t parameter_1, int32_t parameter_2
-    );
-    void (*start_meteor_storm)(void* context);
-    void (*set_meteor_enabled)(void* context, bool enabled);
-    void (*clear_all_features)(void* context);
-    void (*clear_feature_at)(void* context, int16_t cell_x, int16_t cell_z);
-    bool (*place_feature_at)(void* context, const char* feature, int16_t cell_x, int16_t cell_z);
+    ){};
+    void (*start_meteor_storm)(void* context){};
+    void (*set_meteor_enabled)(void* context, bool enabled){};
+    void (*clear_all_features)(void* context){};
+    void (*clear_feature_at)(void* context, int16_t cell_x, int16_t cell_z){};
+    bool (*place_feature_at)(void* context, const char* feature, int16_t cell_x, int16_t cell_z){};
     // The path search's per-tick node credit and its base heuristic weight
     // (16.16).
-    void (*set_search_node_credit)(void* context, int32_t nodes);
-    void (*set_search_heuristic)(void* context, int32_t weight);
+    void (*set_search_node_credit)(void* context, int32_t nodes){};
+    void (*set_search_heuristic)(void* context, int32_t weight){};
     // AI profiles.
-    void (*reload_ai_profiles)(void* context);
+    void (*reload_ai_profiles)(void* context){};
     // Opens `path` for writing ("w+b") and writes the player's weight report.
-    void (*write_ai_weights)(void* context, uint8_t player, const char* path);
-    void (*apply_ai_weight)(void* context, uint8_t player, const char* unit_type, float percent);
-    void (*apply_ai_limit)(void* context, uint8_t player, const char* unit_type, int32_t limit);
+    void (*write_ai_weights)(void* context, uint8_t player, const char* path){};
+    void (*apply_ai_weight)(void* context, uint8_t player, const char* unit_type, float percent){};
+    void (*apply_ai_limit)(void* context, uint8_t player, const char* unit_type, int32_t limit){};
     // Files, capture and diagnostics.
-    char* (*read_text_file)(void* context, const char* path, int32_t* length);
-    void (*free_text_file)(void* context, char* text);
-    void (*create_directories)(void* context, const char* path);
-    void (*touch_file)(void* context, const char* path);
-    void (*save_game)(void* context, const char* path, const char* description, int32_t game_id);
+    char* (*read_text_file)(void* context, const char* path, int32_t* length){};
+    void (*free_text_file)(void* context, char* text){};
+    void (*create_directories)(void* context, const char* path){};
+    void (*touch_file)(void* context, const char* path){};
+    void (*save_game)(void* context, const char* path, const char* description, int32_t game_id){};
     void (*render_poster)(
         void* context,
         const char* directory,
@@ -115,9 +115,9 @@ struct ConsoleHost {
         int32_t y,
         int32_t width,
         int32_t height
-    );
-    uint32_t (*now_ms)(void* context);
-    void (*crash_test)(void* context, CrashTest test);
+    ){};
+    uint32_t (*now_ms)(void* context){};
+    void (*crash_test)(void* context, CrashTest test){};
     // Adds an extension's commands to console->commands; called once at the
     // end of console_init.
     void* extension_context{};
@@ -128,16 +128,16 @@ inline constexpr size_t kCommandTextBytes = 0x110;
 inline constexpr size_t kChatLineBytes = 0x100;
 
 struct Console {
-    World* world;
-    const ConsoleHost* host;
+    World* world{};
+    const ConsoleHost* host{};
     ui::services::CommandTable commands;
-    char last_command[kCommandTextBytes]; // re-run by the '\' hotkey
+    char last_command[kCommandTextBytes]{}; // re-run by the '\' hotkey
     // The session's cheat flag: a skirmish, or a multiplayer game whose host
     // allows cheats.
-    bool cheats_enabled;
-    bool sfx_flag;             // "SFX": the emitter pool refuses new particle emitters
-    int32_t contour_values[2]; // "Contour" spacing and phase in heights << 8
-    bool ai_plan_matches;      // the last "plan" directive named this difficulty
+    bool cheats_enabled{};
+    bool sfx_flag{};             // "SFX": the emitter pool refuses new particle emitters
+    int32_t contour_values[2]{}; // "Contour" spacing and phase in heights << 8
+    bool ai_plan_matches{};      // the last "plan" directive named this difficulty
 };
 
 /// Clears `console`, registers every command list and the spawn fallback, then lets the host's extend add its commands.

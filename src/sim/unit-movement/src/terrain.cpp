@@ -3,23 +3,20 @@
 
 #include "oa/sim/unit_movement/terrain.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/core/unit.h"
+#include "oa/core/unit_def.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::unit_movement {
 namespace {
 constexpr unsigned fraction_bits = 16, attribute_shift = 4;
 constexpr int attribute_spacing = 1 << attribute_shift;
 constexpr uint32_t attribute_fraction_mask = attribute_spacing - 1;
-// A hovercraft that is live and not about to die bobs on the water. These
-// mirror the core bits OA_UNIT_DEF_FLAG_CAN_HOVER of UnitDef.flags and
-// OA_UNIT_FLAG_LIVE and OA_UNIT_FLAG_DEATH_PENDING of Unit.flags.
-constexpr uint32_t hover_type = 0x1000;
-constexpr uint32_t live_unit = 0x10000000;
-constexpr uint32_t death_pending = 0x4000;
+// A hovercraft that is live and not about to die bobs on the water.
+constexpr uint32_t hover_type = OA_UNIT_DEF_FLAG_CAN_HOVER;
 constexpr uint32_t bob_decay_ticks = 60, bob_clock_mask = 31;
 constexpr unsigned bob_vertex_phase = 8, bob_angle_shift = 11;
 
@@ -72,20 +69,25 @@ int16_t slope_angle(Fixed height, Fixed distance) noexcept {
 }
 } // namespace
 
-Terrain::Terrain(const oa::formats::tnt::Map& map) : map_(&map) {
-    if (map.attribute_width < 2 || map.attribute_height < 2 ||
-        map.attribute_width > oa::formats::tnt::limit::attribute_dimension ||
-        map.attribute_height > oa::formats::tnt::limit::attribute_dimension ||
-        uint64_t(map.attribute_width) * map.attribute_height != map.attributes.size() ||
-        map.sea_level > 255)
-        throw std::invalid_argument("Invalid TNT height grid");
+bool terrain_grid_valid(const oa::formats::tnt::Map& map) noexcept {
+    return map.attribute_width >= 2 && map.attribute_height >= 2 &&
+           map.attribute_width <= oa::formats::tnt::limit::attribute_dimension &&
+           map.attribute_height <= oa::formats::tnt::limit::attribute_dimension &&
+           uint64_t(map.attribute_width) * map.attribute_height == map.attributes.size() &&
+           map.sea_level <= 255;
+}
+
+Terrain::Terrain(const oa::formats::tnt::Map& map) noexcept
+    : map_(terrain_grid_valid(map) ? &map : nullptr) {
 }
 
 uint8_t Terrain::sea_level() const noexcept {
-    return static_cast<uint8_t>(map_->sea_level);
+    return map_ ? static_cast<uint8_t>(map_->sea_level) : 0;
 }
 
 int32_t Terrain::height(Fixed x, Fixed z) const noexcept {
+    if (!map_)
+        return -1;
     const int world_x = short_bits(uint32_t(x) >> fraction_bits),
               world_z = short_bits(uint32_t(z) >> fraction_bits);
     const int cell_x = world_x >> attribute_shift, cell_z = world_z >> attribute_shift;
@@ -117,14 +119,14 @@ std::optional<GroundQuad> ground_quad(const oa::formats::objects3d::Model& model
     if (root.selection_primitive < 0)
         return std::nullopt;
     if (std::size_t(root.selection_primitive) >= root.primitives.size())
-        throw std::invalid_argument("Ground selection primitive out of range");
+        return std::nullopt;
     const auto& indices = root.primitives[std::size_t(root.selection_primitive)].vertex_indices;
     if (indices.size() < 4)
-        throw std::invalid_argument("Ground selection primitive has fewer than four vertices");
+        return std::nullopt;
     GroundQuad quad{};
     for (std::size_t i = 0; i < quad.size(); ++i) {
         if (indices[i] >= root.vertices.size())
-            throw std::invalid_argument("Ground selection vertex out of range");
+            return std::nullopt;
         const auto& v = root.vertices[indices[i]];
         quad[i] = {subtract(0, v.x), subtract(0, v.z)};
     }
@@ -152,8 +154,7 @@ bool fit_ground(
             terrain.height(add(pose.position[0], vertex[0]), subtract(pose.position[2], vertex[1]));
         if (sample < 0)
             return false;
-        if ((pose.type_flags & hover_type) != 0 && (pose.flags & live_unit) != 0 &&
-            (pose.flags & death_pending) == 0) {
+        if ((pose.type_flags & hover_type) != 0 && unit_is_live_target(pose.flags)) {
             sample = std::max(sample, Fixed(terrain.sea_level()));
             const auto phase = static_cast<uint16_t>(
                 ((clock.bob_ticks[i] & bob_clock_mask) + uint32_t(i) * bob_vertex_phase)
@@ -162,7 +163,7 @@ bool fit_ground(
             const auto angle = static_cast<uint16_t>(phase + pose.bob_phase);
             const auto half_maximum = pose.maximum_speed / 2;
             if (half_maximum == 0)
-                throw std::domain_error("Ground bob speed divisor is zero");
+                return false;
             const auto ratio =
                 low(int64_t(std::min(movement.speed, half_maximum)) * 65536 / half_maximum);
             const auto amplitude = subtract(2, low((int64_t(ratio) * 2) >> fraction_bits));

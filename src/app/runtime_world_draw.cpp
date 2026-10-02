@@ -3,6 +3,7 @@
 
 // World-space drawing: build ghosts, lines and GAF blits.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "match_models.hpp"
 #include "presentation_interpolation.hpp"
 #include "world_draws.hpp"
@@ -19,10 +20,6 @@
 #include <vector>
 
 namespace oa::app {
-
-namespace {
-constexpr int32_t kCellPixels = 16; // map pixels across a footprint cell
-} // namespace
 
 std::array<uint8_t, 3> Runtime::palette_rgb(uint8_t index) const {
     const auto pal = static_cast<std::size_t>(index) * 4U;
@@ -94,7 +91,7 @@ void Runtime::draw_build_ghost(
     const auto height = static_cast<uint32_t>(site->world[1]);
     // Cells to 16.16 map positions; a negative cell stays left of or above the map.
     const auto cell_position = [](int32_t cell) {
-        return static_cast<uint32_t>(cell * kCellPixels) << 16;
+        return static_cast<uint32_t>(cell * OA_MAP_CELL_PIXELS) << 16;
     };
     const auto top_left = project_match_point(
         viewport, {cell_position(site->cell_x), height, cell_position(site->cell_z)}

@@ -22,8 +22,8 @@ constexpr int32_t display_bits = 8;
 constexpr int32_t pitch_alignment_mask = ~3;
 
 struct StandardMode {
-    int32_t width;
-    int32_t height;
+    int32_t width{};
+    int32_t height{};
 };
 
 constexpr StandardMode windowed_modes[] = {{640, 480}, {800, 600}, {1024, 768}};

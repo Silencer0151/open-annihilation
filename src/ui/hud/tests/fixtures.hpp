@@ -18,6 +18,10 @@ namespace hud_test {
 struct TestWorld {
     oa::World* world = oa::world_create();
 
+    /// Creates the world with its tables; every player's info and economy refer to its own index, and its index is 10.
+    ///
+    /// @param unit_slots unit slots in the unit table
+    /// @param unit_defs unit types in the type table
     explicit TestWorld(uint32_t unit_slots = 64, uint32_t unit_defs = 8) {
         oa::WorldCapacity capacity{unit_slots, unit_defs, 4};
         oa::world_alloc_tables(world, &capacity);
@@ -29,15 +33,28 @@ struct TestWorld {
         }
     }
 
+    /// Destroys the world and its tables.
     ~TestWorld() { oa::world_destroy(world); }
 
     TestWorld(const TestWorld&) = delete;
     TestWorld& operator=(const TestWorld&) = delete;
 
+    /// Returns the world's game record.
+    ///
+    /// @return the game
     oa::Game& game() { return world->game; }
 
+    /// Returns one player record.
+    ///
+    /// @param index the player's index, below OA_PLAYER_COUNT
+    /// @return the player
     oa::Player& player(uint32_t index) { return world->game.players[index]; }
 
+    /// Marks a player in use with one unit, its own index, id 100 + index and the name "Player <index>".
+    ///
+    /// @param index the player's index, below OA_PLAYER_COUNT
+    /// @param status the player's status
+    /// @return the player
     oa::Player& add_player(uint8_t index, uint8_t status) {
         auto& p = player(index);
         p.in_use = 1;
@@ -62,6 +79,10 @@ struct TestWorld {
         }
     }
 
+    /// Returns one unit slot.
+    ///
+    /// @param slot the slot, within the unit table
+    /// @return the unit
     oa::Unit& unit(uint32_t slot) { return world->units[slot]; }
 
     /// Makes slot a live unit of type `type`.
@@ -91,8 +112,15 @@ struct FakePanel {
     int redraws = 0;
     bool loaded_answer = true;
 
+    /// Creates a panel whose controls are the given names, indexed in order.
+    ///
+    /// @param controls the control names
     explicit FakePanel(std::vector<std::string> controls = {}) : names(std::move(controls)) {}
 
+    /// Finds a control by name.
+    ///
+    /// @param name the control name
+    /// @return its index, or -1 when no control has that name
     int32_t index(const std::string& name) const {
         for (size_t i = 0; i < names.size(); ++i)
             if (names[i] == name)
@@ -100,8 +128,18 @@ struct FakePanel {
         return -1;
     }
 
+    /// Returns a control's name.
+    ///
+    /// @param index the control index, within the names
+    /// @return the name
     const std::string& name(int32_t index) const { return names[static_cast<size_t>(index)]; }
 
+    /// Builds the control table over this panel.
+    ///
+    /// Every setter records the value under the control's name; a renamed control
+    /// keeps the value, text and states it had.
+    ///
+    /// @return the table, its user this panel
     oa::ui::hud::PanelControls controls() {
         oa::ui::hud::PanelControls c{};
         c.user = this;
@@ -163,6 +201,12 @@ struct FakePanel {
         return c;
     }
 
+    /// Builds the panel loader over this panel.
+    ///
+    /// Each load records the panel name and flags and succeeds; is_loaded answers
+    /// loaded_answer; closes, links and redraws are recorded.
+    ///
+    /// @return the loader, its user this panel
     oa::ui::hud::PanelLoader loader() {
         oa::ui::hud::PanelLoader l{};
         l.user = this;
@@ -190,6 +234,9 @@ struct FakePanel {
 struct Sounds {
     std::vector<std::string> played;
 
+    /// Builds the HUD events that record each sound played, with no standing-order hook.
+    ///
+    /// @return the events, their user this recorder
     oa::ui::hud::HudEvents events() {
         return {
             this,

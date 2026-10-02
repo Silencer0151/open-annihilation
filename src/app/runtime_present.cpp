@@ -17,6 +17,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 namespace oa::app {
 namespace {
@@ -545,7 +546,14 @@ void Runtime::present_software_cursor() {
         );
         if (match_cursor_tex_ == nullptr)
             return;
-        (void)SDL_SetTextureBlendMode(match_cursor_tex_, SDL_BLENDMODE_BLEND);
+        // Unblended, the cursor would cover the battlefield with its clear
+        // pixels; a texture that cannot blend is dropped as one that cannot
+        // be made is, and the next frame tries again.
+        if (!SDL_SetTextureBlendMode(match_cursor_tex_, SDL_BLENDMODE_BLEND)) {
+            SDL_DestroyTexture(match_cursor_tex_);
+            match_cursor_tex_ = nullptr;
+            return;
+        }
         match_cursor_tex_w_ = static_cast<int>(frame.width);
         match_cursor_tex_h_ = static_cast<int>(frame.height);
     }
@@ -583,7 +591,9 @@ void Runtime::present_software_cursor() {
         static_cast<float>(frame.width),
         static_cast<float>(frame.height)
     };
-    (void)SDL_RenderTexture(sdl_.renderer, match_cursor_tex_, nullptr, &dest);
+    // A cursor the renderer refuses is missing from this frame alone: the
+    // next frame draws it again.
+    std::ignore = SDL_RenderTexture(sdl_.renderer, match_cursor_tex_, nullptr, &dest);
 }
 
 void Runtime::render() {

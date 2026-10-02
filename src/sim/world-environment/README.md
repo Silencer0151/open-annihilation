@@ -12,7 +12,9 @@ calm-direction retention, a single rounding of the normalized strength to
 float, and changed flag behavior.
 
 `refresh_wind(Game&, ...)` and `initialize_wind(Game&, ...)` run the same
-scheduler over the canonical `Game` wind fields. `update_sea_occupy` reads the
+scheduler over the canonical `Game` wind fields. Each run says how it ended
+(`WindRefresh`): waiting, changed, or stopped by a rand() value above 32767 or
+a zero strength divisor, which leave the `Game` fields as they were. `update_sea_occupy` reads the
 canonical `Unit`/`UnitDef` and keeps the occupy code in
 `Unit.last_occupy_code`; the match's movement tick runs it for every unit it
 moves, and its hook runs the unit script's `setSFXoccupy`.

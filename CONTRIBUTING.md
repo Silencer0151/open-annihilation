@@ -254,12 +254,14 @@ scripts behind the source checks also run on their own, for example
 
 ## When a source check fails
 
-`style-ratchet` counts, per directory, the breaches of the naming and
-language rules in [the conventions](docs/development/conventions.md) against
-`tools/style-baseline.json`, and a run fails when a count grows. Each
-finding prints as `path:line: rule: text`; fix it as the rule's section of
-the conventions says. When a change removes findings, lower the counts with
-`python3 tools/check_style.py --write-baseline`; they never go up.
+`style-ratchet` counts, per file, the breaches of the naming and language
+rules in [the conventions](docs/development/conventions.md) against
+`tools/style-baseline.json`, and a run fails when a count differs from the
+baseline. A count that grows is a new finding: it prints as
+`path:line: rule: text`; fix it as the rule's section of the conventions
+says. A count that fell is slack, which would let a new finding in where an
+old one was fixed: lower the baseline in the same change with
+`python3 tools/check_style.py --update`. Counts never go up.
 
 `format-check` fails on a source that is not laid out as `.clang-format`
 says, and `licensing-check` on a file that states no copyright and licence:

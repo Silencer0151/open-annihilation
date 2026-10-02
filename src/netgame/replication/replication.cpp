@@ -256,71 +256,70 @@ WireError replication_apply_full_record(
     const auto def_bits = static_cast<unsigned>(world->game.unit_def_id_bits);
     if (def_bits < 1 || def_bits > unit_state_max_def_index_bits)
         return WireError::bad_argument;
-    const auto def_index = static_cast<uint16_t>(bit_reader_read(reader, def_bits));
-    if (def_index == 0) {
+    // The record is read whole before any of it applies, so a truncated one
+    // leaves the unit as it was. Only the speed word waits: whether it is
+    // there depends on the movement the unit has once recreated.
+    BitReader record_reader = *reader;
+    FullUnitRecord record{};
+    if (read_full_unit_record(&record_reader, def_bits, false, &record) != WireError::ok)
+        return WireError::truncated;
+    if (record.unit_def_index == 0) {
         if (unit->type_index != 0)
             unit->flags |= OA_UNIT_FLAG_DEATH_PENDING;
-        return bit_reader_overrun(reader) ? WireError::truncated : WireError::ok;
+        *reader = record_reader;
+        return WireError::ok;
     }
-    if (unit->type_index != def_index)
-        create_from_stream(world, sim, unit, def_index);
+    if (unit->type_index != record.unit_def_index)
+        create_from_stream(world, sim, unit, record.unit_def_index);
+    const bool has_speed_word = !record.attached && unit->movement != 0;
+    uint32_t speed_word = 0;
+    if (has_speed_word) {
+        speed_word = bit_reader_read(&record_reader, 32);
+        if (bit_reader_overrun(&record_reader))
+            return WireError::truncated;
+    }
+    *reader = record_reader;
     if (sim != nullptr && sim->clear_linked_object_word != nullptr)
         sim->clear_linked_object_word(sim->context, world, unit);
-    unit->health = static_cast<int16_t>(bit_reader_read(reader, 16));
-    const auto build = static_cast<uint8_t>(bit_reader_read(reader, 8));
-    if (unit_state_build_fraction_differs(build, unit->build_remaining)) {
-        unit->build_remaining = unit_state_build_fraction(build);
+    unit->health = record.health;
+    if (unit_state_build_fraction_differs(record.build_byte, unit->build_remaining)) {
+        unit->build_remaining = unit_state_build_fraction(record.build_byte);
         unit->flags |= OA_UNIT_FLAG_CONSTRUCTION_DIRTY;
     }
-    const auto state = static_cast<uint8_t>(bit_reader_read(reader, 8));
-    toggle_state_flags(world, sim, unit, state, true);
-    toggle_state_flags(world, sim, unit, static_cast<uint8_t>(~state), false);
-    const auto occupancy = static_cast<uint8_t>(bit_reader_read(reader, 2));
-    const bool attached = bit_reader_read_bit(reader);
-    if (!attached) {
-        if (unit->attach_parent != 0) {
-            UnitLinkRecord detach;
-            detach.unit_index = unit->id;
-            detach.linked_unit_index = 0;
-            detach.attach_piece = static_cast<int8_t>(carrier_none_piece);
-            detach.occupancy = occupancy;
-            link_unit(world, sim, detach);
-        }
-        FixedVec3 to;
-        to.x = static_cast<int32_t>(bit_reader_read(reader, 32));
-        to.y = static_cast<int32_t>(bit_reader_read(reader, 32));
-        to.z = static_cast<int32_t>(bit_reader_read(reader, 32));
-        const auto heading = static_cast<uint16_t>(bit_reader_read(reader, 16));
-        const auto pitch = static_cast<int16_t>(bit_reader_read(reader, 16));
-        const auto bank = static_cast<int16_t>(bit_reader_read(reader, 16));
-        if (bit_reader_overrun(reader))
-            return WireError::truncated;
-        if (sim != nullptr && sim->place_unit != nullptr)
-            sim->place_unit(sim->context, world, unit, to, occupancy);
-        else
-            unit->position = to;
-        unit->bank = bank;
-        unit->heading = heading;
-        unit->pitch = pitch;
-        if (unit->movement != 0) {
-            const auto word = bit_reader_read(reader, 32);
-            if (MovementRecord* m = movement_of(world, sim, unit))
-                m->speed = word;
-            if (sim != nullptr && sim->set_movement_speed != nullptr)
-                sim->set_movement_speed(sim->context, world, unit, word);
-        }
-    } else {
+    toggle_state_flags(world, sim, unit, record.state_flags, true);
+    toggle_state_flags(world, sim, unit, static_cast<uint8_t>(~record.state_flags), false);
+    if (record.attached) {
         UnitLinkRecord link;
         link.unit_index = unit->id;
-        link.linked_unit_index =
-            static_cast<uint16_t>(bit_reader_read(reader, unit_state_carrier_index_bits));
-        link.attach_piece = static_cast<int8_t>(bit_reader_read_signed(reader, 8));
-        link.occupancy = occupancy;
-        if (bit_reader_overrun(reader))
-            return WireError::truncated;
+        link.linked_unit_index = record.attached_unit_index;
+        link.attach_piece = record.attach_piece;
+        link.occupancy = record.occupancy;
         link_unit(world, sim, link);
+        return WireError::ok;
     }
-    return bit_reader_overrun(reader) ? WireError::truncated : WireError::ok;
+    if (unit->attach_parent != 0) {
+        UnitLinkRecord detach;
+        detach.unit_index = unit->id;
+        detach.linked_unit_index = 0;
+        detach.attach_piece = static_cast<int8_t>(carrier_none_piece);
+        detach.occupancy = record.occupancy;
+        link_unit(world, sim, detach);
+    }
+    const FixedVec3 to{record.position[0], record.position[1], record.position[2]};
+    if (sim != nullptr && sim->place_unit != nullptr)
+        sim->place_unit(sim->context, world, unit, to, record.occupancy);
+    else
+        unit->position = to;
+    unit->bank = static_cast<int16_t>(record.bank);
+    unit->heading = record.heading;
+    unit->pitch = static_cast<int16_t>(record.pitch);
+    if (has_speed_word) {
+        if (MovementRecord* m = movement_of(world, sim, unit))
+            m->speed = speed_word;
+        if (sim != nullptr && sim->set_movement_speed != nullptr)
+            sim->set_movement_speed(sim->context, world, unit, speed_word);
+    }
+    return WireError::ok;
 }
 
 WireError replication_apply_unit_state(
@@ -357,6 +356,8 @@ WireError replication_apply_unit_state(
 
     auto index = static_cast<uint16_t>(bit_reader_read(&reader, unit_state_unit_index_bits));
     while (index != no_unit_index) {
+        if (bit_reader_overrun(&reader))
+            return WireError::truncated;
         const auto slot = static_cast<int16_t>(index);
         if (slot < 0 || static_cast<uint32_t>(slot) >= count)
             return WireError::bad_argument;

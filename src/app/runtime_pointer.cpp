@@ -4,6 +4,7 @@
 // Pointer tracking, menu activation and match unit picking.
 #include "oa/app/runtime.hpp"
 #include "match_models.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/sim/spatial_state/spatial.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
 #include <algorithm>
@@ -133,9 +134,7 @@ void Runtime::activate() {
             button_result(menu::MenuHandle{kFrontendMenuHandle}, menu::Button::multiplayer) != 0
         ) {
             const MultiplayerSelection selection =
-                extension_.select_multiplayer == nullptr
-                    ? MultiplayerSelection::unavailable
-                    : extension_.select_multiplayer(extension_.context, *this);
+                call_hook_or_raise<&Extension::select_multiplayer>(extension_, *this);
             if (selection == MultiplayerSelection::frontend)
                 menu::handle_event(state_, event, *this);
         } else {
@@ -253,12 +252,11 @@ oa::sim::selection::VisibleLists Runtime::on_screen_lists() {
     lists.unit_capacity = static_cast<uint32_t>(on_screen_units_.size());
     lists.radar = radar_state_.hot_units.data();
     lists.radar_capacity = static_cast<uint32_t>(radar_state_.hot_units.size());
-    // The radar renderer places its picture and lists its blips in Game as it
-    // draws; selection takes them from here rather than reading them itself.
+    // The radar renderer places its picture in Game and returns the blips it
+    // listed; selection takes both from here rather than reading them itself.
     if (match_) {
-        const auto& game = match_->state().game;
-        lists.radar_count = game.hot_radar_unit_count;
-        lists.radar_picture = game.radar_picture_rect;
+        lists.radar_count = static_cast<int32_t>(radar_state_.hot_unit_count);
+        lists.radar_picture = match_->state().game.radar_picture_rect;
     }
     return lists;
 }

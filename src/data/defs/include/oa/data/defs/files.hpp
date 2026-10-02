@@ -16,14 +16,14 @@ inline constexpr std::size_t path_capacity = 256; // bytes of a path buffer, as 
 // Platform boundary over the merged loose-file + HPI view. Paths use '\\' as
 // the game does; implementations may accept either separator.
 struct Files {
-    void* context;
+    void* context{};
     // Reads a whole file. On success *data is released with release().
     bool (*read)(
         void* context, const char* path, uint8_t** data, uint32_t* size, bool* from_archive
-    );
-    void (*release)(void* context, uint8_t* data);
+    ) = nullptr;
+    void (*release)(void* context, uint8_t* data) = nullptr;
     // Reports true when the path names a readable file.
-    bool (*exists)(void* context, const char* path);
+    bool (*exists)(void* context, const char* path) = nullptr;
     // Calls visit(user, name) for each file name (without directory) in the
     // directory with the extension (no dot), in the order the VFS enumerates them.
     void (*list)(
@@ -32,7 +32,7 @@ struct Files {
         const char* extension,
         void (*visit)(void* user, const char* name),
         void* user
-    );
+    ) = nullptr;
 };
 
 /// Reads a TDF-family file whole through the file boundary and parses it.

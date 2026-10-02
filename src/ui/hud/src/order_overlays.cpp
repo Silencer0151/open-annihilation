@@ -522,7 +522,7 @@ void draw_selection_overlays(const OverlayContext& context) {
     const Unit* first = world_player_units(world, local, &count);
     for (uint32_t index = 0; index < count; ++index) {
         const Unit& unit = first[index];
-        if ((unit.flags & OA_UNIT_FLAG_LIVE) == 0 || (unit.flags & OA_UNIT_FLAG_DEATH_PENDING) != 0)
+        if (!unit_is_live_target(unit.flags))
             continue;
         bool animate = true;
         uint32_t mask = kOverlayAll;

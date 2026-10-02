@@ -3,6 +3,8 @@
 
 #include "oa/platform/log_files.hpp"
 
+#include "oa/platform/files.hpp"
+
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
@@ -93,18 +95,24 @@ fs::path new_file(const fs::path& folder, sys_seconds now) {
 
 std::FILE* reopen(const fs::path& path, std::FILE* stream) {
 #if defined(_WIN32)
+    // Visual Studio's C library marks _wfreopen unsafe in favour of
+    // _wfreopen_s, which denies other programs the file while the stream has
+    // it open; a log must stay readable while the game writes it.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
     return _wfreopen(path.c_str(), L"ab", stream);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 #else
     return std::freopen(path.c_str(), "ab", stream);
 #endif
 }
 
 bool can_append(const fs::path& path) {
-#if defined(_WIN32)
-    std::FILE* file = _wfopen(path.c_str(), L"ab");
-#else
-    std::FILE* file = std::fopen(path.c_str(), "ab");
-#endif
+    std::FILE* file = open_file(path, "ab");
     if (file == nullptr)
         return false;
     std::fclose(file);

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include "oa/test/match_services.hpp"
 
 // Raw words of a unit's economy block (energy then metal accumulators).
 std::array<uint32_t, 12>& economy_words(oa::Unit& unit) {
@@ -20,38 +21,29 @@ using namespace oa;
             throw std::runtime_error(#x);                                                          \
     } while (false)
 
-struct Services : sim::match_runtime::OfflineServices {
-#define UNEXPECTED(type, name, args)                                                               \
-    type name args override {                                                                      \
-        throw std::runtime_error("unexpected " #name);                                             \
+struct Services : oa::test::QuietServices {
+    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {
+        oa::test::unexpected_call("attachment_notification");
     }
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
+    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {
+        oa::test::unexpected_call("emit_sfx");
+    }
 
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {
+        oa::test::unexpected_call("explode_piece");
+    }
 
-    UNEXPECTED(void, attachment_notification, (sim::unit_spawn::Slot&, uint32_t))
+    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {
+        oa::test::unexpected_call("attach_unit");
+    }
 
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-    UNEXPECTED(void, emit_sfx, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, explode_piece, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
-    UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(oa::sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-#undef UNEXPECTED
+    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {
+        oa::test::unexpected_call("drop_unit");
+    }
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 int main() {
     formats::tnt::Map map;
@@ -191,8 +183,8 @@ int main() {
     CHECK(target && target->unit_index != 0);
     shooter->unit->object_present = false;
     target->unit->object_present = false;
-    shooter->unit->flags |= 0x10000000u;
-    target->unit->flags |= 0x10000000u;
+    shooter->unit->flags |= OA_UNIT_FLAG_LIVE;
+    target->unit->flags |= OA_UNIT_FLAG_LIVE;
     target->unit->health = 1;
     std::array<uint8_t, 10> allies{};
     allies[0] = 1;
@@ -258,7 +250,7 @@ int main() {
         match.tick();
     }
     CHECK(target->unit->record.type_index == 0);
-    CHECK((target->unit->flags & 0x10000000u) == 0);
+    CHECK((target->unit->flags & OA_UNIT_FLAG_LIVE) == 0);
     CHECK(match.world().players[1].current_count == 0);
     CHECK(oa::world_player(&match.state(), 1)->losses == 1);
     CHECK(oa::world_player(&match.state(), 0)->kills == 1);
@@ -335,7 +327,7 @@ int main() {
     // easy computers half; a finished build fraction credits 0.
     {
         const auto killer = shooter->unit_index;
-        def.build_cost_metal = 100.0F;
+        def.build_cost_metal = 100;
         def.energy_storage = 1000.0F;
         def.metal_storage = 1000.0F;
         match.reload_unit_defs();
@@ -352,7 +344,7 @@ int main() {
         for (const auto& c : cases) {
             auto* victim = match.create({0, 1, {96u << 16, 32u << 16, 96u << 16}, true, 1, 0});
             CHECK(victim && victim->unit_index != 0);
-            victim->unit->flags |= 0x10000000u;
+            victim->unit->flags |= OA_UNIT_FLAG_LIVE;
             victim->unit->record.damage_kind =
                 static_cast<uint8_t>(sim::match_runtime::DeathKind::reclaim);
             victim->record.last_attacker_id = killer;
@@ -374,7 +366,7 @@ int main() {
 
             victim = match.create({0, 1, {96u << 16, 32u << 16, 96u << 16}, true, 1, 0});
             CHECK(victim && victim->unit_index != 0);
-            victim->unit->flags |= 0x10000000u;
+            victim->unit->flags |= OA_UNIT_FLAG_LIVE;
             victim->unit->record.damage_kind =
                 static_cast<uint8_t>(sim::match_runtime::DeathKind::reclaim);
             victim->record.last_attacker_id = killer;
@@ -397,14 +389,14 @@ int main() {
         }
         match.set_difficulty(1);
         match.simulation().players[0].status = 1;
-        def.build_cost_metal = 0.0F;
+        def.build_cost_metal = 0;
         def.energy_storage = 0.0F;
         def.metal_storage = 0.0F;
         // Any other death kind skips the statistics and runs the shared
         // teardown tail.
         auto* unknown = match.create({0, 1, {96u << 16, 32u << 16, 96u << 16}, true, 1, 0});
         CHECK(unknown && unknown->unit_index != 0);
-        unknown->unit->flags |= 0x10000000u;
+        unknown->unit->flags |= OA_UNIT_FLAG_LIVE;
         unknown->unit->record.damage_kind = 0xe;
         const auto losses = oa::world_player(&match.state(), 1)->losses;
         match.teardown_dead_unit(*unknown);

@@ -5,7 +5,6 @@
 
 #include <bit>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace oa::sim::script_state {
@@ -74,9 +73,8 @@ encoded_size(std::size_t static_count, std::size_t piece_count) noexcept {
 
 std::vector<uint8_t> encode(const State& state) {
     const auto size = encoded_size(state.statics.size(), state.pieces.size());
-    if (!size.has_value()) {
-        throw std::invalid_argument("script state exceeds bounded static or piece count");
-    }
+    if (!size.has_value())
+        return {};
 
     std::vector<uint8_t> output;
     output.reserve(*size);

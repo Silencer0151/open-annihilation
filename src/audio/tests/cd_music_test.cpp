@@ -214,7 +214,7 @@ void disc_cache() {
     };
 
     auto cache = std::make_unique<DiscCache>();
-    std::memset(cache.get(), 0xaa, sizeof(DiscCache));
+    std::memset(static_cast<void*>(cache.get()), 0xaa, sizeof(DiscCache));
     cd_load_disc_cache(*cache, settings);
     require(cache->records[3].track_types[0] == 0, "missing setting clears the cache");
 

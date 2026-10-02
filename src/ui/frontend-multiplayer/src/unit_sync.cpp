@@ -3,7 +3,6 @@
 
 // Unit-content sync table behind the battleroom and the restriction panel.
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
-#include "oa/base/bytes.hpp"
 
 #include "oa/netgame/player_slots.hpp"
 #include "oa/netgame/records.hpp"
@@ -16,7 +15,6 @@
 namespace oa::ui::frontend_multiplayer {
 
 namespace {
-using base::bytes::load_le32;
 
 constexpr uint8_t kSubtypeGreeting = 0;
 constexpr uint8_t kSubtypeDefCount = 1;
@@ -182,27 +180,29 @@ void unit_sync_relay(Lobby& lobby, uint32_t key) noexcept {
         sync.pending[sync.pending_count++] = key;
 }
 
-void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) noexcept {
+void unit_sync_receive(Lobby& lobby, std::span<const uint8_t> bytes, uint8_t from_slot) noexcept {
     auto& sync = lobby.sync;
-    const uint8_t subtype = record[1];
+    netgame::UnitDefHandshakeRecord record{};
+    if (netgame::decode_record(bytes.data(), bytes.size(), &record) != netgame::WireError::ok)
+        return;
+    const uint8_t subtype = record.subtype;
     if (subtype >= netgame::handshake_subtype_limit || sync.finished)
         return;
     ++sync.records_handled;
-    const auto key = load_le32(record + 6);
+    const auto key = record.key;
     if (!sync.host) {
         if (subtype != kSubtypeVerdict)
             return;
         auto* entry = upsert(sync, key);
         if (entry == nullptr)
             return;
+        // A verdict's value holds the local and remote bytes, then the limit.
         entry->checksum = 0;
-        entry->local = record[10];
+        entry->local = static_cast<uint8_t>(record.value);
         entry->local_high = 0;
-        entry->remote = record[11];
+        entry->remote = static_cast<uint8_t>(record.value >> 8U);
         entry->remote_high = 0;
-        int16_t limit = 0;
-        std::memcpy(&limit, record + 12, sizeof(limit));
-        entry->limit = limit;
+        entry->limit = static_cast<int16_t>(record.value >> 16U);
         unit_sync_relay(lobby, key);
         return;
     }
@@ -213,7 +213,7 @@ void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) n
             peer = &sync.peers[index];
     if (peer == nullptr)
         return;
-    const auto value = load_le32(record + 10);
+    const auto value = record.value;
     if (subtype == kSubtypeDefCount) {
         peer->expected = value;
     } else if (subtype == kSubtypeChecksum) {

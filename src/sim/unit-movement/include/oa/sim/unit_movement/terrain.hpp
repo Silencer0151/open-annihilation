@@ -17,10 +17,17 @@ class Terrain {
 
     /// Makes a terrain view of a TNT height grid.
     ///
-    /// Throws std::invalid_argument for a grid smaller than 2x2, too large, inconsistent or with sea level past 255.
+    /// A grid terrain_grid_valid refuses gives an empty view: every height is
+    /// -1, as outside the map interior, and the sea level is 0.
     ///
     /// @param map parsed TNT; must outlive the view
-    explicit Terrain(const oa::formats::tnt::Map& map);
+    explicit Terrain(const oa::formats::tnt::Map& map) noexcept;
+
+    /// Tells whether the view holds its map's grid.
+    ///
+    /// @return false for the empty view of a refused grid
+    [[nodiscard]] bool holds_grid() const noexcept { return map_ != nullptr; }
+
     /// Returns the interpolated ground height at a 16.16 X/Z.
     ///
     /// The four attribute heights around the point are interpolated along X, then
@@ -40,6 +47,13 @@ class Terrain {
     const oa::formats::tnt::Map* map_;
 };
 
+/// Tells whether a TNT height grid can be viewed as terrain.
+///
+/// @param map parsed TNT
+/// @return true for a grid of at least 2x2 and at most the TNT attribute limit
+///         each way, whose attributes fill it exactly, with a sea level of at most 255
+[[nodiscard]] bool terrain_grid_valid(const oa::formats::tnt::Map& map) noexcept;
+
 /// Returns the integer altitude of the surface at a 16.16 X/Z.
 ///
 /// @param terrain terrain view
@@ -56,10 +70,9 @@ using GroundQuad =
 /// X and Z are negated as the 3DO loader stores them; root offsets are not
 /// added.
 ///
-/// Throws std::invalid_argument for a selection index, vertex count or vertex index out of range.
-///
 /// @param model the unit's model
-/// @return the quad, or nullopt when the root has no selection primitive
+/// @return the quad; nullopt when the root has no selection primitive, or one
+///         whose index, vertex count or vertex indices lie outside the root
 std::optional<GroundQuad> ground_quad(const oa::formats::objects3d::Model& model);
 
 struct GroundPose {
@@ -94,15 +107,15 @@ struct GroundClock {
 /// front and back pairs, written into the high word so the previous low 16
 /// fractional bits stay; pitch and roll come from the front/back and left/right
 /// height differences. Rotation and atan use host libm with explicit
-/// nearest-even integer conversion. Throws std::domain_error in the bob for a
-/// zero half maximum speed.
+/// nearest-even integer conversion.
 ///
 /// @param terrain terrain view
 /// @param quad the model's selection quad, or nullopt
 /// @param[in,out] pose position, angles, bob phase and flags of the unit
 /// @param movement movement object: speed and last motion tick for the bob
 /// @param clock simulation tick and the four per-vertex bob readings
-/// @return false, leaving the pose unchanged, for a missing quad or an off-map sample
+/// @return false, leaving the pose unchanged, for a missing quad, an off-map
+///         sample, or a bob with a zero half maximum speed to divide by
 bool fit_ground(
     const Terrain& terrain,
     const std::optional<GroundQuad>& quad,

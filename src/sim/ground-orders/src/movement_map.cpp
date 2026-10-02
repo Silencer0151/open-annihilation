@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
@@ -16,12 +15,15 @@ int16_t half(uint32_t value) noexcept {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(value));
 }
 
-std::size_t words_for(uint32_t width, uint32_t height) {
+// Whether the grid's words fit in memory's address space.
+bool addressable(uint32_t width, uint32_t height) noexcept {
     const auto rows = (uint64_t(height) + cells_per_word - 1) / cells_per_word;
-    const auto words = uint64_t(width) * rows;
-    if (words > std::numeric_limits<std::size_t>::max())
-        throw std::length_error("movement map dimensions exceed address space");
-    return static_cast<std::size_t>(words);
+    return uint64_t(width) * rows <= std::numeric_limits<std::size_t>::max();
+}
+
+std::size_t words_for(uint32_t width, uint32_t height) noexcept {
+    const auto rows = (uint64_t(height) + cells_per_word - 1) / cells_per_word;
+    return static_cast<std::size_t>(uint64_t(width) * rows);
 }
 } // namespace
 
@@ -32,8 +34,9 @@ MovementMap::MovementMap(
     int16_t footprint_z,
     MovementMapSampler& sampler
 )
-    : width_(width), height_(height), footprint_x_(footprint_x), footprint_z_(footprint_z),
-      sampler_(&sampler), cells_(words_for(width, height)) {
+    : width_(addressable(width, height) ? width : 0),
+      height_(addressable(width, height) ? height : 0), footprint_x_(footprint_x),
+      footprint_z_(footprint_z), sampler_(&sampler), cells_(words_for(width_, height_)) {
 }
 
 uint8_t MovementMap::cell(uint32_t x, uint32_t z) const noexcept {

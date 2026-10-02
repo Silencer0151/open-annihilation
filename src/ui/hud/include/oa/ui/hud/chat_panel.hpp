@@ -9,14 +9,13 @@
 #include "oa/ui/hud/order_panel.hpp"
 
 #include "oa/core/world.h"
+#include "oa/data/campaign/campaign_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 namespace oa::ui::hud {
 
-/// CampaignFile.kind of a multiplayer session.
-inline constexpr int32_t kSessionMultiplayer = 3;
 /// frame_flags bit held while the chat panel is open.
 inline constexpr uint16_t kFrameChatOpen = 0x0004u;
 /// frame_flags bit held while the unit info panel is open.
@@ -55,7 +54,7 @@ struct ChatHost {
 /// players and refreshes the target buttons. TALK gets the keyboard focus.
 ///
 /// @param[in,out] world World whose Game.frame_flags gain kFrameChatOpen.
-/// @param session_kind CampaignFile.kind of the session (kSessionMultiplayer for multiplayer).
+/// @param session_kind CampaignFile.kind of the session .
 /// @param[in,out] draft Text kept between openings; cleared on first use.
 /// @param loader Loads the panel layout.
 /// @param controls Named controls of the loaded panel.
@@ -63,7 +62,7 @@ struct ChatHost {
 /// @return Whether the panel opened.
 bool open_chat_panel(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     ChatDraft& draft,
     const PanelLoader& loader,
     const PanelControls& controls,
@@ -115,7 +114,7 @@ void send_chat_line(World& world, const char* typed, const ChatHost& host);
 /// @return What the host does next.
 ChatClick chat_panel_click(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const char* name,
     int32_t control,
     ChatDraft& draft,
@@ -168,8 +167,8 @@ void draw_message_log(const World& world, const MessageLogSink& sink);
 /// Destination and source corners of a player logo blit: the logo sequence
 /// frame of the player's colour stretched into `rect` shifted down by `lift`.
 struct LogoBlit {
-    int32_t dest[8];   // x0,y0 x1,y0 x1,y1 x0,y1
-    int32_t source[8]; // same order over the logo frame
+    int32_t dest[8]{};   // x0,y0 x1,y0 x1,y1 x0,y1
+    int32_t source[8]{}; // same order over the logo frame
 };
 
 /// Computes the corners of a player logo blit.

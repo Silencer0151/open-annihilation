@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 
 namespace oa::app {
@@ -120,7 +121,7 @@ void Runtime::apply_group_order(const char* tag, int32_t value) {
             return;
         const auto* def = hud::unit_def(table, table.units[id]);
         if (def != nullptr && hud::group_order_reaches(tag, *def))
-            (void)match_->issue_state_order(id, kind, value);
+            match_->issue_state_order(id, kind, value);
     });
 }
 
@@ -303,7 +304,9 @@ void Runtime::toggle_order_button(std::size_t index) {
         return;
     oa::World& world = match_->state();
     auto state = hud::order_panel_load(world.game);
-    (void)hud::order_panel_toggle(
+    // A control that is not a toggle leaves the order words as they were,
+    // and storing them back changes nothing.
+    std::ignore = hud::order_panel_toggle(
         state,
         order_panel_table(),
         order_panel_controls(),

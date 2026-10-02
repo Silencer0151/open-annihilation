@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The combined extension table (extension_list.hpp): each hook of it calls
-// the extensions' own hooks by the rules extension.hpp gives.
+// the extensions' own hooks by the rules extension.hpp gives. It is part of
+// the table, so it calls them directly: what one throws passes through the
+// combined hook to the engine's guarded call of it (hook_call.hpp), and the
+// extensions after it are not called for that call.
 #include "oa/app/extension_list.hpp"
 
 #include "oa/app/command_line.hpp"
@@ -615,6 +618,9 @@ void combine_hooks(ExtensionListState& state) {
             return false;
         }
     );
+    combine(state, &Extension::release_runtime, [](void* context, Runtime& runtime) {
+        call_every_reversed(context, &Extension::release_runtime, runtime);
+    });
 }
 
 } // namespace

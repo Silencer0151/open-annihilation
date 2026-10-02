@@ -25,14 +25,14 @@ inline constexpr const char* bad_target_category_default = "none";
 // Blocks a UnitDef refers to: the yard map (UnitDef.yard_map) and the build
 // list (UnitDef.build_ids). A record stores block index + 1; 0 means none.
 struct UnitDefBlock {
-    uint8_t* bytes;
-    uint32_t size;
+    uint8_t* bytes{};
+    uint32_t size{};
 };
 
 struct UnitDefBlocks {
-    UnitDefBlock* blocks;
-    uint32_t count;
-    uint32_t capacity;
+    UnitDefBlock* blocks{};
+    uint32_t count{};
+    uint32_t capacity{};
 };
 
 /// Empties a block store without freeing anything.
@@ -65,21 +65,21 @@ oa_ref32 unit_def_blocks_alloc(UnitDefBlocks* blocks, uint32_t size) noexcept;
 
 // Lookups the loader makes outside the definition tables.
 struct UnitDefLoadHost {
-    void* context;
+    void* context{};
     // FeatureDef index of the named corpse, loading the definition when the
     // table lacks it.
-    int16_t (*corpse)(void* context, const char* feature_name);
+    int16_t (*corpse)(void* context, const char* feature_name) = nullptr;
 };
 
 // Tables a unit definition resolves names against. All are required except host.
 struct UnitDefSources {
-    const char* language; // localized-key prefix ("" for none)
-    const MoveClassTable* move_classes;
-    const WeaponDef* weapon_defs; // Game.weapon_defs, OA_WEAPON_DEF_COUNT records
-    const SoundCategoryTable* sound_categories;
-    CategoryRegistry* categories;
-    UnitDefBlocks* blocks;
-    const UnitDefLoadHost* host;
+    const char* language{}; // localized-key prefix ("" for none)
+    const MoveClassTable* move_classes{};
+    const WeaponDef* weapon_defs{}; // Game.weapon_defs, OA_WEAPON_DEF_COUNT records
+    const SoundCategoryTable* sound_categories{};
+    CategoryRegistry* categories{};
+    UnitDefBlocks* blocks{};
+    const UnitDefLoadHost* host{};
 };
 
 /// Finds a weapon by its TDF section name.

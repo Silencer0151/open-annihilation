@@ -3,6 +3,7 @@
 
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "test_support.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -138,7 +139,7 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
     OA_CHECK(calls.sounds.back() == "Exit");
 
     context.exit_kind = ExitKind::main_menu;
-    std::strcpy(context.return_label.data(), "Portal");
+    oa::base::text::copy_terminated(context.return_label, "Portal");
     ingame_enter_exit_confirm(confirm, context);
     OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and return to Portal?");
     select(confirm, "CHOICE1");
@@ -158,7 +159,7 @@ OA_GAME_DATA_TEST(exit_menu_return_label_replaces_button) {
         return;
     Calls calls;
     auto context = make_context(calls, SessionKind::multiplayer);
-    std::strcpy(context.return_label.data(), "Harbour");
+    oa::base::text::copy_terminated(context.return_label, "Harbour");
     ingame_enter_exit_menu(panel, context);
     OA_CHECK(panel_control(panel, "EXITGAME")->active == 0);
     OA_CHECK(text_of(panel, "MAINMENU") == "Harbour");

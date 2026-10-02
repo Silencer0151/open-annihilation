@@ -7,6 +7,10 @@
 
 #include "oa/core/types.h"
 
+/* Width and depth of one map cell (one plot), in map pixels; a map pixel is
+   one world unit. */
+#define OA_MAP_CELL_PIXELS 16
+
 /* MapPlot.feature values at or above this carry no feature of their own. */
 #define OA_PLOT_FEATURE_RESERVED 0xfffbu
 

@@ -355,13 +355,8 @@ int main() {
     );
 
     Unit typeless{8};
-    bool missing_type = false;
-    try {
-        (void)apply_build_progress(typeless, typeless, -1.0F, build);
-    } catch (const std::invalid_argument&) {
-        missing_type = true;
-    }
-    CHECK(missing_type);
+    const auto untyped = apply_build_progress(typeless, typeless, -1.0F, build);
+    CHECK(untyped.target_untyped && !untyped.performed && build.damage.empty());
 
     // The build step keeps 53 bits: 1 - 1/3 is stored as 0x3F2AAAAB
     // (float arithmetic would give 0x3F2AAAAA), and the third step of a

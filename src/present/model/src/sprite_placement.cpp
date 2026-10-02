@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/model/sprite_placement.hpp"
+#include "oa/core/map_plot.h"
 
 #include "oa/sim/feature_runtime.hpp"
 
 namespace oa::present::model {
 namespace {
 
-constexpr int32_t kCellPixels = 16;
 /// Screen-space offset of the battlefield inside the 640x480 HUD frame (the
 /// order panel on the left, the resource bar on top).
 constexpr int32_t kBattlefieldLeft = 0x80;
@@ -148,10 +148,10 @@ FeatureDraw plan_feature_draw(World& world, int32_t cell_x, int32_t cell_z) {
         return corner != nullptr ? corner->height : 0;
     };
     const int32_t lift = (height(0, 0) + height(1, 0) + height(0, 1) + height(1, 1)) >> 3;
-    draw.x = (def.footprint_x * kCellPixels) / 2 - static_cast<int32_t>(game.camera_x) +
-             cell_x * kCellPixels + kBattlefieldLeft;
-    draw.y = (def.footprint_z * kCellPixels) / 2 - lift - static_cast<int32_t>(game.camera_y) +
-             cell_z * kCellPixels + kBattlefieldTop;
+    draw.x = (def.footprint_x * OA_MAP_CELL_PIXELS) / 2 - static_cast<int32_t>(game.camera_x) +
+             cell_x * OA_MAP_CELL_PIXELS + kBattlefieldLeft;
+    draw.y = (def.footprint_z * OA_MAP_CELL_PIXELS) / 2 - lift -
+             static_cast<int32_t>(game.camera_y) + cell_z * OA_MAP_CELL_PIXELS + kBattlefieldTop;
     const bool shadows = (game.graphics_flags & kGraphicsShadows) != 0;
     const auto add = [&](bool shadow, FeatureFrame frame, bool translucent) {
         draw.sprites[draw.sprite_count++] = {shadow, frame, translucent};

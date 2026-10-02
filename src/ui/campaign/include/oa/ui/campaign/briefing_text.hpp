@@ -72,41 +72,41 @@ std::size_t reflow_span_text(const char* text, char* out, std::size_t capacity);
 [[nodiscard]] const char* find_text_page(const char* text, int32_t lines_per_page, int32_t page);
 
 struct BriefingRegion {
-    int32_t x;
-    int32_t y;
-    int32_t height;
-    int32_t line_height; // font height + 2
+    int32_t x{};
+    int32_t y{};
+    int32_t height{};
+    int32_t line_height{}; // font height + 2
 };
 
 struct BriefingRow {
-    char text[kRowTextBytes];
-    int32_t x;
-    int32_t y;
+    char text[kRowTextBytes]{};
+    int32_t x{};
+    int32_t y{};
 };
 
 struct BriefingHighlight {
-    char text[kRowTextBytes];
-    int32_t x;
-    int32_t y;
-    HighlightColor color;
+    char text[kRowTextBytes]{};
+    int32_t x{};
+    int32_t y{};
+    HighlightColor color{};
 };
 
 enum class MoreLabel : uint8_t { none, more, back_to_start };
 
 struct BriefingPage {
     BriefingRow rows[kMaxRows];
-    uint32_t row_count;
+    uint32_t row_count{};
     BriefingHighlight highlights[kMaxHighlights];
-    uint32_t highlight_count;
-    MoreLabel more;
-    int32_t page;
+    uint32_t highlight_count{};
+    MoreLabel more{};
+    int32_t page{};
 };
 
 // Paging state kept between MOREBAR clicks.
 struct BriefingPager {
-    const char* text; // wrapped and reflowed briefing
-    int32_t page;
-    bool fresh; // next layout restarts at page 0
+    const char* text{}; // wrapped and reflowed briefing
+    int32_t page{};
+    bool fresh{}; // next layout restarts at page 0
 };
 
 /// Starts paging a briefing text; the next layout shows page 0.

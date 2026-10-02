@@ -30,7 +30,6 @@ constexpr std::string_view kSmallButtonSound = "SMLBUTTON";
 constexpr std::string_view kSmallButtonLowerSound = "smlbutton";
 constexpr std::string_view kSmallButtonMixedSound = "SmallButton";
 constexpr std::string_view kOptionsSound = "Options";
-constexpr int32_t kInvalidMessageWidth = 0x140;
 constexpr int32_t kDiscMessageWidth = 200;
 constexpr uint32_t kEditableAttribute = 2;
 
@@ -348,7 +347,7 @@ void savegame_fill_preview(Panel& panel, SaveDialogContext& context) {
 }
 
 void savegame_report_invalid(Panel& panel, SaveDialogContext& context) {
-    message(context, "Invalid savegame file", kInvalidMessageWidth);
+    message(context, kInvalidSaveMessage, kInvalidSaveMessageWidth);
     panel_clear_selection(panel);
 }
 

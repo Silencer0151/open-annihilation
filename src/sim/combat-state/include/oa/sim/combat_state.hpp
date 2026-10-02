@@ -3,13 +3,15 @@
 
 #pragma once
 
+#include "oa/core/unit.h"
+#include "oa/core/unit_def.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -376,6 +378,9 @@ struct SpawnGeometryHost {
 struct SpawnCombatResult {
     bool resolved_nondefault_weapon{};
     InitializationResult initialization;
+    // A host callback cleared a slot's definition: the slots after it are not
+    // armed and the slowest reload is not reported.
+    bool definition_cleared{};
 };
 
 /// Arms a new unit's three weapon slots and reports its slowest reload to its script.
@@ -386,13 +391,14 @@ struct SpawnCombatResult {
 /// then gets the slowest reload in milliseconds. The reload countdown is the
 /// canonical slot's, which the caller clears.
 ///
-/// Throws std::runtime_error when a host callback clears a slot's definition.
+/// A host callback that clears a slot's definition ends the arming there.
 ///
 /// @param[in,out] weapons unit's weapon slots
 /// @param registry installed weapons
 /// @param names FBI weapon1, weapon2 and weapon3
 /// @param host script and model operations for the new unit
-/// @return whether a weapon other than record zero resolved, and the slowest reload
+/// @return whether a weapon other than record zero resolved, the slowest reload, and
+///         whether a callback cleared a definition
 [[nodiscard]] SpawnCombatResult initialize_spawn_combat(
     UnitWeapons& weapons,
     const WeaponRegistry& registry,
@@ -405,11 +411,7 @@ struct SpawnCombatResult {
 using UnitIdentity = uintptr_t;
 inline constexpr size_t player_mask_word_count = 2048;
 inline constexpr uint32_t target_search_sample_limit = 50;
-inline constexpr uint32_t unit_targetable_flag = 0x10000000U; // Unit.flags OA_UNIT_FLAG_LIVE
-inline constexpr uint32_t unit_excluded_from_auto_target_flag =
-    0x00004000U; // Unit.flags OA_UNIT_FLAG_DEATH_PENDING
-inline constexpr uint32_t source_range_check_bypass_flag =
-    0x10000000U; // UnitDef.flags OA_UNIT_DEF_FLAG_KAMIKAZE
+inline constexpr uint32_t source_range_check_bypass_flag = OA_UNIT_DEF_FLAG_KAMIKAZE;
 // OA_UNIT_DEF_FLAG_SHOOT_ME in bits 8..15 of UnitDef.flags.
 inline constexpr uint8_t candidate_type_auto_target_flag = 0x80U;
 // weapon_paralyzer_flag in the low byte of WeaponDef.flags that

@@ -55,6 +55,7 @@ def main():
     subprocess.run(["cmake", "-S", str(source), "-B", str(build),
                     "-DCMAKE_BUILD_TYPE=Release", "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON",
                     "-DSDL_TEST_LIBRARY=OFF", "-DSDL_TESTS=OFF",
+                    f"-DCMAKE_PROJECT_INCLUDE={(ROOT / 'tools' / 'sdl_build_options.cmake').as_posix()}",
                     f"-DCMAKE_INSTALL_PREFIX={install}"], check=True)
     subprocess.run(["cmake", "--build", str(build), "--config", "Release", "--parallel", "8"], check=True)
     subprocess.run(["cmake", "--install", str(build), "--config", "Release"], check=True)

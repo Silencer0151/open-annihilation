@@ -21,8 +21,16 @@ class SdlWavPlayer {
     ///
     /// @param assets Asset store; must outlive the player.
     explicit SdlWavPlayer(const oa::AssetStore& assets);
+
+    /// Stops the loop, the stream and every effect, and frees the decoded sounds.
     ~SdlWavPlayer();
+
+    /// Takes over another player's sounds, voices and volume; the source plays nothing afterwards.
     SdlWavPlayer(SdlWavPlayer&&) noexcept;
+
+    /// Stops this player's sounds and takes over another player's.
+    ///
+    /// @return this player
     SdlWavPlayer& operator=(SdlWavPlayer&&) noexcept;
     SdlWavPlayer(const SdlWavPlayer&) = delete;
     SdlWavPlayer& operator=(const SdlWavPlayer&) = delete;

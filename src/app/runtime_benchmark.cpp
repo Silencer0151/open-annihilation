@@ -6,6 +6,8 @@
 #include "oa/app/runtime.hpp"
 #include "match_models.hpp"
 #include "oa/sim/selection.hpp"
+#include "oa/platform/files.hpp"
+#include "match_fault.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -107,7 +109,7 @@ constexpr uint64_t kFramesDigestMultiplier = 0x9e3779b97f4a7c15ULL;
 void Runtime::step_match_simulation() {
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
 }
 
 void Runtime::benchmark_scene(std::string_view label, std::size_t frames, bool scroll) {
@@ -222,7 +224,11 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
                 )) << 16,
                 static_cast<uint32_t>(z) << 16
             };
-            (void)match_->create(request);
+            const auto* placed = match_->create(request);
+            if (placed == nullptr || placed->unit == nullptr)
+                throw std::runtime_error(
+                    "combat benchmark could not place " + std::string(names[side])
+                );
         }
     }
     if (options_.busy_combat)
@@ -262,8 +268,8 @@ void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
     // Missile trucks behind each army: their missiles are drawn as 3DO models.
     for (int32_t truck = 0; truck < kBusyCombatTrucks; ++truck) {
         const int32_t z = centre_z + kBusyCombatTruckTop + truck * kBusyCombatTruckSpacing;
-        (void)place("ARMSAM", local, centre_x - kBusyCombatTruckReach, z);
-        (void)place("CORMIST", enemy, centre_x + kBusyCombatTruckReach, z);
+        place("ARMSAM", local, centre_x - kBusyCombatTruckReach, z);
+        place("CORMIST", enemy, centre_x + kBusyCombatTruckReach, z);
     }
     // A kbot lab building peewees: its nano particles, and each peewee
     // carried on the lab's pad while it is built.
@@ -279,7 +285,7 @@ void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
         centre_x + kBusyCombatTransportX + kBusyCombatCargoOffset,
         centre_z + kBusyCombatTransportZ
     );
-    (void)match_->issue_load(transport, cargo, false);
+    match_->issue_load(transport, cargo, false);
     // The local army selected, its selection boxes shown.
     auto& world = match_->state();
     world.game.console_flags =
@@ -369,7 +375,7 @@ void Runtime::run_headless_frames(std::size_t ticks, uint32_t frames_per_second)
 
     std::FILE* log = nullptr;
     if (!options_.frame_log.empty()) {
-        log = run_end.log = std::fopen(options_.frame_log.string().c_str(), "w");
+        log = run_end.log = oa::platform::open_file(options_.frame_log, "w");
         if (log == nullptr)
             throw std::runtime_error("cannot create the frame log " + options_.frame_log.string());
         std::fprintf(

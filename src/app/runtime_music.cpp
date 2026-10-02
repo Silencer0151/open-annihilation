@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -103,8 +104,10 @@ void Runtime::music_start() {
                 &owner.timers, &owner.clock, static_cast<int32_t>(interval), user, callback
             );
         };
+    // A handle that names no timer has nothing to free.
     mixer.timers.remove = [](void* context, int32_t handle) {
-        (void)oa::ui::services::timers_remove(&static_cast<MusicHost*>(context)->timers, handle);
+        std::ignore =
+            oa::ui::services::timers_remove(&static_cast<MusicHost*>(context)->timers, handle);
     };
     mixer.random.context = &host;
     mixer.random.next = [](void* context) {
@@ -283,10 +286,16 @@ void Runtime::park_music_while_inactive() {
         host.parked_while_inactive = true;
         return;
     case oa::platform::MusicFocusAction::resume:
-        (void)audio::cd_open(mixer);
-        (void)audio::cd_set_disc_change_callback(mixer, audio::music_on_disc_change, &host.session);
+        // A device that does not open again leaves the music silent, as one
+        // that does not open at the start does, and is reported the same way.
+        if (!audio::cd_open(mixer))
+            std::cerr << "music device unavailable: " << audio::sdl_music_device_error(host.device)
+                      << '\n';
+        // Both always succeed.
+        std::ignore =
+            audio::cd_set_disc_change_callback(mixer, audio::music_on_disc_change, &host.session);
         audio::cd_set_enabled(mixer, host.game->music_flags & audio::music_flag_enabled);
-        (void)audio::cd_set_play_mode(mixer, host.game->cd_mode);
+        std::ignore = audio::cd_set_play_mode(mixer, host.game->cd_mode);
         audio::cd_set_music_kind(mixer, host.parked_music_kind);
         audio::music_on_disc_change(&host.session);
         host.parked_while_inactive = false;

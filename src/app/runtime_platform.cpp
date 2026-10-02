@@ -90,7 +90,10 @@ void Runtime::quit_application(const char* message) {
     if (sdl_.window != nullptr) {
         // The box needs the pointer, which full screen keeps on the window.
         release_pointer(sdl_.window);
-        (void)SDL_ShowSimpleMessageBox(0, SDL_GetWindowTitle(sdl_.window), message, sdl_.window);
+        // A message the box cannot show goes to standard error, as it does
+        // without a window.
+        if (!SDL_ShowSimpleMessageBox(0, SDL_GetWindowTitle(sdl_.window), message, sdl_.window))
+            std::fprintf(stderr, "%s\n", message);
     } else
         std::fprintf(stderr, "%s\n", message);
 }

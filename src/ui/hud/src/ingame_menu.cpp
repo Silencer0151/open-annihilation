@@ -111,7 +111,7 @@ void show_named(const PanelControls& controls, const char* name, bool shown) {
 
 bool toggle_tab_menu(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     bool control_offered,
     const PanelLoader& loader,
     const PanelControls& controls,
@@ -137,7 +137,7 @@ bool toggle_tab_menu(
             ++others;
     const Player& local = game.players[game.local_player_index % OA_PLAYER_COUNT];
     bool control = false;
-    if (session_kind == kSessionMultiplayer && !is_watcher(world, local)) {
+    if (session_kind == oa::data::campaign::SessionKind::multiplayer && !is_watcher(world, local)) {
         show_named(controls, "ALLIES", others > 0);
         show_named(controls, "SHARE", others > 0);
         control = (game.setup_options & kSetupOptionLocked) == 0 && control_offered;

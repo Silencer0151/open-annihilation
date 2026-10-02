@@ -185,7 +185,7 @@ void test_sample_records() {
     CHECK(oa::present::find_gaf_sequence(gaf, "ALPHAS") == nullptr);
 
     auto surface = oa::present::create_surface(6, 4);
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 0xEE);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{0xEE});
     oa::present::draw_sprite(&surface.surface, rle, 1, 1);
     const uint8_t expected[] = {
         0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, //

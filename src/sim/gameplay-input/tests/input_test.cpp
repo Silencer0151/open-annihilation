@@ -36,6 +36,9 @@ int main() {
     const PickUnit unit{7, {100 * 65536, 0, 200 * 65536}, {}, &model};
     OA_CHECK(hits_root_bounds(unit, {50, 75}, {178, 157}));
     OA_CHECK(!hits_root_bounds(unit, {50, 75}, {200, 157}));
+    // A unit without a model has no box to hit.
+    const PickUnit modelless{8, {100 * 65536, 0, 200 * 65536}, {}, nullptr};
+    OA_CHECK(!hits_root_bounds(modelless, {50, 75}, {178, 157}));
     oa::formats::tnt::Map map;
     map.attribute_width = 4;
     map.attribute_height = 8;
@@ -46,6 +49,9 @@ int main() {
     const oa::sim::unit_movement::Terrain terrain(map);
     const auto ground = terrain_intersection(terrain, 32, 40, 64, 128);
     OA_CHECK(ground.x == 32 * 65536 && ground.y == 20 * 65536 && ground.z == 50 * 65536);
+    // A map with no size has no terrain to find.
+    const auto nowhere = terrain_intersection(terrain, 32, 40, 0, 128);
+    OA_CHECK(nowhere.x == 0 && nowhere.y == 0 && nowhere.z == 0);
     OA_CHECK(command_binds_cursor_unit(0));
     OA_CHECK(command_binds_cursor_unit(1));
     OA_CHECK(command_binds_cursor_unit(2));

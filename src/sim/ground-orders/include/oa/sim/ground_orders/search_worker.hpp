@@ -26,15 +26,12 @@ inline constexpr int32_t search_early_turn_penalty = 0x4b;
 inline constexpr int16_t search_early_run_limit = 5;
 inline constexpr int16_t search_difficult_extra = 0x1e;
 inline constexpr int16_t search_start_run = 100;
-inline constexpr int32_t search_slice_expansions = 100;     // job scan inner budget
-inline constexpr int32_t search_initial_fan = 4;            // fan when a job starts
-inline constexpr int32_t search_continue_fan = 2;           // fan after the first pop
-inline constexpr int32_t search_heuristic_scale = 0x18000;  // initial base heuristic weight
-inline constexpr int32_t search_tick_credit = 0x535;        // initial per-tick node credit
-inline constexpr int32_t search_scale_period = 0x96;        // heuristic refresh period
-inline constexpr uint32_t search_goal_contact_flag = 0x100; // order event: start inside goal
-// Order event: the start is off the grid, or the wall-follow seed missed the goal.
-inline constexpr uint32_t search_seed_unresolved_flag = 0x200;
+inline constexpr int32_t search_slice_expansions = 100;    // job scan inner budget
+inline constexpr int32_t search_initial_fan = 4;           // fan when a job starts
+inline constexpr int32_t search_continue_fan = 2;          // fan after the first pop
+inline constexpr int32_t search_heuristic_scale = 0x18000; // initial base heuristic weight
+inline constexpr int32_t search_tick_credit = 0x535;       // initial per-tick node credit
+inline constexpr int32_t search_scale_period = 0x96;       // heuristic refresh period
 inline constexpr uint8_t search_goal_bit = 4;
 inline constexpr uint8_t search_seed_bit = 8;
 inline constexpr uint16_t search_heading_bias = 0x1000;
@@ -112,15 +109,14 @@ struct SearchBegin {
 /// Returns a player's heuristic scale after the refresh counter wraps at 150.
 ///
 /// Players whose units searched rarely get a greedier (larger) heuristic: six
-/// times the base below one pick per unit, three times below two. Throws
-/// std::domain_error for zero units per player.
+/// times the base below one pick per unit, three times below two.
 ///
 /// @param usage_count jobs the player's units started since the last refresh
 /// @param units_per_player unit slots per player
 /// @param base base heuristic scale (16.16)
-/// @return the scale
+/// @return the scale; the base for zero units per player, which leaves no picks per unit
 [[nodiscard]] int32_t
-search_rescaled_heuristic(int32_t usage_count, uint16_t units_per_player, int32_t base);
+search_rescaled_heuristic(int32_t usage_count, uint16_t units_per_player, int32_t base) noexcept;
 
 inline constexpr std::size_t search_player_slots = 10; // player slots the job scan walks
 
@@ -150,7 +146,8 @@ struct SearchPlayerJobState {
 /// Empties the open set (free head -1), sizes the cell grid from the map, sets
 /// the touched-map bits then clears them with the cells, and resets the credits
 /// and the ten cursors to the first unit (index 0). Leaves job_picks and
-/// refresh_tick untouched. A zero cell count clears no touched-map words.
+/// refresh_tick untouched. A zero cell count, or one of 2^31 - 255 or more,
+/// keeps no touched-map words.
 ///
 /// @param[out] heap open-set heap to reset
 /// @param[out] grid cell grid to allocate
@@ -178,10 +175,12 @@ class SearchWorker {
     /// and pushes the start node. Cells the job's player has not seen classify as
     /// passable.
     ///
-    /// @param record unit, navigator, goal and movement map; all must be set
+    /// @param record unit, navigator, goal and movement map
     /// @param begin occupancy inputs, sight bit, heuristic scale and map size
     /// @param sight_grid Game.sight_grid, one player bit per 32-unit cell
-    /// @return in_progress, or failed when the job ends at once (start inside the goal, off the map, or unreachable)
+    /// @return in_progress, or failed when the job ends at once (start inside the goal, off the map, or unreachable);
+    ///         failed too, with the worker unchanged, for a record with a missing field or a map whose
+    ///         cell count does not fit in memory
     [[nodiscard]] SearchAdvance
     begin(SearchRecord record, const SearchBegin& begin, std::span<const uint16_t> sight_grid);
     /// Pops the best open node and expands its neighbours within the fan.
@@ -243,12 +242,10 @@ class SearchWorker {
 
     /// Returns a search-map cell.
     ///
-    /// Throws std::out_of_range outside the allocated grid.
-    ///
     /// @param x cell column
     /// @param z cell row
-    /// @return the cell
-    [[nodiscard]] SearchMapCell cell(uint32_t x, uint32_t z) const;
+    /// @return the cell; an empty cell outside the allocated grid
+    [[nodiscard]] SearchMapCell cell(uint32_t x, uint32_t z) const noexcept;
 
     /// Returns the search map width in cells.
     [[nodiscard]] uint32_t width() const noexcept { return width_; }
@@ -391,7 +388,9 @@ struct SearchScheduler {
 /// credit remains. With no job it steps the player's unit cursor and starts a
 /// job for a unit whose navigator asks for a search (cost 1, +100 when a job
 /// starts); with a job it expands up to 100 nodes and publishes the route when
-/// a goal cell is reached.
+/// a goal cell is reached. The scan ends early when no player has credit left
+/// to pick, or the picked player has no unit list, no units, or a cursor past
+/// its units; a job the controller refuses to start costs its 100 all the same.
 ///
 /// @param[in,out] scheduler job state, controller and worker
 /// @param players player slots with their unit lists

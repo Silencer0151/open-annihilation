@@ -36,8 +36,8 @@ struct Glyph {
 
 struct Font {
     // The FNT header's second word, kept as read. Its low byte, signed, is
-    // the rows a label's glyphs start above its pen row (see row_lift);
-    // shipped fonts hold 1, 2 or 3 in it. Zero for a GAF-backed font.
+    // the rows every glyph starts above the pen row (see row_lift); shipped
+    // fonts hold 1, 2 or 3 in it. Zero for a GAF-backed font.
     uint16_t word_after_height = 0;
     uint16_t nominal_height = 0;
     std::array<std::optional<Glyph>, limit::glyph_count> glyphs;
@@ -111,12 +111,12 @@ load_named_fnt(AssetStore& assets, std::string_view name, std::string_view langu
 /// @param font font measured; its nominal height stands in when glyph 'I' is missing
 /// @return height in pixels
 [[nodiscard]] uint16_t line_height(const Font& font) noexcept;
-/// Returns the rows the game's label drawing starts a glyph above its pen row.
+/// Returns the rows the game draws a glyph above its pen row.
 ///
-/// The game draws a label's glyph rows from the pen row less the low byte of
-/// the header's second word, read signed: one row up for COMIX and CONSOLE.
-/// raster_text does not apply it; a caller placing text as the game's labels
-/// do subtracts it from the pen row.
+/// The game draws every FNT glyph from the pen row less the low byte of the
+/// header's second word, read signed: one row up for COMIX, CONSOLE and
+/// SMLFONT, two for the briefing fonts. raster_text applies it, so a caller
+/// passes the pen row the game passes.
 ///
 /// @param font font drawn with
 /// @return rows above the pen row; negative moves the glyphs down
@@ -133,15 +133,17 @@ struct IndexedSurface {
 
 /// Draws text as palette indices with origin offsets and clipping.
 ///
-/// Control bytes and missing glyphs are skipped; a space advances without
-/// drawing. Throws std::runtime_error when the surface or a glyph has
-/// inconsistent buffers.
+/// Each glyph's rows start the font's row_lift above the pen row, as the
+/// game places every FNT glyph. Control bytes and missing glyphs are
+/// skipped; a space advances without drawing. Throws std::runtime_error when
+/// the surface or a glyph has inconsistent buffers.
 ///
 /// @param surface destination pixels and optional coverage mask
 /// @param font font drawn with
 /// @param text bytes of the text
 /// @param x pen column in surface pixels
-/// @param y pen row in surface pixels; glyph origins are subtracted
+/// @param y pen row in surface pixels; glyph origins and the font's
+///        row_lift are subtracted
 /// @return the final pen x
 [[nodiscard]] int32_t
 raster_text(IndexedSurface surface, const Font& font, std::string_view text, int32_t x, int32_t y);

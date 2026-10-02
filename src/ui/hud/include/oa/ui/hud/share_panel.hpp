@@ -23,22 +23,22 @@ inline constexpr uint8_t kSetupWatcher = OA_SETUP_OPTION_WATCHER;
 
 /// Players plus the per-player state the share panel needs.
 struct ShareWorld {
-    Player* players;               // OA_PLAYER_COUNT records
-    UnitEconomy* const* economies; // Player.economy staging blocks, by player index
-    const uint8_t* setup_flags;    // low byte of PlayerSetupInfo.options, by player index
-    uint8_t local_player;          // Game.local_player_index
-    int32_t difficulty;            // Game.difficulty; scales computer income
+    Player* players{};               // OA_PLAYER_COUNT records
+    UnitEconomy* const* economies{}; // Player.economy staging blocks, by player index
+    const uint8_t* setup_flags{};    // low byte of PlayerSetupInfo.options, by player index
+    uint8_t local_player{};          // Game.local_player_index
+    int32_t difficulty{};            // Game.difficulty; scales computer income
 };
 
 /// How a transfer the local player makes reaches the other players' games.
 struct ShareHost {
-    void* user;
-    void (*send_energy)(void* user, uint8_t from, uint8_t to, float amount);
-    void (*send_metal)(void* user, uint8_t from, uint8_t to, float amount);
+    void* user{};
+    void (*send_energy)(void* user, uint8_t from, uint8_t to, float amount){};
+    void (*send_metal)(void* user, uint8_t from, uint8_t to, float amount){};
     /// Hands the giver's transferable units to the recipient.
-    void (*give_units)(void* user, uint8_t from, uint8_t to);
+    void (*give_units)(void* user, uint8_t from, uint8_t to){};
     /// Shares the giver's explored map with the recipient.
-    void (*share_map)(void* user, uint8_t from, uint8_t to);
+    void (*share_map)(void* user, uint8_t from, uint8_t to){};
 };
 
 /// Tells whether a player takes part in the game.
@@ -110,11 +110,11 @@ void transfer_metal(
 
 /// Recipient list and slider ranges of an opened share panel.
 struct SharePanel {
-    int32_t recipient_count;
-    uint8_t recipients[OA_PLAYER_COUNT];  // player indices, list order
-    uint32_t player_ids[OA_PLAYER_COUNT]; // Player.player_id per list entry
-    int32_t metal_max;
-    int32_t energy_max;
+    int32_t recipient_count{};
+    uint8_t recipients[OA_PLAYER_COUNT]{};  // player indices, list order
+    uint32_t player_ids[OA_PLAYER_COUNT]{}; // Player.player_id per list entry
+    int32_t metal_max{};
+    int32_t energy_max{};
 };
 
 /// Fills the recipient list and slider ranges of the share panel for the local player.

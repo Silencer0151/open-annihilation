@@ -55,15 +55,15 @@ void test_paused_clock_offers_no_step() {
     oa::base::game_loop::Timing timing{};
     timing.requested_rate = 10;
     timing.actual_rate = 10;
-    oa::base::game_loop::update_timing(timing, 1000);
+    CHECK(oa::base::game_loop::update_timing(timing, 1000) == oa::base::game_loop::LoopError::none);
     // Paused: a second of clock units offers nothing, and the time moves on.
     timing.flags = oa::app::clock_flags_with_pause(timing.flags, 0x0001);
-    oa::base::game_loop::update_timing(timing, 1030);
+    CHECK(oa::base::game_loop::update_timing(timing, 1030) == oa::base::game_loop::LoopError::none);
     CHECK(timing.pending_steps == 0);
     CHECK(timing.previous_clock == 1030);
     // Resumed: the next frame steps for its own time only.
     timing.flags = oa::app::clock_flags_with_pause(timing.flags, 0x0000);
-    oa::base::game_loop::update_timing(timing, 1031);
+    CHECK(oa::base::game_loop::update_timing(timing, 1031) == oa::base::game_loop::LoopError::none);
     CHECK(timing.pending_steps == 1);
 }
 
@@ -117,7 +117,10 @@ FrameRun play_frames(uint64_t start_ns, uint32_t frames_per_second, uint32_t fra
             run.ticks.push_back(0);
             continue;
         }
-        oa::base::game_loop::update_timing(timing, reading);
+        CHECK(
+            oa::base::game_loop::update_timing(timing, reading) ==
+            oa::base::game_loop::LoopError::none
+        );
         run.ticks.push_back(timing.pending_steps);
     }
     return run;
@@ -152,7 +155,7 @@ void test_clock_set_past_the_frame_holds_one_frame() {
     timing.previous_clock = 1090;
     CHECK(oa::app::clock_reading_behind(1000, timing.previous_clock));
     CHECK(!oa::app::clock_reading_behind(1091, timing.previous_clock));
-    oa::base::game_loop::update_timing(timing, 1091);
+    CHECK(oa::base::game_loop::update_timing(timing, 1091) == oa::base::game_loop::LoopError::none);
     CHECK(timing.pending_steps == 1);
 }
 

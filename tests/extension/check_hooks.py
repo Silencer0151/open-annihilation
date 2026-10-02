@@ -77,7 +77,7 @@ HOOKS = [
     "simulation_step", "outcome_ready", "match_game", "match_event", "disconnect_text",
     "give_resources", "message_hooks", "player_gone", "console_host", "check_console", "draw_loading",
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
-    "close_requested", "return_label", "speed_changed", "app_mode_set", "open_recording",
+    "close_requested", "return_label", "speed_changed", "app_mode_set", "open_recording", "release_runtime",
 ]
 # The hooks one extension at most may fill, which network play fills and
 # neither test extension does.
@@ -147,9 +147,9 @@ RUNS = {
             ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
              "draw_loading", "draw_match_hud", "draw_match_overlay", "state", "load_progress",
-             "team_panel_host", "return_label", "keep_stored_password", "follower.order startup",
-             "follower.order run_mode",
-             "follower.order return_label"],
+             "team_panel_host", "return_label", "keep_stored_password", "release_runtime",
+             "follower.order startup", "follower.order run_mode", "follower.order return_label",
+             "follower.order release_runtime"],
             game=True),
         Run("headless-navigation",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--check-navigation"],

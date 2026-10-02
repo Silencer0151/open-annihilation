@@ -15,11 +15,11 @@ namespace oa::data::defs {
 // numtables; table then gets each TABLE<index + 1> the file has, with its
 // numlines (never negative). A false return stops the load.
 struct GamedataTableSink {
-    void* context;
-    bool (*resize)(void* context, int16_t table_count);
+    void* context{};
+    bool (*resize)(void* context, int16_t table_count) = nullptr;
     bool (*table)(
         void* context, int16_t index, const formats::tdf::Block* section, int16_t line_count
-    );
+    ) = nullptr;
 };
 
 /// Loads GAMEDATA/LOS.TDF into a sink, preferring the variant directory.

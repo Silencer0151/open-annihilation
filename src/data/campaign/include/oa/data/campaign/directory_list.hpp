@@ -24,24 +24,24 @@ inline constexpr int32_t kSortEntryLimit = 3000;
 
 // One entry a find-first/find-next walk reports.
 struct FindRecord {
-    uint32_t attributes; // kFindDirectory for a directory
-    uint32_t write_time;
-    uint32_t size; // bytes
-    const char* name;
+    uint32_t attributes{}; // kFindDirectory for a directory
+    uint32_t write_time{};
+    uint32_t size{}; // bytes
+    const char* name{};
 };
 
 // The virtual file system's find walk.
 struct DirectoryFind {
-    void* context;
+    void* context{};
     // Calls visit with each entry of `pattern`, in find order.
     void (*find)(
         void* context,
         const char* pattern,
         void (*visit)(void* user, const FindRecord& record),
         void* user
-    );
+    ) = nullptr;
     // Size of a file by name, as the size tags read it.
-    uint32_t (*file_size)(void* context, const char* name);
+    uint32_t (*file_size)(void* context, const char* name) = nullptr;
 };
 
 enum class ListSort : int32_t {

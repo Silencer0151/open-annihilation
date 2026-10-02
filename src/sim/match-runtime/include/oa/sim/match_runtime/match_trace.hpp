@@ -9,7 +9,7 @@
 
 #include "oa/sim/trace.hpp"
 
-#include <cstdio>
+#include <fstream>
 #include <span>
 #include <string>
 #include <vector>
@@ -50,8 +50,8 @@ class TraceRecorder {
     /// Closes both stream files, if open.
     void close() noexcept;
 
-    std::FILE* stream_{};
-    std::FILE* units_{};
+    std::ofstream stream_;
+    std::ofstream units_;
     std::vector<sim::trace::UnitSide> sides_;
 };
 } // namespace oa::sim::match_runtime

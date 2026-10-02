@@ -3,7 +3,6 @@
 
 #include "oa/sim/match_runtime/spawn_bridge.hpp"
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 SpawnBridge::SpawnBridge(
@@ -15,25 +14,30 @@ SpawnBridge::SpawnBridge(
     Effects& effects,
     SpawnSubsystems& subsystems,
     SharedRandom& random,
-    int32_t scale
+    int32_t scale,
+    MatchFault& fault
 )
     : state_(state), tables_(tables), views_(views), loaded_(loaded), values_(values),
       effects_(effects), subsystems_(subsystems), random_(random), clock_scale_(scale),
-      runtime_(state.unit_slot_count) {
-    if (loaded.size() != tables.types.size() || tables.types.size() != state.unit_def_count)
-        throw std::invalid_argument("spawn runtime tables do not match world");
+      fault_(fault), runtime_(state.unit_slot_count) {
+    if (loaded.size() != tables.types.size() || tables.types.size() != state.unit_def_count) {
+        fault_.note("spawn runtime tables do not match world");
+        loaded_ = {};
+    }
+}
+
+void SpawnBridge::note(sim::unit_spawn::SpawnFault fault) noexcept {
+    if (fault != sim::unit_spawn::SpawnFault::none)
+        fault_.note(sim::unit_spawn::spawn_fault_text(fault));
 }
 
 sim::unit_spawn::Slot* SpawnBridge::create(const sim::unit_spawn::Request& request) {
     auto* previous = active_;
-    try {
-        auto* result = sim::unit_spawn::create(state_, tables_, request, *this);
-        active_ = previous;
-        return result ? &slot(*result) : nullptr;
-    } catch (...) {
-        active_ = previous;
-        throw;
-    }
+    auto fault = sim::unit_spawn::SpawnFault::none;
+    auto* result = sim::unit_spawn::create(state_, tables_, request, *this, &fault);
+    active_ = previous;
+    note(fault);
+    return result ? &slot(*result) : nullptr;
 }
 
 sim::unit_spawn::StartResult SpawnBridge::start_player(
@@ -47,22 +51,22 @@ sim::unit_spawn::StartResult SpawnBridge::start_player(
     sim::unit_spawn::StartHost& start
 ) {
     auto* previous = active_;
-    try {
-        auto result = sim::unit_spawn::spawn_player_commander(
-            state_, tables_, player, setup, markers, index, local, width, height, *this, start
-        );
-        active_ = previous;
-        return result;
-    } catch (...) {
-        active_ = previous;
-        throw;
-    }
+    auto fault = sim::unit_spawn::SpawnFault::none;
+    auto result = sim::unit_spawn::spawn_player_commander(
+        state_, tables_, player, setup, markers, index, local, width, height, *this, start, &fault
+    );
+    active_ = previous;
+    note(fault);
+    return result;
 }
 
 SlotRuntime& SpawnBridge::runtime(sim::unit_spawn::Slot& slot) {
     const auto index = slot.unit_index;
-    if (index >= runtime_.size() || &views_.slots()[index] != &slot)
-        throw std::out_of_range("spawn runtime slot does not belong to pool");
+    if (index >= runtime_.size() || &views_.slots()[index] != &slot) {
+        fault_.note("spawn runtime slot does not belong to pool");
+        spare_runtime_ = {};
+        return spare_runtime_;
+    }
     return runtime_[index];
 }
 
@@ -72,25 +76,29 @@ SlotRuntime& SpawnBridge::runtime(const oa::Unit& unit) {
 
 void SpawnBridge::tick_script(sim::unit_spawn::Slot& slot, uint32_t elapsed) {
     auto& state = runtime(slot);
-    if (!state.instance)
-        throw std::logic_error("unit model/script runtime is not constructed");
+    if (!state.instance) {
+        fault_.note("unit model/script runtime is not constructed");
+        return;
+    }
     state.instance->tick(elapsed);
 }
 
-SpawnBridge::PendingScript& SpawnBridge::pending(sim::unit_spawn::AssetHandle handle) {
+SpawnBridge::PendingScript* SpawnBridge::pending(sim::unit_spawn::AssetHandle handle) noexcept {
     for (auto& script : scripts_)
         if (reinterpret_cast<sim::unit_spawn::AssetHandle>(script.get()) == handle)
-            return *script;
-    throw std::out_of_range("script handle is not owned by match");
+            return script.get();
+    fault_.note("script handle is not owned by match");
+    return nullptr;
 }
 
-const sim::unit_spawn::LoadedType&
-SpawnBridge::asset_model(sim::unit_spawn::AssetHandle handle) const {
+const sim::unit_spawn::LoadedType*
+SpawnBridge::asset_model(sim::unit_spawn::AssetHandle handle) const noexcept {
     for (const auto& loaded : loaded_)
         if (loaded.model &&
             reinterpret_cast<sim::unit_spawn::AssetHandle>(loaded.model.get()) == handle)
-            return loaded;
-    throw std::out_of_range("model asset handle is not loaded");
+            return &loaded;
+    fault_.note("model asset handle is not loaded");
+    return nullptr;
 }
 
 std::shared_ptr<const formats::cob::CobProgram>
@@ -99,7 +107,8 @@ SpawnBridge::asset_script(sim::unit_spawn::AssetHandle handle) const {
         if (loaded.script &&
             reinterpret_cast<sim::unit_spawn::AssetHandle>(loaded.script.get()) == handle)
             return loaded.script;
-    throw std::out_of_range("COB asset handle is not loaded");
+    fault_.note("COB asset handle is not loaded");
+    return nullptr;
 }
 
 uint32_t SpawnBridge::random_bounded(uint32_t bound) {
@@ -108,8 +117,10 @@ uint32_t SpawnBridge::random_bounded(uint32_t bound) {
 
 void SpawnBridge::init_weapon_target(oa::Unit& unit, uint32_t index) {
     active_ = &slot(unit);
-    if (index >= OA_UNIT_WEAPON_COUNT)
-        throw std::out_of_range("weapon slot outside the unit");
+    if (index >= OA_UNIT_WEAPON_COUNT) {
+        fault_.note("weapon slot outside the unit");
+        return;
+    }
     auto& weapon = unit.weapons[index];
     weapon.target_a = 0;
     weapon.target_b = OA_UNIT_TARGET_IS_UNIT;
@@ -121,8 +132,10 @@ void SpawnBridge::reset_weapon_targets(oa::Unit& unit, uint8_t index) {
         reset_weapon_targets(unit, 1);
         index = 2;
     }
-    if (index >= OA_UNIT_WEAPON_COUNT)
-        throw std::out_of_range("weapon slot outside the unit");
+    if (index >= OA_UNIT_WEAPON_COUNT) {
+        fault_.note("weapon slot outside the unit");
+        return;
+    }
     auto& weapon = unit.weapons[index];
     if ((weapon.flags & OA_UNIT_WEAPON_ENABLED) && !(weapon.flags & OA_UNIT_WEAPON_RETALIATE)) {
         weapon.flags |= OA_UNIT_WEAPON_RETALIATE;
@@ -132,8 +145,10 @@ void SpawnBridge::reset_weapon_targets(oa::Unit& unit, uint8_t index) {
 
 void SpawnBridge::init_unit_economy(oa::Unit& unit, uint8_t owner) {
     auto* player = oa::world_player(&state_, owner);
-    if (!player)
-        throw std::out_of_range("unit economy owner outside ten players");
+    if (!player) {
+        fault_.note("unit economy owner outside ten players");
+        return;
+    }
     unit.economy = {};
     unit.economy.player = oa::world_player_ref_of(&state_, player);
 }
@@ -145,14 +160,19 @@ void SpawnBridge::assign_squad(oa::Unit& unit, uint32_t group) {
 
 sim::unit_spawn::AssetHandle
 SpawnBridge::create_model_instance(sim::unit_spawn::AssetHandle model) {
-    if (!active_)
-        throw std::logic_error("plain model creation outside unit spawn");
-    auto loaded = asset_model(model);
+    if (!active_) {
+        fault_.note("plain model creation outside unit spawn");
+        return 0;
+    }
+    const auto* found = asset_model(model);
+    if (!found)
+        return 0;
+    auto loaded = *found;
     loaded.script.reset();
     loaded.type.cob = 0;
     auto& state = runtime(*active_);
     state.instance = std::make_unique<UnitInstance>(
-        loaded, *active_, views_.slots(), state_, values_, effects_, random_, clock_scale_
+        loaded, *active_, views_.slots(), state_, values_, effects_, random_, clock_scale_, &fault_
     );
     ++state.instance_generation;
     return reinterpret_cast<sim::unit_spawn::AssetHandle>(state.instance.get());
@@ -162,7 +182,7 @@ void SpawnBridge::model_owner(oa::Unit& unit) {
     const auto& state = runtime(unit);
     if (!state.instance ||
         state.instance->model().owner_token() != reinterpret_cast<uintptr_t>(slot(unit).unit))
-        throw std::logic_error("plain model owner not bound");
+        fault_.note("plain model owner not bound");
 }
 
 sim::unit_spawn::AssetHandle SpawnBridge::allocate_script() {
@@ -173,18 +193,30 @@ sim::unit_spawn::AssetHandle SpawnBridge::allocate_script() {
 void SpawnBridge::load_script_state(
     sim::unit_spawn::AssetHandle script, sim::unit_spawn::AssetHandle cob
 ) {
-    pending(script).program = asset_script(cob);
+    if (auto* record = pending(script))
+        record->program = asset_script(cob);
 }
 
 sim::unit_spawn::AssetHandle SpawnBridge::create_scripted_model(
     sim::unit_spawn::AssetHandle model, sim::unit_spawn::AssetHandle cob, oa::Unit& unit
 ) {
-    auto loaded = asset_model(model);
+    const auto* found = asset_model(model);
+    if (!found)
+        return 0;
+    auto loaded = *found;
     loaded.script = asset_script(cob);
     loaded.type.cob = cob;
     auto& state = runtime(unit);
     state.instance = std::make_unique<UnitInstance>(
-        loaded, slot(unit), views_.slots(), state_, values_, effects_, random_, clock_scale_
+        loaded,
+        slot(unit),
+        views_.slots(),
+        state_,
+        values_,
+        effects_,
+        random_,
+        clock_scale_,
+        &fault_
     );
     ++state.instance_generation;
     return reinterpret_cast<sim::unit_spawn::AssetHandle>(state.instance.get());
@@ -193,24 +225,32 @@ sim::unit_spawn::AssetHandle SpawnBridge::create_scripted_model(
 void SpawnBridge::bind_script_model(
     sim::unit_spawn::AssetHandle script, sim::unit_spawn::AssetHandle model
 ) {
-    auto& record = pending(script);
+    auto* record = pending(script);
+    if (!record)
+        return;
     for (auto& state : runtime_)
         if (state.instance &&
             reinterpret_cast<sim::unit_spawn::AssetHandle>(state.instance.get()) == model) {
-            if (!record.program || !state.instance->script() ||
-                &state.instance->script()->program() != record.program.get())
-                throw std::logic_error("model and VM COB mismatch");
-            record.bound = state.instance.get();
+            if (!record->program || !state.instance->script() ||
+                &state.instance->script()->program() != record->program.get()) {
+                fault_.note("model and VM COB mismatch");
+                return;
+            }
+            record->bound = state.instance.get();
             return;
         }
-    throw std::out_of_range("model runtime handle is not owned by match");
+    fault_.note("model runtime handle is not owned by match");
 }
 
 void SpawnBridge::call_script_create(sim::unit_spawn::AssetHandle script) {
-    auto& record = pending(script);
-    if (!record.bound)
-        throw std::logic_error("Create before model binding");
-    record.bound->create();
+    auto* record = pending(script);
+    if (!record)
+        return;
+    if (!record->bound) {
+        fault_.note("Create before model binding");
+        return;
+    }
+    record->bound->create();
 }
 
 void SpawnBridge::model_reset(oa::Unit& unit) {

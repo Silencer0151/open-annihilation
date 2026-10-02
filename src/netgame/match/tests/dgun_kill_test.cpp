@@ -45,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 using namespace oa::netgame;
@@ -129,7 +130,7 @@ struct LoadedUnit {
 struct Catalog {
     AssetStore store = oa::test::require_game_assets("the D-gun kill shared between two machines");
     sim::combat_state::WeaponRegistry weapons;
-    std::vector<data::unit_definitions::TdfDocument> feature_docs;
+    std::vector<formats::tdf::OwnedDocument> feature_docs;
     sim::map_runtime::FeatureDefTable features;
     std::vector<LoadedUnit> units; // index 0 reserved; kCommanderType ARMCOM; kSolarType ARMSOLAR
     data::unit_definitions::UnitTargetCategoryMasks target_masks;
@@ -160,7 +161,7 @@ struct Catalog {
 
         struct Corpses {
             sim::map_runtime::FeatureDefTable& features;
-            std::vector<data::unit_definitions::TdfDocument>& documents;
+            std::vector<formats::tdf::OwnedDocument>& documents;
             std::string error;
 
             static int16_t load(void* context, const char* name) {
@@ -258,39 +259,15 @@ struct PieceExplosion {
     bool operator==(const PieceExplosion&) const = default;
 };
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<PieceExplosion> explosions;
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
 
     void explode_piece(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t flags) override {
         explosions.push_back({slot.unit_index, piece, flags});
     }
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 struct Datagram {
     uint32_t from{};

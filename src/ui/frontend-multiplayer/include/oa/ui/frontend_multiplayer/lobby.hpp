@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <cstring>
 
 namespace oa::ui::frontend_multiplayer {
@@ -1040,9 +1041,10 @@ void unit_sync_send(Lobby& lobby, uint32_t player_id, const uint8_t* record) noe
 /// peer's unit count (1), checksums (2) and received count (4).
 ///
 /// @param[in,out] lobby Lobby state.
-/// @param record The 14-byte record; subtypes of 100 and above are dropped.
+/// @param record The record as received; one that is not a whole 14-byte 0x1a record is dropped, as
+///        are subtypes of 100 and above.
 /// @param from_slot Sender's slot.
-void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) noexcept;
+void unit_sync_receive(Lobby& lobby, std::span<const uint8_t> record, uint8_t from_slot) noexcept;
 
 /// Sends one record's verdict (subtype 3: local, remote and limit) to a peer.
 ///

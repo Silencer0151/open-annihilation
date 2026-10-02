@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -165,6 +166,51 @@ void test_files() {
     check(log_message("platform-shims log %d\n", 1) > 0, "log writes");
 }
 
+void test_open_file() {
+    using namespace oa::platform;
+    const auto directory = oa::test::make_scratch_directory("oa-platform-open-file");
+    // A name outside the narrow code pages of Windows opens by its path.
+    const auto path = directory / std::filesystem::path(u8"r\u00e9sum\u00e9-\u65e5\u672c.txt");
+    std::FILE* out = open_file(path, "wb");
+    check(out != nullptr, "a file of any name opens for writing");
+    if (out != nullptr) {
+        check(std::fwrite("abc", 1, 3, out) == 3, "the file takes its bytes");
+        std::fclose(out);
+    }
+    // Another stream reads the file while one still has it open to append.
+    std::FILE* writer = open_file(path, "ab");
+    std::FILE* reader = open_file(path, "rb");
+    check(writer != nullptr && reader != nullptr, "an open file opens again for reading");
+    char contents[4]{};
+    check(
+        reader != nullptr && std::fread(contents, 1, 3, reader) == 3 &&
+            std::memcmp(contents, "abc", 3) == 0,
+        "the second stream reads what the first wrote"
+    );
+    if (reader != nullptr)
+        std::fclose(reader);
+    if (writer != nullptr)
+        std::fclose(writer);
+    check(open_file(directory / "missing.txt", "rb") == nullptr, "a missing file does not open");
+    const std::string narrow = (directory / "narrow.txt").string();
+    std::FILE* narrow_file = open_file(narrow.c_str(), "wb");
+    check(narrow_file != nullptr, "a file opens by its narrow path");
+    if (narrow_file != nullptr)
+        std::fclose(narrow_file);
+    std::error_code removal;
+    std::filesystem::remove_all(directory, removal);
+}
+
+void test_environment_value() {
+    using namespace oa::platform;
+    check(
+        !environment_value("OA_PLATFORM_TEST_VARIABLE_NEVER_SET").has_value(),
+        "an unset variable has no value"
+    );
+    const auto search_path = environment_value("PATH");
+    check(search_path.has_value() && !search_path->empty(), "PATH has its value");
+}
+
 void test_grouped_decimal() {
     using namespace oa::platform;
     char text[32];
@@ -298,7 +344,7 @@ void test_error_log() {
     const std::string prefix = (directory / "").string();
     check(append_error_log(prefix.c_str(), out_of_memory_message), "first report");
     check(append_error_log(prefix.c_str(), out_of_memory_message), "second report appends");
-    std::FILE* log = std::fopen((directory / error_log_file_name).string().c_str(), "rb");
+    std::FILE* log = open_file(directory / error_log_file_name, "rb");
     char contents[128]{};
     const std::size_t read = log != nullptr ? std::fread(contents, 1, sizeof contents - 1, log) : 0;
     if (log != nullptr)
@@ -375,6 +421,8 @@ int main() {
     test_thread_and_clock();
     test_error_sink();
     test_files();
+    test_open_file();
+    test_environment_value();
     test_grouped_decimal();
     test_memory_status();
     test_app_loop();

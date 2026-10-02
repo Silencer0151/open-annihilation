@@ -60,7 +60,7 @@ struct UnitState {
     Point position;
     uint16_t veteran_level{};   // Unit.veteran_level
     int16_t health{};           // Unit.health
-    uint32_t maximum_health{};  // UnitDef.max_damage; must be nonzero
+    uint32_t maximum_health{};  // UnitDef.max_damage; zero leaves a shot's reload undefined
     uint16_t shot_event_bits{}; // Unit.events
 };
 
@@ -72,6 +72,8 @@ enum class SlotResult : uint8_t {
     insufficient_resources,
     projectile_rejected,
     fired,
+    no_maximum_health, // fired, but the unit's zero maximum health leaves its reload undefined;
+                       // the slots after it are not ticked
 };
 
 struct TickResult {
@@ -220,7 +222,7 @@ struct TurretSlewInput {
 /// The base is scaled by 100 - 6 * min(veteran / 5, 5) percent, then by
 /// 120 - health * 20 / maximum_health percent.
 ///
-/// Throws std::invalid_argument for a zero maximum health.
+/// A zero maximum health gives no reload: the result is 0.
 ///
 /// @param base WeaponDef reload, ticks
 /// @param veteran_level unit's veteran level (Unit.veteran_level)
@@ -230,7 +232,7 @@ struct TurretSlewInput {
 /// @quirk The products wrap at 32 bits.
 [[nodiscard]] uint16_t reload_ticks_after_shot(
     uint16_t base, uint16_t veteran_level, int16_t health, uint32_t maximum_health
-);
+) noexcept;
 
 /// Runs one tick of a unit's three weapon slots.
 ///

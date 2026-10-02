@@ -10,11 +10,13 @@
 #include "saved_game.hpp"
 
 #include "oa/data/persist/save_sections.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -395,9 +397,15 @@ void hand_built_section_loads() {
     saved_game::ScopedBank bank;
     persist::bank_open_account(bank.get(), "Features");
     std::vector<uint8_t> names(3 * 0x80);
-    std::strcpy(reinterpret_cast<char*>(names.data()), "Wreck");
-    std::strcpy(reinterpret_cast<char*>(names.data() + 0x80), "Tree");
-    std::strcpy(reinterpret_cast<char*>(names.data() + 0x100), "Rock");
+    oa::base::text::copy_terminated(
+        std::span(reinterpret_cast<char*>(names.data()), 0x80), "Wreck"
+    );
+    oa::base::text::copy_terminated(
+        std::span(reinterpret_cast<char*>(names.data() + 0x80), 0x80), "Tree"
+    );
+    oa::base::text::copy_terminated(
+        std::span(reinterpret_cast<char*>(names.data() + 0x100), 0x80), "Rock"
+    );
     persist::bank_open_blob_name(bank.get(), "Feature Type Names");
     persist::bank_blob_write(bank.get(), names.data(), static_cast<uint32_t>(names.size()));
     // Normal: a tree at (2,3) with 30 damage taken and a rock at (5,5).

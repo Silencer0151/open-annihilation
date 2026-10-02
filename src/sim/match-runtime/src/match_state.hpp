@@ -6,52 +6,93 @@
 #pragma once
 
 #include "oa/sim/match_runtime.hpp"
+#include "oa/sim/match_runtime/attachment_links.hpp"
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
-inline oa::Unit& match_unit(Match& match, std::size_t slot) {
+/// Returns the unit record in a pool slot.
+///
+/// @param match The match.
+/// @param slot Unit slot; one outside the pool is noted and gives the
+///     reserved slot 0, which holds no unit.
+/// @return The unit record.
+inline oa::Unit& match_unit(Match& match, std::size_t slot) noexcept {
     auto* unit = oa::world_unit_at(&match.state(), static_cast<uint32_t>(slot));
-    if (!unit)
-        throw std::out_of_range("unit slot outside the match pool");
-    return *unit;
+    if (unit)
+        return *unit;
+    match.note_fault("unit slot outside the match pool");
+    return *oa::world_unit_at(&match.state(), 0);
 }
 
-inline const oa::Unit& match_unit(const Match& match, std::size_t slot) {
+/// Returns the unit record in a pool slot.
+///
+/// @param match The match.
+/// @param slot Unit slot; one outside the pool is noted and gives the
+///     reserved slot 0, which holds no unit.
+/// @return The unit record.
+inline const oa::Unit& match_unit(const Match& match, std::size_t slot) noexcept {
     const auto* unit = oa::world_unit_at(&match.state(), static_cast<uint32_t>(slot));
-    if (!unit)
-        throw std::out_of_range("unit slot outside the match pool");
-    return *unit;
+    if (unit)
+        return *unit;
+    match.note_fault("unit slot outside the match pool");
+    return *oa::world_unit_at(&match.state(), 0);
 }
 
-inline oa::Player& match_player(Match& match, std::size_t index) {
+/// Returns a player record.
+///
+/// @param match The match.
+/// @param index Player index 0..9; another is noted and gives the no-player
+///     record (Game.no_player).
+/// @return The player record.
+inline oa::Player& match_player(Match& match, std::size_t index) noexcept {
     auto* player = oa::world_player(&match.state(), static_cast<uint32_t>(index));
-    if (!player)
-        throw std::out_of_range("player index outside the ten players");
-    return *player;
+    if (player)
+        return *player;
+    match.note_fault("player index outside the ten players");
+    return match.state().game.no_player;
 }
 
-inline const oa::UnitDef& match_unit_def(const Match& match, const oa::Unit& unit) {
+/// Returns a unit's canonical type record.
+///
+/// @param match The match.
+/// @param unit The unit; one without a type is noted and gives reserved type 0.
+/// @return The type record.
+inline const oa::UnitDef& match_unit_def(const Match& match, const oa::Unit& unit) noexcept {
     const auto* def = oa::world_unit_def_of(&match.state(), &unit);
-    if (!def)
-        throw std::logic_error("unit has no canonical type");
-    return *def;
+    if (def)
+        return *def;
+    match.note_fault("unit has no canonical type");
+    return match.state().unit_defs[0];
 }
 
+/// Returns a unit's legacy order lists.
+///
+/// @param match The match.
+/// @param slot Unit slot.
+/// @return The unit's primary and secondary queue heads.
 inline sim::simulation_state::OrderQueue& match_orders(Match& match, std::size_t slot) {
     return match.orders(static_cast<uint16_t>(slot));
 }
 
-inline oa::UnitEconomy& match_player_economy(Match& match, std::size_t index) {
+/// Returns a player's economy staging block.
+///
+/// @param match The match.
+/// @param index Player index 0..9.
+/// @return The block, or null, which is noted, for a player without one.
+inline oa::UnitEconomy* match_player_economy(Match& match, std::size_t index) noexcept {
     auto* block = oa::world_player_economy(&match.state(), &match_player(match, index));
     if (!block)
-        throw std::logic_error("player has no economy staging block");
-    return *block;
+        match.note_fault("player has no economy staging block");
+    return block;
 }
 
-// Words 0..11 of an economy block (energy then metal accumulators) as raw bits.
+/// Returns words 0..11 of an economy block, the energy then the metal
+/// accumulators, as raw bits.
+///
+/// @param block The economy block.
+/// @return The twelve words.
 inline std::array<uint32_t, 12> economy_words(const oa::UnitEconomy& block) noexcept {
     static_assert(offsetof(oa::UnitEconomy, player) == 12 * sizeof(uint32_t));
     std::array<uint32_t, 12> words;
@@ -59,49 +100,14 @@ inline std::array<uint32_t, 12> economy_words(const oa::UnitEconomy& block) noex
     return words;
 }
 
+/// Writes words 0..11 of an economy block, the energy then the metal
+/// accumulators, from raw bits.
+///
+/// @param[out] block The economy block.
+/// @param words The twelve words.
 inline void
 store_economy_words(oa::UnitEconomy& block, const std::array<uint32_t, 12>& words) noexcept {
     std::memcpy(&block, words.data(), sizeof words);
 }
 
-// Attachment links (Unit.attach_parent, attach_first_child and attach_next)
-// as unit slot indices; 0 is none.
-
-/// Returns the unit slot of a unit's carrier (Unit.attach_parent).
-///
-/// @param unit Unit record.
-/// @return The carrier's slot, 0 for none.
-inline uint16_t link_parent(const oa::Unit& unit) noexcept {
-    return static_cast<uint16_t>(oa::oa_unit_slot_from_ref(unit.attach_parent));
-}
-
-/// Returns the unit slot of the first unit a unit carries
-/// (Unit.attach_first_child).
-///
-/// @param unit Unit record.
-/// @return The first carried unit's slot, 0 for none.
-inline uint16_t link_first_child(const oa::Unit& unit) noexcept {
-    return static_cast<uint16_t>(oa::oa_unit_slot_from_ref(unit.attach_first_child));
-}
-
-/// Returns the unit slot of the next unit carried with this one
-/// (Unit.attach_next).
-///
-/// @param unit Unit record.
-/// @return The next carried unit's slot, 0 for none.
-inline uint16_t link_next(const oa::Unit& unit) noexcept {
-    return static_cast<uint16_t>(oa::oa_unit_slot_from_ref(unit.attach_next));
-}
-
-inline void set_link_parent(oa::Unit& unit, uint32_t slot) noexcept {
-    unit.attach_parent = oa::oa_unit_ref_from_slot(slot);
-}
-
-inline void set_link_first_child(oa::Unit& unit, uint32_t slot) noexcept {
-    unit.attach_first_child = oa::oa_unit_ref_from_slot(slot);
-}
-
-inline void set_link_next(oa::Unit& unit, uint32_t slot) noexcept {
-    unit.attach_next = oa::oa_unit_ref_from_slot(slot);
-}
 } // namespace oa::sim::match_runtime

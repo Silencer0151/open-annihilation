@@ -13,6 +13,8 @@
 #error "link oa-test-game-data, which defines OA_GAME_DATA_SKIP_CODE"
 #endif
 
+#include "oa/platform/system.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -57,8 +59,8 @@ inline constexpr std::string_view kGameDataSwitch = "--data";
 ///
 /// @return true when OA_REQUIRE_GAME_DATA is set to anything but empty or "0"
 [[nodiscard]] inline bool game_data_required() {
-    const char* value = std::getenv(kRequireGameDataVariable);
-    return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+    const auto value = oa::platform::environment_value(kRequireGameDataVariable);
+    return value && !value->empty() && *value != "0";
 }
 
 /// Ends the test for want of the installed game.
@@ -87,10 +89,10 @@ inline constexpr std::string_view kGameDataSwitch = "--data";
 /// @return the folder, or an empty path when the variable is unset, empty or
 ///     names no directory
 [[nodiscard]] inline std::filesystem::path game_directory() {
-    const char* value = std::getenv(kGameDirVariable);
-    if (value == nullptr || *value == '\0')
+    const auto value = oa::platform::environment_value(kGameDirVariable);
+    if (!value || value->empty())
         return {};
-    std::filesystem::path folder(value);
+    std::filesystem::path folder(*value);
     std::error_code error;
     return std::filesystem::is_directory(folder, error) ? folder : std::filesystem::path{};
 }
@@ -103,15 +105,15 @@ inline constexpr std::string_view kGameDataSwitch = "--data";
 /// @param what the cases that need the installation, for the skip line
 /// @return the folder OA_GAME_DIR names
 [[nodiscard]] inline std::filesystem::path require_game_directory(std::string_view what) {
-    const char* value = std::getenv(kGameDirVariable);
-    if (value == nullptr || *value == '\0')
+    const auto value = oa::platform::environment_value(kGameDirVariable);
+    if (!value || value->empty())
         missing_game_directory(
             what,
             "OA_GAME_DIR is not set; set it to the Total Annihilation folder holding totala1.hpi"
         );
     auto folder = game_directory();
     if (folder.empty())
-        missing_game_directory(what, std::string("OA_GAME_DIR names no directory: ") + value);
+        missing_game_directory(what, std::string("OA_GAME_DIR names no directory: ") + *value);
     return folder;
 }
 

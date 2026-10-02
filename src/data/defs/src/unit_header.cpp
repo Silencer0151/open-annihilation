@@ -5,6 +5,7 @@
 #include "oa/base/game_math.hpp"
 
 #include "oa/data/defs/locale.hpp"
+#include "oa/base/text.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -24,9 +25,9 @@ constexpr const char* weapon_keys[] = {
 
 struct NameList {
     char (*names)[path_capacity];
-    uint32_t count;
-    uint32_t capacity;
-    bool failed;
+    uint32_t count{};
+    uint32_t capacity{};
+    bool failed{};
 };
 
 void collect_name(void* user, const char* name) {
@@ -47,7 +48,7 @@ void collect_name(void* user, const char* name) {
         list->names = names;
         list->capacity = grown;
     }
-    std::strncpy(list->names[list->count], name, path_capacity - 1);
+    oa::base::text::copy_padded(list->names[list->count], name, path_capacity - 1);
     list->names[list->count][path_capacity - 1] = '\0';
     ++list->count;
 }

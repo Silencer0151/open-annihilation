@@ -66,8 +66,10 @@ void Match::disable_scenario() noexcept {
 }
 
 void Match::configure_player_alliances(uint8_t player, const std::array<uint8_t, 10>& allies) {
-    if (player >= player_alliances_.size())
-        throw std::out_of_range("alliance owner outside player table");
+    if (player >= player_alliances_.size()) {
+        fault_.note("alliance owner outside player table");
+        return;
+    }
     player_alliances_[player] = allies;
     std::copy(allies.begin(), allies.end(), state().game.players[player].alliance);
     if (outcome_view_ && outcome_view_->local_player == player)
@@ -98,19 +100,23 @@ void Match::configure_outcomes(
     const std::array<uint8_t, 10>& allies,
     bool defeat_allowed,
     bool campaign,
-    bool multiplayer
+    bool multiplayer_game
 ) {
-    if (outcome_view_)
-        throw std::logic_error("outcome cadence already initialized");
-    if (local >= simulation_.players.size())
-        throw std::out_of_range("local outcome player outside table");
+    if (outcome_view_) {
+        fault_.note("outcome cadence already initialized");
+        return;
+    }
+    if (local >= simulation_.players.size()) {
+        fault_.note("local outcome player outside table");
+        return;
+    }
     outcome_view_.emplace();
     outcome_view_->local_player = local;
     outcome_view_->local_allies = allies;
     configure_player_alliances(local, allies);
     defeat_allowed_ = defeat_allowed;
     campaign_outcomes_ = campaign;
-    multiplayer_outcomes_ = multiplayer;
+    multiplayer_outcomes_ = multiplayer_game;
     state().game.local_player_index = local;
 }
 
@@ -272,10 +278,10 @@ void Match::respawn_local_commander() {
     const auto& side = world.game.sides[oa::world_player_info(&world, &player)->side];
     const auto type =
         oa::data::defs::unit_defs_type_id(world.unit_defs, world.unit_def_count, side.commander);
-    if (type == 0)
-        throw std::runtime_error(
-            std::string("side commander ") + side.commander + " is not in the unit catalog"
-        );
+    if (type == 0) {
+        fault_.note("side commander is not in the unit catalog", side.commander);
+        return;
+    }
     sim::unit_spawn::Request request;
     request.player = world.game.local_player_index;
     request.type = type;
@@ -283,8 +289,10 @@ void Match::respawn_local_commander() {
     request.finished = true;
     request.state = sim::unit_spawn::ground_occupancy_state;
     auto* commander = create(request);
-    if (commander == nullptr || commander->unit == nullptr)
-        throw std::runtime_error("the deathmatch commander could not be created");
+    if (commander == nullptr || commander->unit == nullptr) {
+        fault_.note("the deathmatch commander could not be created");
+        return;
+    }
     sim::unit_spawn::grant_start_storage(
         player, host.metal_hundreds * 100, host.energy_hundreds * 100
     );

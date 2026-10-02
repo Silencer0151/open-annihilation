@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
+#include "oa/base/game_math.hpp"
 #include <array>
 #include <bit>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -16,32 +18,12 @@ using namespace oa;
     } while (false)
 
 namespace {
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<uint32_t> sounds;
 
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
         sounds.push_back(category);
     }
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
 struct Scenario : sim::scenario::DefinitionHost {
@@ -166,7 +148,7 @@ struct Fixture {
 
     uint32_t
     dispatch(sim::unit_spawn::Slot& s, sim::simulation_state::Order& order, uint32_t events) {
-        sim::match_runtime::TickHost host(*match);
+        sim::match_runtime::MatchTickAccess host(*match);
         return host.dispatch_mission(match->state(), s.record, order, events);
     }
 
@@ -251,7 +233,7 @@ void air_strike() {
     CHECK(bomber.unit->primary->next == &order && order.wait_events == 0);
 
     // Target lost while allowed to fire: hand over to VTOL_SeekAttack.
-    bomber.unit->flags |= 0x100000u;
+    bomber.unit->flags |= 1u << OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
     CHECK(!order.next);
     CHECK(f.dispatch(bomber, order, 0x8) == 5);
     CHECK(order.next && order.next->kind == sim::match_runtime::vtol_seek_attack_kind);

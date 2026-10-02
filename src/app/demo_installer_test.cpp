@@ -20,6 +20,7 @@
 #include "oa/formats/hpi.hpp"
 #include "oa/test/game_data.hpp"
 #include "oa/test/pe_image.hpp"
+#include "oa/platform/system.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -500,16 +501,16 @@ fs::path fresh_temporary(std::string_view name) {
 
 // The installer OA_DEMO_INSTALLER names, unpacked into a temporary data folder.
 void test_installed_release() {
-    const char* named = std::getenv("OA_DEMO_INSTALLER");
-    if (named == nullptr || *named == '\0')
+    const auto named = oa::platform::environment_value("OA_DEMO_INSTALLER");
+    if (!named || named->empty())
         oa::test::skip_test(
             "the Total Annihilation demo (1997) installer checks",
             "OA_DEMO_INSTALLER is not set; set it to the demo's installer"
         );
-    const auto installer = path_from_utf8(named);
+    const auto installer = path_from_utf8(named->c_str());
     std::error_code error;
     if (!fs::is_regular_file(installer, error)) {
-        std::fprintf(stderr, "FAILED: OA_DEMO_INSTALLER names no file: %s\n", named);
+        std::fprintf(stderr, "FAILED: OA_DEMO_INSTALLER names no file: %s\n", named->c_str());
         ++failures;
         return;
     }

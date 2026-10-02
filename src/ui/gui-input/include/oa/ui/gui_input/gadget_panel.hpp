@@ -345,6 +345,11 @@ GadgetOwner* load_panel(
 // Panel load flags passed to load_panel().
 namespace panel_flag {
 inline constexpr uint32_t first_draw = 0x1; // the loader sets it on every panel
+// The whole-panel draw keeps no copy of the screen under the panel; a panel
+// merged into an existing PANEL frame carries it.
+inline constexpr uint32_t no_save_under = 0x20;
+// The whole-panel draw redraws the face and every record.
+inline constexpr uint32_t redraw = 0x40;
 inline constexpr uint32_t modal_backdrop = 0x80;
 inline constexpr uint32_t centre = 0x100; // first draw centres the root on the screen
 inline constexpr uint32_t merge = 0x200;

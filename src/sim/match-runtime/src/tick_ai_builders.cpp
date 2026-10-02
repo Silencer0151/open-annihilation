@@ -20,7 +20,9 @@ std::span<const uint16_t> Match::squad_members(uint8_t player, uint32_t squad) c
 }
 
 void Match::set_unit_squad(uint16_t unit, uint32_t squad) {
-    assign_squad(slots_.at(unit), squad);
+    if (unit == 0 || unit >= slots_.size())
+        return;
+    assign_squad(slots_[unit], squad);
 }
 
 void Match::destroy_player_units(uint8_t owner) {

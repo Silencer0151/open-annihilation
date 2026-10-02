@@ -204,7 +204,7 @@ int32_t update_panel(GadgetPanel& panel) {
     int32_t chosen = panel.activated;
     if (panel.dirty == 1) {
         panel.dirty = 0;
-        draw_panel(panel, panel.owner->flags | 0x40);
+        draw_panel(panel, panel.owner->flags | panel_flag::redraw);
     }
     auto records = panel.owner->records();
     const auto root_rect = ui::gui_layout::screen_rect(records, 0);

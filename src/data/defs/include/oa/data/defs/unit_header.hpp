@@ -16,9 +16,9 @@ namespace oa::data::defs {
 
 // The WEAPONS\*.TDF documents whose section hashes feed UnitDef.weapon_checksum.
 struct WeaponTdfSet {
-    formats::tdf::Document* documents;
-    uint32_t count;    // documents loaded
-    uint32_t capacity; // files listed
+    formats::tdf::Document* documents{};
+    uint32_t count{};    // documents loaded
+    uint32_t capacity{}; // files listed
 };
 
 /// Empties a weapon document set without freeing anything.
@@ -57,12 +57,12 @@ void weapon_tdf_set_free(WeaponTdfSet* set) noexcept;
 
 // Checks the running build and install make of each unit.
 struct UnitHeaderSources {
-    const char* language; // localized-key prefix ("" for none)
-    const WeaponTdfSet* weapons;
-    int8_t build_major; // the running build's major version, 3 in 3.1c
-    int8_t build_minor; // its minor version, 1 in 3.1c
-    bool archive_only;  // loose unit files are refused
-    bool disc_mismatch; // the game disc failed its check
+    const char* language{}; // localized-key prefix ("" for none)
+    const WeaponTdfSet* weapons{};
+    int8_t build_major{}; // the running build's major version, 3 in 3.1c
+    int8_t build_minor{}; // its minor version, 1 in 3.1c
+    bool archive_only{};  // loose unit files are refused
+    bool disc_mismatch{}; // the game disc failed its check
 };
 
 // The Copyright value a unit needs, any year: the 60-character notice the
@@ -107,8 +107,8 @@ bool load_unit_header(
 
 // The whole units\*.FBI header pass that fills Game.unit_defs.
 struct UnitHeaderLoader {
-    void* context;
-    void (*load)(void* context, Game* game);
+    void* context{};
+    void (*load)(void* context, Game* game) = nullptr;
 };
 
 /// Reloads the unit header table while none is loaded or a full unit load

@@ -45,7 +45,7 @@ constexpr uint32_t label(HostCall call) {
 }
 
 struct Event {
-    uint32_t call;
+    uint32_t call{};
     int32_t a{}, b{};
     uint8_t state{}, signal{};
 };

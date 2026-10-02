@@ -3,6 +3,7 @@
 
 #include "oa/data/defs/weapons.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -16,8 +17,8 @@ constexpr uint32_t max_damage_entries = 4096;
 constexpr std::size_t asset_name_capacity = 0x100;
 
 struct BoolKey {
-    const char* key;
-    uint32_t flag;
+    const char* key{};
+    uint32_t flag{};
 };
 
 // The game's read order; noautorange is read earlier, next to weapontimer.
@@ -164,7 +165,7 @@ bool set_damage(WeaponDamageTable* table, const char* unit, int32_t damage) noex
     }
     WeaponDamage* slot = &table->entries[first];
     std::memmove(slot + 1, slot, sizeof(WeaponDamage) * (table->count - first));
-    std::strncpy(slot->unit, unit, sizeof slot->unit - 1);
+    oa::base::text::copy_padded(slot->unit, unit, sizeof slot->unit - 1);
     slot->unit[sizeof slot->unit - 1] = '\0';
     slot->damage = damage;
     ++table->count;
@@ -173,9 +174,9 @@ bool set_damage(WeaponDamageTable* table, const char* unit, int32_t damage) noex
 
 struct FileList {
     char (*names)[path_capacity];
-    uint32_t count;
-    uint32_t capacity;
-    bool overflow;
+    uint32_t count{};
+    uint32_t capacity{};
+    bool overflow{};
 };
 
 void push_name(void* user, const char* name) {
@@ -192,7 +193,7 @@ void push_name(void* user, const char* name) {
         list->names = names;
         list->capacity = grown;
     }
-    std::strncpy(list->names[list->count], name, path_capacity - 1);
+    oa::base::text::copy_padded(list->names[list->count], name, path_capacity - 1);
     list->names[list->count][path_capacity - 1] = '\0';
     ++list->count;
 }
@@ -230,7 +231,7 @@ void share_or_load_model(
     weapon->model = resolver != nullptr && resolver->model != nullptr
                         ? resolver->model(resolver->context, name)
                         : 0;
-    std::strncpy(model_name(weapon), name, model_name_capacity - 1);
+    oa::base::text::copy_padded(model_name(weapon), name, model_name_capacity - 1);
     model_name(weapon)[model_name_capacity - 1] = '\0';
 }
 
@@ -312,7 +313,7 @@ bool weapon_load(
     }
     WeaponDef* weapon = &table->defs[id];
     const WeaponResolver* resolver = options != nullptr ? options->resolver : nullptr;
-    std::strncpy(weapon->key, section->name, sizeof weapon->key - 1);
+    oa::base::text::copy_padded(weapon->key, section->name, sizeof weapon->key - 1);
     weapon->key[sizeof weapon->key - 1] = '\0';
     formats::tdf::get_string(section, "name", weapon->name, sizeof weapon->name, "");
     weapon->weapon_velocity =

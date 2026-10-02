@@ -31,6 +31,25 @@ struct Geometry final : SpawnGeometryHost {
     void set_max_reload_time(int32_t value) override { maximum = value; }
 };
 
+// A host whose AimFrom callback clears the slot's definition.
+struct ClearingGeometry final : SpawnGeometryHost {
+    UnitWeapons* weapons{};
+    std::vector<uint8_t> query;
+    int32_t maximum{-1};
+
+    std::array<int32_t, 3> query_weapon_world(uint8_t slot) override {
+        query.push_back(slot);
+        return {};
+    }
+
+    std::array<int32_t, 3> aim_from_world(uint8_t slot) override {
+        weapons->slots[slot].definition = nullptr;
+        return {};
+    }
+
+    void set_max_reload_time(int32_t value) override { maximum = value; }
+};
+
 struct TargetFixture final : TargetSearchHost {
     std::vector<TargetUnit> nearby;
     std::vector<uint32_t> random_values;
@@ -250,6 +269,12 @@ int main() {
     CHECK(spawned.slots[2].muzzle_offset == 12);
     CHECK(host.maximum == 2033);
     CHECK(host.query == std::vector<uint8_t>({0, 1, 2}) && host.aim == host.query);
+    UnitWeapons cleared;
+    ClearingGeometry clearing;
+    clearing.weapons = &cleared;
+    const auto stopped = initialize_spawn_combat(cleared, registry, names, clearing);
+    CHECK(stopped.definition_cleared && clearing.query == std::vector<uint8_t>({0}));
+    CHECK(clearing.maximum == -1 && cleared.slots[1].definition == nullptr);
     std::array<uint32_t, 1> category_mask{1U << 3};
     TargetSource source;
     source.identity = 10;
@@ -262,8 +287,8 @@ int main() {
     source.weapon_flags[0] = 0;
     TargetFixture targets;
     targets.nearby = {
-        {20, 2, {0x10000, 0, 0}, unit_targetable_flag, 0, 3, candidate_type_auto_target_flag},
-        {30, 3, {0x20000, 0, 0}, unit_targetable_flag, 0, 4, candidate_type_auto_target_flag}
+        {20, 2, {0x10000, 0, 0}, OA_UNIT_FLAG_LIVE, 0, 3, candidate_type_auto_target_flag},
+        {30, 3, {0x20000, 0, 0}, OA_UNIT_FLAG_LIVE, 0, 4, candidate_type_auto_target_flag}
     };
     // Candidate selection index then randomized-distance score, repeated. Outside
     // the category mask wins even though its score is larger.

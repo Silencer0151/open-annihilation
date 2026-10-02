@@ -25,10 +25,10 @@ void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
 }
 
 struct ScanState {
-    MapList* list;
-    const CampaignFiles* files;
-    bool first_only;
-    bool stopped;
+    MapList* list{};
+    const CampaignFiles* files{};
+    bool first_only{};
+    bool stopped{};
 };
 
 // Appends a name to the packed block, keeping the closing NUL after it.

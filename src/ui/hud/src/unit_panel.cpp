@@ -74,10 +74,11 @@ bool sees(const UnitPanelHooks& hooks, const Player* viewer, const Unit& unit) {
 
 /// Tells whether the panel names a unit by its owner: a commander, or a type
 /// that shows its player's name, in a multiplayer game.
-bool shows_owner_name(const UnitDef& def, int32_t session_kind) {
+bool shows_owner_name(const UnitDef& def, oa::data::campaign::SessionKind session_kind) {
     constexpr uint32_t owner_named =
         OA_UNIT_DEF_ABILITY_SHOW_PLAYER_NAME | OA_UNIT_DEF_ABILITY_COMMANDER;
-    return session_kind == kSessionMultiplayer && (def.abilities & owner_named) != 0;
+    return session_kind == oa::data::campaign::SessionKind::multiplayer &&
+           (def.abilities & owner_named) != 0;
 }
 
 } // namespace
@@ -105,7 +106,7 @@ UnitPanelSnapshot unit_panel_snapshot(
     const World& world,
     uint16_t cursor_unit,
     bool debug_keys,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const OverlayContext& overlay,
     const UnitPanelHooks& hooks
 ) {

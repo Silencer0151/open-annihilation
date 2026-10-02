@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 
 using namespace oa::formats::tdf;
 
@@ -171,6 +172,22 @@ void tdf_atof_accepts_only_the_decimal_grammar() {
     CHECK(parse_double("1e") == 1.0);
 }
 
+// A key that is present reads its text's number even when the text holds
+// none: the fallback is only for a missing key.
+void tdf_present_key_without_a_number_reads_zero() {
+    Parsed parsed("[A]{empty=; word=Meteor; plus=+5; half=.5; hex=0x10;}");
+    const Block* block = parsed.section("A");
+    CHECK(get_int(block, "empty", -1) == 0);
+    CHECK(get_int(block, "word", -1) == 0);
+    CHECK(get_int(block, "plus", -1) == 5);
+    CHECK(get_int(block, "hex", -1) == 0);
+    CHECK(get_int(block, "missing", -1) == -1);
+    CHECK(get_double(block, "empty", 7.0) == 0.0);
+    CHECK(get_double(block, "half", 7.0) == 0.5);
+    CHECK(get_double(block, "hex", 7.0) == 0.0);
+    CHECK(get_double(block, "missing", 7.0) == 7.0);
+}
+
 void tdf_fixed_scales_and_wraps_out_of_range() {
     Parsed parsed("[A]{a=1.9; b=-1.9; c=32768; d=1e30; e=0.15;}");
     const Block* block = parsed.section("A");
@@ -221,6 +238,36 @@ void tdf_compare_nocase_folds_to_lower() {
     CHECK(compare_nocase("Z", "a") > 0);
 }
 
+void tdf_owned_document_moves_its_tree() {
+    OwnedDocument first;
+    CHECK(first.root() == nullptr);
+    CHECK(first.parse("[A]{v=1;}"));
+    const Block* section = find_child(first.root(), "a");
+    OwnedDocument second(std::move(first));
+    CHECK(first.root() == nullptr);
+    CHECK(find_child(second.root(), "a") == section);
+    CHECK(value_is(section, "v", "1"));
+    OwnedDocument third;
+    CHECK(third.parse("[B]{}"));
+    third = std::move(second);
+    CHECK(second.root() == nullptr);
+    CHECK(find_child(third.root(), "a") == section);
+    CHECK(select_section(third.get(), "A"));
+}
+
+void tdf_owned_document_reports_failures() {
+    OwnedDocument document;
+    ParseError error{};
+    CHECK(!document.parse("[A]{v=1}", &error));
+    CHECK(document.root() == nullptr);
+    CHECK(error.status == ParseStatus::semicolon_missing);
+    CHECK(describe(error) == "entry lacks its closing ';' at byte 6 in [A]");
+    const std::string large(std::size_t{max_input_bytes} + 1u, ' ');
+    CHECK(!document.parse(large, &error) && error.status == ParseStatus::too_large);
+    CHECK(document.parse(""));
+    CHECK(document.root() != nullptr && child_count(document.root()) == 0);
+}
+
 void tdf_rejects_excessive_nesting() {
     std::string text;
     for (int i = 0; i < 80; ++i)
@@ -246,11 +293,14 @@ int main() {
     tdf_block_hash_skips_last_two_bytes();
     tdf_atoi_parses_like_atol();
     tdf_atof_accepts_only_the_decimal_grammar();
+    tdf_present_key_without_a_number_reads_zero();
     tdf_fixed_scales_and_wraps_out_of_range();
     tdf_get_string_bounds_and_defaults();
     tdf_cursor_selects_relative_to_current_section();
     tdf_property_keys_are_in_nocase_order();
     tdf_compare_nocase_folds_to_lower();
+    tdf_owned_document_moves_its_tree();
+    tdf_owned_document_reports_failures();
     tdf_rejects_excessive_nesting();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

@@ -4,12 +4,16 @@
 #include "oa/platform/system.hpp"
 
 #include "oa/base/threads.hpp"
+#include "oa/platform/files.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -38,6 +42,29 @@ uint32_t processor_count() noexcept {
     return base::threads::processor_count();
 }
 
+std::optional<std::string> environment_value(const char* name) {
+#if defined(_MSC_VER)
+    // Visual Studio's C library marks getenv unsafe; its own copy is the
+    // same value.
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+        return std::nullopt;
+
+    struct Release {
+        void operator()(char* copy) const noexcept { std::free(copy); }
+    };
+
+    const std::unique_ptr<char, Release> owned(value);
+    return std::string(owned.get());
+#else
+    const char* value = std::getenv(name);
+    if (value == nullptr)
+        return std::nullopt;
+    return std::string(value);
+#endif
+}
+
 void set_error_sink(ErrorSink sink) noexcept {
     error_sink.store(sink);
 }
@@ -53,7 +80,7 @@ void show_error_message(const char* message) noexcept {
 bool append_error_log(const char* directory, const char* text) noexcept {
     std::string path = directory != nullptr ? directory : "";
     path += error_log_file_name;
-    std::FILE* log = std::fopen(path.c_str(), "ab");
+    std::FILE* log = open_file(path.c_str(), "ab");
     if (log == nullptr)
         return false;
     const std::size_t length = text != nullptr ? std::strlen(text) : 0;

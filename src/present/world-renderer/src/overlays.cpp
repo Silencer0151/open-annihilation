@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/world_renderer/world_overlays.hpp"
+#include "oa/core/map_plot.h"
 
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
@@ -285,13 +286,13 @@ void overlay_cell_outline(
     int32_t color_slot
 ) {
     const auto top =
-        (cell_y * map_cell_pixels - static_cast<int32_t>(game.camera_y)) - (cell_height >> 1);
+        (cell_y * OA_MAP_CELL_PIXELS - static_cast<int32_t>(game.camera_y)) - (cell_height >> 1);
     // (cell + 8) * 16 folds the battlefield x origin into the cell column.
     Rect32 rect{};
-    rect.x1 = (cell_x + 8) * map_cell_pixels - static_cast<int32_t>(game.camera_x);
+    rect.x1 = (cell_x + 8) * OA_MAP_CELL_PIXELS - static_cast<int32_t>(game.camera_x);
     rect.y1 = top + battlefield_origin_y;
-    rect.y2 = cells_high * map_cell_pixels + rect.y1;
-    rect.x2 = cells_wide * map_cell_pixels + rect.x1;
+    rect.y2 = cells_high * OA_MAP_CELL_PIXELS + rect.y1;
+    rect.x2 = cells_wide * OA_MAP_CELL_PIXELS + rect.x1;
     if (color_slot == cell_outline_inset_slot) {
         rect.x1 += 1;
         rect.y1 = top + battlefield_origin_y + 1;
@@ -447,19 +448,19 @@ void overlay_debug_grid(
     const ContourStyle contour{sources.contour_spacing, sources.contour_phase, game.sea_level};
     const auto camera_x = static_cast<int32_t>(game.camera_x);
     const auto camera_y = static_cast<int32_t>(game.camera_y);
-    const int32_t first_column = camera_x / map_cell_pixels;
+    const int32_t first_column = camera_x / OA_MAP_CELL_PIXELS;
     int32_t end_column = game.view_cells_width + 1 + first_column;
     if (game.map_width - 1 <= end_column)
         end_column = game.map_width - 1;
     const int32_t end_row = game.map_height - 1;
     uint8_t step_color = 0;
-    for (int32_t row = camera_y / map_cell_pixels; row < end_row; ++row) {
+    for (int32_t row = camera_y / OA_MAP_CELL_PIXELS; row < end_row; ++row) {
         if (first_column >= end_column)
             return;
         bool below_screen = true;
-        const int32_t top = (row + 2) * map_cell_pixels;
+        const int32_t top = (row + 2) * OA_MAP_CELL_PIXELS;
         for (int32_t column = first_column; column < end_column; ++column) {
-            const int32_t left = (column + 8) * map_cell_pixels;
+            const int32_t left = (column + 8) * OA_MAP_CELL_PIXELS;
             const auto at = static_cast<size_t>(game.map_width * row + column);
             const auto under = at + static_cast<size_t>(game.map_width);
             const MapPlot& plot = sources.plots[at];
@@ -473,12 +474,12 @@ void overlay_debug_grid(
             const int32_t p[debug_grid_corners * 2] = {
                 left - camera_x,
                 top - (heights[0] >> 1) - camera_y,
-                left + map_cell_pixels - camera_x,
+                left + OA_MAP_CELL_PIXELS - camera_x,
                 top - (heights[1] >> 1) - camera_y,
-                left + map_cell_pixels - camera_x,
-                top + map_cell_pixels - (heights[2] >> 1) - camera_y,
+                left + OA_MAP_CELL_PIXELS - camera_x,
+                top + OA_MAP_CELL_PIXELS - (heights[2] >> 1) - camera_y,
                 left - camera_x,
-                top + map_cell_pixels - (heights[3] >> 1) - camera_y,
+                top + OA_MAP_CELL_PIXELS - (heights[3] >> 1) - camera_y,
             };
             if (p[1] < static_cast<int32_t>(game.offscreen_height))
                 below_screen = false;

@@ -33,13 +33,18 @@ defined (--targets, written by cmake/OaLayout.cmake), and fails on:
   stale        a baseline entry for a link that no longer exists, which
                must be removed: the baseline may only shrink
   name         a module library not named oa-<group>-<module>[-part]
-               (oa-<group>[-part] in a group-level module) or without the
-               ALIAS oa::<group>::<module>[_part], or a public header outside
-               include/oa/<group>/<module>/ and include/oa/<group>/<module>.*
-               (include/oa/<group>/ in a group-level module)
+               (oa-<group>[-part] in a group-level module); any library of
+               the tree (the build files at the root and under cmake/, src/
+               and tests/, every platform's branch included) not named
+               oa-<group>[-<part>] or without the ALIAS
+               oa::<group>[::<part>], the part's hyphens as underscores; or
+               a public header outside include/oa/<group>/<module>/ and
+               include/oa/<group>/<module>.* (include/oa/<group>/ in a
+               group-level module)
 
 Tests (executables) and tools may link anything, but must still link what
-they include. Code outside src/ is not checked.
+they include. Code outside src/ is not checked, apart from the names of its
+libraries.
 
 --self-test checks a small built-in tree. Exit status is 1 on any finding
 and 2 when the targets file or the baseline cannot be read.
@@ -75,6 +80,10 @@ COMMAND_RE = re.compile(r"(?m)^[ \t]*(add_subdirectory|target_include_directorie
                         r"target_sources)[ \t]*\(([^)]*)\)")
 ALIAS_RE = re.compile(r"add_library\(\s*(\S+)\s+ALIAS\s+(\S+)\s*\)")
 DEFINE_RE = re.compile(r"(?m)^[ \t]*(?:add_library|add_executable)[ \t]*\(\s*([^\s)]+)")
+LIBRARY_RE = re.compile(r"(?m)^[ \t]*add_library[ \t]*\(\s*([^\s)]+)([^)]*)\)")
+# The folders under the root whose build files define the tree's libraries,
+# besides the root's own CMakeLists.txt.
+BUILD_FILE_FOLDERS = ("cmake", "src", "tests")
 LINK_RE = re.compile(r"(?m)^[ \t]*target_link_libraries[ \t]*\(\s*([^\s)]+)")
 # The largest baseline or targets file read; the tree's are a few kilobytes
 # and a few megabytes.
@@ -267,6 +276,11 @@ class Checker:
         """Whether a target's directory lies in the engine tree (the configuration may hold more)."""
         return self.targets.rel(directory) is not None
 
+    def _defined_in_tree(self, name):
+        """Whether the root's build file or one under BUILD_FILE_FOLDERS defines a target."""
+        directory = self.targets.rel(self.targets.get(name, "SOURCE_DIR"))
+        return directory == "." or (directory is not None and directory.split("/", 1)[0] in BUILD_FILE_FOLDERS)
+
     def _module_of_target(self, name):
         source_dir = self.targets.rel(self.targets.get(name, "SOURCE_DIR"))
         if source_dir and source_dir.startswith("src/"):
@@ -284,13 +298,21 @@ class Checker:
             return "/".join(parts[:2])
         return "/".join(parts[:3]) if len(parts) >= 3 else None
 
-    def _files(self):
+    def _files(self, top="src"):
         files = []
-        for folder, subfolders, names in os.walk(self.root / "src"):
+        for folder, subfolders, names in os.walk(self.root / top):
             subfolders[:] = [name for name in subfolders if not name.startswith(".")]
             for name in names:
                 files.append((Path(folder) / name).relative_to(self.root).as_posix())
         return sorted(files)
+
+    def build_files(self):
+        """Return the tree's build files: the root's CMakeLists.txt and those under BUILD_FILE_FOLDERS."""
+        found = ["CMakeLists.txt"] if (self.root / "CMakeLists.txt").is_file() else []
+        for top in BUILD_FILE_FOLDERS:
+            found.extend(path for path in self._files(top)
+                         if Path(path).name == "CMakeLists.txt" or path.endswith(".cmake"))
+        return found
 
     def report(self, rule, where, message):
         """Record a finding once (a header several targets reach is read once for each)."""
@@ -470,23 +492,31 @@ class Checker:
                                                           "baseline entry")
 
     def check_names(self):
-        """Report module libraries and public headers that break the naming rule."""
+        """Report libraries and public headers that break the naming rule."""
         declared = defaultdict(set)
-        for path in self.files:
-            if Path(path).name == "CMakeLists.txt":
-                for match in ALIAS_RE.finditer((self.root / path).read_text(encoding="utf-8", errors="replace")):
-                    declared[match.group(2)].add(match.group(1))
-        for name in sorted(self.engine):
-            module = self.module_of_target[name]
-            if module is None or name in INFRASTRUCTURE or self.targets.get(name, "TYPE") not in LIBRARY_TYPES:
-                continue
-            source_dir = self.targets.rel(self.targets.get(name, "SOURCE_DIR"))
-            if not source_dir or not source_dir.startswith("src/"):
-                continue  # the app's targets the root defines
-            group, sub = module_names(module)
-            stem = f"oa-{group}" + (f"-{sub}" if sub else "")
-            if name != stem and not name.startswith(stem + "-"):
-                self.report("name", name, f"is in {module}; its name should be {stem} or {stem}-<part>")
+        defined = {}
+        for path in self.build_files():
+            text = re.sub(r"#[^\n]*", "", (self.root / path).read_text(encoding="utf-8", errors="replace"))
+            for match in ALIAS_RE.finditer(text):
+                declared[match.group(2)].add(match.group(1))
+            for match in LIBRARY_RE.finditer(text):
+                rest = match.group(2).split()
+                if "ALIAS" in rest or "IMPORTED" in rest or "$" in match.group(1):
+                    continue
+                defined.setdefault(match.group(1), f"{path}:{text[:match.start()].count(chr(10)) + 1}")
+        libraries = {name for name in self.engine if self.targets.get(name, "TYPE") in LIBRARY_TYPES
+                     and self._defined_in_tree(name)}
+        for name in sorted(libraries | set(defined)):
+            module = self.module_of_target.get(name)
+            source_dir = self.targets.rel(self.targets.get(name, "SOURCE_DIR")) if name in self.engine else None
+            if module is not None and name not in INFRASTRUCTURE and source_dir and source_dir.startswith("src/"):
+                group, sub = module_names(module)
+                stem = f"oa-{group}" + (f"-{sub}" if sub else "")
+                if name != stem and not name.startswith(stem + "-"):
+                    self.report("name", name, f"is in {module}; its name should be {stem} or {stem}-<part>")
+                    continue
+            if not re.fullmatch(r"oa(-[a-z0-9]+)+", name):
+                self.report("name", name, "is not named oa-<group>[-<part>]")
                 continue
             rest = name[len("oa-"):]
             alias = "oa::" + (rest.replace("-", "::", 1).replace("-", "_") if "-" in rest else rest)
@@ -571,6 +601,12 @@ SELF_TEST_FILES = {
     "src/platform/src/files.cpp": '#include "oa/platform/files.hpp"\n',
     "src/ui/hud/CMakeLists.txt": "add_library(hud src/hud.cpp)\nadd_library(oa::ui::hud ALIAS hud)\n",
     "src/ui/hud/src/hud.cpp": '#include "oa/sim/unit.hpp"\n',
+    "CMakeLists.txt": "add_library(oa-test-support INTERFACE)\nadd_library(oa::test::support ALIAS oa-test-support)\n"
+                      "add_library(oa-test-launch STATIC launch.cpp)\n# add_library(oa::test::launch ALIAS oa-test-launch)\n",
+    "cmake/Options.cmake": "add_library(oa-options INTERFACE)\nadd_library(oa::options ALIAS oa-options)\n"
+                           "add_library(SDL3::SDL3 SHARED IMPORTED)\n",
+    "tests/extension/CMakeLists.txt": "if(WIN32)\n  add_library(oa-extension-windows STATIC a.cpp)\nendif()\n"
+                                      "add_library(recorder STATIC b.cpp)\nadd_library(oa::recorder ALIAS recorder)\n",
 }
 
 # (rule, where) of each finding the self-test tree must give.
@@ -586,6 +622,9 @@ SELF_TEST_EXPECTED = [
     ("name", "oa-platform-shims"),  # no alias
     ("name", "hud"),  # not oa-ui-hud
     ("name", "src/sim/unit/include/oa/misplaced.hpp"),  # outside oa/sim/unit
+    ("name", "oa-test-launch"),  # no alias outside src/: the alias is a comment
+    ("name", "oa-extension-windows"),  # no alias, in a branch this platform does not take
+    ("name", "recorder"),  # not oa-<group>-<part>
     ("stale", "oa-sim-unit -> oa-core-types"),  # a baseline entry for a link that keeps the order
 ]
 
@@ -613,6 +652,10 @@ def self_test_targets(root):
                extra_includes=f";{root}/src/platform/include"),
         target("oa-platform-shims", "STATIC_LIBRARY", "src/platform", "src/files.cpp", "include"),
         target("hud", "STATIC_LIBRARY", "src/ui/hud", "src/hud.cpp", links="::@(0x1);oa::sim::unit;::@"),
+        target("oa-test-support", "INTERFACE_LIBRARY", "."),
+        target("oa-test-launch", "STATIC_LIBRARY", ".", "launch.cpp"),
+        target("oa-options", "INTERFACE_LIBRARY", "."),
+        target("recorder", "STATIC_LIBRARY", "tests/extension", "b.cpp"),
         "ALIAS\toa::sim::unit\toa-sim-unit",
     ]) + "\n"
 

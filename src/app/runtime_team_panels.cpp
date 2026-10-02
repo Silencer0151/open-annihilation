@@ -29,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -410,7 +411,7 @@ void Runtime::toggle_team_menu() {
     // CONTROL is the host's, and withheld in a tournament game.
     const bool opened = hud::toggle_tab_menu(
         world,
-        hud::kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         hud::control_offered(world, team_panel_host_),
         loader,
         team_panel_controls(),
@@ -524,7 +525,8 @@ void Runtime::open_control_team_panel(bool darken_panel_below) {
     if (!load_team_panel("CONTROL.GUI"))
         return;
     team_session().panel = TeamPanel::control;
-    (void)hud::open_control_panel(match_->state(), team_panel_controls());
+    // It refuses only a watching player, who never gets here.
+    std::ignore = hud::open_control_panel(match_->state(), team_panel_controls());
     status_ = "Control";
     render_match_surface();
 }

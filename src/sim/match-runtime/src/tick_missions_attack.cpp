@@ -349,8 +349,10 @@ uint32_t TickHost::GroundMissions::follow() {
 
 uint32_t TickHost::GroundMissions::teleport() {
     const auto* bounds = host.match.bounds_for(*s.unit);
-    if (!bounds)
-        unsupported("teleporter without type bounds");
+    if (!bounds) {
+        host.match.fault_.note("teleporter without type bounds");
+        return ground::mission_failed;
+    }
     const auto& at = s.record.position;
     const auto& to = record.extra.destination;
     const int32_t minimum[3]{

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/feature_runtime.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -530,10 +531,10 @@ void test_placements() {
     Recorder r;
     const auto host = make_host(r);
     FeaturePlacement placements[3]{};
-    std::strcpy(placements[0].name, "wreck");
+    oa::base::text::copy_terminated(placements[0].name, "wreck");
     placements[0].x = 6;
     placements[0].z = 6;
-    std::strcpy(placements[2].name, "tree");
+    oa::base::text::copy_terminated(placements[2].name, "tree");
     placements[2].x = 2;
     placements[2].z = 3;
     apply_feature_placements(f.world, host, placements, 3, [](void*, const char* name) -> uint16_t {

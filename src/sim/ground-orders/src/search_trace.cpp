@@ -3,7 +3,6 @@
 
 #include "oa/sim/ground_orders/search_trace.hpp"
 #include <algorithm>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
@@ -22,24 +21,29 @@ std::vector<std::array<int16_t, 2>> reconstruct_search_path(
     std::span<const uint8_t> predecessor
 ) {
     if (predecessor.size() < std::size_t(width) * height)
-        throw std::invalid_argument("search predecessor map is truncated");
+        return {};
     std::array<std::array<int16_t, 2>, retained_turns> ring{};
     ring[0] = finish;
     auto current = finish;
     uint32_t written = 1;
+    auto inside = [&](const std::array<int16_t, 2>& p) {
+        return p[0] >= 0 && p[1] >= 0 && uint32_t(p[0]) < width && uint32_t(p[1]) < height;
+    };
     auto index = [&](const std::array<int16_t, 2>& p) {
-        if (p[0] < 0 || p[1] < 0 || uint32_t(p[0]) >= width || uint32_t(p[1]) >= height)
-            throw std::invalid_argument("search predecessor leaves map");
         return std::size_t(uint32_t(p[1])) * width + uint32_t(p[0]);
     };
+    if (!inside(current))
+        return {};
     auto previous = predecessor[index(current)];
     if (previous >= direction_x.size())
-        throw std::invalid_argument("invalid search predecessor direction");
+        return {};
     std::size_t guard = 0;
     while (current != start) {
+        if (!inside(current))
+            return {};
         const auto direction = predecessor[index(current)];
         if (direction >= direction_x.size())
-            throw std::invalid_argument("invalid search predecessor direction");
+            return {};
         if (direction != previous) {
             ring[written & 63u] = current;
             ++written;
@@ -48,7 +52,7 @@ std::vector<std::array<int16_t, 2>> reconstruct_search_path(
         current[0] = static_cast<int16_t>(int32_t(current[0]) - direction_x[direction]);
         current[1] = static_cast<int16_t>(int32_t(current[1]) - direction_z[direction]);
         if (++guard > predecessor.size())
-            throw std::invalid_argument("cyclic search predecessor map");
+            return {};
     }
     ring[written & 63u] = start;
     const auto count = std::min<uint32_t>(written + 1, retained_turns);

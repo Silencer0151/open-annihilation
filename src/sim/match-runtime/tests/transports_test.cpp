@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 using namespace oa;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -55,7 +56,7 @@ struct Caption {
     std::string text;
 };
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<std::pair<uint16_t, uint32_t>> speech;
     std::vector<Caption> captions;
     sim::match_runtime::Match* match{};
@@ -88,16 +89,6 @@ struct Services : sim::match_runtime::OfflineServices {
 
     bool spoke(uint16_t unit, uint32_t category) const { return spoken(unit, category) != 0; }
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
     void
     attach_unit(sim::unit_spawn::Slot& slot, int32_t target, int32_t piece, int32_t mode) override {
         match->script_attach_unit(slot.unit_index, target, piece, mode);
@@ -106,22 +97,12 @@ struct Services : sim::match_runtime::OfflineServices {
     void drop_unit(sim::unit_spawn::Slot& slot, int32_t target) override {
         match->script_drop_unit(slot.unit_index, target);
     }
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 struct Function {
-    const char* name;
+    const char* name{};
     std::vector<uint32_t> code;
 };
 
@@ -308,8 +289,8 @@ installed_model(const AssetStore& assets, const std::string& path) {
 std::shared_ptr<formats::cob::CobProgram>
 installed_script(const AssetStore& assets, const std::string& path) {
     auto parsed = formats::cob::parse_cob(test::read_game_file(assets, path));
-    CHECK(parsed);
-    return std::make_shared<formats::cob::CobProgram>(std::move(*parsed.program));
+    CHECK(parsed.ok());
+    return std::make_shared<formats::cob::CobProgram>(std::move(*parsed.value));
 }
 
 struct Fixture {

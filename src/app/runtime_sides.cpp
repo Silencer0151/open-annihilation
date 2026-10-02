@@ -6,11 +6,13 @@
 #include "oa/app/runtime.hpp"
 
 #include "oa/app/asset_files.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/ui/campaign/single_player.hpp"
+#include "match_fault.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -20,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -73,8 +76,9 @@ std::vector<std::string> Runtime::saved_game_side_names() const {
         std::memcpy(names[side], side_table_.sides[side].name, campaign::kSideNameBytes);
     // The dialogs' side list: the names one after another, each ended by a
     // NUL, and one more NUL after the last.
+    // The list is read to its closing NUL, so its length is not needed.
     char list[OA_SIDE_COUNT * campaign::kSideNameBytes + 1] = {};
-    (void)campaign::build_side_name_list(names, count, list, sizeof list);
+    std::ignore = campaign::build_side_name_list(names, count, list, sizeof list);
     std::vector<std::string> shown;
     for (const char* name = list; *name != '\0'; name += std::strlen(name) + 1)
         shown.emplace_back(name);
@@ -118,10 +122,12 @@ void Runtime::bind_respawn_view() {
                         auto& runtime = *static_cast<Runtime*>(context);
                         if (runtime.match_ != nullptr) {
                             runtime.match_->choose_continue_watching(keep);
-                            const auto& extension = runtime.extension_;
-                            if (keep && extension.match_event != nullptr)
-                                extension.match_event(
-                                    extension.context, runtime, MatchEvent::watching_kept
+                            if (keep)
+                                call_hook_or_report<&Extension::match_event>(
+                                    runtime.extension_,
+                                    runtime.hook_error_report(),
+                                    runtime,
+                                    MatchEvent::watching_kept
                                 );
                         }
                     }
@@ -271,7 +277,7 @@ void Runtime::check_deathmatch_respawn() {
     for (uint32_t step = 0; step < kRespawnTickLimit && commander == nullptr; ++step) {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
         if (player.unit_count == 0)
             defeated = true;
         else if (defeated)

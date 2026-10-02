@@ -5,6 +5,7 @@
 #include "render_internal.hpp"
 
 #include "oa/data/defs/files.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstring>
 
@@ -221,7 +222,7 @@ load_named_gaf(const GadgetRenderer& renderer, const GadgetPanel& panel, const c
     while (directory_length + 1 < sizeof(name_path) && panel.gaf_path[directory_length] != '\0')
         ++directory_length;
     std::memcpy(name_path, panel.gaf_path.data(), directory_length);
-    std::strncat(name_path, name, sizeof(name_path) - std::strlen(name_path) - 1);
+    oa::base::text::append_terminated(name_path, name);
     char path[data::defs::path_capacity]{};
     data::defs::format_with_extension(name_path, path, sizeof(path), kGafExtension);
     return renderer.art.load_gaf != nullptr ? renderer.art.load_gaf(renderer.art.context, path)

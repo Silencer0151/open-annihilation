@@ -298,14 +298,14 @@ void Runtime::check_engine_settings_wiring() {
             return extension_state::multiplayer | extension_state::shared_match;
         };
         send(escape_press(false));
-        const bool opened = ingame_menu_column_shown();
-        const bool running = match_clock_steps();
+        const bool menu_opened = ingame_menu_column_shown();
+        const bool game_running = match_clock_steps();
         send(escape_press(false));
-        const bool closed = !ingame_menu_column_shown();
+        const bool menu_closed = !ingame_menu_column_shown();
         extension_ = kept_extension;
-        require(opened, "Escape with nothing to clear did not open the menu in a shared game");
-        require(running, "the menu Escape opened stopped a shared game");
-        require(closed, "Escape did not close the menu in a shared game");
+        require(menu_opened, "Escape with nothing to clear did not open the menu in a shared game");
+        require(game_running, "the menu Escape opened stopped a shared game");
+        require(menu_closed, "Escape did not close the menu in a shared game");
         if (match_paused_)
             resume_match_pause();
     }

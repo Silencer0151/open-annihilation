@@ -4,6 +4,7 @@
 // The cursor a selected commander shows over the map's vegetation, another
 // reclaimable feature and a wreck, driven through synthetic SDL pointer motion.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -32,7 +33,6 @@ constexpr int32_t kWreckNearest = 6;
 // Screen pixels between pointer samples, and around a footprint's drawn box.
 constexpr int32_t kSampleStep = 2;
 constexpr int32_t kSampleMargin = 12;
-constexpr int32_t kCellPixels = 16;
 constexpr uint16_t kNoFeature = 0xffff;
 // The ground Reclaim order's kind (VTOL_Reclaim is 58).
 constexpr uint8_t kReclaimKind = 32;
@@ -121,14 +121,14 @@ void Runtime::check_reclaim_cursor() {
     };
     const auto visible_cell = [&](int32_t x, int32_t z) {
         const auto height = match_->map_height(
-            static_cast<uint32_t>(x * kCellPixels + 8) << 16U,
-            static_cast<uint32_t>(z * kCellPixels + 8) << 16U
+            static_cast<uint32_t>(x * OA_MAP_CELL_PIXELS + 8) << 16U,
+            static_cast<uint32_t>(z * OA_MAP_CELL_PIXELS + 8) << 16U
         );
         return match_->point_visible(
             match_local_player_,
-            {static_cast<uint32_t>(x * kCellPixels + 8) << 16U,
+            {static_cast<uint32_t>(x * OA_MAP_CELL_PIXELS + 8) << 16U,
              static_cast<uint32_t>(std::max(height, 0)) << 16U,
-             static_cast<uint32_t>(z * kCellPixels + 8) << 16U}
+             static_cast<uint32_t>(z * OA_MAP_CELL_PIXELS + 8) << 16U}
         );
     };
     const auto footprint_visible = [&](int32_t x, int32_t z, const oa::FeatureDef& def) {
@@ -218,8 +218,10 @@ void Runtime::check_reclaim_cursor() {
     std::size_t move_samples = 0;
     for (const auto& feature : hovered) {
         const auto& def = *feature.def;
-        const auto centre_x = feature.cell_x * kCellPixels + def.footprint_x * kCellPixels / 2;
-        const auto centre_z = feature.cell_z * kCellPixels + def.footprint_z * kCellPixels / 2;
+        const auto centre_x =
+            feature.cell_x * OA_MAP_CELL_PIXELS + def.footprint_x * OA_MAP_CELL_PIXELS / 2;
+        const auto centre_z =
+            feature.cell_z * OA_MAP_CELL_PIXELS + def.footprint_z * OA_MAP_CELL_PIXELS / 2;
         match_camera_x_ = centre_x - visible_map_width() / 2;
         match_camera_z_ = centre_z - visible_map_height() / 2;
         render_match_surface();
@@ -230,8 +232,9 @@ void Runtime::check_reclaim_cursor() {
         int32_t bottom = right;
         for (int32_t row = 0; row <= def.footprint_z; ++row)
             for (int32_t column = 0; column <= def.footprint_x; ++column) {
-                const auto x = static_cast<uint32_t>((feature.cell_x + column) * kCellPixels);
-                const auto z = static_cast<uint32_t>((feature.cell_z + row) * kCellPixels);
+                const auto x =
+                    static_cast<uint32_t>((feature.cell_x + column) * OA_MAP_CELL_PIXELS);
+                const auto z = static_cast<uint32_t>((feature.cell_z + row) * OA_MAP_CELL_PIXELS);
                 const auto height = std::max(
                     match_->map_height(x << 16U, z << 16U),
                     static_cast<int32_t>(world.game.sea_level)

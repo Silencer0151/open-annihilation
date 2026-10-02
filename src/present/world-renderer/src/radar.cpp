@@ -270,7 +270,7 @@ void radar_fill_mapped(
     game.radar_blink_flags = static_cast<uint16_t>(game.radar_blink_flags | radar_flag_redraw);
 }
 
-void radar_compose_final(
+uint32_t radar_compose_final(
     World& world,
     const RadarSurfaces& surfaces,
     const RadarSprites& sprites,
@@ -278,10 +278,10 @@ void radar_compose_final(
     std::span<RadarHotUnit> hot_units
 ) noexcept {
     Game& game = world.game;
-    game.hot_radar_unit_count = 0;
+    uint32_t listed = 0;
     if (surfaces.final_image == nullptr || surfaces.mapped == nullptr ||
         game.map_pixel_width == 0 || game.map_pixel_height == 0)
-        return;
+        return listed;
     ::oa::Surface& target = *surfaces.final_image;
     ::oa::present::blit_surface(&target, surfaces.mapped, 0, 0);
     const auto full_radar = (game.console_flags & console_flag_full_radar) != 0;
@@ -316,14 +316,14 @@ void radar_compose_final(
             if ((def->flags & OA_UNIT_DEF_FLAG_ANTI_WEAPONS) != 0)
                 draw_interceptor_rings(world, unit, target, x, y);
         }
-        const auto listed = static_cast<std::size_t>(game.hot_radar_unit_count);
         if (listed < hot_units.size()) {
             hot_units[listed] = {unit.id, game.radar_offset_x + x, game.radar_offset_y + y};
-            ++game.hot_radar_unit_count;
+            ++listed;
         }
     }
     draw_projectiles(world, target, sprites, host);
     game.radar_blink_flags = static_cast<uint16_t>(game.radar_blink_flags | radar_flag_redraw);
+    return listed;
 }
 
 void radar_draw(Game& game, const RadarSurfaces& surfaces, ::oa::Surface& target) noexcept {

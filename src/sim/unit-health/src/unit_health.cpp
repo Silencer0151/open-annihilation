@@ -6,7 +6,6 @@
 #include <bit>
 #include <cmath>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::unit_health {
 using base::game_math::truncate_low32;
@@ -108,9 +107,9 @@ float credit_energy(
 
 void record_hit_reaction(uint8_t& event_flags, int amount, int threshold) noexcept {
     if (threshold * 2 < amount)
-        event_flags = static_cast<uint8_t>(event_flags | 0x40);
+        event_flags = static_cast<uint8_t>(event_flags | hit_reaction_over_double);
     else
-        event_flags = static_cast<uint8_t>(event_flags | 0x20);
+        event_flags = static_cast<uint8_t>(event_flags | hit_reaction_within_double);
 }
 
 bool within_unit_limit(
@@ -161,7 +160,7 @@ HealthEvent make_health_event(
     };
 }
 
-void submit_damage(
+bool submit_damage(
     const Unit* source,
     Unit& target,
     int32_t amount,
@@ -170,7 +169,7 @@ void submit_damage(
     uint32_t direction_word
 ) {
     if (!target.type)
-        throw std::invalid_argument("damage target has no unit type");
+        return false;
     const auto event = make_health_event(source, target, amount, kind, direction_word);
     if (host.target_is_live(target)) {
         if (event.kind == healing_damage_kind)
@@ -183,6 +182,7 @@ void submit_damage(
         const auto route = source ? host.source_owner_route(*source) : host.fallback_route();
         host.share_health_event(route, event);
     }
+    return true;
 }
 
 int16_t healed_health(int16_t health, int16_t amount, uint32_t maximum_health) noexcept {
@@ -194,8 +194,11 @@ int16_t healed_health(int16_t health, int16_t amount, uint32_t maximum_health) n
 }
 
 RecoveryResult recover_health(Unit& repairer, Unit& target, float rate, RecoveryHost& host) {
-    if (!target.type)
-        throw std::invalid_argument("recovery target has no unit type");
+    if (!target.type) {
+        RecoveryResult untyped{};
+        untyped.target_untyped = true;
+        return untyped;
+    }
     if (static_cast<int32_t>(target.health) >= std::bit_cast<int32_t>(target.type->maximum_health))
         return {};
     auto health = repair_quantity(
@@ -210,7 +213,7 @@ RecoveryResult recover_health(Unit& repairer, Unit& target, float rate, Recovery
         energy = 1;
     RecoveryResult result{false, health, energy};
     if (debit_resource(host.energy_debit(repairer), static_cast<float>(energy))) {
-        submit_damage(&repairer, target, health, healing_damage_kind, host, 0);
+        (void)submit_damage(&repairer, target, health, healing_damage_kind, host, 0);
         result.performed = true;
     }
     return result;
@@ -218,9 +221,11 @@ RecoveryResult recover_health(Unit& repairer, Unit& target, float rate, Recovery
 
 ConstructionResult
 apply_build_progress(Unit& builder, Unit& target, float rate, ConstructionHost& host) {
-    if (!target.type)
-        throw std::invalid_argument("construction target has no unit type");
     ConstructionResult result{};
+    if (!target.type) {
+        result.target_untyped = true;
+        return result;
+    }
     if (zero_or_unordered(target.build_remaining))
         return result;
     if (rate >= 0.0F)

@@ -23,26 +23,26 @@ inline constexpr uint16_t kAllMissionsUnlocked = 0x0001;
 // State the panels read and write. Fields named after the game-block values
 // they mirror; the host copies them back when the panel closes.
 struct CampaignSetup {
-    int32_t side;             // Game.campaign_side (0 ARM, 1 CORE)
-    int32_t difficulty;       // Game.difficulty (0 easy .. 2 hard)
-    uint16_t unlock_flags;    // Game.campaign_unlock_flags
-    uint8_t player_side[2];   // local and opponent PlayerSetupInfo.side
-    uint8_t player_color[2];  // local and opponent PlayerSetupInfo.color
-    bool any_mission;         // NEWGAME opened for AnyMsn (mission list shown)
-    bool fixed_side_campaign; // side buttons choose Arm/Core Campaign directly
-    char side_names[kMaxSides][kSideNameBytes];
-    uint32_t side_count;
+    int32_t side{};             // Game.campaign_side (0 ARM, 1 CORE)
+    int32_t difficulty{};       // Game.difficulty (0 easy .. 2 hard)
+    uint16_t unlock_flags{};    // Game.campaign_unlock_flags
+    uint8_t player_side[2]{};   // local and opponent PlayerSetupInfo.side
+    uint8_t player_color[2]{};  // local and opponent PlayerSetupInfo.color
+    bool any_mission{};         // NEWGAME opened for AnyMsn (mission list shown)
+    bool fixed_side_campaign{}; // side buttons choose Arm/Core Campaign directly
+    char side_names[kMaxSides][kSideNameBytes]{};
+    uint32_t side_count{};
     // Campaign list (NUL-separated) and its selection.
-    char campaigns[kCampaignListBytes];
-    int32_t campaign_count;
-    int32_t campaign_selected;
+    char campaigns[kCampaignListBytes]{};
+    int32_t campaign_count{};
+    int32_t campaign_selected{};
     // Mission list of the selected campaign.
     char (*missions)[oa::data::campaign::kCampaignNameBytes];
-    int32_t mission_count;
-    int32_t mission_selected;
-    oa::data::campaign::CampaignFile* campaign;
+    int32_t mission_count{};
+    int32_t mission_selected{};
+    oa::data::campaign::CampaignFile* campaign{};
     oa::data::campaign::CampaignEnv env;
-    bool list_dirty;
+    bool list_dirty{};
 };
 
 /// Zeroes the setup state, then sets player 1's side and colour to 1.

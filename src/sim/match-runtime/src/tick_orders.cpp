@@ -8,34 +8,40 @@
 namespace oa::sim::match_runtime {
 
 namespace {
-uint32_t mission_descriptor(uint8_t kind) {
+// The order kind's descriptor word, or nothing for a kind outside the mission
+// table.
+std::optional<uint32_t> mission_descriptor(uint8_t kind) noexcept {
     if (kind >= mission_descriptor_table.size())
-        throw std::runtime_error("unsupported simulation branch: order kind outside mission table");
+        return std::nullopt;
     return mission_descriptor_table[kind];
 }
 
 // The order insert frees the orders at the head of the primary queue that carry
-// command flag 0x40 before inserting a primary order.
+// command flag 0x40 before inserting a primary order. A head order the match
+// does not own empties the queue; an order removal that runs past its budget
+// stops the freeing, and its fault is returned.
 template <typename Extra>
-void drop_head_overlays(
+sim::simulation_state::StepFault drop_head_overlays(
     sim::simulation_state::Unit& unit, Extra&& extra, sim::simulation_state::Host& host
 ) {
     std::size_t idle_steps = overlay_order_budget;
     while (unit.primary && idle_steps-- > 0) {
         auto* head = unit.primary;
-        uint8_t flags = 0;
-        try {
-            flags = extra(head).command_flags;
-        } catch (const std::exception&) {
+        const auto* head_extra = extra(head);
+        // A head order the match does not own ends the queue there.
+        if (!head_extra) {
             unit.primary = nullptr;
             break;
         }
-        if ((flags & 0x40) == 0)
+        if ((head_extra->command_flags & command_overlay) == 0)
             break;
-        sim::simulation_state::remove_order(unit, *head, host);
+        if (const auto fault = sim::simulation_state::remove_order(unit, *head, host);
+            fault != sim::simulation_state::StepFault::none)
+            return fault;
         if (unit.primary == head)
             break;
     }
+    return sim::simulation_state::StepFault::none;
 }
 
 // Preserve flags (the descriptor's low byte) the order-queue insert tests or
@@ -43,12 +49,6 @@ void drop_head_overlays(
 constexpr uint8_t descriptor_inserted = 0x01;    // ? set on every queued order
 constexpr uint8_t descriptor_queue_head = 0x20;  // goes to the head of the primary queue
 constexpr uint8_t descriptor_keeps_queue = 0x40; // an unqueued order leaves the queue
-// Command flags bits.
-constexpr uint8_t command_counts_builds = 0x01; // its second parameter shows on the build button
-constexpr uint8_t command_has_target = 0x02;
-constexpr uint8_t command_has_point = 0x04;
-constexpr uint8_t command_unqueued = 0x20;
-constexpr uint8_t command_overlay = 0x40; // dropped from the queue head by the next insert
 // Order flags bits: the order lives on the secondary queue; the order
 // overlays saw its target unit and kept the cell in seen_x and seen_z.
 constexpr uint8_t flags_secondary = 0x04;
@@ -68,6 +68,18 @@ bool aircraft_builder(oa::World& world, uint16_t index) {
 }
 } // namespace
 
+sim::ground_orders::OrderState* Match::owned_extra(sim::simulation_state::Order* order) noexcept {
+    for (auto& candidate : orders_)
+        if (&candidate->order == order)
+            return &candidate->extra;
+    return nullptr;
+}
+
+sim::simulation_state::Order& Match::refused_order() noexcept {
+    spare_order_ = {};
+    return spare_order_.order;
+}
+
 sim::simulation_state::Order& Match::insert_ground_order(
     uint16_t index,
     uint8_t kind,
@@ -77,20 +89,25 @@ sim::simulation_state::Order& Match::insert_ground_order(
 ) {
     auto& u = units_.at(index);
     if (!u.record.type_index)
-        throw std::invalid_argument("order owner is inactive");
+        return refused_order();
+    const auto descriptor = mission_descriptor(kind);
+    if (!descriptor) {
+        fault_.note("order kind outside mission table");
+        return refused_order();
+    }
     auto entry = std::make_unique<RuntimeOrder>();
     entry->unit = &u;
     entry->order.kind = kind;
     entry->order.wake_tick = 0xffffffffu;
     entry->order.issue_tick = state().game.tick;
-    const auto flags = mission_descriptor(kind);
+    const auto flags = *descriptor;
     entry->order.preserve_flags = static_cast<uint8_t>(flags);
     entry->extra.command_flags = static_cast<uint8_t>(flags >> 8);
     entry->order.flags = static_cast<uint8_t>(flags >> 16);
     if (destination)
         entry->extra.destination = *destination;
     else
-        entry->extra.command_flags &= 0xfbu;
+        entry->extra.command_flags &= static_cast<uint8_t>(~command_has_point);
     entry->extra.tolerance = tolerance;
     // As in order creation, the target is kept only when the descriptor takes
     // one.
@@ -107,7 +124,7 @@ sim::simulation_state::Order& Match::insert_ground_order(
     if (head) {
         for (const auto& old : orders_)
             if (&old->order == head)
-                entry->extra.command_flags |= old->extra.command_flags & 0x40;
+                entry->extra.command_flags |= old->extra.command_flags & command_overlay;
     }
     auto* result = &entry->order;
     orders_.push_back(std::move(entry));
@@ -120,15 +137,15 @@ Match::issue_ground_move(uint16_t index, const sim::ground_orders::Point& destin
     auto& unit = units_.at(index);
     if (!ground_runtime(index) && takes_move_order(index))
         return issue_queued_command(
-            index, qmove_kind, destination, queue, mission_descriptor(qmove_kind)
+            index, qmove_kind, destination, queue, mission_descriptor_table[qmove_kind]
         );
     if (!unit.record.type_index || !ground_runtime(index))
-        throw std::invalid_argument("resolved Move_Ground requires an active ground controller");
+        return refused_order();
     auto entry = std::make_unique<RuntimeOrder>();
     entry->unit = &unit;
     // The command resolver gives aircraft VTOL_Move; its ground-goal branch
     // waits for arrival as Move_Ground does.
-    entry->order.kind = (unit.type && (unit.type->flags & 0x800u))
+    entry->order.kind = (unit.type && (unit.type->flags & OA_UNIT_DEF_FLAG_CAN_FLY))
                             ? sim::ground_orders::vtol_move_kind
                             : sim::ground_orders::move_ground_kind;
     entry->order.wake_tick = 0xffffffffu;
@@ -140,18 +157,13 @@ Match::issue_ground_move(uint16_t index, const sim::ground_orders::Point& destin
     auto* record = entry.get();
     orders_.push_back(std::move(entry));
     TickHost host(*this);
-    const auto extra = [&](sim::simulation_state::Order* order) -> sim::ground_orders::OrderState& {
-        for (auto& candidate : orders_)
-            if (&candidate->order == order)
-                return candidate->extra;
-        throw std::logic_error("ground command encounters an unowned order");
-    };
+    const auto extra = [&](sim::simulation_state::Order* order) { return owned_extra(order); };
     if (!queue)
-        sim::simulation_state::clear_orders(unit, false, host);
-    drop_head_overlays(unit, extra, host);
+        note_step(sim::simulation_state::clear_orders(unit, false, host));
+    note_step(drop_head_overlays(unit, extra, host));
     record->order.preserve_flags |= 1;
     if (!queue)
-        record->extra.command_flags |= 0x20;
+        record->extra.command_flags |= command_unqueued;
     insert_after_queue_tail(unit, record->order, extra);
     return record->order;
 }
@@ -173,7 +185,7 @@ sim::simulation_state::Order& Match::issue_queued_command(
 ) {
     auto& unit = units_.at(index);
     if (!unit.record.type_index)
-        throw std::invalid_argument("resolved command requires an active unit");
+        return refused_order();
     auto entry = std::make_unique<RuntimeOrder>();
     entry->unit = &unit;
     entry->order.kind = kind;
@@ -186,18 +198,13 @@ sim::simulation_state::Order& Match::issue_queued_command(
     auto* record = entry.get();
     orders_.push_back(std::move(entry));
     TickHost host(*this);
-    const auto extra = [&](sim::simulation_state::Order* order) -> sim::ground_orders::OrderState& {
-        for (auto& candidate : orders_)
-            if (&candidate->order == order)
-                return candidate->extra;
-        throw std::logic_error("command encounters an unowned order");
-    };
+    const auto extra = [&](sim::simulation_state::Order* order) { return owned_extra(order); };
     if (!queue)
-        sim::simulation_state::clear_orders(unit, false, host);
-    drop_head_overlays(unit, extra, host);
+        note_step(sim::simulation_state::clear_orders(unit, false, host));
+    note_step(drop_head_overlays(unit, extra, host));
     record->order.preserve_flags |= 1;
     if (!queue)
-        record->extra.command_flags |= 0x20;
+        record->extra.command_flags |= command_unqueued;
     insert_after_queue_tail(unit, record->order, extra);
     return record->order;
 }
@@ -210,7 +217,12 @@ sim::simulation_state::Order&
 Match::issue_state_order(uint16_t index, uint8_t kind, int32_t value) {
     auto& unit = units_.at(index);
     if (!unit.record.type_index)
-        throw std::invalid_argument("state order requires an active unit");
+        return refused_order();
+    const auto descriptor = mission_descriptor(kind);
+    if (!descriptor) {
+        fault_.note("order kind outside mission table");
+        return refused_order();
+    }
     auto entry = std::make_unique<RuntimeOrder>();
     entry->unit = &unit;
     entry->order.kind = kind;
@@ -218,24 +230,19 @@ Match::issue_state_order(uint16_t index, uint8_t kind, int32_t value) {
     entry->order.issue_tick = state().game.tick;
     entry->extra.tolerance = value;
     entry->attack.weapon_slot = value;
-    const auto flags = mission_descriptor(entry->order.kind);
+    const auto flags = *descriptor;
     entry->order.preserve_flags = static_cast<uint8_t>(flags);
     entry->extra.command_flags = static_cast<uint8_t>(flags >> 8);
     entry->order.flags = static_cast<uint8_t>(flags >> 16);
     auto* record = entry.get();
     orders_.push_back(std::move(entry));
     TickHost host(*this);
-    const auto extra = [&](sim::simulation_state::Order* order) -> sim::ground_orders::OrderState& {
-        for (auto& candidate : orders_)
-            if (&candidate->order == order)
-                return candidate->extra;
-        throw std::logic_error("state order encounters an unowned order");
-    };
+    const auto extra = [&](sim::simulation_state::Order* order) { return owned_extra(order); };
     // The descriptor's preserve flags bit 0x40 keeps the queue, and bit 0x20
     // puts the order at the head of the primary queue.
-    drop_head_overlays(unit, extra, host);
+    note_step(drop_head_overlays(unit, extra, host));
     record->order.preserve_flags |= 1;
-    record->extra.command_flags |= 0x20;
+    record->extra.command_flags |= command_unqueued;
     record->order.next = unit.primary;
     unit.primary = &record->order;
     return record->order;
@@ -254,7 +261,7 @@ void Match::visit_primary_queue(
                 record = candidate.get();
                 break;
             }
-        if (!record || (record->extra.command_flags & 0x40) != 0)
+        if (!record || (record->extra.command_flags & command_overlay) != 0)
             return;
         QueuedCommandView view;
         view.kind = order->kind;
@@ -294,7 +301,12 @@ sim::simulation_state::Order& Match::issue_order(
 ) {
     auto& unit = units_.at(index);
     if (!unit.record.type_index)
-        throw std::invalid_argument("order owner is inactive");
+        return refused_order();
+    const auto found_descriptor = mission_descriptor(kind);
+    if (!found_descriptor) {
+        fault_.note("order kind outside mission table");
+        return refused_order();
+    }
     sim::simulation_state::Unit* aimed = target != 0 ? &units_.at(target) : nullptr;
     // The record order creation builds: the kind's descriptor, the target (kept
     // only when the descriptor takes one), the point and the argument words,
@@ -304,7 +316,7 @@ sim::simulation_state::Order& Match::issue_order(
     entry->order.kind = kind;
     entry->order.wake_tick = 0xffffffffu;
     entry->order.issue_tick = state().game.tick;
-    const auto descriptor = mission_descriptor(kind);
+    const auto descriptor = *found_descriptor;
     entry->order.preserve_flags = static_cast<uint8_t>(descriptor);
     entry->extra.command_flags = static_cast<uint8_t>(descriptor >> 8);
     entry->order.flags = static_cast<uint8_t>(descriptor >> 16);
@@ -331,16 +343,11 @@ sim::simulation_state::Order& Match::issue_order(
     auto* record = entry.get();
     orders_.push_back(std::move(entry));
     TickHost host(*this);
-    const auto extra = [&](sim::simulation_state::Order* order) -> sim::ground_orders::OrderState& {
-        for (auto& candidate : orders_)
-            if (&candidate->order == order)
-                return candidate->extra;
-        throw std::logic_error("order insert encounters an unowned order");
-    };
+    const auto extra = [&](sim::simulation_state::Order* order) { return owned_extra(order); };
     if (!queue && (record->order.preserve_flags & descriptor_keeps_queue) == 0)
-        sim::simulation_state::clear_orders(unit, false, host);
+        note_step(sim::simulation_state::clear_orders(unit, false, host));
     if ((record->order.flags & flags_secondary) == 0)
-        drop_head_overlays(unit, extra, host);
+        note_step(drop_head_overlays(unit, extra, host));
     record->order.preserve_flags |= descriptor_inserted;
     if (!queue)
         record->extra.command_flags |= command_unqueued;
@@ -348,9 +355,15 @@ sim::simulation_state::Order& Match::issue_order(
         (record->order.flags & flags_secondary) != 0) {
         // Before the head of the order's own queue.
         auto& head = (record->order.flags & flags_secondary) ? unit.secondary : unit.primary;
+        if (head) {
+            const auto* head_extra = extra(head);
+            if (!head_extra) {
+                fault_.note("order insert encounters an unowned order");
+                return record->order;
+            }
+            record->extra.command_flags |= head_extra->command_flags & command_overlay;
+        }
         record->order.next = head;
-        if (head)
-            record->extra.command_flags |= extra(head).command_flags & command_overlay;
         head = &record->order;
     } else {
         insert_after_queue_tail(unit, record->order, extra);
@@ -390,7 +403,7 @@ bool Match::cancel_queued_order(
     if (found == nullptr)
         return false;
     TickHost host(*this);
-    sim::simulation_state::remove_order(unit, *found, host);
+    note_step(sim::simulation_state::remove_order(unit, *found, host));
     return true;
 }
 
@@ -470,13 +483,13 @@ sim::simulation_state::Order&
 Match::issue_patrol(uint16_t index, const sim::ground_orders::Point& destination, bool queue) {
     if (!ground_runtime(index))
         return issue_queued_command(
-            index, qpatrol_kind, destination, queue, mission_descriptor(qpatrol_kind)
+            index, qpatrol_kind, destination, queue, mission_descriptor_table[qpatrol_kind]
         );
     const auto& def = match_unit_def(*this, units_.at(index).record);
     if (def.abilities & OA_UNIT_DEF_ABILITY_CAN_REPAIR)
         return issue_repair_patrol(index, destination, queue);
     const auto kind = (def.flags & OA_UNIT_DEF_FLAG_CAN_FLY) ? vtol_patrol_kind : patrol_kind;
-    return issue_queued_command(index, kind, destination, queue, mission_descriptor(kind));
+    return issue_queued_command(index, kind, destination, queue, mission_descriptor_table[kind]);
 }
 
 sim::simulation_state::Order& Match::issue_repair_patrol(
@@ -563,7 +576,12 @@ int32_t Match::queued_build_count(uint16_t index, int32_t type) const {
 
 void Match::change_queued_count(uint16_t index, uint8_t kind, uint16_t type, int32_t delta) {
     auto& unit = units_.at(index);
-    const bool secondary = ((mission_descriptor(kind) >> 16) & flags_secondary) != 0;
+    const auto descriptor = mission_descriptor(kind);
+    if (!descriptor) {
+        fault_.note("order kind outside mission table");
+        return;
+    }
+    const bool secondary = ((*descriptor >> 16) & flags_secondary) != 0;
     const auto owned = [&](sim::simulation_state::Order* order) -> RuntimeOrder* {
         for (auto& candidate : orders_)
             if (&candidate->order == order)
@@ -608,7 +626,7 @@ void Match::change_queued_count(uint16_t index, uint8_t kind, uint16_t type, int
             return;
         }
         delta += latest_record->construction.remaining;
-        sim::simulation_state::remove_order(unit, *latest, host);
+        note_step(sim::simulation_state::remove_order(unit, *latest, host));
     }
 }
 
@@ -751,8 +769,10 @@ bool Match::commit_attack_orders(
             request.kind != sim::ground_orders::vtol_move_kind &&
             request.kind != air_to_ground_kind && request.kind != air_to_air_kind &&
             request.kind != air_strike_kind && request.kind != air_to_ground_hover_kind &&
-            request.kind != suppress_kind && request.kind != vtol_seek_attack_kind)
-            unsupported("attack request descriptor");
+            request.kind != suppress_kind && request.kind != vtol_seek_attack_kind) {
+            fault_.note("attack request descriptor");
+            return false;
+        }
         auto entry = std::make_unique<RuntimeOrder>();
         entry->unit = &unit;
         entry->order.kind = request.kind;
@@ -769,9 +789,9 @@ bool Match::commit_attack_orders(
                 entry->extra.destination[i] = std::bit_cast<int32_t>(request.position[i]);
             entry->attack.destination = request.position;
         } else
-            entry->extra.command_flags &= 0xfb;
+            entry->extra.command_flags &= static_cast<uint8_t>(~command_has_point);
         if (request.target == 0)
-            entry->extra.command_flags &= 0xfd;
+            entry->extra.command_flags &= static_cast<uint8_t>(~command_has_target);
         else if (entry->extra.command_flags & command_has_target)
             link_target_observer(*entry, &units_.at(request.target));
         // The leash and the anchor are one value each; every view of the order holds them.
@@ -787,7 +807,7 @@ bool Match::commit_attack_orders(
         if (head) {
             for (auto& prior : orders_)
                 if (&prior->order == head)
-                    record->extra.command_flags |= prior->extra.command_flags & 0x40;
+                    record->extra.command_flags |= prior->extra.command_flags & command_overlay;
         }
         head = &record->order;
     }
@@ -804,7 +824,7 @@ sim::simulation_state::Order& Match::issue_stop(uint16_t index) {
 
 void Match::stop_orders(uint16_t index) {
     TickHost host(*this);
-    sim::simulation_state::clear_orders(units_.at(index), true, host);
+    note_step(sim::simulation_state::clear_orders(units_.at(index), true, host));
 }
 
 } // namespace oa::sim::match_runtime

@@ -49,11 +49,10 @@ holds(const std::filesystem::path& root, std::initializer_list<const char*> file
 /// @return the bytes, or empty when the archive or the file is missing
 [[nodiscard]] inline std::vector<uint8_t>
 read_archived(const std::filesystem::path& root, const char* archive, const char* path) {
-    try {
-        return oa::HpiArchive(root / archive).read(path).value.value_or(std::vector<uint8_t>{});
-    } catch (const std::exception&) {
+    const auto opened = oa::open_hpi_file(root / archive);
+    if (!opened.ok())
         return {};
-    }
+    return opened.value->read(path).value.value_or(std::vector<uint8_t>{});
 }
 
 // Bytes of the game's palette file: four per colour, 256 colours.

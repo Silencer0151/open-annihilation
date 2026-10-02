@@ -4,11 +4,12 @@
 // Aircraft flight orders over the air driver: the take-off climb,
 // VTOL_LandIfCan, the idle VTOL_Standby and the off-map bucket test the
 // flight step and goals share.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -33,35 +34,9 @@ constexpr uint32_t arrived_event = 0x20;
 constexpr uint32_t goal_events = 0xe0;
 constexpr uint32_t weapon_event = 0x10000;
 
-struct Services : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+using Services = oa::test::QuietServices;
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 sim::ground_orders::Point point(int32_t x, int32_t y, int32_t z) {
     return {x << 16, y << 16, z << 16};
@@ -202,7 +177,7 @@ struct Fixture {
     // Runs the order once and applies the queue's phase rule for results 0 and 1.
     uint32_t
     step(sim::unit_spawn::Slot& slot, sim::simulation_state::Order& order, uint32_t events) {
-        sim::match_runtime::TickHost host(*match);
+        sim::match_runtime::MatchTickAccess host(*match);
         order.wait_events = 0;
         const auto result = host.dispatch_mission(match->state(), slot.record, order, events);
         if (result == 0)
@@ -406,7 +381,7 @@ void off_map_is_the_footprint_bucket() {
         (south.record.position.z >> 16) >=
         static_cast<int32_t>(f.match->state().game.map_pixel_height)
     );
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     const auto air = host.air_host();
     CHECK(air.outside_map(air.context, &west.record));
     CHECK(!air.outside_map(air.context, &south.record));

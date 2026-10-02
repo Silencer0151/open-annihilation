@@ -6,6 +6,7 @@
 // the on-screen unit list, the pointer's pick and what they drive, through
 // synthetic SDL input.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/ui/decoded.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/hud/camera_scroll.hpp"
@@ -947,9 +948,9 @@ void Runtime::check_pointer_picks() {
     slots[blip_unit].record.flags |= OA_UNIT_FLAG_RADAR_CONTACT;
     compose_radar_final();
     std::optional<std::pair<float, float>> blip;
-    for (int32_t index = 0; index < game.hot_radar_unit_count; ++index)
-        if (radar_state_.hot_units[static_cast<std::size_t>(index)].unit_id == blip_unit) {
-            const auto& hot = radar_state_.hot_units[static_cast<std::size_t>(index)];
+    for (uint32_t index = 0; index < radar_state_.hot_unit_count; ++index)
+        if (radar_state_.hot_units[index].unit_id == blip_unit) {
+            const auto& hot = radar_state_.hot_units[index];
             const auto point =
                 oa::ui::display_layout::source_to_canvas(match_layout_, hot.x, hot.y);
             blip = std::pair{static_cast<float>(point.x), static_cast<float>(point.y)};
@@ -974,8 +975,9 @@ void Runtime::check_pointer_picks() {
     // The feature line: with no unit under the cursor, the feature on the
     // ground under the pointer shows its description and metal at NAME.
     clear_panels();
-    constexpr int32_t kCellPixels = 16;
-    const auto cell_centre = [&](int32_t cell) { return cell * kCellPixels + kCellPixels / 2; };
+    const auto cell_centre = [&](int32_t cell) {
+        return cell * OA_MAP_CELL_PIXELS + OA_MAP_CELL_PIXELS / 2;
+    };
     const auto ground_canvas = [&](int32_t x, int32_t z) {
         const auto point = game_screen_canvas(
             oa::ui::display_layout::kSourceLeft + x - static_cast<int32_t>(game.camera_x),
@@ -991,10 +993,10 @@ void Runtime::check_pointer_picks() {
     uint16_t feature_type = 0;
     const auto first_cell_x =
         std::clamp(commander_x - 3 * kNearby, 3 * kEdgeMargin, map_width - kEdgeMargin) /
-        kCellPixels;
+        OA_MAP_CELL_PIXELS;
     const auto first_cell_z =
         std::clamp(commander_z + 3 * kNearby, kEdgeMargin, map_height - 3 * kEdgeMargin) /
-        kCellPixels;
+        OA_MAP_CELL_PIXELS;
     const int32_t game_feature_defs = game.feature_def_count;
     const auto shown_types = std::min<uint32_t>(
         world.feature_def_count, static_cast<uint32_t>(std::max(0, game_feature_defs))
@@ -1020,7 +1022,8 @@ void Runtime::check_pointer_picks() {
     // Bare ground a few cells away, and the name line there.
     std::optional<std::pair<float, float>> bare;
     for (int32_t offset = 3; offset < 12 && !bare; ++offset) {
-        const auto [bare_x, bare_y] = ground_canvas(feature_x, feature_z + offset * kCellPixels);
+        const auto [bare_x, bare_y] =
+            ground_canvas(feature_x, feature_z + offset * OA_MAP_CELL_PIXELS);
         move_to(bare_x, bare_y);
         if (game.cursor_unit_id == 0 && game.cursor_feature >= OA_PLOT_FEATURE_RESERVED)
             bare = std::pair{bare_x, bare_y};

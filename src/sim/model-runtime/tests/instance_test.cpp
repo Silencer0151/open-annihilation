@@ -75,11 +75,10 @@ int main() {
                 oa::sim::model_runtime::count_linked_objects(*rooted_siblings, 1) == 1,
             "root sibling chain was not counted"
         );
-        try {
-            (void)oa::sim::model_runtime::count_linked_objects(*model, 3);
-            throw std::runtime_error("object count accepted an out-of-range index");
-        } catch (const std::out_of_range&) {
-        }
+        require(
+            oa::sim::model_runtime::count_linked_objects(*model, 3) == 0,
+            "an object index past the model counts nothing"
+        );
 
         constexpr std::string_view names[] = {"flare", "turret"};
         auto instance = oa::sim::model_runtime::make_instance(model, 0x1234, names);
@@ -196,11 +195,20 @@ int main() {
         (void)oa::sim::model_runtime::make_instance(model, 0, excess);
         auto malformed = std::make_shared<oa::formats::objects3d::Model>(*model);
         malformed->objects[1].next_sibling = 99;
-        try {
-            (void)oa::sim::model_runtime::make_instance(malformed);
-            throw std::runtime_error("invalid public Model link was accepted");
-        } catch (const std::invalid_argument&) {
-        }
+        require(
+            oa::sim::model_runtime::model_hierarchy_error(malformed) != nullptr,
+            "invalid public Model link was accepted"
+        );
+        const auto refused = oa::sim::model_runtime::make_instance(malformed, 7);
+        require(
+            refused.pieces().empty() && refused.root_piece() == oa::sim::model_runtime::kNoPiece &&
+                refused.owner_token() == 7 && refused.find_piece(0) == nullptr,
+            "a refused model gives an instance with no pieces"
+        );
+        require(
+            oa::sim::model_runtime::model_hierarchy_error(model) == nullptr,
+            "a well-linked model is refused"
+        );
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -3,6 +3,7 @@
 
 // Headless check of the commander's D-gun order.
 #include "oa/app/runtime.hpp"
+#include "match_fault.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <cstdint>
@@ -77,7 +78,7 @@ void Runtime::check_dgun_order() {
     const auto tick = [&] {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
     };
     const auto shots_of = [&](oa_ref32 weapon) {
         int32_t count = 0;

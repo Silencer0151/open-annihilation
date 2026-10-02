@@ -11,6 +11,7 @@
 #pragma once
 
 #include "oa/core/types.h"
+#include "oa/data/campaign/campaign_file.hpp"
 #include "oa/ui/gui_layout.hpp"
 #include "oa/ui/frontend_state/initialization.hpp"
 #include "oa/present/world_renderer/world_display_modes.hpp"
@@ -351,10 +352,10 @@ struct OptionsContext {
     bool in_game = false;             // Game.session_flags bit 2
     bool realtime_panels = false;     // Game.frame_flags bit 0: in-game *RT.GUI variants
     bool audio_device_missing = false;
-    bool game_speed_locked = false; // current player may not change the game speed
-    bool hold_game = false;         // Game.sim_run_flags bit 0
-    uint8_t session_kind = 0;       // campaign object state
-    uint8_t options_dirty = 0;      // flag written by the options tab handler
+    bool game_speed_locked = false;                 // current player may not change the game speed
+    bool hold_game = false;                         // Game.sim_run_flags bit 0
+    oa::data::campaign::SessionKind session_kind{}; // campaign object state
+    uint8_t options_dirty = 0;                      // flag written by the options tab handler
     OptionsLightbar lightbar{};
 };
 

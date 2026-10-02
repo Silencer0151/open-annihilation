@@ -25,6 +25,7 @@ inline int failures = 0;
 using namespace oa;
 using namespace oa::sim::air;
 
+/// Returns a whole number of world units as a 16.16 fixed-point coordinate.
 constexpr oa_fixed world(int32_t units) {
     return static_cast<oa_fixed>(static_cast<uint32_t>(units) << 16);
 }
@@ -38,6 +39,8 @@ struct Fixture {
     bool outside{};
     AirHost host{};
 
+    /// Creates the world, its two unit types and seven units of the flying type,
+    /// and points the host's terrain and off-map answers at this fixture.
     Fixture() {
         state = world_create();
         WorldCapacity capacity{8, 4, 1};
@@ -74,13 +77,20 @@ struct Fixture {
         };
     }
 
+    /// Destroys the world.
     ~Fixture() { world_destroy(state); }
 
+    /// Returns the fixture a host callback's context points at.
     static Fixture& self(void* context) { return *static_cast<Fixture*>(context); }
 
+    /// Returns the unit in a slot.
     Unit& unit(uint32_t slot) { return state->units[slot]; }
 };
 
+/// Prints whether a test's checks passed.
+///
+/// @param name the test's name, for the message
+/// @return 0 when every check passed, else 1
 inline int finish(const char* name) {
     if (failures != 0) {
         std::fprintf(stderr, "%d %s checks failed\n", failures, name);

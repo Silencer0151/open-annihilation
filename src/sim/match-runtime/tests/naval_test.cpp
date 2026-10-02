@@ -5,7 +5,7 @@
 // shallow shelf and land, driven through the full match tick. Run with --data,
 // the installed game's own ships, submarines, amphibians and shipyard do the
 // same on such a map.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 #include "installed_units.hpp"
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
@@ -16,6 +16,7 @@
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -59,35 +60,9 @@ ID=3; ballistic=1; range=600; reloadtime=2; weaponvelocity=300; areaofeffect=64;
 )";
 constexpr int8_t submarine_waterline = 20;
 
-struct Services : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+using Services = oa::test::QuietServices;
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 uint8_t floor_at(int32_t column) {
     if (column >= land_column)

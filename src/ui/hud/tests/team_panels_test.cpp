@@ -196,7 +196,7 @@ void test_tab_menu() {
     hud_test::Sounds sounds;
     CHECK(toggle_tab_menu(
         *game.world.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         true,
         panel.loader(),
         panel.controls(),
@@ -208,7 +208,7 @@ void test_tab_menu() {
     // A second press closes it.
     CHECK(!toggle_tab_menu(
         *game.world.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         true,
         panel.loader(),
         panel.controls(),
@@ -218,7 +218,7 @@ void test_tab_menu() {
     // CONTROL needs this machine to host; a watcher gets neither ALLIES nor SHARE.
     CHECK(toggle_tab_menu(
         *game.world.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         false,
         panel.loader(),
         panel.controls(),
@@ -229,7 +229,7 @@ void test_tab_menu() {
     game.info(0).options = OA_SETUP_OPTION_WATCHER;
     CHECK(toggle_tab_menu(
         *game.world.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         true,
         panel.loader(),
         panel.controls(),

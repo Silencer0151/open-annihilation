@@ -3,6 +3,7 @@
 
 // Headless check of the attack command a click and an area attack give.
 #include "oa/app/runtime.hpp"
+#include "match_fault.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -82,7 +83,7 @@ void Runtime::check_attack_command() {
     const auto tick = [&] {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
     };
     tick();
     for (const auto enemy : {near_enemy, second_enemy}) {

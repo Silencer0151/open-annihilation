@@ -7,6 +7,7 @@
 
 #include "oa/audio/offline_mix.hpp"
 #include "oa/base/threads.hpp"
+#include "oa/platform/system.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <utility>
 
 #ifdef _WIN32
@@ -163,12 +165,13 @@ void finish_wave(std::ofstream& file, const fs::path& path, uint64_t sample_fram
 }
 
 /// Removes a file the render kept only for a later step; one already gone
-/// is fine.
+/// is fine, and one that cannot be removed stays beside the output, which is
+/// whole without it.
 ///
 /// @param path the file
 void remove_file(const fs::path& path) {
     std::error_code error;
-    (void)fs::remove(path, error);
+    std::ignore = fs::remove(path, error);
 }
 
 /// Starts the encoder.
@@ -466,24 +469,24 @@ std::string manifest_line(uint64_t frame, uint32_t tick, const sha256::Digest& d
 
 EncoderSettings encoder_settings_from_environment() {
     EncoderSettings settings{};
-    if (const char* encoder = std::getenv(director_encoder_variable);
-        encoder != nullptr && encoder[0] != '\0') {
-        if (std::string_view(encoder) != director_encoder_off)
+    if (const auto encoder = oa::platform::environment_value(director_encoder_variable);
+        encoder && !encoder->empty()) {
+        if (*encoder != director_encoder_off)
             throw std::runtime_error(
                 std::string(director_encoder_variable) + " is " + director_encoder_off +
-                " or unset, not " + encoder
+                " or unset, not " + *encoder
             );
         settings.enabled = false;
     }
-    if (const char* preset = std::getenv(director_preset_variable);
-        preset != nullptr && preset[0] != '\0') {
-        const std::string_view text(preset);
+    if (const auto preset = oa::platform::environment_value(director_preset_variable);
+        preset && !preset->empty()) {
+        const std::string_view text(*preset);
         if (!std::all_of(text.begin(), text.end(), [](char letter) {
                 return letter >= 'a' && letter <= 'z';
             }))
             throw std::runtime_error(
                 std::string(director_preset_variable) +
-                " names a libx264 preset, such as veryfast, not " + preset
+                " names a libx264 preset, such as veryfast, not " + *preset
             );
         settings.preset = text;
     }
@@ -509,13 +512,16 @@ EncoderPipe::EncoderPipe(const std::vector<std::string>& arguments)
             );
         wait_on_input(input_);
     } catch (...) {
-        (void)release();
+        // The error being thrown says what went wrong; the encoder's status
+        // adds nothing to it.
+        std::ignore = release();
         throw;
     }
 }
 
 EncoderPipe::~EncoderPipe() {
-    (void)release();
+    // finish() has read the status of an encoder that was not abandoned.
+    std::ignore = release();
 }
 
 int EncoderPipe::release() noexcept {

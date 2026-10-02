@@ -16,6 +16,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -44,7 +45,7 @@ struct PieceExplosion {
     bool carrying{};
 };
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     uint32_t notices{};
     // Values of the attachment notifications raised (0x10000 on cloaking).
     std::vector<uint32_t> attachment_notices;
@@ -52,22 +53,18 @@ struct Services : sim::match_runtime::OfflineServices {
     // unexpected.
     bool record_explosions{};
     std::vector<PieceExplosion> explosions;
-#define UNEXPECTED(type, name, args)                                                               \
-    type name args override {                                                                      \
-        throw std::runtime_error("unexpected " #name);                                             \
-    }
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
+    /// Counts the attack notices among the command sounds.
+    ///
+    /// @param category speech category
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
         if (category == attack_notice)
             ++notices;
     }
 
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
+    /// Records an attachment notification.
+    ///
+    /// @param value the notified value
     void attachment_notification(sim::unit_spawn::Slot&, uint32_t value) override {
         attachment_notices.push_back(value);
     }
@@ -89,16 +86,15 @@ struct Services : sim::match_runtime::OfflineServices {
         );
     }
 
-    UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
-    UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
+    /// Fails the test: no fixture script attaches a unit.
+    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {
+        oa::test::unexpected_call("attach_unit");
+    }
 
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(oa::sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-#undef UNEXPECTED
+    /// Fails the test: no fixture script drops a unit.
+    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {
+        oa::test::unexpected_call("drop_unit");
+    }
 };
 
 struct Scenario : sim::scenario::DefinitionHost {
@@ -107,6 +103,12 @@ struct Scenario : sim::scenario::DefinitionHost {
     int32_t water_damage{};
     std::optional<std::string> unit_type_killed;
 
+    /// Reads the GlobalHeader integers the fixture sets: lavaworld, waterdoesdamage
+    /// and waterdamage.
+    ///
+    /// @param key key name
+    /// @param fallback value for any other key
+    /// @return the value
     int32_t integer(std::string_view key, int32_t fallback) override {
         if (key == "waterdoesdamage")
             return water_does_damage;
@@ -115,6 +117,10 @@ struct Scenario : sim::scenario::DefinitionHost {
         return key == "lavaworld" ? lava_world : fallback;
     }
 
+    /// Reads the GlobalHeader text the fixture sets: UnitTypeKilled.
+    ///
+    /// @param key key name
+    /// @return the text, or nothing for any other key
     std::optional<std::string> text(std::string_view key) override {
         return key == "UnitTypeKilled" ? unit_type_killed : std::nullopt;
     }
@@ -215,6 +221,11 @@ struct Fixture {
     Scenario scenario;
     std::unique_ptr<sim::match_runtime::Match> match;
 
+    /// Builds a 16 by 16 map, one armed unit type and a match over them, with
+    /// players 0 and 1 each allied only with itself and player 0's outcomes
+    /// configured.
+    ///
+    /// @param options the map, weapons, features and outcome settings
     explicit Fixture(const Options& options = {}) {
         map.attribute_width = map.attribute_height = 16;
         map.attributes.resize(256);
@@ -414,7 +425,12 @@ struct Fixture {
         }
     }
 
-    // A finished unit that fires at will and may chase.
+    /// Creates a finished unit that fires at will and may chase.
+    ///
+    /// @param player owning player
+    /// @param x whole world units
+    /// @param z whole world units
+    /// @return the unit's slot
     sim::unit_spawn::Slot& spawn(uint8_t player, uint32_t x, uint32_t z) {
         auto* slot = match->create({player, 1, {x << 16, 32u << 16, z << 16}, true, 1, 0});
         CHECK(slot && slot->unit);
@@ -424,14 +440,21 @@ struct Fixture {
         return *slot;
     }
 
+    /// Runs full match ticks, checking after each that no fault was noted.
+    ///
+    /// @param ticks ticks to run
     void run(uint32_t ticks) {
         for (uint32_t i = 0; i < ticks; ++i) {
             ++match->simulation().tick;
             match->tick();
+            CHECK(match->fault() == nullptr);
         }
     }
 
-    // FirePrimary calls so far.
+    /// Returns how many times a unit's script ran FirePrimary.
+    ///
+    /// @param slot the unit
+    /// @return its script's static 1, or -1 when unset
     int32_t shots_from(const sim::unit_spawn::Slot& slot) {
         auto* instance = match->instance(slot.unit_index);
         CHECK(instance && instance->script());
@@ -439,11 +462,21 @@ struct Fixture {
     }
 };
 
+/// Tells whether a unit's first primary order is of a kind.
+///
+/// @param slot the unit
+/// @param kind mission kind
+/// @return true when the queue's head has the kind
 inline bool head_is(const sim::unit_spawn::Slot& slot, uint8_t kind) {
     return slot.unit->primary != nullptr && slot.unit->primary->kind == kind;
 }
 
-// A weapon death credited to the killer's owner, as the kill handler counts it.
+/// Kills a unit with a weapon death credited to the killer's owner, as the
+/// kill handler counts it.
+///
+/// @param f the fixture
+/// @param victim the dying unit
+/// @param killer the unit credited
 inline void kill(Fixture& f, sim::unit_spawn::Slot& victim, sim::unit_spawn::Slot& killer) {
     victim.unit->record.damage_kind = static_cast<uint8_t>(sim::match_runtime::DeathKind::weapon);
     victim.record.last_attacker_id = killer.unit_index;

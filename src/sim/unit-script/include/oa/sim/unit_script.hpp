@@ -320,10 +320,10 @@ enum class UnitValue : int32_t {
 inline constexpr uint8_t state_flag_activated = 0x01;
 inline constexpr uint8_t state_flag_armored = 0x02;
 /// Unit.build_flags bits a script reads or writes.
-inline constexpr uint8_t build_flag_in_build_stance = 0x01;
-inline constexpr uint8_t build_flag_busy = 0x02;
-inline constexpr uint8_t build_flag_yard_open = 0x04;
-inline constexpr uint8_t build_flag_bugger_off = 0x08;
+inline constexpr uint8_t build_flag_in_build_stance = OA_UNIT_BUILD_IN_BUILD_STANCE;
+inline constexpr uint8_t build_flag_busy = OA_UNIT_BUILD_BUSY;
+inline constexpr uint8_t build_flag_yard_open = OA_UNIT_BUILD_YARD_OPEN;
+inline constexpr uint8_t build_flag_bugger_off = OA_UNIT_BUILD_BUGGER_OFF;
 /// Unit.events bit raised by any SET.
 inline constexpr uint16_t event_script_state_changed = 0x0004; /* ? */
 

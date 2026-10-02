@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "check.hpp"
+#include "oa/base/bytes.hpp"
 
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/test/scratch_directory.hpp"
@@ -14,6 +15,7 @@
 #include <vector>
 
 using namespace oa::data::persist;
+using oa::base::bytes::load_le32;
 
 namespace {
 
@@ -39,10 +41,6 @@ struct ScopedImage {
 
     std::vector<uint8_t> bytes() const { return {image.data, image.data + image.size}; }
 };
-
-uint32_t le32(const std::vector<uint8_t>& b, std::size_t at) {
-    return b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (static_cast<uint32_t>(b[at + 3]) << 24);
-}
 
 void fields() {
     ScopedBank b;
@@ -115,28 +113,28 @@ void image_layout() {
     const uint32_t account = bank_header_bytes;
     const uint32_t record = account_header_bytes + int_entry_bytes + blob_entry_bytes + 2;
     CHECK(std::memcmp(bytes.data(), "HAPIBANK", 8) == 0);
-    CHECK(le32(bytes, bank_header::description) == 0);
-    CHECK(le32(bytes, bank_header::pool_offset) == account + record);
-    CHECK(le32(bytes, bank_header::first_account) == bank_header_bytes);
-    CHECK(le32(bytes, bank_header::version) == 1);
+    CHECK(load_le32(bytes.data() + bank_header::description) == 0);
+    CHECK(load_le32(bytes.data() + bank_header::pool_offset) == account + record);
+    CHECK(load_le32(bytes.data() + bank_header::first_account) == bank_header_bytes);
+    CHECK(load_le32(bytes.data() + bank_header::version) == 1);
     CHECK(bytes[bank_header::pool_packed] == 0);
     for (std::size_t i = bank_header::pool_packed + 1; i < bank_header_bytes; ++i)
         CHECK(bytes[i] == 0);
-    CHECK(le32(bytes, account + account_header::size) == record);
-    CHECK(le32(bytes, account + account_header::name) == 23);
-    CHECK(le32(bytes, account + account_header::int_count) == 1);
-    CHECK(le32(bytes, account + account_header::real_count) == 0);
-    CHECK(le32(bytes, account + account_header::text_count) == 0);
-    CHECK(le32(bytes, account + account_header::blob_count) == 1);
-    CHECK(le32(bytes, account + account_header::packed) == 0);
-    CHECK(le32(bytes, account + 0x1c) == 0);
+    CHECK(load_le32(bytes.data() + account + account_header::size) == record);
+    CHECK(load_le32(bytes.data() + account + account_header::name) == 23);
+    CHECK(load_le32(bytes.data() + account + account_header::int_count) == 1);
+    CHECK(load_le32(bytes.data() + account + account_header::real_count) == 0);
+    CHECK(load_le32(bytes.data() + account + account_header::text_count) == 0);
+    CHECK(load_le32(bytes.data() + account + account_header::blob_count) == 1);
+    CHECK(load_le32(bytes.data() + account + account_header::packed) == 0);
+    CHECK(load_le32(bytes.data() + account + 0x1c) == 0);
     const uint32_t entries = account + account_header_bytes;
-    CHECK(le32(bytes, entries) == 25);
-    CHECK(le32(bytes, entries + 4) == 5);
-    CHECK(le32(bytes, entries + 8) == 0xffffffffu);
-    CHECK(le32(bytes, entries + 12) == 3);
-    CHECK(le32(bytes, entries + 16) == entries + 24);
-    CHECK(le32(bytes, entries + 20) == 2);
+    CHECK(load_le32(bytes.data() + entries) == 25);
+    CHECK(load_le32(bytes.data() + entries + 4) == 5);
+    CHECK(load_le32(bytes.data() + entries + 8) == 0xffffffffu);
+    CHECK(load_le32(bytes.data() + entries + 12) == 3);
+    CHECK(load_le32(bytes.data() + entries + 16) == entries + 24);
+    CHECK(load_le32(bytes.data() + entries + 20) == 2);
     CHECK(bytes[entries + 24] == 0x11 && bytes[entries + 25] == 0x22);
     const std::string pool(
         reinterpret_cast<const char*>(bytes.data()) + account + record,
@@ -171,11 +169,11 @@ void named_blob_carries_scratch_slot() {
     CHECK(bank_write_image(b.get(), "d", false, &image.image));
     const auto bytes = image.bytes();
     const uint32_t entries = bank_header_bytes + account_header_bytes;
-    const uint32_t real_name = le32(bytes, entries);
+    const uint32_t real_name = load_le32(bytes.data() + entries);
     CHECK(real_name == 6); // "d\0Acc\0r"
     const uint32_t blob = entries + real_entry_bytes;
-    CHECK(le32(bytes, blob) == 8); // "Blob"
-    CHECK(le32(bytes, blob + 4) == real_name);
+    CHECK(load_le32(bytes.data() + blob) == 8); // "Blob"
+    CHECK(load_le32(bytes.data() + blob + 4) == real_name);
     double value = 0;
     std::memcpy(&value, bytes.data() + entries + 4, 8);
     CHECK(value == 1.5);
@@ -238,7 +236,7 @@ void round_trip(bool pack) {
     CHECK(bank_write_image(b.get(), savegame_description, pack, &first.image));
     if (pack) {
         // The compressible accounts are LZ77-packed.
-        CHECK(le32(first.bytes(), bank_header_bytes + account_header::packed) == 1);
+        CHECK(load_le32(first.bytes().data() + bank_header_bytes + account_header::packed) == 1);
     }
     ScopedBank back;
     BankError error{};

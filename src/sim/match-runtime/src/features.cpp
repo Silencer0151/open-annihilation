@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -74,113 +73,103 @@ bool plot_blocks(const World& world, std::size_t index) noexcept {
 
 } // namespace
 
-// The feature runtime's calls into the match.
-struct FeatureCalls {
-    static Match& match(void* context) noexcept { return *static_cast<Match*>(context); }
+namespace {
 
-    static uint32_t random(void* context, uint32_t limit) {
-        return match(context).random_.bounded(limit);
-    }
+/// Returns the match a feature runtime call is made on.
+///
+/// @param context FeatureHost::context, the match.
+/// @return The match.
+Match& feature_match(void* context) noexcept {
+    return *static_cast<Match*>(context);
+}
 
-    static int32_t lcg_random(void* context) { return match(context).lcg_rand(); }
+/// Finds a mission placement's FeatureDef by name; the app loaded every
+/// named one into the table before the match copied it.
+///
+/// @param context The match.
+/// @param name The FeatureDef's name.
+/// @return Its index in the match's table, or features::no_feature.
+uint16_t find_mission_feature(void* context, const char* name) {
+    const auto& world = feature_match(context).state();
+    if (world.feature_defs == nullptr)
+        return features::no_feature;
+    return sim::map_runtime::find_feature_index(
+        {world.feature_defs, world.feature_def_count}, name
+    );
+}
 
-    static bool sequence_frame(
-        void* context, oa_ref32 sequence, uint16_t frame, features::FeatureSequenceFrame* out
-    ) {
-        const auto& lookup = match(context).input_.feature_sequence_frame;
-        return lookup && lookup(sequence, frame, *out);
-    }
+} // namespace
 
-    // A mission placement's FeatureDef by name; the app loaded every named
-    // one into the table before the match copied it.
-    static uint16_t find_mission_feature(void* context, const char* name) {
-        const auto& world = match(context).state();
-        if (world.feature_defs == nullptr)
-            return features::no_feature;
-        return sim::map_runtime::find_feature_index(
-            {world.feature_defs, world.feature_def_count}, name
-        );
-    }
-
+// The feature runtime's calls into the match. They are defined here, in a
+// member of the match, which gives them the match's own access.
+features::FeatureHost Match::feature_host() noexcept {
+    features::FeatureHost host{};
+    host.context = this;
+    host.random = [](void* context, uint32_t limit) {
+        return feature_match(context).random_.bounded(limit);
+    };
+    host.lcg_random = [](void* context) { return feature_match(context).lcg_rand(); };
+    host.sequence_frame =
+        [](void* context, oa_ref32 sequence, uint16_t frame, features::FeatureSequenceFrame* out) {
+            const auto& lookup = feature_match(context).input_.feature_sequence_frame;
+            return lookup && lookup(sequence, frame, *out);
+        };
     // The footprint goes to the map listeners.
-    static void footprint_changed(
-        void* context, int16_t cell_x, int16_t cell_z, int16_t width, int16_t height
-    ) {
-        auto& m = match(context);
-        m.project_feature_plots({cell_x, cell_z}, {width, height});
-        m.map_listeners_.notify_footprint_changed({cell_x, cell_z}, {width, height});
-    }
-
-    static void vent_smoke(void* context, const FixedVec3* position, uint32_t layer) {
-        auto& m = match(context);
+    host.footprint_changed =
+        [](void* context, int16_t cell_x, int16_t cell_z, int16_t width, int16_t height) {
+            auto& m = feature_match(context);
+            m.project_feature_plots({cell_x, cell_z}, {width, height});
+            m.map_listeners_.notify_footprint_changed({cell_x, cell_z}, {width, height});
+        };
+    host.emit_feature_fx = [](void* context, const FixedVec3* position, uint32_t layer) {
+        auto& m = feature_match(context);
         sim::effect_particles::spawn_feature_smoke(
             m.effects(), m.state().game, m.effect_host(), *position, static_cast<uint16_t>(layer)
         );
-    }
-
-    static void fire_smoke(void* context, const FixedVec3* position, uint32_t layer) {
-        auto& m = match(context);
+    };
+    host.emit_smoke = [](void* context, const FixedVec3* position, uint32_t layer) {
+        auto& m = feature_match(context);
         sim::effect_particles::spawn_white_smoke(
             m.effects(), m.state().game, m.effect_host(), *position, static_cast<uint16_t>(layer)
         );
-    }
-
-    static void play_sound(void* context, const char* name, const FixedVec3* position) {
-        match(context).play_named_sound_at(name, *position);
-    }
-
-    static void burn_weapon(void* context, oa_ref32 weapon, const FixedVec3* position) {
-        match(context).burn_weapon_blast(weapon, *position);
-    }
-
+    };
+    host.play_sound = [](void* context, const char* name, const FixedVec3* position) {
+        feature_match(context).play_named_sound_at(name, *position);
+    };
+    host.burn_weapon = [](void* context, oa_ref32 weapon, const FixedVec3* position) {
+        feature_match(context).burn_weapon_blast(weapon, *position);
+    };
     // Energy, then metal, into the reclaiming unit's economy block.
-    static void credit_reclaim(void* context, Unit* unit, float energy, float metal) {
-        auto& m = match(context);
+    host.credit_reclaim = [](void* context, Unit* unit, float energy, float metal) {
+        auto& m = feature_match(context);
         m.credit_energy(*unit, energy);
         m.credit_metal(*unit, metal);
-    }
-
+    };
     // A weapon hit on a feature that another player's machine settles.
-    static bool hit_elsewhere(void* context, uint8_t weapon_id, int32_t cell_x, int32_t cell_z) {
-        const auto& multiplayer = match(context).multiplayer;
+    host.feature_hit_elsewhere = [](void* context,
+                                    uint8_t weapon_id,
+                                    int32_t cell_x,
+                                    int32_t cell_z) {
+        const auto& multiplayer = feature_match(context).multiplayer;
         return multiplayer.feature_hit_elsewhere != nullptr &&
                multiplayer.feature_hit_elsewhere(multiplayer.context, weapon_id, cell_x, cell_z);
-    }
-
+    };
     // A feature change settled here, for the other players, with the slot
     // of the unit that reclaimed it.
-    static void changed(
-        void* context,
-        features::FeatureChange change,
-        int32_t cell_x,
-        int32_t cell_z,
-        const Unit* reclaimer
-    ) {
-        auto& m = match(context);
+    host.feature_changed = [](void* context,
+                              features::FeatureChange change,
+                              int32_t cell_x,
+                              int32_t cell_z,
+                              const Unit* reclaimer) {
+        auto& m = feature_match(context);
         const auto& multiplayer = m.multiplayer;
         if (multiplayer.feature_changed == nullptr)
             return;
         const auto slot = reclaimer != nullptr
                               ? static_cast<uint16_t>(world_unit_slot(&m.state(), reclaimer))
-                              : 0;
+                              : uint16_t{0};
         multiplayer.feature_changed(multiplayer.context, change, cell_x, cell_z, slot);
-    }
-};
-
-features::FeatureHost Match::feature_host() noexcept {
-    features::FeatureHost host{};
-    host.context = this;
-    host.random = FeatureCalls::random;
-    host.lcg_random = FeatureCalls::lcg_random;
-    host.sequence_frame = FeatureCalls::sequence_frame;
-    host.footprint_changed = FeatureCalls::footprint_changed;
-    host.emit_feature_fx = FeatureCalls::vent_smoke;
-    host.emit_smoke = FeatureCalls::fire_smoke;
-    host.play_sound = FeatureCalls::play_sound;
-    host.burn_weapon = FeatureCalls::burn_weapon;
-    host.credit_reclaim = FeatureCalls::credit_reclaim;
-    host.feature_hit_elsewhere = FeatureCalls::hit_elsewhere;
-    host.feature_changed = FeatureCalls::changed;
+    };
     return host;
 }
 
@@ -256,8 +245,10 @@ void Match::place_map_features() {
         plot.feature = features::no_feature;
         plot.flags = static_cast<uint8_t>(features::no_player << features::plot_player_shift);
     }
-    if (!features::init_feature_pool(world))
-        throw std::logic_error("placed-feature pool is smaller than the game's");
+    if (!features::init_feature_pool(world)) {
+        fault_.note("placed-feature pool is smaller than the game's");
+        return;
+    }
     // The movement maps are built after the placement, so it dispatches
     // nothing; the whole map is projected onto the match plots once it is done.
     auto host = feature_host();
@@ -297,7 +288,7 @@ void Match::place_map_features() {
             host,
             input_.mission_features.data(),
             static_cast<int32_t>(input_.mission_features.size()),
-            FeatureCalls::find_mission_feature
+            find_mission_feature
         );
     }
     // The map edges are hidden once every feature is placed.

@@ -18,7 +18,7 @@ void TickHost::AttackAdapter::set_goal(std::unique_ptr<sim::ground_orders::Goal>
         record.extra.goal.reset();
     }
     if (goal) {
-        record.order.raised_events &= ~0x3e0u;
+        record.order.raised_events &= ~sim::ground_orders::goal_event_mask;
         sim::ground_orders::install_goal(
             host.view(source, g, flags), goal.get(), host.match.simulation_.tick, host
         );
@@ -28,8 +28,8 @@ void TickHost::AttackAdapter::set_goal(std::unique_ptr<sim::ground_orders::Goal>
 }
 
 void TickHost::AttackAdapter::announce(const char* caption) {
-    if (record.extra.command_flags & 0x20) {
-        record.extra.command_flags &= 0xdf;
+    if (record.extra.command_flags & command_unqueued) {
+        record.extra.command_flags &= static_cast<uint8_t>(~command_unqueued);
         host.play_sound(*source.unit, 5, caption);
     }
 }
@@ -44,16 +44,20 @@ uint8_t TickHost::AttackAdapter::selected_weapon() {
 }
 
 void TickHost::AttackAdapter::release_weapon_targets(uint32_t i) {
-    if (i > 3)
-        throw std::out_of_range("attack weapon index outside slots");
+    if (i > 3) {
+        host.match.fault_.note("attack weapon index outside slots");
+        return;
+    }
     host.before_callback();
     host.match.release_tracked_weapons(source, static_cast<uint8_t>(i));
     host.after_callback();
 }
 
 void TickHost::AttackAdapter::assign_target(sim::simulation_state::Unit& target, int32_t index) {
-    if (index < 0 || index >= 3)
-        throw std::out_of_range("attack weapon index outside slots");
+    if (index < 0 || index >= 3) {
+        host.match.fault_.note("attack weapon index outside slots");
+        return;
+    }
     sim::weapon_execution::aim_slot_at_unit(
         source.record, target.record, static_cast<uint8_t>(index)
     );
@@ -149,8 +153,10 @@ uint8_t TickHost::AttackAdapter::morph_attack_command(sim::simulation_state::Uni
 }
 
 void TickHost::AttackAdapter::assign_ground(const AttackPoint& point, int32_t slot) {
-    if (slot < 0 || slot >= 3)
-        throw std::out_of_range("ground weapon index outside slots");
+    if (slot < 0 || slot >= 3) {
+        host.match.fault_.note("ground weapon index outside slots");
+        return;
+    }
     sim::weapon_execution::aim_slot_at_point(
         source.record,
         {std::bit_cast<oa::oa_fixed>(point[0]),
@@ -164,11 +170,9 @@ void TickHost::PatrolAdapter::clone_patrol() {
     constexpr uint8_t cloned_mark = 0x80;
     bool already = false;
     for_each_primary_uncycled(source.unit->primary, [&](sim::simulation_state::Order* order) {
-        try {
-            if (host.owned(*order).extra.command_flags & cloned_mark)
-                already = true;
-        } catch (const std::exception&) {
-        }
+        const auto* extra = host.match.owned_extra(order);
+        if (extra && (extra->command_flags & cloned_mark))
+            already = true;
     });
     record.extra.command_flags |= cloned_mark;
     if (already)

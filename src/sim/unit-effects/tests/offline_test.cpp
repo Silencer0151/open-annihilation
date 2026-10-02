@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include "oa/test/match_services.hpp"
 using namespace oa;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -12,25 +13,13 @@ using namespace oa;
             throw std::runtime_error(#x);                                                          \
     } while (false)
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
+using Scenario = oa::test::EmptyScenario;
 
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
-
-struct Services : sim::match_runtime::OfflineServices,
+struct Services : oa::test::QuietServices,
                   sim::unit_effects::OfflineLifecycle,
                   sim::unit_effects::Sink {
     sim::unit_effects::OfflineEffects* effects{};
     uint32_t events{};
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
 
     void emit_sfx(sim::unit_spawn::Slot& s, uint32_t p, int32_t e) override {
         effects->emit_sfx(s, p, e);
@@ -45,12 +34,6 @@ struct Services : sim::match_runtime::OfflineServices,
     }
 
     void drop_unit(sim::unit_spawn::Slot& s, int32_t c) override { effects->drop_unit(s, c); }
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 
     void effect(const sim::unit_effects::Event&) override { ++events; }
 };
@@ -202,7 +185,7 @@ int main() {
     };
     CHECK(first_child(*parent) == second->unit_index);
     CHECK(oa::oa_unit_slot_from_ref(second->record.attach_next) == first->unit_index);
-    CHECK((first->unit->flags & 0x20000U) != 0);
+    CHECK((first->unit->flags & OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE) != 0);
     CHECK(static_cast<int8_t>(second->record.attach_piece) == 0);
     effects.drop_unit(*first, second->unit_index);
     CHECK(oa::oa_unit_slot_from_ref(second->record.attach_parent) == parent->unit_index);
@@ -220,7 +203,7 @@ int main() {
     CHECK(first_child(*parent) == first->unit_index);
     CHECK(match.spatial().units[second->unit_index].bucket == preserved);
     CHECK(match.spatial().units[second->unit_index].bucket_linked);
-    CHECK((first->unit->flags & 0x20000U) != 0);
+    CHECK((first->unit->flags & OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE) != 0);
     CHECK(services.events == 0);
     std::cout << "offline effects attachment composition passed\n";
 

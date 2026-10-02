@@ -23,8 +23,9 @@ condition's savegame account.
 Each condition is a plain `Condition` record with named fields. Every kind
 uses the two flags and the fields whose comments name it; a field that a
 kind's constructor leaves unset keeps its initial value until the kind writes
-it. The code rejects malformed condition text and bounds the 32-byte name
-fields.
+it. `register_conditions` returns a `DefinitionError` for malformed condition
+text or a name past the 32-byte field, leaving the controller unregistered; the
+condition builders return nothing for such a name.
 
 Standalone build:
 

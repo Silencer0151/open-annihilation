@@ -57,6 +57,7 @@ struct PlaybackStats {
     uint32_t recorder_records{};    // 0xf9..0xfe, not part of the game stream
     uint32_t untimed_unit_states{}; // 0xfd or 0xff with no tick base before it
     uint32_t sends_dropped{};       // the watcher's own outgoing frames
+    uint32_t unknown_senders{};     // packets from a number no player chunk names; dropped
 };
 
 struct DemoPlayback {

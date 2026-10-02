@@ -118,17 +118,17 @@ enum class SessionStep : uint16_t {
 enum class AppMode : int32_t { boot = 0, frontend = 2, skirmish_setup = 5, end_mission = 7 };
 
 struct SessionHost {
-    void* context;
-    void (*step)(void* context, SessionStep step);
-    void (*set_app_mode)(void* context, AppMode mode);
+    void* context{};
+    void (*step)(void* context, SessionStep step){};
+    void (*set_app_mode)(void* context, AppMode mode){};
     // Reads an integer from the game settings file.
-    int32_t (*read_setting)(void* context, const char* key, int32_t fallback);
-    uint32_t (*performance_counter)(void* context);
-    int32_t (*random)(void* context); // a random value from 0 to 32767
-    void (*shuffle)(void* context, int32_t* values, int32_t count);
-    void (*spawn_commander)(void* context, uint32_t player, int32_t start);
-    bool (*slot_active)(void* context, uint32_t player);
-    void (*select_cursor_animation)(void* context, int32_t index);
+    int32_t (*read_setting)(void* context, const char* key, int32_t fallback){};
+    uint32_t (*performance_counter)(void* context){};
+    int32_t (*random)(void* context){}; // a random value from 0 to 32767
+    void (*shuffle)(void* context, int32_t* values, int32_t count){};
+    void (*spawn_commander)(void* context, uint32_t player, int32_t start){};
+    bool (*slot_active)(void* context, uint32_t player){};
+    void (*select_cursor_animation)(void* context, int32_t index){};
 };
 
 // The skirmish settings block Game.skirmish_info points at: its size, where
@@ -152,13 +152,13 @@ inline constexpr int32_t kMaxUnitLimit = 500;
 }
 
 struct Session {
-    World* world;                               // live game block and match tables
-    oa::data::campaign::CampaignFile* campaign; // Game.game_options
-    uint8_t* skirmish_info;                     // Game.skirmish_info, kSkirmishInfoBytes
-    void* saved_game;                           // Game.saved_game, loaded save being resumed
-    bool saved_between_missions;                // save's Summary has BetweenMissions
-    int32_t unit_limit;                         // Game.max_units_setting, [UnitLimit] clamped
-    int32_t multiplayer_rules;                  // rules flag set per session kind
+    World* world{};                               // live game block and match tables
+    oa::data::campaign::CampaignFile* campaign{}; // Game.game_options
+    uint8_t* skirmish_info{};                     // Game.skirmish_info, kSkirmishInfoBytes
+    void* saved_game{};                           // Game.saved_game, loaded save being resumed
+    bool saved_between_missions{};                // save's Summary has BetweenMissions
+    int32_t unit_limit{};                         // Game.max_units_setting, [UnitLimit] clamped
+    int32_t multiplayer_rules{};                  // rules flag set per session kind
     WorldCapacity capacity;
 };
 

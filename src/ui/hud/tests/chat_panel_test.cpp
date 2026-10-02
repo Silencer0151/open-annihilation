@@ -9,6 +9,7 @@
 #include "oa/ui/hud/player_records.hpp"
 
 #include "oa/sim/messages.hpp"
+#include "oa/base/text.hpp"
 
 #include <array>
 #include <cstdio>
@@ -24,8 +25,8 @@ namespace {
 struct Posted {
     std::string text;
     std::string target;
-    uint8_t mode;
-    uint8_t targets[OA_PLAYER_COUNT];
+    uint8_t mode{};
+    uint8_t targets[OA_PLAYER_COUNT]{};
 };
 
 struct Host {
@@ -75,7 +76,10 @@ struct Chat {
         host.game = &match.game();
     }
 
-    ChatClick click(const char* name, int32_t session = kSessionMultiplayer) {
+    ChatClick click(
+        const char* name,
+        oa::data::campaign::SessionKind session = oa::data::campaign::SessionKind::multiplayer
+    ) {
         return chat_panel_click(
             *match.world,
             session,
@@ -140,7 +144,7 @@ void test_send_prefixes() {
     CHECK(game.chat_mode == OA_CHAT_MODE_EVERYONE);
     // Empty text posts nothing but still clears the draft and team flag.
     set_chat_to_team(game, true);
-    std::strcpy(chat.draft.text, "draft");
+    oa::base::text::copy_terminated(chat.draft.text, "draft");
     chat.type("   ");
     CHECK(chat.host.posts.size() == 6 && chat.draft.text[0] == '\0' && !chat_to_team(game));
 }
@@ -198,7 +202,7 @@ void test_open_panel() {
     Game& game = chat.match.game();
     CHECK(open_chat_panel(
         *chat.match.world,
-        kSessionSkirmish,
+        oa::data::campaign::SessionKind::skirmish,
         chat.draft,
         chat.panel.loader(),
         chat.panel.controls(),
@@ -211,7 +215,7 @@ void test_open_panel() {
     set_chat_to_team(game, true);
     open_chat_panel(
         *chat.match.world,
-        kSessionSkirmish,
+        oa::data::campaign::SessionKind::skirmish,
         chat.draft,
         chat.panel.loader(),
         chat.panel.controls(),
@@ -220,7 +224,7 @@ void test_open_panel() {
     CHECK(chat.panel.loads.back() == "TALK.GUI");
     open_chat_panel(
         *chat.match.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         chat.draft,
         chat.panel.loader(),
         chat.panel.controls(),
@@ -232,7 +236,7 @@ void test_open_panel() {
     game.frame_flags |= kFrameUnitInfoOpen;
     CHECK(!open_chat_panel(
         *chat.match.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         chat.draft,
         chat.panel.loader(),
         chat.panel.controls(),
@@ -242,7 +246,7 @@ void test_open_panel() {
     chat.match.world->player_info[0].options = OA_SETUP_OPTION_WATCHER;
     CHECK(!open_chat_panel(
         *chat.match.world,
-        kSessionMultiplayer,
+        oa::data::campaign::SessionKind::multiplayer,
         chat.draft,
         chat.panel.loader(),
         chat.panel.controls(),

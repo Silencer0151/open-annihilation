@@ -4,12 +4,14 @@
 #include "check.hpp"
 
 #include "oa/data/persist/save_sections.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -248,11 +250,11 @@ void map_sections() {
 
 void features() {
     Fixture f;
-    std::strcpy(f.feature_defs[0].name, "Tree");
+    oa::base::text::copy_terminated(f.feature_defs[0].name, "Tree");
     f.feature_defs[0].flags = feature_def_flag_sprite;
-    std::strcpy(f.feature_defs[1].name, "Wreck");
+    oa::base::text::copy_terminated(f.feature_defs[1].name, "Wreck");
     f.feature_defs[1].flags = 0;
-    std::strcpy(f.feature_defs[2].name, "Burner");
+    oa::base::text::copy_terminated(f.feature_defs[2].name, "Burner");
     f.feature_defs[2].flags = feature_def_flag_sprite;
     f.feature_defs[2].seq_name_burn = 0x100;
     f.feature_defs[2].seq_name_die = 0x200;
@@ -310,9 +312,9 @@ void features() {
 
     // Reload with the defs reordered: saved names remap to current indices.
     Fixture g;
-    std::strcpy(g.feature_defs[0].name, "burner");
-    std::strcpy(g.feature_defs[1].name, "TREE");
-    std::strcpy(g.feature_defs[2].name, "Rock");
+    oa::base::text::copy_terminated(g.feature_defs[0].name, "burner");
+    oa::base::text::copy_terminated(g.feature_defs[1].name, "TREE");
+    oa::base::text::copy_terminated(g.feature_defs[2].name, "Rock");
     ScopedBank loaded;
     reload(bank.get(), loaded);
     save_read_features(&g.world, loaded.get());
@@ -338,7 +340,7 @@ void features() {
 // load restarts the sequence and keeps only that high nibble.
 void animating_sequences() {
     Fixture f;
-    std::strcpy(f.feature_defs[2].name, "Burner");
+    oa::base::text::copy_terminated(f.feature_defs[2].name, "Burner");
     f.feature_defs[2].flags = feature_def_flag_sprite;
     f.feature_defs[2].seq_name_burn = 0x100;
     f.feature_defs[2].seq_name_die = 0x200;
@@ -388,7 +390,7 @@ void animating_sequences() {
     }
 
     Fixture g;
-    std::strcpy(g.feature_defs[2].name, "Burner");
+    oa::base::text::copy_terminated(g.feature_defs[2].name, "Burner");
     ScopedBank loaded;
     reload(bank.get(), loaded);
     save_read_features(&g.world, loaded.get());
@@ -423,9 +425,9 @@ void animating_sequences() {
 // the indices.
 void feature_record_bounds() {
     Fixture g;
-    std::strcpy(g.feature_defs[0].name, "Tree");
-    std::strcpy(g.feature_defs[1].name, "Wreck");
-    std::strcpy(g.feature_defs[2].name, "Burner");
+    oa::base::text::copy_terminated(g.feature_defs[0].name, "Tree");
+    oa::base::text::copy_terminated(g.feature_defs[1].name, "Wreck");
+    oa::base::text::copy_terminated(g.feature_defs[2].name, "Burner");
     // A placement of no type leaves its plot as it was.
     g.hooks.place_feature =
         [](void* c, uint8_t* p, uint16_t type, const uint8_t* object, const uint8_t*) {
@@ -448,9 +450,9 @@ void feature_record_bounds() {
     ScopedBank bank;
     bank_open_account(bank.get(), "Features");
     char names[3 * 0x80] = {};
-    std::strcpy(names, "Tree");
-    std::strcpy(names + 0x80, "Wreck");
-    std::strcpy(names + 0x100, "Burner");
+    oa::base::text::copy_terminated(std::span(names, 0x80), "Tree");
+    oa::base::text::copy_terminated(std::span(names + 0x80, 0x80), "Wreck");
+    oa::base::text::copy_terminated(std::span(names + 0x100, 0x80), "Burner");
     bank_open_blob_name(bank.get(), "Feature Type Names");
     bank_blob_write(bank.get(), names, sizeof names);
     const uint8_t normal[] = {
@@ -510,7 +512,7 @@ void feature_record_bounds() {
 
     // A context without records writes no object or animating feature.
     Fixture f;
-    std::strcpy(f.feature_defs[1].name, "Wreck");
+    oa::base::text::copy_terminated(f.feature_defs[1].name, "Wreck");
     for (int i = 0; i < map_w * map_h; ++i) {
         f.plots[i * plot_bytes + plot::feature] = 0xff;
         f.plots[i * plot_bytes + plot::feature + 1] = 0xff;
@@ -527,7 +529,7 @@ void feature_record_bounds() {
 
 void units() {
     Fixture f;
-    std::strcpy(f.unit_defs[0].unit_name, "ARMCOM");
+    oa::base::text::copy_terminated(f.unit_defs[0].unit_name, "ARMCOM");
     f.game->weapon_defs[1].weapon_id = 42;
     Unit& a = f.units[1];
     a.id = 1;
@@ -753,7 +755,7 @@ void whole_game() {
     std::memcpy(f.game->mission_results, "cormis1", 8);
     f.rules[skirmish_rules::commander_death] = 1;
     f.rules[skirmish_rules::location] = 5;
-    std::strcpy(f.feature_defs[0].name, "Tree");
+    oa::base::text::copy_terminated(f.feature_defs[0].name, "Tree");
     for (int i = 0; i < map_w * map_h; ++i)
         f.plots[i * plot_bytes + plot::feature + 1] = 0xff,
                                                  f.plots[i * plot_bytes + plot::feature] = 0xff;

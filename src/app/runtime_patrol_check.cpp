@@ -24,7 +24,6 @@
 namespace oa::app {
 namespace {
 
-constexpr int32_t kCellPixels = 16;
 // Rings of cells around the feature searched for the kbot's start, which
 // stands this far from it on one side and patrols as far to the other.
 constexpr int32_t kStartNearest = 6;
@@ -191,7 +190,7 @@ void Runtime::check_patrol_reclaim() {
     };
 
     const auto cell_centre = [](int32_t cell) {
-        return static_cast<uint32_t>(cell * kCellPixels + kCellPixels / 2) << 16;
+        return static_cast<uint32_t>(cell * OA_MAP_CELL_PIXELS + OA_MAP_CELL_PIXELS / 2) << 16;
     };
     const std::array<uint32_t, 3> feature_world{
         cell_centre(feature->first), slots[builder].unit->position[1], cell_centre(feature->second)

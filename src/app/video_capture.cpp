@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <tuple>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -144,12 +145,19 @@ void read_target(SDL_Renderer* renderer, int width, int height, std::vector<uint
     int logical_width = 0;
     int logical_height = 0;
     SDL_RendererLogicalPresentation mode = SDL_LOGICAL_PRESENTATION_DISABLED;
-    (void)SDL_GetRenderLogicalPresentation(renderer, &logical_width, &logical_height, &mode);
-    if (mode != SDL_LOGICAL_PRESENTATION_DISABLED)
-        (void)SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+    if (!SDL_GetRenderLogicalPresentation(renderer, &logical_width, &logical_height, &mode))
+        fail(std::string("cannot read the window's presentation: ") + SDL_GetError());
+    if (mode != SDL_LOGICAL_PRESENTATION_DISABLED &&
+        !SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED))
+        fail(std::string("cannot read the whole window: ") + SDL_GetError());
     SDL_Surface* target = SDL_RenderReadPixels(renderer, nullptr);
-    if (mode != SDL_LOGICAL_PRESENTATION_DISABLED)
-        (void)SDL_SetRenderLogicalPresentation(renderer, logical_width, logical_height, mode);
+    // The game goes on drawing in the presentation it chose, so one that
+    // cannot be put back ends the capture.
+    if (mode != SDL_LOGICAL_PRESENTATION_DISABLED &&
+        !SDL_SetRenderLogicalPresentation(renderer, logical_width, logical_height, mode)) {
+        SDL_DestroySurface(target);
+        fail(std::string("cannot restore the window's presentation: ") + SDL_GetError());
+    }
     SDL_Surface* converted =
         target != nullptr ? SDL_ConvertSurface(target, SDL_PIXELFORMAT_RGB24) : nullptr;
     SDL_DestroySurface(target);
@@ -274,16 +282,16 @@ std::vector<std::string> join_arguments(const CaptureFiles& files, uint64_t fram
 
 void prepare_capture_audio(const fs::path& video) {
     const auto mix = path_text(capture_files(video).mix);
-    (void)SDL_SetHintWithPriority(SDL_HINT_AUDIO_DRIVER, "disk", SDL_HINT_OVERRIDE);
-    (void)SDL_SetHintWithPriority(SDL_HINT_AUDIO_DISK_OUTPUT_FILE, mix.c_str(), SDL_HINT_OVERRIDE);
-    (void)SDL_SetHintWithPriority(SDL_HINT_AUDIO_DISK_TIMESCALE, kDiskTimescale, SDL_HINT_OVERRIDE);
-    (void)SDL_SetHintWithPriority(SDL_HINT_AUDIO_FORMAT, kMixFormatHint, SDL_HINT_OVERRIDE);
-    (void)SDL_SetHintWithPriority(
-        SDL_HINT_AUDIO_CHANNELS, std::to_string(capture_channels).c_str(), SDL_HINT_OVERRIDE
-    );
-    (void)SDL_SetHintWithPriority(
-        SDL_HINT_AUDIO_FREQUENCY, std::to_string(capture_sample_rate).c_str(), SDL_HINT_OVERRIDE
-    );
+    const auto set = [](const char* hint, const std::string& value) {
+        if (!SDL_SetHintWithPriority(hint, value.c_str(), SDL_HINT_OVERRIDE))
+            fail(std::string("SDL refused the sound setting ") + hint + ": " + SDL_GetError());
+    };
+    set(SDL_HINT_AUDIO_DRIVER, "disk");
+    set(SDL_HINT_AUDIO_DISK_OUTPUT_FILE, mix);
+    set(SDL_HINT_AUDIO_DISK_TIMESCALE, kDiskTimescale);
+    set(SDL_HINT_AUDIO_FORMAT, kMixFormatHint);
+    set(SDL_HINT_AUDIO_CHANNELS, std::to_string(capture_channels));
+    set(SDL_HINT_AUDIO_FREQUENCY, std::to_string(capture_sample_rate));
 }
 
 VideoCapture::VideoCapture(const fs::path& video, int width, int height)
@@ -341,8 +349,10 @@ void VideoCapture::release() noexcept {
     if (encoder_input_ != nullptr)
         SDL_CloseIO(encoder_input_);
     encoder_input_ = nullptr;
+    // An encoder still here was abandoned: finish() reads the status of one
+    // that ends the capture. It is waited for only so that it is gone.
     if (encoder_ != nullptr) {
-        (void)SDL_WaitProcess(encoder_, true, nullptr);
+        std::ignore = SDL_WaitProcess(encoder_, true, nullptr);
         SDL_DestroyProcess(encoder_);
     }
     encoder_ = nullptr;

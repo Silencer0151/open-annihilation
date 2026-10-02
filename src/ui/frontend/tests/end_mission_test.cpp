@@ -3,6 +3,7 @@
 
 #include "oa/ui/frontend/end_mission.hpp"
 #include "test_support.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -217,18 +218,18 @@ OA_GAME_DATA_TEST(end_mission_after_a_defeat_and_outside_campaigns) {
     OA_CHECK(panel_control(fixture->panel, "Missions")->list_selection == 3);
 
     fixture->campaign->kind = oa::data::campaign::SessionKind::skirmish;
-    std::strcpy(context.return_label.data(), "Portal");
+    oa::base::text::copy_terminated(context.return_label, "Portal");
     end_mission_enter(fixture->panel, context);
     OA_CHECK(!context.continuing);
     OA_CHECK(std::strcmp(context.palette, "outcome0") == 0);
     OA_CHECK(std::string(context.focus.data()) == "MainMenu");
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "Portal");
-    std::strcpy(context.return_label.data(), "PortalGate");
+    oa::base::text::copy_terminated(context.return_label, "PortalGate");
     end_mission_enter(fixture->panel, context);
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "OK");
     // A game with the online flag shows the label as well, and "OK"
     // without one.
-    std::strcpy(context.return_label.data(), "Hall");
+    oa::base::text::copy_terminated(context.return_label, "Hall");
     fixture->world->game.gui_flags = 0x10;
     end_mission_enter(fixture->panel, context);
     OA_CHECK(text_of(fixture->panel, "MainMenu") == "Hall");
@@ -317,6 +318,36 @@ OA_GAME_DATA_TEST(end_mission_clicks) {
     OA_CHECK(context.mission_count == 0);
 }
 
+// A campaign whose next mission's files are missing: Start binds the
+// selected mission, which shows the mission loader's message, and stays on
+// the panel with its selection cleared, as 3.1c does.
+OA_GAME_DATA_TEST(end_mission_start_with_the_next_mission_missing) {
+    MissingMissionFiles missing("ac02");
+    auto fixture = std::make_unique<Fixture>();
+    fixture->env.files = &missing.files;
+    if (!fixture->load())
+        return;
+    auto& context = fixture->context;
+    auto& panel = fixture->panel;
+    fixture->world->game.victory = 1;
+    end_mission_enter(panel, context);
+    OA_CHECK(missing.messages.empty());
+    OA_CHECK(panel_control(panel, "Missions")->list_selection == 1);
+
+    select(panel, "Start");
+    OA_CHECK(end_mission_on_click(panel, context) == EndMissionAction::none);
+    OA_CHECK(
+        missing.messages.size() == 1 &&
+        missing.messages[0] ==
+            "Hey, joker!  There is no mission defintion for this mission: AC02.ota"
+    );
+    OA_CHECK(fixture->calls.messages.empty());
+    OA_CHECK(panel.selected == kNoSelection);
+    OA_CHECK(fixture->campaign->mission_index == 1);
+    OA_CHECK(fixture->state.state != fs_state::state_id::briefing_to_end_mission);
+    OA_CHECK(fixture->frontend.modes.empty());
+}
+
 // With a return label, MAIN MENU leaves for the main menu as it always
 // does but leaves the pointer's picture as it is.
 OA_GAME_DATA_TEST(end_mission_main_menu_with_a_return_label) {
@@ -326,7 +357,7 @@ OA_GAME_DATA_TEST(end_mission_main_menu_with_a_return_label) {
     auto& context = fixture->context;
     auto& panel = fixture->panel;
     fixture->world->game.victory = 1;
-    std::strcpy(context.return_label.data(), "Harbour");
+    oa::base::text::copy_terminated(context.return_label, "Harbour");
     end_mission_enter(panel, context);
     const auto cursors = fixture->frontend.cursors.size();
     fixture->frontend.cursor_visible = -1;
@@ -354,7 +385,7 @@ OA_GAME_DATA_TEST(end_mission_state_opens_the_panel) {
         return;
     auto& context = fixture->context;
     fixture->world->game.victory = 1;
-    std::strcpy(fixture->world->game.scores[0].name, "Commander");
+    oa::base::text::copy_terminated(fixture->world->game.scores[0].name, "Commander");
     fixture->world->game.score_maxima[campaign::score_kills] = 10;
     fixture->world->game.endgame_column = 7;
     auto layout = std::make_unique<campaign::ScoreLayout>();

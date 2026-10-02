@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace oa::formats::tdf {
 
@@ -19,35 +21,35 @@ inline constexpr uint32_t max_arena_bytes = 64u * 1024u * 1024u;
 inline constexpr uint32_t max_nesting_depth = 64;
 
 struct Property {
-    char* key;
-    char* value;
+    char* key{};
+    char* value{};
 };
 
 struct Block {
-    char* name;
-    Block** children;
-    uint32_t child_count;
-    uint32_t child_capacity;
-    Property* properties; // sorted by case-insensitive key
-    uint32_t property_count;
-    uint32_t property_capacity;
+    char* name{};
+    Block** children{};
+    uint32_t child_count{};
+    uint32_t child_capacity{};
+    Property* properties{}; // sorted by case-insensitive key
+    uint32_t property_count{};
+    uint32_t property_capacity{};
     // Buffer hash of the block body; see parse_text for the covered span.
-    uint32_t body_hash;
+    uint32_t body_hash{};
 };
 
 struct ArenaChunk;
 
 struct Arena {
-    ArenaChunk* head;
-    uint32_t used_bytes;
+    ArenaChunk* head{};
+    uint32_t used_bytes{};
 };
 
 // A parsed TDF document: the root plus a cursor used by the section-stepping
 // helpers. A null cursor means "at the root".
 struct Document {
-    Block* root;
-    const Block* cursor;
-    bool from_archive; // file was read from an HPI rather than a loose file
+    Block* root{};
+    const Block* cursor{};
+    bool from_archive{}; // file was read from an HPI rather than a loose file
     Arena arena;
 };
 
@@ -64,9 +66,9 @@ enum class ParseStatus : uint8_t {
 };
 
 struct ParseError {
-    ParseStatus status;
-    uint32_t offset;     // byte offset into the comment-stripped text
-    char block_name[64]; // block being parsed when the error was raised
+    ParseStatus status{};
+    uint32_t offset{};     // byte offset into the comment-stripped text
+    char block_name[64]{}; // block being parsed when the error was raised
 };
 
 /// Returns a short English description of a parse status.
@@ -74,6 +76,12 @@ struct ParseError {
 /// @param status parse status
 /// @return a static string
 [[nodiscard]] const char* parse_status_message(ParseStatus status) noexcept;
+/// Describes a parse failure: its status, the byte it was found at and the
+/// block being parsed.
+///
+/// @param error failure parse_text reported
+/// @return e.g. "entry lacks its closing ';' at byte 12 in [Coral20]"
+[[nodiscard]] std::string describe(const ParseError& error);
 
 /// Makes a document empty with no arena storage.
 ///
@@ -229,5 +237,55 @@ bool select_section(Document* document, const char* name) noexcept;
 /// @param index child position, in file order
 /// @return true when the child exists; a miss resets the cursor to the root
 bool step_entry(Document* document, uint32_t index) noexcept;
+
+/// A Document that frees its tree when it goes out of scope.
+///
+/// Moving one hands its tree over and leaves the source empty; blocks keep
+/// their addresses across the move.
+class OwnedDocument {
+  public:
+
+    /// Makes an empty document.
+    OwnedDocument() noexcept;
+    /// Frees the tree.
+    ~OwnedDocument();
+    /// Takes another document's tree.
+    ///
+    /// @param[in,out] other document left empty
+    OwnedDocument(OwnedDocument&& other) noexcept;
+    /// Frees this tree and takes another document's.
+    ///
+    /// @param[in,out] other document left empty
+    /// @return this document
+    OwnedDocument& operator=(OwnedDocument&& other) noexcept;
+    OwnedDocument(const OwnedDocument&) = delete;
+    OwnedDocument& operator=(const OwnedDocument&) = delete;
+
+    /// Replaces the tree with a parse of a text, as parse_text does.
+    ///
+    /// @param text TDF text; one longer than max_input_bytes fails as too_large
+    /// @param[out] error status, offset and block name of a failure; may be null
+    /// @return true when the text parsed; on failure the document is empty
+    [[nodiscard]] bool parse(std::string_view text, ParseError* error = nullptr) noexcept;
+
+    /// Returns the root block, whose children are the top-level sections.
+    ///
+    /// @return the root, or null while empty
+    [[nodiscard]] const Block* root() const noexcept { return document_.root; }
+
+    /// Returns the document, for the cursor helpers.
+    ///
+    /// @return the document
+    [[nodiscard]] Document* get() noexcept { return &document_; }
+
+    /// Returns the document.
+    ///
+    /// @return the document
+    [[nodiscard]] const Document* get() const noexcept { return &document_; }
+
+  private:
+
+    Document document_{};
+};
 
 } // namespace oa::formats::tdf

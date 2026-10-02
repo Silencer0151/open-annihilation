@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 
 namespace oa::app {
@@ -165,7 +166,9 @@ bool Runtime::route_scroll_pointer(const SDL_Event& event, float x, float y) {
     auto& layout = over_match ? match_hud_->layout : resources_.layout;
     const auto point = over_match ? hud_source_point(x, y) : frontend_panel_point(x, y);
     if (event.type == SDL_EVENT_MOUSE_MOTION) {
-        (void)renderer::move_layout_scrolls(*scrolls, point.x, point.y);
+        // Whether a bar is held does not matter: motion always reaches the
+        // screen's own handler as well.
+        std::ignore = renderer::move_layout_scrolls(*scrolls, point.x, point.y);
         return false;
     }
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && scroll_button(event.button.button)) {
@@ -261,7 +264,9 @@ std::optional<std::size_t> Runtime::step_frontend_list_row(std::string_view name
     const auto index = gadget_index(resources_.layout, name);
     if (!index)
         return std::nullopt;
-    (void)renderer::step_layout_list_row(*scrolls, resources_.layout, *index, forward);
+    // Whether the selection moved on the page does not matter: the row
+    // selected afterwards is read back from the list below.
+    std::ignore = renderer::step_layout_list_row(*scrolls, resources_.layout, *index, forward);
     const auto* list = renderer::find_layout_list(*scrolls, *index);
     if (list == nullptr || list->list.selection < 0)
         return std::nullopt;

@@ -14,21 +14,21 @@ inline constexpr uint32_t category_mask_words = 16; // 64-byte masks
 inline constexpr uint32_t category_token_capacity = 256;
 
 struct CategoryMask {
-    uint32_t words[category_mask_words];
+    uint32_t words[category_mask_words]{};
 };
 
 struct Category {
-    char* name;
-    uint32_t mask; // index into CategoryRegistry.masks
+    char* name{};
+    uint32_t mask{}; // index into CategoryRegistry.masks
 };
 
 // Entries sorted by case-insensitive name. Masks stay in creation order so a
 // mask reference (index + 1, as UnitDef stores it) survives later inserts.
 struct CategoryRegistry {
-    Category* entries;
-    CategoryMask* masks;
-    uint32_t count; // entries and masks
-    uint32_t capacity;
+    Category* entries{};
+    CategoryMask* masks{};
+    uint32_t count{}; // entries and masks
+    uint32_t capacity{};
 };
 
 /// Sets a unit type's bit in a category mask.

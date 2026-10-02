@@ -9,6 +9,8 @@
 // process over 127.0.0.1, runs the in-game team panels over the session
 // and compares both worlds after a settled run.
 #include "oa/app/runtime.hpp"
+#include "network_play.hpp"
+#include "oa/app/check_host.hpp"
 #include "net_options.hpp"
 #include "net_state.hpp"
 #include "traffic_overlay.hpp"
@@ -331,7 +333,7 @@ void mark_agreed_units(void* context, UnitDef* headers, uint32_t count) {
 }
 
 struct LoopbackSide {
-    Runtime* runtime{};
+    NetworkPlay* play{};
     const char* nickname{};
     std::unique_ptr<Game> game = std::make_unique<Game>();
     std::unique_ptr<mp::Lobby> lobby = std::make_unique<mp::Lobby>();
@@ -343,8 +345,8 @@ struct LoopbackSide {
 
 // C-style callbacks handed to the multiplayer screens and the net match, and
 // the launch steps they drive.
-struct NetHost {
-    static Runtime& self(void* context) { return *static_cast<Runtime*>(context); }
+struct NetworkPlay::NetHost {
+    static NetworkPlay& self(void* context) { return *static_cast<NetworkPlay*>(context); }
 
     static void on_start(void* context, mp::Lobby& lobby) { launch(self(context), lobby); }
 
@@ -358,23 +360,23 @@ struct NetHost {
     }
 
     static void notice(void* context, const char* text) {
-        self(context).console_post_message(text);
+        self(context).runtime_.console_post_message(text);
     }
 
     static int32_t rand15(void*) { return std::rand() & 0x7fff; }
 
     // Services the other in-process machine while this one waits on a reply.
     static void pump_peer(void* context, uint32_t wait_ms) {
-        auto* peer = static_cast<Runtime::NetState*>(context);
+        auto* peer = static_cast<NetState*>(context);
         if (peer->connection.opened)
             oa::netgame::sock::host_pump(peer->connection.host, wait_ms);
     }
 
     // The binding's hooks, reached through the runtime's session: its
-    // chat, notice and random hooks need the runtime as their context.
-    static nm::NetMatchHooks hooks(Runtime& runtime) {
+    // chat, notice and random hooks take network play's state as their context.
+    static nm::NetMatchHooks hooks(NetworkPlay& play) {
         nm::NetMatchHooks hooks{};
-        hooks.context = &runtime;
+        hooks.context = &play;
         hooks.chat = chat;
         hooks.notice = notice;
         hooks.rand15 = rand15;
@@ -407,11 +409,11 @@ struct NetHost {
     // closes; the loading screen's first frame sends it, so clients load
     // alongside the host. While the world is built no frame runs: the
     // engine's load_progress hook keeps the connection alive meanwhile.
-    static void launch(Runtime& runtime, mp::Lobby& lobby) {
-        auto& state = *runtime.net_;
+    static void launch(NetworkPlay& play, mp::Lobby& lobby) {
+        auto& state = *play.net_;
         if (!state.connected || !state.connection.in_session || lobby.game == nullptr ||
             lobby.game->local_player_index >= OA_PLAYER_COUNT) {
-            abort(runtime, "the battle room has no live session");
+            abort(play, "the battle room has no live session");
             return;
         }
         const auto local_slot = lobby.game->local_player_index;
@@ -419,7 +421,7 @@ struct NetHost {
         const auto* host_info =
             host_slot != mp::kNoSlot ? mp::slot_info(lobby, host_slot) : nullptr;
         if (host_info == nullptr) {
-            abort(runtime, "the battle room has no host");
+            abort(play, "the battle room has no host");
             return;
         }
         state.hosting = host_slot == local_slot;
@@ -429,9 +431,9 @@ struct NetHost {
         state.loading_pace = {};
         state.load_rows = {};
         try {
-            build(runtime, lobby, *host_info, local_slot);
+            build(play, lobby, *host_info, local_slot);
         } catch (const std::exception& error) {
-            abort(runtime, error.what());
+            abort(play, error.what());
         }
         state.building_game = nullptr;
     }
@@ -447,16 +449,20 @@ struct NetHost {
     /// std::runtime_error when the map is not installed, has too few start
     /// positions, or the lobby holds no local slot.
     ///
-    /// @param runtime runtime that loads the match
+    /// @param play network play's state for the runtime that loads the match
     /// @param lobby battle room the match starts from; its unit-sync table is dropped
     /// @param host_info the host's setup block, which names the map and the unit limit
     /// @param local_slot this machine's player slot
     static void build(
-        Runtime& runtime, mp::Lobby& lobby, const mp::PlayerSetupInfo& host_info, uint8_t local_slot
+        NetworkPlay& play,
+        mp::Lobby& lobby,
+        const mp::PlayerSetupInfo& host_info,
+        uint8_t local_slot
     ) {
-        auto& state = *runtime.net_;
+        Runtime& runtime = play.runtime_;
+        auto& state = *play.net_;
         const std::string map(field_text(host_info.map_name, sizeof host_info.map_name));
-        if (!runtime.select_map_named(map))
+        if (!play.select_map_named(map))
             throw std::runtime_error("the multiplayer map is not installed: " + map);
         // Watchers take no start position.
         uint16_t live = 0;
@@ -523,7 +529,7 @@ struct NetHost {
         auto& world = runtime.match_->state();
         if (!nm::match_launch_apply(lobby, &world))
             throw std::runtime_error("the lobby has no local slot");
-        runtime.start_reporter(world, lobby.game);
+        play.start_reporter(world, lobby.game);
         if (state.hosting)
             world.game.session_flags =
                 static_cast<uint8_t>(world.game.session_flags | nm::kNetFlagGameStarted);
@@ -533,7 +539,7 @@ struct NetHost {
             &state.connection,
             &world,
             nm::match_binding_sim(&state.binding),
-            hooks(runtime)
+            hooks(play)
         );
         nm::match_binding_install(&state.binding);
         for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
@@ -563,12 +569,12 @@ struct NetHost {
     // can be placed (nm::commander_wait_frames). Each frame before the
     // barrier passes also reports the local players' load progress from the
     // rows the engine last reported.
-    static bool loading_frame(Runtime& runtime) {
-        auto& state = *runtime.net_;
+    static bool loading_frame(NetworkPlay& play) {
+        auto& state = *play.net_;
         const bool ready = nm::net_match_paced_loading_frame(
             state.net.get(), &state.loading_pace, state.load_rows.data()
         );
-        watch_timeouts(runtime);
+        watch_timeouts(play);
         return ready;
     }
 
@@ -590,9 +596,10 @@ struct NetHost {
     /// std::runtime_error when the match has no host block, a local player has
     /// no start position or a commander cannot be placed.
     ///
-    /// @param runtime runtime whose network match loaded
-    static void finish(Runtime& runtime) {
-        auto& state = *runtime.net_;
+    /// @param play network play's state for the runtime whose network match loaded
+    static void finish(NetworkPlay& play) {
+        Runtime& runtime = play.runtime_;
+        auto& state = *play.net_;
         auto& world = runtime.match_->state();
         const auto* host = nm::launch_host_info(&world);
         if (host == nullptr)
@@ -629,7 +636,7 @@ struct NetHost {
         }
         // Every store starts at the host's resources.
         oa::ui::hud::set_starting_resources(
-            world, oa::ui::hud::kSessionMultiplayer, nullptr, nullptr
+            world, oa::data::campaign::SessionKind::multiplayer, nullptr, nullptr
         );
         nm::match_apply_watcher_view(&world);
         if (nm::match_slot_watcher(&world, state.local_slot)) {
@@ -642,21 +649,23 @@ struct NetHost {
         nm::net_match_set_speed(state.net.get(), runtime.preferences_.current_game_speed, false);
         state.speed_seen = runtime.preferences_.current_game_speed;
         state.loading = false;
-        runtime.report_game_event(oa::app::netgame::extension_api::report_event::game_started);
+        play.report_game_event(oa::app::netgame::extension_api::report_event::game_started);
         runtime.enter_match_view();
     }
 
-    static void abort(Runtime& runtime, std::string_view reason) {
+    static void abort(NetworkPlay& play, std::string_view reason) {
+        Runtime& runtime = play.runtime_;
         runtime.status_ = "Multiplayer start failed: " + std::string(reason);
         std::cerr << "multiplayer: " << reason << '\n';
-        runtime.net_leave();
+        play.net_leave();
         if (runtime.match_)
             runtime.leave_match();
         runtime.pending_screen_ = screen_id(Screen::main_menu);
     }
 
-    static void watch_timeouts(Runtime& runtime) {
-        auto& state = *runtime.net_;
+    static void watch_timeouts(NetworkPlay& play) {
+        Runtime& runtime = play.runtime_;
+        auto& state = *play.net_;
         const auto stalled = state.net->timeout_player;
         if (stalled != state.stalled_player) {
             state.stalled_player = stalled;
@@ -669,8 +678,8 @@ struct NetHost {
 
     // Loopback check: ephemeral ports on 127.0.0.1, the peer serviced while
     // this machine waits.
-    static bool loopback_configure(Runtime& runtime, uint32_t seed, Runtime::NetState* peer) {
-        auto& state = *runtime.net_;
+    static bool loopback_configure(NetworkPlay& play, uint32_t seed, NetState* peer) {
+        auto& state = *play.net_;
         if (state.connected)
             nm::net_connection_destroy(&state.connection);
         nm::SessionLobbyConfig config{};
@@ -689,20 +698,21 @@ struct NetHost {
         return state.connected;
     }
 
-    static void loopback_pump(Runtime& runtime, uint32_t wait_ms) {
-        if (runtime.net_->connection.opened)
-            oa::netgame::sock::host_pump(runtime.net_->connection.host, wait_ms);
+    static void loopback_pump(NetworkPlay& play, uint32_t wait_ms) {
+        if (play.net_->connection.opened)
+            oa::netgame::sock::host_pump(play.net_->connection.host, wait_ms);
     }
 
     // A networked tick pushed out at once; the paced flush of real play
     // would hold records for the wall clock the check does not wait on.
-    static void loopback_step(Runtime& runtime) {
-        auto& connection = runtime.net_->connection;
-        runtime.net_simulation_step();
+    static void loopback_step(NetworkPlay& play) {
+        auto& connection = play.net_->connection;
+        play.net_simulation_step();
         nm::packet_layer_flush(connection.packets, nm::net_connection_time(&connection), true);
     }
 
-    static UnitPose unit_pose(Runtime& runtime, uint16_t unit) {
+    static UnitPose unit_pose(NetworkPlay& play, uint16_t unit) {
+        Runtime& runtime = play.runtime_;
         const auto& record = runtime.match_->state().units[unit];
         const auto* ground = runtime.match_->ground_runtime(unit);
         return {
@@ -714,7 +724,8 @@ struct NetHost {
         };
     }
 
-    static uint16_t local_commander(Runtime& runtime) {
+    static uint16_t local_commander(NetworkPlay& play) {
+        Runtime& runtime = play.runtime_;
         const auto& world = runtime.match_->state();
         for (uint32_t slot = 1; slot < world.unit_slot_count; ++slot) {
             const auto& unit = world.units[slot];
@@ -772,13 +783,17 @@ struct NetHost {
     /// counts the computer player's kills and losses as the host does.
     /// Progress goes to stdout; a failure throws std::runtime_error.
     ///
-    /// @param host the hosting runtime, in its running match
-    /// @param joiner the joining runtime, in its running match
+    /// @param host network play's state for the hosting runtime, in its running match
+    /// @param joiner network play's state for the joining runtime, in its running match
     /// @param build_ticks ticks the computer player builds before the strike
     /// @param computer_id session id of the computer player
     /// @param watching whether the joiner only watches
     static void computer_match(
-        Runtime& host, Runtime& joiner, std::size_t build_ticks, uint32_t computer_id, bool watching
+        NetworkPlay& host,
+        NetworkPlay& joiner,
+        std::size_t build_ticks,
+        uint32_t computer_id,
+        bool watching
     ) {
         const auto require = [](bool ok, const char* what) {
             if (!ok)
@@ -1172,13 +1187,13 @@ struct NetHost {
     }
 };
 
-void Runtime::destroy_net_state(NetState* state) noexcept {
+void NetworkPlay::destroy_net_state(NetState* state) noexcept {
     if (state != nullptr && state->connected)
         nm::net_connection_destroy(&state->connection);
     delete state;
 }
 
-void Runtime::net_bind_multiplayer() {
+void NetworkPlay::net_bind_multiplayer() {
     release_match_report();
     if (!net_) {
         net_.reset(new NetState());
@@ -1203,7 +1218,7 @@ void Runtime::net_bind_multiplayer() {
     mp::multiplayer_bind_player_timeout(net_launch_switches().net_timeout_seconds);
     mp::multiplayer_bind_start(NetHost::on_start, this);
     mp::multiplayer_bind_translation(
-        {this, [](void* context, std::string_view interface_text) {
+        {&runtime_, [](void* context, std::string_view interface_text) {
              return static_cast<Runtime*>(context)->translate_ui(interface_text);
          }}
     );
@@ -1222,7 +1237,7 @@ void Runtime::net_bind_multiplayer() {
 // and the match clock keeps stepping it, so it keeps sending its per-tick
 // records, and the other players play on. The timeout scan keeps running,
 // so a player who stops answering is dropped and no longer holds the gate.
-void Runtime::net_frame() {
+void NetworkPlay::net_frame() {
     if (!net_ || !net_->active)
         return;
     auto& state = *net_;
@@ -1236,63 +1251,65 @@ void Runtime::net_frame() {
         return;
     }
     // A shared match goes on beneath the preferences its menu opens.
-    if (!match_running())
+    if (!runtime_.match_running())
         return;
-    auto& game = match_->state().game;
+    auto& game = runtime_.match_->state().game;
     const bool sim_paused = (game.sim_run_flags & nm::run_flag_paused) != 0;
     if (sim_paused != state.pause_seen) {
         state.pause_seen = sim_paused;
-        status_ = sim_paused ? "Game paused" : "Game resumed";
+        runtime_.status_ = sim_paused ? "Game paused" : "Game resumed";
     }
     // A speed set elsewhere: one another machine sent, or one this machine's
     // preferences put back (Cancel, UNDO, RESTORE), which stays here.
     if (game.requested_speed != state.speed_seen && game.requested_speed >= nm::min_game_speed &&
         game.requested_speed <= nm::max_game_speed) {
-        preferences_.current_game_speed = game.requested_speed;
-        match_timing_.actual_rate = game.requested_speed;
-        match_timing_.requested_rate = game.requested_speed;
+        runtime_.preferences_.current_game_speed = game.requested_speed;
+        runtime_.match_timing_.actual_rate = game.requested_speed;
+        runtime_.match_timing_.requested_rate = game.requested_speed;
         state.speed_seen = game.requested_speed;
     }
     if (sim_paused)
         nm::net_match_paused_frame(state.net.get());
-    nm::net_match_sync_timing(&match_->state(), &match_timing_);
+    nm::net_match_sync_timing(&runtime_.match_->state(), &runtime_.match_timing_);
     NetHost::watch_timeouts(*this);
     step_reporter_frame();
 }
 
-bool Runtime::net_match_active() const {
+bool NetworkPlay::net_match_active() const {
     return net_ && net_->active;
 }
 
-const Runtime::NetState* Runtime::loading_net_match() const {
+const NetState* NetworkPlay::loading_net_match() const {
     return net_ && net_->active && net_->loading ? net_.get() : nullptr;
 }
 
-const Runtime::NetState* Runtime::session_net_match() const {
+const NetState* NetworkPlay::session_net_match() const {
     return net_ && net_->active ? net_.get() : nullptr;
 }
 
-bool Runtime::net_local_watcher() const {
-    return net_ && net_->active && match_ &&
-           nm::match_slot_watcher(&match_->state(), match_->state().game.local_player_index);
+bool NetworkPlay::net_local_watcher() const {
+    return net_ && net_->active && runtime_.match_ &&
+           nm::match_slot_watcher(
+               &runtime_.match_->state(), runtime_.match_->state().game.local_player_index
+           );
 }
 
-bool Runtime::net_session_open() const {
+bool NetworkPlay::net_session_open() const {
     return net_ && net_->connected && net_->connection.in_session;
 }
 
-bool Runtime::net_simulation_step() {
-    if (!net_ || !net_->active || net_->loading || !match_)
+bool NetworkPlay::net_simulation_step() {
+    if (!net_ || !net_->active || net_->loading || !runtime_.match_)
         return false;
     nm::match_binding_tick(&net_->binding);
-    match_timing_.tick = match_->state().game.tick;
+    runtime_.match_timing_.tick = runtime_.match_->state().game.tick;
     return true;
 }
 
 // A finished network game holds on its frame until the final
 // economy is settled, then tears the game down.
-bool Runtime::net_final_economy_settled() {
-    if (!net_ || !net_->active || net_->loading || !match_)
+bool NetworkPlay::net_final_economy_settled() {
+    if (!net_ || !net_->active || net_->loading || !runtime_.match_)
         return true;
     auto& state = *net_;
     (void)nm::net_match_pump(state.net.get());
@@ -1302,14 +1319,14 @@ bool Runtime::net_final_economy_settled() {
 
 // The statistics live with the connection's packet queue; without one
 // there is nothing to reset.
-void Runtime::net_reset_traffic_stats() {
+void NetworkPlay::net_reset_traffic_stats() {
     if (!net_ || !net_->connected || net_->connection.packets == nullptr)
         return;
-    const uint32_t tick = match_ ? match_->state().game.tick : 0;
+    const uint32_t tick = runtime_.match_ ? runtime_.match_->state().game.tick : 0;
     oa::netgame::traffic_stats_reset(&net_->connection.packets->traffic, tick);
 }
 
-void Runtime::net_send_player_status() {
+void NetworkPlay::net_send_player_status() {
     if (net_ && net_->active)
         nm::net_match_send_player_status(net_->net.get(), false);
 }
@@ -1317,12 +1334,12 @@ void Runtime::net_send_player_status() {
 // Leaving sends no record of its own: closing the session destroys the local
 // players, and every other machine retires their slots as departed, with no
 // chat line.
-void Runtime::net_leave() {
+void NetworkPlay::net_leave() {
     if (!net_ || !net_->active)
         return;
     auto& state = *net_;
-    if (match_)
-        nm::net_connection_finish(&state.connection, &match_->state().game);
+    if (runtime_.match_)
+        nm::net_connection_finish(&state.connection, &runtime_.match_->state().game);
     state.active = false;
     state.loading = false;
     state.finish_pending = false;
@@ -1336,7 +1353,7 @@ void Runtime::net_leave() {
 // "Give" while a network match runs: net_match_give debits, credits and
 // sends the resource record, as the share transfers' network branch does.
 // Nothing is given while the match loads.
-bool Runtime::net_give(uint8_t from, uint8_t to, bool metal, float amount) {
+bool NetworkPlay::net_give(uint8_t from, uint8_t to, bool metal, float amount) {
     if (!net_ || !net_->active)
         return false;
     if (!net_->loading)
@@ -1345,16 +1362,16 @@ bool Runtime::net_give(uint8_t from, uint8_t to, bool metal, float amount) {
 }
 
 // The text message send as the chat line calls it: the formatted line to every player.
-void Runtime::net_send_chat(const char* line) {
+void NetworkPlay::net_send_chat(const char* line) {
     if (!net_ || !net_->active || net_->loading || line == nullptr || *line == '\0')
         return;
     nm::net_match_say(net_->net.get(), line);
 }
 
-void Runtime::net_say(std::string_view text) {
-    if (!net_ || !net_->active || net_->loading || !match_ || text.empty())
+void NetworkPlay::net_say(std::string_view text) {
+    if (!net_ || !net_->active || net_->loading || !runtime_.match_ || text.empty())
         return;
-    const auto& local = match_->state().game.players[net_->local_slot];
+    const auto& local = runtime_.match_->state().game.players[net_->local_slot];
     const auto name = field_text(local.name, sizeof local.name);
     char line[sizeof(oa::netgame::ChatRecord::text)];
     std::snprintf(
@@ -1368,35 +1385,36 @@ void Runtime::net_say(std::string_view text) {
     );
     nm::net_match_say(net_->net.get(), line);
     // The chat formatter also reports lines that reach everyone.
-    const uint8_t mode = match_->state().game.chat_mode;
+    const uint8_t mode = runtime_.match_->state().game.chat_mode;
     if (mode != OA_CHAT_MODE_CHOSEN && mode != OA_CHAT_MODE_ALLIES &&
         mode != oa::sim::messages::chat_mode_local_only)
         report_chat_line(line);
 }
 
-int Runtime::run_net_loopback_check(std::size_t ticks) {
-    if (!options_.headless_check)
+int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
+    if (!runtime_options(runtime_).headless_check)
         throw std::runtime_error("--net-loopback-check needs --headless-check");
     std::cout << "net loopback check: hosting and joining in-process over 127.0.0.1\n";
     // The joiner's match writes its own trace files beside the host's.
-    auto joiner_options = options_;
+    auto joiner_options = runtime_options(runtime_);
     for (auto* path : {&joiner_options.trace_digest, &joiner_options.trace_units})
         if (!path->empty())
             *path += ".joiner";
     // Both machines run the same extension table; the check presses Pause
     // through it as the engine's hotkeys do.
-    const Extension& extension = extension_;
+    const Extension& extension = runtime_.extension_;
     // The joining machine is a whole second runtime, so it lives on the heap
     // beside this one rather than on the thread's stack.
     const auto joiner_runtime =
-        std::make_unique<Runtime>(std::move(joiner_options), assets_, extension);
+        std::make_unique<Runtime>(std::move(joiner_options), runtime_.assets_, extension);
     Runtime& joiner = *joiner_runtime;
+    NetworkPlay& joiner_play = NetworkPlay::of(joiner);
 
     // The host services the joiner while it waits (loopback_configure). It
     // stops before the joiner is destroyed, however the check ends, so the
     // host's later teardown never services a freed machine.
     struct JoinerUnlink {
-        Runtime& host;
+        NetworkPlay& host;
 
         ~JoinerUnlink() {
             if (host.net_) {
@@ -1408,21 +1426,22 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
 
     const JoinerUnlink unlink_joiner{*this};
     LoopbackSide host{this, "hoster"};
-    LoopbackSide client{&joiner, "joiner"};
+    LoopbackSide client{&joiner_play, "joiner"};
     const auto require = [](bool ok, const char* what) {
         if (!ok)
             throw std::runtime_error(std::string("net loopback check: ") + what);
     };
-    const auto on_screen = [](const Runtime& side, Screen screen) {
-        return side.screen_ == screen;
+    const auto on_screen = [](Runtime& side, Screen screen) {
+        const CheckHost side_host = check_host(side);
+        return side_host.screen(side_host.context) == screen_id(screen);
     };
     require(
-        NetHost::loopback_configure(*this, 0x51, joiner.net_.get()) &&
-            NetHost::loopback_configure(joiner, 0x77, net_.get()),
+        NetHost::loopback_configure(*this, 0x51, joiner_play.net_.get()) &&
+            NetHost::loopback_configure(joiner_play, 0x77, net_.get()),
         "loopback session storage"
     );
     for (auto* side : {&host, &client}) {
-        side->net = nm::session_lobby_net(&side->runtime->net_->connection);
+        side->net = nm::session_lobby_net(&side->play->net_->connection);
         mp::lobby_reset(*side->lobby, *side->game);
         side->lobby->net = side->net;
         side->lobby->local_version_major = 3;
@@ -1431,7 +1450,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     }
     const auto pump_both = [&](uint32_t wait_ms) {
         NetHost::loopback_pump(*this, wait_ms);
-        NetHost::loopback_pump(joiner, wait_ms);
+        NetHost::loopback_pump(joiner_play, wait_ms);
     };
     const auto wait_until = [&](auto done, const char* what) {
         const auto started = std::chrono::steady_clock::now();
@@ -1470,12 +1489,13 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         host_info.map_name,
         sizeof host_info.map_name,
         "%s",
-        small_map ? kLoopbackComputerMap : first_map_name_.c_str()
+        small_map ? kLoopbackComputerMap : runtime_.first_map_name_.c_str()
     );
     mp::lobby_publish_session(*host.lobby);
 
     require(client.net.open(client.net.context, &providers[0], "127.0.0.1"), "client open");
-    joiner.net_->connection.host->engine.config.enum_port = net_->connection.host->enum_port_bound;
+    joiner_play.net_->connection.host->engine.config.enum_port =
+        net_->connection.host->enum_port_bound;
     mp::SessionEntry sessions[mp::kMaxSessions]{};
     require(
         client.net.enumerate(client.net.context, sessions, mp::kMaxSessions) >= 1,
@@ -1484,7 +1504,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     client.connect->chosen = sessions[0];
     require(mp::connect_join(*client.lobby, *client.connect, false), "client join");
     const auto host_id = net_->connection.local_id;
-    const auto client_id = joiner.net_->connection.local_id;
+    const auto client_id = joiner_play.net_->connection.local_id;
     wait_until(
         [&] {
             drain(host);
@@ -1605,7 +1625,9 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     int32_t synced_units = 0;
     {
         int32_t unit_count = 0;
-        mp::LobbyUnit* host_units = mp::multiplayer_units(assets_, &unit_count);
+        const CheckHost host_check = check_host(runtime_);
+        mp::LobbyUnit* host_units =
+            mp::multiplayer_units(*host_check.assets(host_check.context), &unit_count);
         require(unit_count > 100, "the install has no unit table");
         std::vector<mp::LobbyUnit> client_units(host_units, host_units + unit_count);
         int32_t altered = 1;
@@ -1676,7 +1698,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     const auto hold_speed = [](Runtime& side, uint16_t speed) {
         side.preferences_.game_speed = side.preferences_.current_game_speed = speed;
     };
-    hold_speed(*this, kHostLeftSpeed);
+    hold_speed(runtime_, kHostLeftSpeed);
     hold_speed(joiner, kClientLeftSpeed);
 
     // START: the host launches and its 0x08 launches the client. No frame
@@ -1684,7 +1706,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     // through the engine's load progress hook, which sends the 0x08, a probe
     // and the host's rising load progress (0x2a) to the joiner's battle room.
     const auto joiner_received = [&](oa::netgame::RecordType type) {
-        return joiner.net_->connection.packets->traffic
+        return joiner_play.net_->connection.packets->traffic
             .record_count[static_cast<uint8_t>(type)]
                          [static_cast<uint8_t>(oa::netgame::TrafficChannel::received)];
     };
@@ -1710,26 +1732,26 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             !build_progress.empty() && build_progress.front() < nm::load_progress_complete,
         "the host's build sent no probe or load progress to the joiner"
     );
-    NetHost::launch(joiner, *client.lobby);
-    require(joiner.net_->active && joiner.net_->loading, "client launch");
+    NetHost::launch(joiner_play, *client.lobby);
+    require(joiner_play.net_->active && joiner_play.net_->loading, "client launch");
     // The load barrier and the match entry run through the per-frame path.
     wait_until(
         [&] {
             net_frame();
-            joiner.net_frame();
-            return !net_->loading && !joiner.net_->loading;
+            joiner_play.net_frame();
+            return !net_->loading && !joiner_play.net_->loading;
         },
         "load barrier did not pass"
     );
     require(
-        net_->active && joiner.net_->active && on_screen(*this, Screen::match) &&
+        net_->active && joiner_play.net_->active && on_screen(runtime_, Screen::match) &&
             on_screen(joiner, Screen::match),
         "match entry"
     );
     // Joining waits for no match report: each machine's report starts as
     // its match launches.
     require(
-        net_->report_started && joiner.net_->report_started,
+        net_->report_started && joiner_play.net_->report_started,
         "a machine's score report did not start as its match launched"
     );
     std::cout << "net loopback check: the host's build sent the joiner load progress";
@@ -1740,7 +1762,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     // loaded and dropped them: neither match has the unit taken away, both
     // have every other.
     for (const auto* side : {&host, &client}) {
-        const auto& world = *side->runtime->net_->net->world;
+        const auto& world = *side->play->net_->net->world;
         bool kept = false;
         for (uint32_t type = 1; type < world.unit_def_count; ++type)
             kept = kept || world.unit_defs[type].fbi_hash == taken_away_key;
@@ -1751,7 +1773,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         );
     }
     for (const Runtime* side :
-         {static_cast<const Runtime*>(this), static_cast<const Runtime*>(&joiner)}) {
+         {static_cast<const Runtime*>(&runtime_), static_cast<const Runtime*>(&joiner)}) {
         const auto& timing = side->match_timing_;
         const auto& game = side->match_->state().game;
         require(
@@ -1765,15 +1787,15 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         );
     }
     if (computer) {
-        NetHost::computer_match(*this, joiner, ticks, computer_id, watching);
+        NetHost::computer_match(*this, joiner_play, ticks, computer_id, watching);
         return 0;
     }
     const auto host_commander = NetHost::local_commander(*this);
     require(host_commander != 0, "host commander");
-    const auto& host_world = match_->state();
+    const auto& host_world = runtime_.match_->state();
     const auto& client_world = joiner.match_->state();
     const auto commander_z = host_world.units[host_commander].position.z;
-    const auto speed_before = preferences_.current_game_speed;
+    const auto speed_before = runtime_.preferences_.current_game_speed;
     // The host commander's pose at each host tick; the client's copy is
     // compared with the pose of the last record it applied. Slot orders
     // differ between machines, so the client's host slot is found by id.
@@ -1817,7 +1839,8 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         if (joiner.match_->ground_runtime(host_commander) == nullptr)
             return;
         const auto& owner = host_poses[static_cast<std::size_t>(tick)];
-        const auto divergence = pose_divergence(owner, NetHost::unit_pose(joiner, host_commander));
+        const auto divergence =
+            pose_divergence(owner, NetHost::unit_pose(joiner_play, host_commander));
         if (copy_placed_tick == 0) {
             if (divergence != 0)
                 return;
@@ -1861,8 +1884,8 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     // Typed text reaches everyone, an option command's echo stays on the host
     // (the chat line's local-only mode).
     const auto type_line = [&](const char* text) {
-        chat_buffer_ = text;
-        submit_chat_line();
+        runtime_.chat_buffer_ = text;
+        runtime_.submit_chat_line();
     };
     // The Pause key as the engine's hotkeys run it: the pause bit flips, then
     // the extension hears of it.
@@ -1871,11 +1894,11 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         host_game.sim_run_flags =
             static_cast<uint16_t>(host_game.sim_run_flags ^ nm::run_flag_paused);
         extension.pause_changed(
-            extension.context, *this, (host_game.sim_run_flags & nm::run_flag_paused) != 0
+            extension.context, runtime_, (host_game.sim_run_flags & nm::run_flag_paused) != 0
         );
     };
     const auto pauses_received = [&] {
-        const auto& traffic = joiner.net_->connection.packets->traffic;
+        const auto& traffic = joiner_play.net_->connection.packets->traffic;
         return traffic.record_count[static_cast<uint8_t>(oa::netgame::RecordType::pause_speed)]
                                    [static_cast<uint8_t>(oa::netgame::TrafficChannel::received)];
     };
@@ -1885,14 +1908,14 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     };
     // The speed keys as the engine's hotkeys run them on the host: the
     // engine reports each speed they set to the extension, which sends it.
-    const auto raise_host_speed = [&] { adjust_game_speed(1); };
+    const auto raise_host_speed = [&] { runtime_.adjust_game_speed(1); };
     // A machine's preferences put a speed back straight into its match, as
     // their Cancel and UNDO put back the speed they opened with and RESTORE
     // the normal speed; the engine reports none of them, and the other
     // machine hears nothing of it.
     const auto put_back_speed = [&](Runtime& side, uint16_t speed) {
         hold_speed(side, speed);
-        auto& side_game = side.net_->net->world->game;
+        auto& side_game = NetworkPlay::of(side).net_->net->world->game;
         side_game.requested_speed = side_game.current_speed = speed;
     };
     const auto host_speeds_received = [&] {
@@ -1909,7 +1932,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     const auto host_puts_back = [&](uint16_t speed) {
         joiner_speeds_before_put_back = pauses_received();
         joiner_speed_before_put_back = client_world.game.requested_speed;
-        put_back_speed(*this, speed);
+        put_back_speed(runtime_, speed);
     };
     // Checks that the joiner heard nothing of the speed the host put back.
     const auto require_put_back_kept = [&](const char* what, uint16_t speed) {
@@ -1919,7 +1942,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             pauses_received() == joiner_speeds_before_put_back &&
                 client_world.game.requested_speed == joiner_speed_before_put_back &&
                 host_world.game.requested_speed == speed &&
-                preferences_.current_game_speed == speed,
+                runtime_.preferences_.current_game_speed == speed,
             failure.c_str()
         );
         std::cout << "net loopback check: the host's " << what << " put back speed " << speed
@@ -1933,7 +1956,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     for (std::size_t tick = 0; tick < ticks; ++tick) {
         if (tick == 30) {
             const auto& unit = host_world.units[host_commander];
-            match_->issue_ground_move(
+            runtime_.match_->issue_ground_move(
                 host_commander,
                 {unit.position.x, unit.position.y, unit.position.z + kLoopbackMoveDistance},
                 false
@@ -1993,7 +2016,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         // The host's in-game menu holds nothing in a shared match and sends no
         // pause: the client keeps ticking and hears no 0x19.
         if (tick == 150) {
-            match_paused_ = true;
+            runtime_.match_paused_ = true;
             pauses_before_menu = pauses_received();
             client_tick_before_menu = client_world.game.tick;
         }
@@ -2004,7 +2027,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                     client_world.game.tick > client_tick_before_menu,
                 "the host's menu paused the client"
             );
-            match_paused_ = false;
+            runtime_.match_paused_ = false;
         }
         // The Pause key pauses both machines, whose ticks then hold, and
         // pressed again resumes both.
@@ -2052,7 +2075,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                 pump_both(kTickPumpWaitMs);
             }
             while (client_world.game.tick < host_world.game.tick) {
-                NetHost::loopback_step(joiner);
+                NetHost::loopback_step(joiner_play);
                 compare_copy();
                 count_shots(client_world, client_shots);
                 pump_both(1);
@@ -2064,26 +2087,26 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             const int32_t ahead = unit.position.z + kLoopbackShotDistance < map_depth
                                       ? kLoopbackShotDistance
                                       : -kLoopbackShotDistance;
-            (void)match_->issue_attack_ground(
+            (void)runtime_.match_->issue_attack_ground(
                 host_commander, {unit.position.x, unit.position.y, unit.position.z + ahead}, false
             );
         }
         if (tick == kLoopbackFireUntil)
-            (void)match_->issue_stop(host_commander);
+            (void)runtime_.match_->issue_stop(host_commander);
         net_frame();
-        joiner.net_frame();
+        joiner_play.net_frame();
         NetHost::loopback_step(*this);
         note_host_pose();
         count_shots(host_world, host_shots);
-        NetHost::loopback_step(joiner);
+        NetHost::loopback_step(joiner_play);
         compare_copy();
         count_shots(client_world, client_shots);
         pump_both(kTickPumpWaitMs);
     }
     require((client_world.game.sim_run_flags & nm::run_flag_paused) == 0, "client stayed paused");
     require(
-        preferences_.current_game_speed != speed_before &&
-            joiner.preferences_.current_game_speed == preferences_.current_game_speed,
+        runtime_.preferences_.current_game_speed != speed_before &&
+            joiner.preferences_.current_game_speed == runtime_.preferences_.current_game_speed,
         "speed change did not reach the client"
     );
     // Settle: the owner's full record refreshes every slot once per
@@ -2097,7 +2120,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         NetHost::loopback_step(*this);
         note_host_pose();
         count_shots(host_world, host_shots);
-        NetHost::loopback_step(joiner);
+        NetHost::loopback_step(joiner_play);
         compare_copy();
         count_shots(client_world, client_shots);
         pump_both(kTickPumpWaitMs);
@@ -2110,7 +2133,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     for (uint32_t slot = 1; slot < host_world.unit_slot_count; ++slot)
         live += host_world.units[slot].type_index != 0 ? 1 : 0;
     const auto& host_net = *net_->net;
-    const auto& client_net = *joiner.net_->net;
+    const auto& client_net = *joiner_play.net_->net;
     char digests[64];
     std::snprintf(
         digests,
@@ -2125,7 +2148,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
               << " / " << client_net.records_applied << ", refused " << host_net.records_refused
               << " / " << client_net.records_refused << ", errors " << host_net.record_errors
               << " / " << client_net.record_errors << ", remote creates "
-              << net_->binding.created_remote << " / " << joiner.net_->binding.created_remote
+              << net_->binding.created_remote << " / " << joiner_play.net_->binding.created_remote
               << ", host commander copy divergence " << copy_divergence << " over " << copy_compared
               << " records, host commander shots " << host_shots.count << " / "
               << client_shots.count << "\n";
@@ -2140,10 +2163,11 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     );
     if (watching) {
         require(
-            live == 1 && NetHost::local_commander(joiner) == 0, "the watcher was given a commander"
+            live == 1 && NetHost::local_commander(joiner_play) == 0,
+            "the watcher was given a commander"
         );
         require(
-            net_->binding.created_remote == 0 && joiner.net_->binding.created_remote == 1,
+            net_->binding.created_remote == 0 && joiner_play.net_->binding.created_remote == 1,
             "the host commander did not reach the watcher"
         );
         require(
@@ -2152,7 +2176,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     } else {
         require(live == 2, "both commanders are not present");
         require(
-            net_->binding.created_remote == 1 && joiner.net_->binding.created_remote == 1,
+            net_->binding.created_remote == 1 && joiner_play.net_->binding.created_remote == 1,
             "remote commanders were not created"
         );
     }
@@ -2193,13 +2217,13 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         );
         require(panel_client_slot < OA_PLAYER_COUNT, "the host has no slot for the client");
         oa::ui::hud::TeamPanelHost panels{};
-        panels.context = this;
-        extension.team_panel_host(extension.context, *this, panels);
+        panels.context = &runtime_;
+        extension.team_panel_host(extension.context, runtime_, panels);
         // The chat line goes out as the match's chat lines do (net_send_chat).
         oa::sim::messages::Hooks chat_hooks{};
         chat_hooks.context = this;
         chat_hooks.share_chat = [](void* context, const char* line) {
-            static_cast<Runtime*>(context)->net_send_chat(line);
+            static_cast<NetworkPlay*>(context)->net_send_chat(line);
         };
         const oa::ui::hud::PanelControls no_controls{
             nullptr,
@@ -2222,7 +2246,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         const auto run_both = [&](int frames) {
             for (int frame = 0; frame < frames; ++frame) {
                 NetHost::loopback_step(*this);
-                NetHost::loopback_step(joiner);
+                NetHost::loopback_step(joiner_play);
                 pump_both(kTickPumpWaitMs);
             }
         };
@@ -2255,8 +2279,9 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                 "the host's alliance change did not reach the joiner"
             );
             require(
-                joiner.net_->binding.match->allied(client_host_slot, joiner_local.index) ==
-                    (allied != 0),
+                joiner_play.net_->binding.match->allied(
+                    static_cast<uint8_t>(client_host_slot), joiner_local.index
+                ) == (allied != 0),
                 "the joiner's simulation did not follow the host's alliance"
             );
         }
@@ -2301,7 +2326,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             const auto& host = *static_cast<const oa::ui::hud::TeamPanelHost*>(user);
             host.sight_shared(host.context, from, to);
         };
-        auto& joiner_world = *joiner.net_->net->world;
+        auto& joiner_world = *joiner_play.net_->net->world;
         const auto* joiner_economy = oa::world_player_economy(
             &joiner_world, &joiner_world.game.players[joiner_world.game.local_player_index]
         );
@@ -2324,7 +2349,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         );
         pump_both(1);
         const auto credited_before = joiner_economy->metal.produced;
-        (void)nm::net_match_pump(joiner.net_->net.get());
+        (void)nm::net_match_pump(joiner_play.net_->net.get());
         require(
             joiner_economy->metal.produced - credited_before == 100.0F,
             "the joiner was not credited the metal the host gave"
@@ -2382,12 +2407,12 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         panel_world.units[gift].flags |= OA_UNIT_FLAG_SELECTED;
         share_host.user = this;
         share_host.give_units = [](void* user, uint8_t, uint8_t to) {
-            auto& self = *static_cast<Runtime*>(user);
+            auto& self = *static_cast<NetworkPlay*>(user);
             const oa::ui::hud::UnitTransfer transfer{
                 &self, [](void* owner, oa::Unit& unit, oa::Player& recipient) {
-                    auto& runtime = *static_cast<Runtime*>(owner);
-                    runtime.net_->binding.match->transfer_unit(
-                        static_cast<uint16_t>(oa::world_unit_slot(runtime.net_->net->world, &unit)),
+                    auto& play = *static_cast<NetworkPlay*>(owner);
+                    play.net_->binding.match->transfer_unit(
+                        static_cast<uint16_t>(oa::world_unit_slot(play.net_->net->world, &unit)),
                         recipient.index
                     );
                 }
@@ -2395,13 +2420,13 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             oa::ui::hud::give_selected_units(*self.net_->net->world, to, nullptr, transfer);
         };
         share_host.share_map = [](void* user, uint8_t from, uint8_t to) {
-            auto& self = *static_cast<Runtime*>(user);
+            auto& self = *static_cast<NetworkPlay*>(user);
             nm::net_match_share_sight(self.net_->net.get(), from, to);
         };
         share_host.send_metal = nullptr;
         share_host.send_energy = nullptr;
         const auto received = [&](oa::netgame::RecordType type) {
-            return joiner.net_->connection.packets->traffic
+            return joiner_play.net_->connection.packets->traffic
                 .record_count[static_cast<uint8_t>(type)]
                              [static_cast<uint8_t>(oa::netgame::TrafficChannel::received)];
         };
@@ -2411,7 +2436,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         // joiner's player has not; the first rows are made so.
         const auto host_bit = static_cast<uint16_t>(1U << client_host_slot);
         const auto joiner_bit = static_cast<uint16_t>(1U << joiner_local.index);
-        auto& joiner_mapped = joiner.net_->binding.match->sight_mutable().player_bits;
+        auto& joiner_mapped = joiner_play.net_->binding.match->sight_mutable().player_bits;
         constexpr std::size_t marked_cells = 256;
         for (std::size_t cell = 0; cell < std::min(joiner_mapped.size(), marked_cells); ++cell)
             joiner_mapped[cell] =
@@ -2452,7 +2477,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
             "the host does not hold the given unit as the joiner's"
         );
         // The joiner's gift goes again, so its commander is its last unit.
-        joiner.net_->binding.match->kill_unit(given, 0);
+        joiner_play.net_->binding.match->kill_unit(given, 0);
         run_both(8);
         require(
             (host_world.units[given].flags & OA_UNIT_FLAG_LIVE) == 0 &&
@@ -2480,7 +2505,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         // in full.
         (void)oa::ui::hud::control_panel_click(panel_world, "OK", no_controls, events, panels);
         run_both(4);
-        const auto& joiner_view = joiner.net_->connection.host->engine;
+        const auto& joiner_view = joiner_play.net_->connection.host->engine;
         const auto published_options = static_cast<uint16_t>(joiner_view.desc.user[0] >> 16);
         require(
             (published_options & OA_SETUP_OPTION_WATCHING_ALLOWED) ==
@@ -2510,7 +2535,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                   << "turned watching off and on\n";
     }
     const auto client_lines = joiner.match_message_lines();
-    const auto host_chat = match_message_lines();
+    const auto host_chat = runtime_.match_message_lines();
     const auto shown = [](const std::vector<std::string>& lines, const char* line) {
         return std::find(lines.begin(), lines.end(), line) != lines.end();
     };
@@ -2613,7 +2638,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     const auto session_step = [&](bool peer_runs) {
         NetHost::loopback_step(*this);
         if (peer_runs)
-            NetHost::loopback_step(joiner);
+            NetHost::loopback_step(joiner_play);
         pump_both(kTickPumpWaitMs);
     };
     check_console_session_cheats(joiner, session_step);
@@ -2621,7 +2646,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     if (watching) {
         // The opponent check passes over a watcher, so the host wins at once.
         require(
-            match_->outcome() == sim::scenario::Outcome::victory,
+            runtime_.match_->outcome() == sim::scenario::Outcome::victory,
             "the host did not win against a watcher"
         );
     } else {
@@ -2629,16 +2654,16 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         // when the client's defeat countdown runs out it watches instead of
         // losing and sends its lobby block again; the host, its
         // only opponent gone, wins.
-        const uint16_t commander = NetHost::local_commander(joiner);
+        const uint16_t commander = NetHost::local_commander(joiner_play);
         joiner.match_->toggle_self_destruct(std::span<const uint16_t>(&commander, 1));
         const auto defeated = [&] {
             return watches(info_for_id(client_world, client_id)) &&
                    watches(info_for_id(host_world, client_id)) &&
-                   match_->outcome() == sim::scenario::Outcome::victory;
+                   runtime_.match_->outcome() == sim::scenario::Outcome::victory;
         };
         for (uint32_t tick = 0; tick < kLoopbackDefeatTicks && !defeated(); ++tick) {
             NetHost::loopback_step(*this);
-            NetHost::loopback_step(joiner);
+            NetHost::loopback_step(joiner_play);
             pump_both(kTickPumpWaitMs);
         }
         std::cout << "net loopback check: the defeated client watches ("
@@ -2646,7 +2671,8 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                   << (watches(info_for_id(host_world, client_id)) ? "yes" : "no")
                   << " on the host), tick " << client_world.game.tick << "\n";
         require(
-            NetHost::local_commander(joiner) == 0, "the client's commander did not self-destruct"
+            NetHost::local_commander(joiner_play) == 0,
+            "the client's commander did not self-destruct"
         );
         require(
             watches(info_for_id(client_world, client_id)), "the defeated client does not watch"
@@ -2671,7 +2697,9 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
                 joiner.match_->outcome() == sim::scenario::Outcome::ongoing,
             "accepting watching did not return to the running match"
         );
-        require(match_->outcome() == sim::scenario::Outcome::victory, "the host did not win");
+        require(
+            runtime_.match_->outcome() == sim::scenario::Outcome::victory, "the host did not win"
+        );
     }
     // The host's game is over and ends as a finished game does. The outcome
     // shows, but the clock of a shared match keeps stepping it; the end of
@@ -2681,7 +2709,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     // no pause: the host's tick moves on and it sends no probe. The joiner's
     // side runs between the host's frames.
     const auto finish_host_game = [&](auto&& between_frames, const char* what) {
-        match_paused_ = true;
+        runtime_.match_paused_ = true;
         uint32_t held = 0;
         const auto probes_sent = [&] {
             return net_->connection.packets->traffic
@@ -2694,7 +2722,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         uint32_t tick_held = 0;
         const auto started = std::chrono::steady_clock::now();
         for (;;) {
-            finish_match_outcome();
+            runtime_.finish_match_outcome();
             if (!net_->active)
                 break;
             const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2712,7 +2740,7 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         require(tick_held == held, "the host's tick did not move on while it held on its outcome");
         require(probes_held == 0, "the host sent probes while it held on its outcome");
         require(
-            on_screen(*this, Screen::campaign_end),
+            on_screen(runtime_, Screen::campaign_end),
             "the host's finished game did not open its end screen"
         );
         require(
@@ -2767,8 +2795,8 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
         // finished world.
         bool paused_by_host = false;
         const auto joiner_frame = [&] {
-            joiner.net_frame();
-            NetHost::loopback_step(joiner);
+            joiner_play.net_frame();
+            NetHost::loopback_step(joiner_play);
             paused_by_host =
                 paused_by_host || (client_world.game.sim_run_flags & nm::run_flag_paused) != 0;
             pump_both(kTickPumpWaitMs);

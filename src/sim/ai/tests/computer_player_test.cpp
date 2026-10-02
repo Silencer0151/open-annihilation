@@ -5,13 +5,17 @@
 #include "oa/sim/combat_state.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/test/game_assets.hpp"
+#include "oa/platform/files.hpp"
+#include "oa/test/scratch_directory.hpp"
 
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace oa::sim::ai;
@@ -42,10 +46,10 @@ enum Type : uint16_t {
 
 struct Order {
     std::string kind;
-    uint16_t unit;
-    uint16_t arg;
+    uint16_t unit{};
+    uint16_t arg{};
     oa::FixedVec3 at;
-    bool queue;
+    bool queue{};
 };
 
 // Fake match: a World, squads and a scripted random stream.
@@ -391,7 +395,8 @@ void test_weight_report() {
         "configure"
     );
     check(computer_players_initialize(&state, host), "initialize");
-    std::FILE* out = std::tmpfile();
+    const auto scratch = oa::test::make_scratch_directory("oa-ai-computer-report");
+    std::FILE* out = oa::platform::open_file(scratch / "weights.txt", "w+b");
     computer_write_report(&state, host, 1, {"Maps/Test.TNT", nullptr}, out);
     const std::string expected = "Match clock: 01:02:03\r\n"
                                  "Name: 'Robot' in player slot 1\r\n"
@@ -408,7 +413,7 @@ void test_weight_report() {
                                  "n/a  -  50 :  50 :  50 =  50 - '\t\t:'\r\n";
     check(read_all(out) == expected, "weight report text");
     std::fclose(out);
-    out = std::tmpfile();
+    out = oa::platform::open_file(scratch / "header.txt", "w+b");
     fake.world.game.players[0].status = OA_PLAYER_STATUS_MIRRORED;
     computer_write_report(&state, host, 0, {}, out);
     const auto header = read_all(out);
@@ -419,6 +424,8 @@ void test_weight_report() {
         "report header only without a controller"
     );
     std::fclose(out);
+    std::error_code removal;
+    std::filesystem::remove_all(scratch, removal);
     computer_players_release(&state);
 }
 
@@ -911,7 +918,7 @@ void test_siege() {
     fake.spawn(23, 1, ARMCK, 160, 100, 0).movement = 1;
     fake.spawn(24, 1, ARMPW, 180, 100, OA_UNIT_FLAG_HAS_WEAPONS).movement = 1;
     siege.reach[22] = true;
-    for (uint16_t slot : {20, 21, 22, 23, 24}) {
+    for (const uint16_t slot : std::array<uint16_t, 5>{20, 21, 22, 23, 24}) {
         auto& unit = fake.units[slot];
         unit.def = oa::world_unit_def_ref(&fake.world, &fake.defs[unit.type_index]);
         fake.set_squad(slot, static_cast<int>(Squad::siege));

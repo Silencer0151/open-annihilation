@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 
@@ -65,35 +66,9 @@ constexpr int32_t fixed(int32_t whole) {
     return static_cast<int32_t>(static_cast<uint32_t>(whole) << 16);
 }
 
-struct Services : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+using Services = oa::test::QuietServices;
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 struct Fixture {
     static constexpr std::size_t cells = static_cast<std::size_t>(map_cells) * map_cells;
@@ -417,13 +392,11 @@ void empty_schema_and_inactive_player() {
     }
     Fixture f;
     const std::array schema{entry("CORAK", nullptr, nullptr, 100, 100, 3)};
-    bool reported = false;
-    try {
-        sim::match_runtime::create_mission_units(*f.match, schema.data(), 1);
-    } catch (const std::runtime_error& error) {
-        reported = std::string(error.what()) == "Player number 3 invalid for unit CORAK";
-    }
-    CHECK(reported);
+    CHECK(!sim::match_runtime::create_mission_units(*f.match, schema.data(), 1));
+    CHECK(
+        f.match->fault() != nullptr &&
+        std::string(f.match->fault()) == "Player number 3 invalid for unit CORAK"
+    );
     CHECK(f.match->scenario_controller().enabled == 1);
     std::cout << "empty schema and inactive player passed\n";
 }

@@ -16,13 +16,13 @@ namespace oa::ui::console {
 // it runs, the word after it, its attribute bytes and its name. The mission's
 // handlers are left out: nothing here runs a mission.
 struct MissionTagRecord {
-    const char* status_text; // shown while the mission runs
+    const char* status_text{}; // shown while the mission runs
     // Set per mission in the static tables; the engine never reads it.
-    uint32_t word_after_status_text;
+    uint32_t word_after_status_text{};
     // attributes[1] to [4] hold the mission's descriptor word, little-endian,
     // as match_runtime's mission_descriptor_table lists it.
-    uint8_t attributes[5];
-    const char* name;
+    uint8_t attributes[5]{};
+    const char* name{};
 };
 
 // Bit of attributes[3]: the mission runs on the secondary order queue.
@@ -34,7 +34,7 @@ inline constexpr uint32_t kMissionTagCapacity = 256;
 
 struct MissionTagTable {
     MissionTagRecord records[kMissionTagCapacity];
-    uint32_t count;
+    uint32_t count{};
 };
 
 /// Orders two records by name, ignoring ASCII case.

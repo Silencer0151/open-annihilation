@@ -7,6 +7,15 @@
 namespace oa::sim::unit_effects {
 namespace {
 constexpr uint32_t no_debris = 0x20U;
+// Explode-type bits that each draw one explosion sprite: the first of six
+// consecutive bits, and all six.
+constexpr uint32_t explosion_sprite_first = 0x100U;
+constexpr uint32_t explosion_sprite_count = 6;
+constexpr uint32_t explosion_sprite_bits = 0x3f00U;
+static_assert(
+    explosion_sprite_bits ==
+    ((explosion_sprite_first << explosion_sprite_count) - explosion_sprite_first)
+);
 
 int32_t wrap_add(int32_t a, int32_t b) noexcept {
     return std::bit_cast<int32_t>(std::bit_cast<uint32_t>(a) + std::bit_cast<uint32_t>(b));
@@ -115,16 +124,16 @@ void Runtime::explode_piece(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t
         host_.set_piece_visible(slot, piece, false);
         sink_.effect(e);
     }
-    if ((flags & 0x3f00U) != 0) {
+    if ((flags & explosion_sprite_bits) != 0) {
         const auto pos = host_.piece_world(slot, piece);
-        for (uint32_t i = 0; i < 6; ++i)
-            if ((flags & (0x100U << i)) != 0) {
+        for (uint32_t i = 0; i < explosion_sprite_count; ++i)
+            if ((flags & (explosion_sprite_first << i)) != 0) {
                 Event e{};
                 e.kind = EventKind::explosion_sprite;
                 e.unit = slot.unit_index;
                 e.piece = piece;
                 e.code = i;
-                e.flags = 0x100U << i;
+                e.flags = explosion_sprite_first << i;
                 e.first = pos;
                 sink_.effect(e);
             }

@@ -6,7 +6,6 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <stdexcept>
 
 namespace oa::sim::gameplay_input {
 namespace {
@@ -60,7 +59,7 @@ bool inside_clockwise(std::span<const ScreenPoint> polygon, ScreenPoint point) n
 
 bool hits_root_bounds(const PickUnit& unit, const Camera& camera, ScreenPoint point) {
     if (!unit.model || unit.model->objects.empty())
-        throw std::invalid_argument("pick unit lacks root model");
+        return false;
     const auto [minimum, maximum] = formats::objects3d::object_bounds(unit.model->objects.front());
     std::array<formats::objects3d::FixedVector3, 4> corners{
         {{minimum.x, minimum.y, minimum.z},
@@ -94,7 +93,7 @@ formats::objects3d::FixedVector3 terrain_intersection(
     int32_t map_height
 ) {
     if (map_width <= 0 || map_height <= 0)
-        throw std::invalid_argument("terrain projection dimensions are invalid");
+        return {};
     map_x = std::clamp(map_x, 0, map_width - 1);
     projected_z = std::clamp(projected_z, 0, map_height - 1);
     const auto fixed_x = std::bit_cast<int32_t>(static_cast<uint32_t>(map_x) << 16U);
@@ -118,7 +117,7 @@ formats::objects3d::FixedVector3 terrain_intersection(
             projected_z <= far_projected) {
             const auto denominator = far_projected - near_projected;
             if (denominator == 0)
-                throw std::domain_error("terrain projection divisor is zero");
+                break;
             // The multiply, add and shift of the numerator wrap at 32 bits.
             const auto numerator_bits = (static_cast<uint32_t>(near_projected) * 0xfffU +
                                          static_cast<uint32_t>(projected_z))

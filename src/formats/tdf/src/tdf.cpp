@@ -3,19 +3,21 @@
 
 #include "oa/formats/tdf.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/base/text.hpp"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace oa::formats::tdf {
 using base::game_math::truncate_to_int64;
 
 struct ArenaChunk {
-    ArenaChunk* next;
-    uint32_t capacity;
-    uint32_t used;
+    ArenaChunk* next{};
+    uint32_t capacity{};
+    uint32_t used{};
     // Storage follows the header.
 };
 
@@ -92,16 +94,16 @@ char* arena_copy(Arena* arena, const char* begin, std::size_t length) noexcept {
 }
 
 struct Parser {
-    Document* document;
-    const char* text;
-    ParseError* error;
+    Document* document{};
+    const char* text{};
+    ParseError* error{};
 };
 
 bool fail(Parser* parser, ParseStatus status, const char* at, const char* block_name) noexcept {
     if (parser->error != nullptr) {
         parser->error->status = status;
         parser->error->offset = static_cast<uint32_t>(at - parser->text);
-        std::strncpy(
+        oa::base::text::copy_padded(
             parser->error->block_name,
             block_name != nullptr ? block_name : "",
             sizeof parser->error->block_name - 1
@@ -224,7 +226,7 @@ Block* parse_block(
         fail(parser, ParseStatus::out_of_memory, body, name);
         return nullptr;
     }
-    std::memset(block, 0, sizeof *block);
+    std::memset(static_cast<void*>(block), 0, sizeof *block);
     block->name = block_name;
 
     const char* at = body;
@@ -324,6 +326,17 @@ const char* parse_status_message(ParseStatus status) noexcept {
         return "TDF arena exhausted";
     }
     return "unknown";
+}
+
+std::string describe(const ParseError& error) {
+    std::string text = parse_status_message(error.status);
+    text += " at byte " + std::to_string(error.offset);
+    if (error.block_name[0] != '\0') {
+        text += " in [";
+        text += error.block_name;
+        text += ']';
+    }
+    return text;
 }
 
 void document_init(Document* document) noexcept {
@@ -540,12 +553,12 @@ bool get_string(
     const char* value = find_value(block, key);
     if (value == nullptr) {
         if (fallback != nullptr) {
-            std::strncpy(out, fallback, size - 1);
+            oa::base::text::copy_padded(out, fallback, size - 1);
             out[size - 1] = '\0';
         }
         return false;
     }
-    std::strncpy(out, value, size);
+    oa::base::text::copy_padded(out, value, size);
     out[size - 1] = '\0';
     return true;
 }
@@ -592,6 +605,33 @@ bool step_entry(Document* document, uint32_t index) noexcept {
     const Block* scope = document->cursor != nullptr ? document->cursor : document->root;
     document->cursor = child_at(scope, index);
     return document->cursor != nullptr;
+}
+
+OwnedDocument::OwnedDocument() noexcept {
+    document_init(&document_);
+}
+
+OwnedDocument::~OwnedDocument() {
+    document_free(&document_);
+}
+
+OwnedDocument::OwnedDocument(OwnedDocument&& other) noexcept : document_(other.document_) {
+    document_init(&other.document_);
+}
+
+OwnedDocument& OwnedDocument::operator=(OwnedDocument&& other) noexcept {
+    if (this != &other) {
+        document_free(&document_);
+        document_ = other.document_;
+        document_init(&other.document_);
+    }
+    return *this;
+}
+
+bool OwnedDocument::parse(std::string_view text, ParseError* error) noexcept {
+    const auto length =
+        text.size() > max_input_bytes ? max_input_bytes + 1u : static_cast<uint32_t>(text.size());
+    return parse_text(&document_, text.data(), length, false, error);
 }
 
 } // namespace oa::formats::tdf

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend/resource_palette.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -20,14 +21,14 @@ constexpr std::size_t kPathBytes = 0x100;
 /// @param capacity bytes of out
 /// @param name NUL-terminated name
 void copy_name(char* out, std::size_t capacity, const char* name) noexcept {
-    std::strncpy(out, name, capacity - 1);
+    oa::base::text::copy_padded(out, name, capacity - 1);
     out[capacity - 1] = '\0';
 }
 
 } // namespace
 
 void resource_cache_init(ResourceCache* cache) noexcept {
-    std::memset(cache, 0, sizeof *cache);
+    std::memset(static_cast<void*>(cache), 0, sizeof *cache);
 }
 
 void resource_cache_free(ResourceCache* cache, const ResourceHost& host) noexcept {

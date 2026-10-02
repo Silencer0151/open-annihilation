@@ -4,6 +4,7 @@
 #include "oa/audio/sound_output.hpp"
 
 #include "oa/audio/sound_output_backends.hpp"
+#include "oa/platform/system.hpp"
 
 #include <cstdlib>
 #include <string_view>
@@ -47,9 +48,9 @@ SoundOutput* chosen_output = nullptr;
 SoundOutput* own_output = nullptr;
 
 std::unique_ptr<SoundOutput> make_own_output() {
-    const char* choice = std::getenv(output_variable);
+    const auto choice = platform::environment_value(output_variable);
     std::unique_ptr<SoundOutput> output;
-    if (choice != nullptr && std::string_view(choice) == wave_out_choice)
+    if (choice && *choice == wave_out_choice)
         output = wave_out_sound_output_create();
     if (output == nullptr)
         output = sdl_sound_output_create();

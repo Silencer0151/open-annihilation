@@ -48,10 +48,10 @@ class UnitHost final : public sim::model_runtime::ModelHost {
     /// Binds a script host to one unit's model instance and world slot.
     ///
     /// @param instance Model instance the piece operations act on.
-    /// @param slot Unit the script belongs to; its index must lie inside the
-    ///     world's unit table, or construction throws.
-    /// @param pool Unit slot pool; its size must equal the world's unit slot
-    ///     count, or construction throws.
+    /// @param slot Unit the script belongs to; its index lies inside the
+    ///     world's unit table, which UnitInstance checks.
+    /// @param pool Unit slot pool; its size equals the world's unit slot
+    ///     count, which UnitInstance checks.
     /// @param state Canonical world holding the unit.
     /// @param values Unit-value services.
     /// @param effects Effect and attachment services.
@@ -149,9 +149,13 @@ class UnitInstance {
     /// program, the script interpreter, and registers the interpreter in the
     /// world's script table. Create does not run yet.
     ///
+    /// A slot bound to no unit, one whose index lies outside the world's unit
+    /// table, or a pool whose size is not the world's unit slot count gets no
+    /// interpreter, and the refusal is noted; so is a model the model runtime
+    /// refuses, whose instance then has no pieces.
+    ///
     /// @param loaded Loaded type: model and optional COB program.
-    /// @param slot Unit slot the instance belongs to; must be bound to a unit,
-    ///     or construction throws.
+    /// @param slot Unit slot the instance belongs to.
     /// @param pool Unit slot pool.
     /// @param state Canonical world holding the unit.
     /// @param values Unit-value services.
@@ -159,6 +163,8 @@ class UnitInstance {
     /// @param random Shared stream the script's RANDOM draws from.
     /// @param clock_scale SLEEP multiplier supplied by the owning
     ///     application (see ScriptInstance).
+    /// @param fault Where refusals and interpreter errors are noted, or null
+    ///     to drop them; must outlive the instance.
     UnitInstance(
         const sim::unit_spawn::LoadedType& loaded,
         sim::unit_spawn::Slot& slot,
@@ -167,7 +173,8 @@ class UnitInstance {
         UnitValueHost& values,
         Effects& effects,
         SharedRandom& random,
-        int32_t clock_scale
+        int32_t clock_scale,
+        MatchFault* fault = nullptr
     );
     /// Removes the interpreter from the world's script table.
     ~UnitInstance();
@@ -185,23 +192,29 @@ class UnitInstance {
     /// @return False when the unit has no script, no Create script or no
     ///     free context.
     bool create();
+    /// The piece query_weapon_piece gives when it cannot ask the script;
+    /// piece_world places it at the unit position.
+    static constexpr uint32_t no_piece = 0xffff'ffffU;
+
     /// Returns the slot's firing piece from QueryPrimary/Secondary/Tertiary.
     ///
-    /// @param slot Weapon slot 0..2; another value throws.
-    /// @return COB piece index; 0 when the script leaves the argument.
+    /// @param slot Weapon slot 0..2.
+    /// @return COB piece index; 0 when the script leaves the argument;
+    ///     no_piece, which is noted, for another slot or a unit without a script.
     uint32_t query_weapon_piece(uint8_t slot);
     /// Returns the slot's firing piece in world space.
     ///
     /// This is the form without a known piece; a caller holding one goes
     /// straight to piece_world.
     ///
-    /// @param slot Weapon slot 0..2; another value throws.
+    /// @param slot Weapon slot 0..2; another is at the unit position.
     /// @return Signed 16.16 x, y, z bit patterns.
     std::array<uint32_t, 3> query_weapon_world(uint8_t slot);
     /// Returns the AimFromPrimary/Secondary/Tertiary piece in world space, or
     /// the firing piece when the script leaves the -1 it is given.
     ///
-    /// @param slot Weapon slot 0..2; another value throws.
+    /// @param slot Weapon slot 0..2; another, or a unit without a script, is
+    ///     at the unit position, which is noted.
     /// @return Signed 16.16 x, y, z bit patterns.
     std::array<uint32_t, 3> aim_from_world(uint8_t slot);
     /// Returns the QueryNanoPiece piece in world space.
@@ -227,7 +240,8 @@ class UnitInstance {
     ///
     /// @param piece COB piece index; a negative one or one outside the model
     ///     adds nothing.
-    /// @return Signed 16.16 x, y, z bit patterns.
+    /// @return Signed 16.16 x, y, z bit patterns; the origin for a slot bound
+    ///     to no unit.
     std::array<uint32_t, 3> piece_world(uint32_t piece) const;
     /// Returns the unit position plus the centre of the box around the
     /// piece's vertices, transformed from the unit's pieces and its bank,
@@ -236,7 +250,8 @@ class UnitInstance {
     ///
     /// @param piece COB piece index; one outside the model gives the unit
     ///     position.
-    /// @return Signed 16.16 x, y, z bit patterns.
+    /// @return Signed 16.16 x, y, z bit patterns; the origin for a slot bound
+    ///     to no unit.
     /// @quirk The box starts at the piece origin, so it always holds (0,0,0).
     std::array<uint32_t, 3> piece_box_center(uint32_t piece) const;
     /// Returns the attitude of a unit carried on the piece: the piece's
@@ -248,10 +263,17 @@ class UnitInstance {
 
   private:
 
+    /// Notes a refusal in the fault record, when there is one.
+    ///
+    /// @param what What was refused.
+    /// @param detail Why, when known.
+    void note(std::string_view what, std::string_view detail = {}) noexcept;
+
     sim::unit_spawn::Slot& slot_;
     oa::World& world_;
     sim::model_runtime::Instance model_;
     UnitHost host_;
     std::unique_ptr<ScriptInstance> script_;
+    MatchFault* fault_{};
 };
 } // namespace oa::sim::match_runtime

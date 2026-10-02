@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -64,8 +65,9 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
         return;
     }
     if (match_command_ == MatchCommand::dgun) {
+        // The click ends here whether or not the orders took it.
         if (target != 0)
-            (void)issue_pointer_unit_orders(x, y, clicks, queueing());
+            std::ignore = issue_pointer_unit_orders(x, y, clicks, queueing());
         else
             issue_pointer_ground_blast(x, y, queueing());
         return;
@@ -263,7 +265,8 @@ void Runtime::check_builder_orders() {
         throw std::runtime_error("builder order check: queued click was not consumed");
     if (!primary_kinds(builder).empty())
         throw std::runtime_error("builder order check: shift-click did not take HelpBuild back");
-    (void)issue_pointer_unit_orders(assist_x, assist_y, 1, true);
+    // The orders it leaves are checked below.
+    std::ignore = issue_pointer_unit_orders(assist_x, assist_y, 1, true);
     kinds = primary_kinds(builder);
     if (kinds.size() != 1 || kinds.front() != oa::sim::match_runtime::help_build_kind)
         throw std::runtime_error("builder order check: shift-click did not queue HelpBuild");
@@ -321,8 +324,9 @@ bool Runtime::issue_force_attack(float x, float y) {
     if (const auto id = hovered_match_unit_; id != 0 && id != selected_match_unit_) {
         const auto ground = match_world_point(x, y);
         try {
+            // A unit no attack resolves for is given no order.
             for_each_selected([&](uint16_t source) {
-                (void)match_->issue_attack_command(
+                std::ignore = match_->issue_attack_command(
                     source, id, queueing(), ground ? &*ground : nullptr
                 );
             });
@@ -338,7 +342,8 @@ bool Runtime::issue_force_attack(float x, float y) {
     if (!ground)
         return false;
     try {
-        (void)match_->issue_attack_ground(selected_match_unit_, *ground, queueing());
+        // A unit no attack resolves for is given no order.
+        std::ignore = match_->issue_attack_ground(selected_match_unit_, *ground, queueing());
         status_ = "Force attack ground";
         return true;
     } catch (const std::exception& error) {

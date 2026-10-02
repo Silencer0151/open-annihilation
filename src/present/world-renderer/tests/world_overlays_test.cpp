@@ -279,7 +279,7 @@ void test_debug_grid_terrain() {
     OA_CHECK(pixels[48 * pitch + 136] == 0xad);
     OA_CHECK(pixels[38 * pitch + 168] == 0xaf);
     // Off (and no contour spacing) draws nothing.
-    std::fill(pixels.begin(), pixels.end(), 0);
+    std::fill(pixels.begin(), pixels.end(), uint8_t{0});
     game->debug_overlay = wr::debug_view::off;
     wr::overlay_debug_grid(*game, wr::present_overlay_raster(), &surface, sources);
     OA_CHECK(std::count(pixels.begin(), pixels.end(), 0) == static_cast<long>(pixels.size()));

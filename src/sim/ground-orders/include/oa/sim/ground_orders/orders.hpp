@@ -22,9 +22,6 @@ inline constexpr uint8_t move_ground_kind = 26, standby_kind = 41,
     vtol_landing_kind = 53,                          // VTOL_Landing
     vtol_move_kind = 55,                             // VTOL_Move
     vtol_standby_kind = 64;                          // VTOL_Standby
-// Order events raised on the goal's order by the navigator and path search.
-inline constexpr uint32_t arrived_event = 0x20, path_failed_event = 0x40,
-                          goal_replaced_event = 0x80;
 // OrderState.command_flags: play the command acknowledgement sound once.
 inline constexpr uint8_t order_announce_flag = 0x20;
 
@@ -58,11 +55,9 @@ class SearchController {
 
     /// Starts a search job.
     ///
-    /// Throws std::invalid_argument for a missing field and std::logic_error while
-    /// another job is active.
-    ///
-    /// @param record unit, navigator, goal and movement map of the job; all must be set
-    void begin(SearchRecord record);
+    /// @param record unit, navigator, goal and movement map of the job
+    /// @return false, with nothing started, when a field is missing or another job is active
+    [[nodiscard]] bool begin(SearchRecord record) noexcept;
     /// Drops the active job when it belongs to a navigator.
     ///
     /// A cancel for another navigator is ignored; a matching cancel clears the whole
@@ -139,7 +134,8 @@ void release_navigation(SearchController& controller, Navigation& navigation) no
 /// a search pending. An existing route ending in the goal, or ending less than
 /// half the unit's distance from it, is kept; otherwise a unit with a primary
 /// non-retry order gets the route from its integer position to the goal
-/// position. The search timestamp resets when at least 10 ticks old.
+/// position. The search timestamp resets when at least 10 ticks old. A
+/// navigator holding more points than its capacity is left as it is.
 ///
 /// @param u unit, geometry, movement and navigator
 /// @param goal new goal, or null to clear it
@@ -156,8 +152,9 @@ void install_goal(UnitView u, Goal* goal, uint32_t tick, Host& host);
 void accept_path(UnitView u, std::span<const RoutePoint> points);
 /// Drops route points from the front of the route.
 ///
-/// Clears route_present when fewer than two points remain. Throws
-/// std::invalid_argument when count exceeds the points held.
+/// Clears route_present when fewer than two points remain. A count past the
+/// points held, or a navigator holding more points than its capacity, drops
+/// nothing.
 ///
 /// @param[in,out] n navigator
 /// @param count points to drop
@@ -166,7 +163,8 @@ void advance_path(Navigation& n, uint32_t count);
 ///
 /// Arrival raises arrived_event and detaches the goal; a waypoint within about
 /// five world units is consumed; a blocked move or an exhausted route marks a
-/// search pending.
+/// search pending. A navigator holding more points than its capacity is left
+/// as it is.
 ///
 /// @param u unit geometry, movement and navigator
 /// @param tick current game tick
@@ -180,12 +178,12 @@ void tick_navigation(UnitView u, uint32_t tick, Host& host);
 bool search_ready(Navigation& navigation, uint32_t tick) noexcept;
 /// Returns the navigator's next three steering points.
 ///
-/// Missing trailing points repeat the last one. Throws std::invalid_argument
-/// for an empty or over-full route.
+/// Missing trailing points repeat the last one.
 ///
 /// @param n navigator
-/// @return signed 16.16 points with Y zero
-std::array<Point, 3> steering_points(const Navigation& n);
+/// @return signed 16.16 points with Y zero; all three at the origin for an empty
+///         route or one holding more points than its capacity
+[[nodiscard]] std::array<Point, 3> steering_points(const Navigation& n) noexcept;
 /// Snaps X and Z onto the centre of the footprint cell they fall in.
 ///
 /// @param[in,out] destination signed 16.16 position; Y is untouched
@@ -234,8 +232,10 @@ uint32_t standby(UnitView u, sim::simulation_state::Order& order, uint32_t tick,
 /// The second route point is pulled back along the first segment to 80 world
 /// units ahead; the unit turns toward it within its turn rate and accelerates
 /// when both the turn and the stop fit before the route, otherwise decelerates.
-/// Without a route it only decelerates. No search result is fabricated.
-/// Throws std::domain_error for a zero maximum turn.
+/// Without a route it only decelerates; an empty or over-full route counts as
+/// none. A zero maximum turn, or a deceleration whose double wraps to zero,
+/// leaves no turn or stop distance to measure: the unit turns, then
+/// decelerates. No search result is fabricated.
 ///
 /// @param[in,out] unit unit whose heading changes
 /// @param[in,out] movement movement object whose speed and velocity change

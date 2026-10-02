@@ -10,6 +10,7 @@
 #include "oa/ui/frontend_state/dispatcher.hpp"
 #include "oa/ui/gui_layout.hpp"
 #include "oa/sim/simulation_state.hpp"
+#include "oa/base/text.hpp"
 
 #include <climits>
 #include <cstdio>
@@ -77,7 +78,7 @@ void build_score_summary(World& world, const oa::data::campaign::CampaignFile* c
         if (!listed && player.units_created == 0)
             continue;
         ScoreEntry& entry = game.scores[index];
-        std::strncpy(entry.name, player.name, kScoreNameBytes);
+        oa::base::text::copy_padded(entry.name, player.name, kScoreNameBytes);
         entry.name[kScoreNameBytes - 1] = '\0';
         entry.values[score_kills] = player.kills;
         entry.values[score_losses] = player.losses;
@@ -576,7 +577,7 @@ int32_t cd_check_click(const FrontendHost* host, const char* control, int32_t st
 }
 
 void copy_status_text(char* status, const char* text) {
-    std::strncpy(status, text != nullptr ? text : "", kStatusTextBytes);
+    oa::base::text::copy_padded(status, text != nullptr ? text : "", kStatusTextBytes);
     status[kStatusTextBytes - 1] = '\0';
 }
 

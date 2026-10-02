@@ -5,15 +5,16 @@
 """Hold an extension's reach into Runtime's private part to a shrinking budget.
 
 An extension reaches oa-game through the hooks of src/app/include/oa/app/extension.hpp.
-Until that is its only way in, it may also have a header of Runtime members
-that runtime.hpp includes inside class Runtime (network play's,
-oa/app/netgame_runtime_members.hpp, in every build; another extension's
-through OA_RUNTIME_EXTENSION_MEMBERS), and use Runtime's private names from
-those members and from Runtime's friends. This check measures both for one
-such header and compares them with a baseline that may only shrink:
+Until that is its only way in, it may use Runtime's private names from
+Runtime's friends (network play's NetworkPlay), and may also have a header
+of Runtime members that runtime.hpp includes inside class Runtime (one
+extension's, through OA_RUNTIME_EXTENSION_MEMBERS) and use them there. This
+check measures both for one extension, with or without such a header, and
+compares them with a baseline that may only shrink:
 
   declarations  the member declarations of the members header: each member
                 function, data member, nested type and friend it declares;
+                0 without one (network play has none);
   names         the private names of Runtime the extension's sources use,
                 each with its number of uses: every name declared only in a
                 private or protected part of class Runtime in runtime.hpp
@@ -426,19 +427,23 @@ def local_sources(paths, engine_header):
 def measure(runtime_path, members_path, sources):
     """The declaration count of the members header and the uses of each private Runtime name, by name.
 
-    Raises SurfaceBreach when the members header holds a preprocessor directive.
+    Without a members header (members_path None) the count is 0 and only the
+    sources are read. Raises SurfaceBreach when the members header holds a
+    preprocessor directive.
     """
     private = runtime_private_names(read_bounded(runtime_path))
-    members_text = read_bounded(members_path)
-    directive = first_directive(members_text)
-    if directive is not None:
-        line, keyword = directive
-        raise SurfaceBreach(f"{members_path}:{line}: the members header holds a #{keyword} directive; it may "
-                            "hold member declarations only, so that the check counts everything it adds")
-    count, own = members_header(members_text)
-    used = collections.Counter()
+    count, own = 0, set()
     files = local_sources(sources, runtime_path)
-    files.setdefault(Path(members_path).resolve(), members_text)
+    if members_path is not None:
+        members_text = read_bounded(members_path)
+        directive = first_directive(members_text)
+        if directive is not None:
+            line, keyword = directive
+            raise SurfaceBreach(f"{members_path}:{line}: the members header holds a #{keyword} directive; it "
+                                "may hold member declarations only, so that the check counts everything it adds")
+        count, own = members_header(members_text)
+        files.setdefault(Path(members_path).resolve(), members_text)
+    used = collections.Counter()
     for text in files.values():
         used.update(runtime_identifiers(tokens(text, define_bodies=True), private - own))
     return count, dict(sorted(used.items()))
@@ -727,7 +732,8 @@ def main(argv=None):
     """Runs the check, the self-test or a baseline update; returns the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("sources", nargs="*", type=Path, help="the extension's sources that reach Runtime")
-    parser.add_argument("--members", type=Path, help="the extension's header of Runtime members")
+    parser.add_argument("--members", type=Path,
+                        help="the extension's header of Runtime members, when it has one")
     parser.add_argument("--runtime", type=Path, default=DEFAULT_RUNTIME, help="runtime.hpp (default: the engine's)")
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE,
                         help="allowed declarations and names (default: tools/runtime-surface-baseline.json)")
@@ -739,8 +745,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
-    if args.members is None and not args.baseline_names:
-        parser.error("--members is required")
     try:
         if args.baseline_names:
             return check_baseline_names(args.runtime, args.baseline)

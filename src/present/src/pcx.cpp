@@ -308,8 +308,8 @@ PcxStatus save_pcx_surface(
 namespace {
 
 struct HighestFrame {
-    std::size_t prefix_length;
-    int32_t highest;
+    std::size_t prefix_length{};
+    int32_t highest{};
 };
 
 void keep_highest_frame(void* user, const char* name) {

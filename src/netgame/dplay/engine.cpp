@@ -1014,6 +1014,24 @@ bool image_data_at(
 
 } // namespace
 
+bool read_system_message_type(const uint8_t* image, std::size_t size, uint32_t* type) noexcept {
+    if (image == nullptr || type == nullptr || size < sizeof(uint32_t))
+        return false;
+    *type = load_u32(image);
+    return true;
+}
+
+bool decode_player_destroyed_image(
+    const uint8_t* image, std::size_t size, PlayerDestroyedView* out
+) noexcept {
+    if (image == nullptr || out == nullptr || size < system_message::destroy_id_end ||
+        load_u32(image) != static_cast<uint32_t>(SystemMessageType::player_destroyed))
+        return false;
+    out->player_type = load_u32(image + 4);
+    out->id = load_u32(image + system_message::destroy_id);
+    return true;
+}
+
 bool decode_create_player_image(
     const uint8_t* image, std::size_t size, CreatePlayerView* out
 ) noexcept {

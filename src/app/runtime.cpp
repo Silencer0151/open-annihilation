@@ -3,8 +3,10 @@
 
 // Runtime construction, main loop and screen loading.
 #include "oa/app/runtime.hpp"
+#include "map_picture_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/hook_call.hpp"
 #include "match_clock.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/platform/app_loop.hpp"
@@ -25,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -145,12 +148,10 @@ Runtime::Runtime(
     }
     start_session_display();
     choose_web_links();
-    if (extension_.startup != nullptr)
-        extension_.startup(extension_.context, *this);
+    call_hook_or_raise<&Extension::startup>(extension_, *this);
     load_all_sounds();
     register_screens();
-    if (extension_.ready != nullptr)
-        extension_.ready(extension_.context, *this);
+    call_hook_or_raise<&Extension::ready>(extension_, *this);
     load_preference_file();
     // Stored after the one-time legacy import, which runs only while no
     // preferences file exists. An unwritable preferences file only costs the
@@ -185,17 +186,27 @@ Runtime::Runtime(
     // Fields the game switches set before the dispatcher first runs; the
     // extension then names the states it runs in place of the engine's.
     state_.skip_intro = options_.launch.skip_intro;
-    if (extension_.frontend_states != nullptr)
-        extension_.frontend_states(extension_.context, frontend_states_);
+    call_hook_or_raise<&Extension::frontend_states>(extension_, frontend_states_);
     step(frontend::Step::reload_unit_overrides, state_);
     frontend::dispatch(state_, *this, frontend_states_);
+}
+
+Runtime::ExtensionRelease::~ExtensionRelease() {
+    // The runtime's state past its match is gone by now, its error report
+    // among it, so an error goes straight to stderr.
+    call_hook_or_report<&Extension::release_runtime>(
+        runtime.extension_,
+        [](const char* hook, const char* message) {
+            std::fprintf(stderr, "open-annihilation: extension hook %s: %s\n", hook, message);
+        },
+        runtime
+    );
 }
 
 int Runtime::run() {
     int exit_code = 0;
     const auto extension_run = [&](RunPhase phase) {
-        return extension_.run_mode != nullptr &&
-               extension_.run_mode(extension_.context, *this, phase, exit_code);
+        return call_hook_or_raise<&Extension::run_mode>(extension_, *this, phase, exit_code);
     };
     if (extension_run(RunPhase::start))
         return exit_code;
@@ -362,7 +373,7 @@ int Runtime::run() {
         std::cerr << "warning: gamedata/version.tdf does not name Revision.GPF "
                   << oa::data::defs::expected_gpf_version
                   << "; the game data may not match this build\n";
-    if (extension_.start_scene == nullptr || !extension_.start_scene(extension_.context, *this))
+    if (!call_hook_or_raise<&Extension::start_scene>(extension_, *this))
         start_menu_music();
     if (options_.showcase != Showcase::none)
         run_showcase();
@@ -390,8 +401,7 @@ int Runtime::run() {
         video_capture_->finish();
         video_capture_.reset();
     }
-    if (extension_.shutdown != nullptr)
-        extension_.shutdown(extension_.context, *this);
+    call_hook_or_raise<&Extension::shutdown>(extension_, *this);
     flush_preferences();
     release_pointer(sdl_.window);
     return exit_status_;
@@ -452,12 +462,10 @@ void Runtime::idle_tick() {
     const bool profiled = screen_ == Screen::match && match_;
     if (profiled)
         begin_profile_window();
-    if (extension_.frame != nullptr)
-        extension_.frame(extension_.context, *this, FrameStage::pump);
+    call_hook_or_raise<&Extension::frame>(extension_, *this, FrameStage::pump);
     if (profiled)
         mark_profile(OA_PROFILE_SYNC);
-    if (extension_.frame != nullptr)
-        extension_.frame(extension_.context, *this, FrameStage::after_pump);
+    call_hook_or_raise<&Extension::frame>(extension_, *this, FrameStage::after_pump);
     // The extension may have asked to end the run (ScreenServices::quit):
     // it ends here, leaving the match first, and nothing more of the frame
     // runs.
@@ -601,20 +609,40 @@ void unit_motion(void* context, uint32_t slot, oa::present::unit_playout::Motion
 void Runtime::advance_match_clock(uint32_t now_ms) {
     match_timing_.flags =
         clock_flags_with_pause(match_timing_.flags, match_->state().game.sim_run_flags);
-    oa::base::game_loop::update_timing(
-        match_timing_, oa::base::game_loop::scaled_clock(now_ms, match_clock_scale())
-    );
+    // A clock state the loop refuses runs no step this frame.
+    if (const auto clock_error = oa::base::game_loop::update_timing(
+            match_timing_, oa::base::game_loop::scaled_clock(now_ms, match_clock_scale())
+        );
+        clock_error != oa::base::game_loop::LoopError::none) {
+        report_match_tick_error(oa::base::game_loop::loop_error_text(clock_error));
+        return;
+    }
     try {
         for (int32_t step = 0; step < match_timing_.pending_steps; ++step) {
             // Each step that runs a tick is timed for the frame statistics,
             // on the real clock; a step the extension holds runs none.
             const auto step_start = std::chrono::steady_clock::now();
             const uint32_t tick_before = match_timing_.tick;
-            if (extension_.simulation_step == nullptr ||
-                !extension_.simulation_step(extension_.context, *this)) {
+            // A step the extension fails to run is reported as a simulation
+            // error, and the frame's remaining steps are dropped.
+            HookError step_error;
+            const bool stepped =
+                call_hook<&Extension::simulation_step>(extension_, step_error, *this);
+            if (step_error.caught) {
+                report_match_tick_error(step_error.message);
+                break;
+            }
+            if (!stepped) {
                 ++match_timing_.tick;
                 match_->simulation().tick = match_timing_.tick;
                 match_->tick();
+            }
+            // A fault the step's tick noted, here or in the extension, ends
+            // the frame's steps, as an error the tick threw did.
+            if (const char* fault = match_->fault()) {
+                report_match_tick_error(fault);
+                match_->clear_fault();
+                break;
             }
             if (match_timing_.tick != tick_before) {
                 const auto tick_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -660,6 +688,25 @@ void Runtime::report_match_tick_error(std::string_view message) {
     console_post_message("Simulation error: " + line);
 }
 
+void Runtime::report_hook_error(const char* hook, const char* message) noexcept {
+    try {
+        std::string line = std::string(hook) + ": " + message;
+        if (line == last_hook_error_) {
+            ++hook_error_repeats_;
+            if ((hook_error_repeats_ & (hook_error_repeats_ - 1)) != 0)
+                return;
+        } else {
+            last_hook_error_ = line;
+            hook_error_repeats_ = 1;
+        }
+        if (hook_error_repeats_ > 1)
+            line += " (x" + std::to_string(hook_error_repeats_) + ")";
+        std::cerr << "open-annihilation: extension hook " << line << '\n';
+    } catch (...) {
+        std::fprintf(stderr, "open-annihilation: extension hook %s: %s\n", hook, message);
+    }
+}
+
 void Runtime::present_unit_announcements() {
     for (auto& event : offline_services_.pump_announcements()) {
         if (event.sound_resource)
@@ -689,7 +736,7 @@ bool Runtime::frame_owned_by_package() const {
 }
 
 uint32_t Runtime::current_extension_state() const {
-    return extension_.state != nullptr ? extension_.state(extension_.context, *this) : 0;
+    return call_hook_or_raise<&Extension::state>(extension_, *this);
 }
 
 void Runtime::load_all_sounds() {
@@ -775,8 +822,10 @@ void Runtime::load(Screen screen) {
         if (!first_draw_after_setup(screen))
             bind_frontend_scrolls(names.layout, names.sprites);
         // The panel is up first; its setup then asks for the named background.
+        // A bitmap that cannot be read throws; whether the backdrop changed
+        // is not needed.
         if (background != nullptr)
-            (void)load_named_background(background, false, false, false);
+            std::ignore = load_named_background(background, false, false, false);
     }
     if (desc->enter != nullptr)
         desc->enter(&context, desc->state);
@@ -921,11 +970,12 @@ void Runtime::rebuild_surface() {
     }
     if (screen_ == Screen::briefing)
         draw_briefing_overlays();
-    if (screen_ == Screen::map_selection && !preview_rgb_.empty() && preview_width_ > 0 &&
-        preview_height_ > 0) {
+    if (const auto* picture = map_picture_.get(); screen_ == Screen::map_selection &&
+                                                  picture != nullptr && !picture->rgb.empty() &&
+                                                  picture->width > 0 && picture->height > 0) {
         const auto* target = widget("MAPPIC");
-        if (target != nullptr && preview_destination_width_ > 0 &&
-            preview_destination_height_ > 0) {
+        if (target != nullptr && picture->destination_width > 0 &&
+            picture->destination_height > 0) {
             // The picture drawer clears the gadget-sized picture to index 0 before the
             // fitted map is drawn into it.
             for (int y = 0; y < target->common.height; ++y)
@@ -937,7 +987,7 @@ void Runtime::rebuild_surface() {
                         destination_y >= static_cast<int>(surface_.height))
                         continue;
                     std::copy_n(
-                        preview_clear_rgb_.begin(),
+                        picture->clear_rgb.begin(),
                         3,
                         surface_.rgb.begin() +
                             static_cast<std::ptrdiff_t>(
@@ -947,25 +997,25 @@ void Runtime::rebuild_surface() {
                             )
                     );
                 }
-            for (int y = 0; y < preview_destination_height_; ++y) {
-                const auto source_y = static_cast<std::size_t>(y) * preview_source_height_ /
-                                      static_cast<std::size_t>(preview_destination_height_);
-                for (int x = 0; x < preview_destination_width_; ++x) {
-                    const int destination_x = target->common.x + preview_destination_x_ + x;
-                    const int destination_y = target->common.y + preview_destination_y_ + y;
+            for (int y = 0; y < picture->destination_height; ++y) {
+                const auto source_y = static_cast<std::size_t>(y) * picture->source_height /
+                                      static_cast<std::size_t>(picture->destination_height);
+                for (int x = 0; x < picture->destination_width; ++x) {
+                    const int destination_x = target->common.x + picture->destination_x + x;
+                    const int destination_y = target->common.y + picture->destination_y + y;
                     if (destination_x < 0 || destination_y < 0 ||
                         destination_x >= static_cast<int>(surface_.width) ||
                         destination_y >= static_cast<int>(surface_.height))
                         continue;
-                    const auto source_x = static_cast<std::size_t>(x) * preview_source_width_ /
-                                          static_cast<std::size_t>(preview_destination_width_);
-                    const auto source = (source_y * preview_width_ + source_x) * 3U;
+                    const auto source_x = static_cast<std::size_t>(x) * picture->source_width /
+                                          static_cast<std::size_t>(picture->destination_width);
+                    const auto source = (source_y * picture->width + source_x) * 3U;
                     const auto destination =
                         (static_cast<std::size_t>(destination_y) * surface_.width +
                          static_cast<std::size_t>(destination_x)) *
                         3U;
                     std::copy_n(
-                        preview_rgb_.begin() + static_cast<std::ptrdiff_t>(source),
+                        picture->rgb.begin() + static_cast<std::ptrdiff_t>(source),
                         3,
                         surface_.rgb.begin() + static_cast<std::ptrdiff_t>(destination)
                     );

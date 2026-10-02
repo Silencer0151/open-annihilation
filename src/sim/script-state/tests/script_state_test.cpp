@@ -162,6 +162,13 @@ void test_exact_size_identity_and_count_bounds() {
     const auto state = patterned_state();
     const auto bytes = oa::sim::script_state::encode(state);
 
+    auto oversized = state;
+    oversized.pieces.resize(oa::sim::script_state::max_piece_count + 1);
+    require(
+        oa::sim::script_state::encode(oversized).empty(),
+        "a piece count over the codec bound encodes to no bytes"
+    );
+
     const auto truncated = oa::sim::script_state::decode(
         std::span(bytes).first(bytes.size() - 1),
         state.script_identity_token,

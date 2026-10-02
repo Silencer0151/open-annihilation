@@ -8,7 +8,7 @@ target_include_directories(oa-sim-ai PUBLIC include)
 target_compile_features(oa-sim-ai PUBLIC cxx_std_20)
 target_link_libraries(oa-sim-ai
   PUBLIC oa-core-types oa-sim-detection
-  PRIVATE oa-sim-simulation-state oa-base-game-math oa-sim-unit-movement oa-sim-unit-health oa-data-unit-definitions)
+  PRIVATE oa-sim-simulation-state oa-base-game-math oa-sim-unit-movement oa-sim-unit-health oa-formats-tdf)
 if(TARGET oa-options)
   target_link_libraries(oa-sim-ai PRIVATE oa-options)
 endif()

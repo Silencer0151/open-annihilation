@@ -15,6 +15,7 @@
 #include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/game_fields.hpp"
 #include "oa/ui/hud/status_panel.hpp"
+#include "match_fault.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,6 +25,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -309,8 +311,9 @@ void Runtime::check_console_display_commands(const std::function<void(const char
                 feature.feature_index == shadowed)
                 staged = &feature;
         require(staged != nullptr, "the staged feature was not drawn");
+        // Only the world layer the frame leaves is wanted.
         const auto world_layer = [&] {
-            (void)frame();
+            frame();
             return match_world_cpu_;
         };
         auto with = world_layer();
@@ -345,7 +348,8 @@ void Runtime::check_console_display_commands(const std::function<void(const char
     }
     toggle("+dither", flag::dither, "DitheredFog", true, false, false);
     enter_line("+dither");
-    (void)frame();
+    // The fog's shading is read once a frame is drawn.
+    frame();
     require(fog_shading_.dithered == (bit(flag::dither) != 0), "the fog did not follow +dither");
     enter_line("+dither");
 
@@ -455,8 +459,15 @@ void Runtime::check_console_display_commands(const std::function<void(const char
         const auto rows = static_cast<uint32_t>(font->nominal_height);
         std::vector<uint8_t> ink(static_cast<std::size_t>(text_width) * rows);
         std::vector<uint8_t> covered(ink.size());
-        (void)oa::formats::fnt::raster_text(
-            {text_width, rows, text_width, ink, covered}, *font, text, 0, 0
+        // With the pen the font's lift below the buffer's top, the glyph
+        // cells start on the buffer's top row. The buffer is as wide as the
+        // measured text, so where the pen stops is not needed.
+        std::ignore = oa::formats::fnt::raster_text(
+            {text_width, rows, text_width, ink, covered},
+            *font,
+            text,
+            0,
+            oa::formats::fnt::row_lift(*font)
         );
         std::array<int, 4> glyphs{static_cast<int>(text_width), static_cast<int>(rows), -1, -1};
         for (uint32_t row = 0; row < rows; ++row)
@@ -532,7 +543,7 @@ void Runtime::check_console_display_commands(const std::function<void(const char
     const auto run_tick = [&] {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
         follow_match_camera_unit();
     };
     run_tick();
@@ -561,7 +572,8 @@ void Runtime::check_console_display_commands(const std::function<void(const char
     clear_local_selection();
     match_camera_x_ = camera_x;
     match_camera_z_ = camera_z;
-    (void)console_burn_feature(shadow_x, shadow_z, true);
+    // The staged feature is cleared if it is still there.
+    std::ignore = console_burn_feature(shadow_x, shadow_z, true);
     std::cout << "console display check: +shading, +antialias and +shadow flip, save and redraw "
                  "the models, +tshadow and +fshadow flip unsaved and drop the unit and feature "
                  "shadows, +dither shades the fog, +light "

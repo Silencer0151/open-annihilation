@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa {
@@ -39,38 +40,38 @@ inline constexpr uint16_t EntryTypeDirectory = 1;
 #pragma pack(push, 1)
 
 struct Header {
-    uint32_t marker;
-    uint32_t version;
-    uint32_t directory_size;
-    uint32_t decrypt_key;
-    uint32_t offset;
+    uint32_t marker{};
+    uint32_t version{};
+    uint32_t directory_size{};
+    uint32_t decrypt_key{};
+    uint32_t offset{};
 };
 
 struct ChunkHeader {
-    uint32_t magic;
-    uint8_t version;
-    uint8_t compression_type;
-    uint8_t encoded;
-    uint32_t compressed_size;
-    uint32_t decompressed_size;
-    uint32_t checksum;
+    uint32_t magic{};
+    uint8_t version{};
+    uint8_t compression_type{};
+    uint8_t encoded{};
+    uint32_t compressed_size{};
+    uint32_t decompressed_size{};
+    uint32_t checksum{};
 };
 
 struct DirectoryNode {
-    uint32_t count;
-    uint32_t list_offset;
+    uint32_t count{};
+    uint32_t list_offset{};
 };
 
 struct DirectoryEntry {
-    uint32_t name_offset;
-    uint32_t data_offset;
-    uint8_t type;
+    uint32_t name_offset{};
+    uint32_t data_offset{};
+    uint8_t type{};
 };
 
 struct FileEntry {
-    uint32_t offset;
-    uint32_t size;
-    uint8_t compression;
+    uint32_t offset{};
+    uint32_t size{};
+    uint8_t compression{};
 };
 
 #pragma pack(pop)
@@ -206,30 +207,92 @@ struct ArchiveNode {
     }
 };
 
-/// An open HPI archive: its resolved directory and the file its entries are read from.
+/// The stored bytes of an archive, read at any offset.
 ///
-/// Reads may run on several threads at once. Each holds the archive's file
+/// The code that opens an archive supplies one: a host file it opened, or
+/// bytes already in memory. HpiArchive calls read_at() from one thread at a
+/// time, so a source need not lock.
+class ArchiveSource {
+  public:
+
+    /// Releases whatever the source holds open.
+    virtual ~ArchiveSource() = default;
+    /// Returns the archive's size.
+    ///
+    /// @return the size in bytes
+    [[nodiscard]] virtual uint64_t size() const noexcept = 0;
+    /// Copies stored bytes from an offset.
+    ///
+    /// @param offset archive offset of the first byte
+    /// @param[out] output receives up to output.size() bytes
+    /// @return the count copied; short past the end of the archive or when
+    ///         the bytes cannot be read
+    virtual std::size_t read_at(uint64_t offset, std::span<uint8_t> output) = 0;
+};
+
+/// An archive held in memory.
+class ArchiveBuffer final : public ArchiveSource {
+  public:
+
+    /// Takes over an archive's bytes.
+    ///
+    /// @param bytes the whole archive
+    explicit ArchiveBuffer(std::vector<uint8_t> bytes) noexcept : bytes_(std::move(bytes)) {}
+
+    /// Returns the archive's size.
+    ///
+    /// @return the count of bytes held
+    [[nodiscard]] uint64_t size() const noexcept override { return bytes_.size(); }
+
+    /// Copies held bytes from an offset.
+    ///
+    /// @param offset archive offset of the first byte
+    /// @param[out] output receives up to output.size() bytes
+    /// @return the count copied; short past the end
+    std::size_t read_at(uint64_t offset, std::span<uint8_t> output) override;
+
+  private:
+
+    std::vector<uint8_t> bytes_;
+};
+
+/// An open HPI archive: its resolved directory and the source its entries are read from.
+///
+/// Reads may run on several threads at once. Each holds the archive's source
 /// only while it copies stored bytes, and decrypts and decompresses them
 /// outside it.
 class HpiArchive {
   public:
 
-    /// Opens and validates an archive and decrypts its directory block.
+    /// Validates an archive and resolves its decrypted directory block.
     ///
     /// The archive must be HPI version 1 with the copyright trailer; the
-    /// directory is resolved into nodes() and the file stays open for reads.
-    /// Throws std::runtime_error for an unreadable or malformed archive.
+    /// directory is resolved into nodes() and the source is kept for reads.
     ///
-    /// @param path host path of the archive
-    explicit HpiArchive(const std::filesystem::path& path);
-    /// Closes the archive file.
+    /// @param source the archive's stored bytes; null is refused as not_found
+    /// @return the archive; or, at its archive offset, bad_signature for a
+    ///         missing marker or copyright trailer, unsupported_version for
+    ///         a version other than 1, truncated for a directory block the
+    ///         source cannot supply, limit_exceeded for a directory over 256
+    ///         MiB, more than a million entries or nesting deeper than 128,
+    ///         cycle for a directory reached twice, out_of_range for a node,
+    ///         list, name or file record outside the directory block, or
+    ///         malformed for an unterminated name
+    [[nodiscard]] static base::bytes::Decoded<HpiArchive>
+    open(std::unique_ptr<ArchiveSource> source);
+    /// Validates an archive held in memory, as open() does for any source.
+    ///
+    /// @param bytes the whole archive
+    /// @return the archive, or open()'s error
+    [[nodiscard]] static base::bytes::Decoded<HpiArchive> open(std::vector<uint8_t> bytes);
+    /// Releases the archive's source.
     ~HpiArchive();
 
-    /// Takes over another archive's open file and directory.
+    /// Takes over another archive's source and directory.
     ///
     /// @param other archive left empty
     HpiArchive(HpiArchive&& other) noexcept;
-    /// Takes over another archive's open file and directory, closing this one's.
+    /// Takes over another archive's source and directory, releasing this one's.
     ///
     /// @param other archive left empty
     /// @return this archive
@@ -251,10 +314,6 @@ class HpiArchive {
     ///         read_node's error
     [[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>> read(std::string_view path) const;
 
-    /// Returns the host path the archive was opened from.
-    ///
-    /// @return the path passed to the constructor
-    [[nodiscard]] const std::filesystem::path& path() const noexcept;
     /// Returns every directory and file record.
     ///
     /// @return the records; node 0 is a synthetic root directory holding the root records
@@ -306,6 +365,12 @@ class HpiArchive {
   private:
 
     struct Impl;
+
+    /// Holds a validated archive.
+    ///
+    /// @param impl the resolved directory and its source
+    explicit HpiArchive(std::unique_ptr<Impl> impl) noexcept;
+
     std::unique_ptr<Impl> impl_;
 };
 
@@ -698,6 +763,15 @@ class AssetStore {
     struct LooseIndex;
     std::unique_ptr<LooseIndex> loose_index_;
 };
+
+/// Opens an archive file and validates it.
+///
+/// The file stays open while the archive lives, for reads of its entries.
+///
+/// @param path host path of the archive
+/// @return the archive; not_found when the file cannot be opened or its size
+///         read, or HpiArchive::open()'s error
+[[nodiscard]] base::bytes::Decoded<HpiArchive> open_hpi_file(const std::filesystem::path& path);
 
 /// Writes a loose file, replacing any previous content.
 ///

@@ -7,6 +7,7 @@
 #include "oa/data/defs/files.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/base/geometry.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -99,8 +100,8 @@ std::string name16(const GadgetRecord& record, size_t offset) {
 // `prefix` + `name` with its extension replaced by GAF.
 std::string gaf_path(const char* prefix, const std::string& name) {
     char joined[data::defs::path_capacity]{};
-    std::strncpy(joined, prefix, sizeof(joined) - 1);
-    std::strncat(joined, name.c_str(), sizeof(joined) - std::strlen(joined) - 1);
+    oa::base::text::copy_padded(joined, prefix, sizeof(joined) - 1);
+    oa::base::text::append_terminated(joined, name.c_str());
     char path[data::defs::path_capacity]{};
     data::defs::format_with_extension(joined, path, sizeof(path), kGafExtension);
     return path;
@@ -201,15 +202,15 @@ void bind_button(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {
         char fallback[kNameBytes + 1]{};
         const uint8_t stages = button.bytes[field::button_stages];
         if ((attributes(button) & kCheckboxButton) != 0) {
-            std::strncpy(fallback, kCheckboxArt, kNameBytes);
+            oa::base::text::copy_padded(fallback, kCheckboxArt, kNameBytes);
         } else if (stages == 0) {
-            std::strncpy(fallback, kButtonArt, kNameBytes);
+            oa::base::text::copy_padded(fallback, kButtonArt, kNameBytes);
         } else if (
             layout::record_string(button, field::text) == kOffOnCaption || stages == 1 ||
             (attributes(button) & kStageArtOverride) != 0
         ) {
             button.bytes[field::button_stages] = kTwoStages;
-            std::strncpy(fallback, kTwoStageArt, kNameBytes);
+            oa::base::text::copy_padded(fallback, kTwoStageArt, kNameBytes);
             layout::set_record_u32(
                 button, field::attributes, attributes(button) | kStageArtOverride
             );

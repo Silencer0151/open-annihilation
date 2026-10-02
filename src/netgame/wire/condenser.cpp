@@ -66,18 +66,14 @@ size_t compress_staged(Condenser* c) noexcept {
     }
 }
 
-// Decompress body into the storage block; false on a malformed stream.
+// Decompress body into the storage block; false on a malformed stream or
+// one that would not fit it.
 bool decompress_into(Condenser* c, const uint8_t* body, size_t size) noexcept {
-    try {
-        const auto decoded = formats::sqsh::decode_lz77({body, size}, condenser_decoded_bytes);
-        if (!decoded.ok())
-            return false;
-        std::memcpy(c->decoded, decoded.value->data(), decoded.value->size());
-        c->decoded_length = static_cast<uint32_t>(decoded.value->size());
-        return true;
-    } catch (const std::bad_alloc&) {
+    const auto decoded = formats::sqsh::decode_lz77_into({body, size}, {c->decoded});
+    if (decoded.status != formats::sqsh::Lz77Status::ok)
         return false;
-    }
+    c->decoded_length = static_cast<uint32_t>(decoded.written);
+    return true;
 }
 
 } // namespace
@@ -193,7 +189,7 @@ uint32_t condenser_receive(
         if (body_size > condenser_decoded_bytes)
             return transport_result::no_messages;
         std::memcpy(c->decoded, buffer + condenser_header_bytes, body_size);
-        c->decoded_length = body_size;
+        c->decoded_length = static_cast<uint32_t>(body_size);
     }
     *size = c->decoded_length;
     if (capacity < c->decoded_length) {

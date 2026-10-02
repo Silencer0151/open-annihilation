@@ -21,22 +21,16 @@
 #include "oa/base/game_math.hpp"
 #include "oa/sim/spatial_state/cell_classifier.hpp"
 #include <cctype>
-#include <exception>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace oa::sim::match_runtime::tick_detail {
 using base::game_math::truncate_low32;
 
-[[noreturn]] inline void unsupported(const char* operation) {
-    throw std::runtime_error(std::string("unsupported simulation branch: ") + operation);
-}
-
-[[noreturn]] inline void unsupported(const std::string& operation) {
-    throw std::runtime_error("unsupported simulation branch: " + operation);
-}
+// The scheduler result of a mission handler that met a fault and noted it:
+// the order scheduler removes the order.
+inline constexpr uint32_t mission_fault_result = 8;
 
 // Overlay/queue walks must stop at a cycle. Patrol clone and a bad
 // queue-tail insert can loop the primary queue; a 100000-step budget still
@@ -48,9 +42,6 @@ inline constexpr std::size_t overlay_order_budget = 256;
 // marker in the top nibble once counting has started.
 inline constexpr uint32_t self_destruct_countdown_marker = 0xf0000000u;
 
-// Command flags bit: the order the next queued order is placed after.
-inline constexpr uint8_t command_queue_tail = 0x10;
-
 /// Queues an order after the one carrying the queue-tail mark, moving the
 /// mark to it, or at the end of the primary queue when no order carries it.
 ///
@@ -60,13 +51,14 @@ inline constexpr uint8_t command_queue_tail = 0x10;
 ///
 /// @param[in,out] unit Unit whose primary queue receives the order.
 /// @param[in,out] record Order to queue; it takes the queue-tail mark.
-/// @param extra Maps an order to its match-side fields (command flags);
-///     throws for an order the match does not own.
+/// @param extra Maps an order to its match-side fields (command flags), or
+///     to null for an order the match does not own.
 template <typename Extra>
 inline void insert_after_queue_tail(
     sim::simulation_state::Unit& unit, sim::simulation_state::Order& record, Extra&& extra
 ) {
-    extra(&record).command_flags |= command_queue_tail;
+    if (auto* own = extra(&record))
+        own->command_flags |= command_queue_tail;
     record.next = nullptr;
     auto** link = &unit.primary;
     sim::simulation_state::Order* seen[overlay_order_budget]{};
@@ -83,17 +75,15 @@ inline void insert_after_queue_tail(
             }
         }
         seen[n++] = current;
-        uint8_t flags = 0;
-        try {
-            flags = extra(current).command_flags;
-        } catch (const std::exception&) {
+        auto* current_extra = extra(current);
+        if (!current_extra) {
             // current is not in orders_ — do not read current->next (use-after-free).
             record.next = nullptr;
             *link = &record;
             return;
         }
-        if (flags & command_queue_tail) {
-            extra(current).command_flags &= static_cast<uint8_t>(~command_queue_tail);
+        if (current_extra->command_flags & command_queue_tail) {
+            current_extra->command_flags &= static_cast<uint8_t>(~command_queue_tail);
             auto* next = current->next;
             if (next == &record || next == current)
                 next = nullptr;
@@ -114,6 +104,13 @@ inline void insert_after_queue_tail(
     *link = &record;
 }
 
+/// Calls a function on each order of a queue from its head, stopping at the
+/// first order seen twice.
+///
+/// At most overlay_order_budget orders are visited.
+///
+/// @param head first order of the queue, or null for an empty queue
+/// @param fn called with each order in queue order
 template <typename Fn>
 inline void for_each_primary_uncycled(sim::simulation_state::Order* head, Fn&& fn) {
     sim::simulation_state::Order* seen[overlay_order_budget]{};
@@ -127,41 +124,80 @@ inline void for_each_primary_uncycled(sim::simulation_state::Order* head, Fn&& f
     }
 }
 
+/// Returns the low 16 bits of a word read as signed.
+///
+/// @param n the word
+/// @return its low half, -32768..32767
 inline int16_t signed_half(uint32_t n) {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(n));
 }
 
+/// Returns the high 16 bits of a word read as signed: the whole part of a
+/// 16.16 value.
+///
+/// @param n the word
+/// @return its high half, -32768..32767
 inline int16_t high_word(uint32_t n) {
     return std::bit_cast<int16_t>(static_cast<uint16_t>(n >> 16));
 }
 
+/// Reads a 32-bit word as signed.
+///
+/// @param n the word
+/// @return the same bits as a signed value
 inline int32_t signed_word(uint32_t n) {
     return std::bit_cast<int32_t>(n);
 }
 
-// 16.16 arithmetic with 32-bit wraparound, as 3.1c does it.
+/// Adds two signed 16.16 values, wrapping at 32 bits as 3.1c does.
+///
+/// @param a first value
+/// @param b second value
+/// @return the low 32 bits of the sum
 inline int32_t wrapping_add(int32_t a, int32_t b) {
     return std::bit_cast<int32_t>(std::bit_cast<uint32_t>(a) + std::bit_cast<uint32_t>(b));
 }
 
+/// Subtracts one signed 16.16 value from another, wrapping at 32 bits.
+///
+/// @param a value subtracted from
+/// @param b value subtracted
+/// @return the low 32 bits of the difference
 inline int32_t wrapping_sub(int32_t a, int32_t b) {
     return std::bit_cast<int32_t>(std::bit_cast<uint32_t>(a) - std::bit_cast<uint32_t>(b));
 }
 
+/// Shifts a word right by 20 bits with its sign, keeping the low 16 bits: the
+/// cell of a 16.16 coordinate measured in 16-unit cells.
+///
+/// @param value the word, read as signed
+/// @return the shifted value's low half, read as signed
 inline int16_t arithmetic_shift20(uint32_t value) {
     const auto high = value >> 20;
     const auto bits = (value & 0x80000000u) ? high | 0xfffff000u : high;
     return std::bit_cast<int16_t>(static_cast<uint16_t>(bits));
 }
 
+/// Returns the high 32 bits of a value's 64-bit square.
+///
+/// @param value the value, read as signed
+/// @return bits 32..63 of value * value
 inline uint32_t square_high(int32_t value) {
     return static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(value) * value) >> 32);
 }
 
+/// Wraps a unit position as a weapon point.
+///
+/// @param p signed 16.16 x, y, z bit patterns
+/// @return the same words as a weapon point
 inline sim::weapon_execution::Point as_point(const std::array<uint32_t, 3>& p) {
     return {{p[0], p[1], p[2]}};
 }
 
+/// Unwraps a weapon point as a unit position.
+///
+/// @param p the weapon point
+/// @return its signed 16.16 x, y, z bit patterns
 inline std::array<uint32_t, 3> as_position(const sim::weapon_execution::Point& p) {
     return {p.fixed[0], p.fixed[1], p.fixed[2]};
 }
@@ -174,7 +210,7 @@ inline constexpr std::array<const char*, 3> fire_script_names{
 };
 inline constexpr uint32_t live_unit_flag = OA_UNIT_FLAG_LIVE;
 inline constexpr uint32_t building_unit_flag = OA_UNIT_FLAG_BUILDING; // bm_code==0
-inline constexpr uint32_t attached_without_piece = 0x20000u;          // carried with piece -1
+inline constexpr uint32_t attached_without_piece = OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE;
 inline constexpr uint32_t floater_type_flag = OA_UNIT_DEF_FLAG_FLOATER;
 inline constexpr uint32_t death_pending_flag = OA_UNIT_FLAG_DEATH_PENDING;
 // The selection bits the kill handler clears.
@@ -219,6 +255,12 @@ inline constexpr std::size_t metal_gate_word = 9;
 inline constexpr std::size_t metal_previous_produced_word = 10;
 inline constexpr std::size_t metal_previous_requested_word = 11;
 
+/// Compares a name with an upper-case name, folding the name's ASCII letters to
+/// upper case.
+///
+/// @param candidate name in any case
+/// @param want name in upper case
+/// @return true when they hold the same letters
 inline bool name_equals_upper(std::string_view candidate, std::string_view want) {
     if (candidate.size() != want.size())
         return false;
@@ -232,6 +274,11 @@ inline bool name_equals_upper(std::string_view candidate, std::string_view want)
     return true;
 }
 
+/// Finds a loaded unit type by name, ignoring the case of the loaded names.
+///
+/// @param input the match's inputs, whose loaded types are searched from index 1
+/// @param want unit name in upper case
+/// @return the type index, or 0 when no loaded type has the name
 inline uint16_t find_loaded_type(const OfflineInputs& input, std::string_view want) {
     for (std::size_t i = 1; i < input.loaded.size(); ++i) {
         if (name_equals_upper(input.loaded[i].unit_name, want))
@@ -240,6 +287,10 @@ inline uint16_t find_loaded_type(const OfflineInputs& input, std::string_view wa
     return 0;
 }
 
+/// Returns the first unit a side's starting factory builds.
+///
+/// @param name factory unit name, in any case
+/// @return the product's unit name; empty for any other unit
 inline std::string_view factory_product(std::string_view name) {
     if (name_equals_upper(name, "ARMLAB"))
         return "ARMPW";
@@ -294,27 +345,69 @@ class TickHost final : public sim::simulation_state::Host,
     std::array<uint8_t, 3>* dispatched_flags{};
     sim::unit_spawn::Slot* dispatched_slot{};
 
+    /// Writes the weapon flags a mission handler holds into its unit's record
+    /// before a callback that reads them.
     void before_callback();
 
+    /// Reads the dispatched unit's weapon flags back after a callback, and projects
+    /// its record into its movement object when it has one.
     void after_callback();
 
+    /// Returns the pool slot of a unit view.
+    ///
+    /// @param u unit view
+    /// @return its slot
     sim::unit_spawn::Slot& slot(sim::simulation_state::Unit& u);
 
+    /// Returns the unit view of a unit record.
+    ///
+    /// @param record unit record of this match's world
+    /// @return its view
     sim::simulation_state::Unit& unit_view(oa::Unit& record);
 
+    /// Returns a unit's movement object.
+    ///
+    /// @param u unit view
+    /// @return the movement object; for a unit without one, which is noted, a
+    ///     fresh spare bound to no slot
     sim::ground_orders::GroundRuntime& ground(sim::simulation_state::Unit& u);
 
+    /// Returns the match's record of an order.
+    ///
+    /// @param order an order
+    /// @return its record; for an order the match does not own, which is noted,
+    ///     the cleared spare order
     Match::RuntimeOrder& owned(sim::simulation_state::Order& order);
 
+    /// Copies a unit's three weapon slot flags.
+    ///
+    /// @param s the unit
+    /// @return UnitWeapon.flags of slots 0..2
     std::array<uint8_t, 3> weapon_flags(sim::unit_spawn::Slot& s);
 
+    /// Writes a unit's three weapon slot flags.
+    ///
+    /// @param[out] s the unit
+    /// @param flags UnitWeapon.flags of slots 0..2
     void write_flags(sim::unit_spawn::Slot& s, const std::array<uint8_t, 3>& flags);
 
-    // Brings every stood-down weapon slot back inside a mission handler that
-    // holds a copy of the weapon flags: the copy is written first and
-    // reloaded after, so the handler's final write keeps the cleared bits.
+    /// Brings every stood-down weapon slot back inside a mission handler that holds
+    /// a copy of the weapon flags.
+    ///
+    /// The copy is written first and reloaded after, so the handler's final write
+    /// keeps the cleared bits.
+    ///
+    /// @param[in,out] s the unit
+    /// @param[in,out] flags the handler's copy of the weapon flags
     void release_tracked_weapons(sim::unit_spawn::Slot& s, std::array<uint8_t, 3>& flags);
 
+    /// Builds the ground-order view of a unit: its record, movement object state,
+    /// carried state and weapon flags.
+    ///
+    /// @param s the unit
+    /// @param g its movement object
+    /// @param[in,out] flags the weapon flags the view's handlers change
+    /// @return the view, which refers to its arguments
     sim::ground_orders::UnitView view(
         sim::unit_spawn::Slot& s,
         sim::ground_orders::GroundRuntime& g,
@@ -330,8 +423,15 @@ class TickHost final : public sim::simulation_state::Host,
     ///     events change when the unit was landed.
     void take_off(sim::unit_spawn::Slot& s, sim::simulation_state::Order& order);
 
-    // Replaces the order's aircraft goal with a point goal (null clears it).
-    // Circle goals carry no altitude; arrival_radius 0 means the unit's cell.
+    /// Replaces an order's aircraft goal with a point goal, or clears it.
+    ///
+    /// Circle goals carry no altitude. A unit without a movement object is left
+    /// alone.
+    ///
+    /// @param s flying unit
+    /// @param[in,out] order order that owns the goal
+    /// @param point signed 16.16 goal point, or null to clear the goal
+    /// @param arrival_radius arrival radius in world units; 0 means the unit's cell
     void set_aircraft_goal(
         sim::unit_spawn::Slot& s,
         sim::simulation_state::Order& order,
@@ -357,11 +457,20 @@ class TickHost final : public sim::simulation_state::Host,
         sim::unit_spawn::Slot& s, sim::simulation_state::Order& order, const sim::air::AirGoal* goal
     );
 
+    /// Starts a script by name on a unit with no arguments, stepping it at once;
+    /// nothing happens without a script.
+    ///
+    /// @param s the unit
+    /// @param name script name; the lookup is case-sensitive
     void script(sim::unit_spawn::Slot& s, std::string_view name);
 
     /// UnitDef.abilities of the unit, zero when it has no type.
     uint32_t unit_abilities(const oa::Unit& unit) const;
 
+    /// Returns the pool slot of a movement unit.
+    ///
+    /// @param u movement-side unit, whose id is its slot
+    /// @return its slot; reserved slot 0 for an id outside the pool, which is noted
     sim::unit_spawn::Slot& movement_slot(const sim::unit_movement::Unit& u);
 
     class AttackAdapter;
@@ -379,6 +488,13 @@ class TickHost final : public sim::simulation_state::Host,
     class VtolBuildMissions; // tick_missions_vtol_build.cpp
     class AirAttackMissions; // tick_missions_air.cpp
 
+    /// Runs the ground mission handler for an order's kind, when it is one.
+    ///
+    /// @param s the unit
+    /// @param[in,out] order order to step
+    /// @param events events that woke the order
+    /// @param[out] result the handler's step result, when it ran
+    /// @return true when a ground handler owns the kind
     bool dispatch_ground_mission(
         sim::unit_spawn::Slot& s,
         sim::simulation_state::Order& order,
@@ -386,6 +502,13 @@ class TickHost final : public sim::simulation_state::Host,
         uint32_t& result
     );
 
+    /// Runs the aircraft mission handler for an order's kind, when it is one.
+    ///
+    /// @param s the unit
+    /// @param[in,out] order order to step
+    /// @param events events that woke the order
+    /// @param[out] result the handler's step result, when it ran
+    /// @return true when an aircraft handler owns the kind
     bool dispatch_vtol_mission(
         sim::unit_spawn::Slot& s,
         sim::simulation_state::Order& order,
@@ -393,6 +516,13 @@ class TickHost final : public sim::simulation_state::Host,
         uint32_t& result
     );
 
+    /// Runs the aircraft construction handler for an order's kind, when it is one.
+    ///
+    /// @param s the unit
+    /// @param[in,out] order order to step
+    /// @param events events that woke the order
+    /// @param[out] result the handler's step result, when it ran
+    /// @return true when an aircraft construction handler owns the kind
     bool dispatch_vtol_build_mission(
         sim::unit_spawn::Slot& s,
         sim::simulation_state::Order& order,
@@ -400,6 +530,13 @@ class TickHost final : public sim::simulation_state::Host,
         uint32_t& result
     );
 
+    /// Runs the aircraft attack handler for an order's kind, when it is one.
+    ///
+    /// @param s the unit
+    /// @param[in,out] order order to step
+    /// @param events events that woke the order
+    /// @param[out] result the handler's step result, when it ran
+    /// @return true when an aircraft attack handler owns the kind
     bool dispatch_air_attack_mission(
         sim::unit_spawn::Slot& s,
         sim::simulation_state::Order& order,
@@ -409,13 +546,24 @@ class TickHost final : public sim::simulation_state::Host,
 
   public:
 
+    /// Binds the host to a match for one simulation pass.
+    ///
+    /// @param m the match
     explicit TickHost(Match& m) : match(m) {}
 
-    // The world queries the air goals and the air driver make, over this match.
+    /// Returns the world queries the air goals and the air driver make, over this
+    /// match.
+    ///
+    /// @return the air host, which refers to the match
     sim::air::AirHost air_host();
 
-    // Hands the order's goal to the unit's movement object: its ground
-    // navigator for a ground goal, its air driver for an air goal.
+    /// Hands an order's goal to the unit's movement object: its ground navigator
+    /// for a ground goal, its air driver for an air goal.
+    ///
+    /// A ground goal for a unit without a movement object is left alone.
+    ///
+    /// @param s the unit
+    /// @param record the order's record
     void install_order_goal(sim::unit_spawn::Slot& s, Match::RuntimeOrder& record);
 
     /// Runs StopBuilding when the order started building, shares the start
@@ -435,29 +583,64 @@ class TickHost final : public sim::simulation_state::Host,
     /// @param movement Its movement object after the tick.
     void signal_move_rate(sim::unit_spawn::Slot& s, const sim::unit_movement::Movement& movement);
 
+    /// Draws from the match's shared random stream.
+    ///
+    /// @param n exclusive upper limit
+    /// @return a value below n, or 0 for a limit below 2
     uint32_t random_bounded(uint32_t n) override;
 
+    /// Draws from the match's shared random stream, as random_bounded does.
+    ///
+    /// @param n exclusive upper limit
+    /// @return a value below n, or 0 for a limit below 2
     uint32_t random(uint32_t n) override { return random_bounded(n); }
 
+    /// Steps a unit's script contexts.
+    ///
+    /// @param record the unit
+    /// @param steps clock time since the last step
     void tick_script(oa::Unit& record, uint32_t steps) override;
 
     /// Hands a wind generator the new wind when it changed this tick:
     /// SetDirection(direction) then SetSpeed(speed << 4).
     ///
     /// @param record Unit about to tick; only a wind generator is affected,
-    ///     and one without a script throws.
+    ///     and one without a script is noted.
     void update_wind_generator(oa::Unit& record) override;
 
+    /// Runs one tick of a unit's three weapon slots: aim, reload and fire.
+    ///
+    /// @param record the unit
     void tick_weapon_aim(oa::Unit& record) override;
 
+    /// Clears a weapon slot's target and runs TargetCleared, keeping a running
+    /// handler's weapon flags in step.
+    ///
+    /// @param u the unit
+    /// @param index weapon slot 0..2
     void wake_weapon(sim::simulation_state::Unit& u, uint32_t index) override;
 
+    /// Clears a weapon slot's target, as wake_weapon does.
+    ///
+    /// @param record the unit
+    /// @param index weapon slot 0..2
     void clear_weapon_target(oa::Unit& record, uint32_t index) override {
         wake_weapon(unit_view(record), index);
     }
 
+    /// Queues a unit's type's default mission when the match runs its handler.
+    ///
+    /// A unit without a movement object gets only GetBuilt.
+    ///
+    /// @param record the unit, whose queue is empty
     void queue_default_mission(oa::World&, oa::Unit& record) override;
 
+    /// Runs one natural repair step of a builder on a unit, paying energy for it.
+    ///
+    /// @param repairer_slot repairing unit
+    /// @param patient repaired unit
+    /// @return true when the step was paid for; false, which is noted, when either
+    ///     unit or its definition is missing
     bool nano_repair(sim::unit_spawn::Slot& repairer_slot, sim::simulation_state::Unit& patient);
 
     /// Runs the handler the mission table holds for the order's kind.
@@ -481,8 +664,18 @@ class TickHost final : public sim::simulation_state::Host,
     /// @param order Order to destroy; it is freed.
     void destroy_order(oa::Unit& record, sim::simulation_state::Order& order) override;
 
+    /// Returns the terrain height under a unit.
+    ///
+    /// @param record the unit
+    /// @return height in whole world units
     int32_t terrain_height_under(oa::Unit& record) override;
 
+    /// Fits a unit with a movement object to the ground under its model.
+    ///
+    /// A unit without a model, or a hovering one without the platform clock, is
+    /// noted and left as it is.
+    ///
+    /// @param record the unit
     void settle_on_ground(oa::Unit& record) override;
 
     /// Runs one movement tick of a unit: its air driver, ground or flight
@@ -492,8 +685,15 @@ class TickHost final : public sim::simulation_state::Host,
     /// @param record Unit to move; one without a movement object is skipped.
     void movement_tick(oa::Unit& record) override;
 
+    /// Drops the path search job a navigator owns.
+    ///
+    /// @param navigation the navigator
     void cancel_search(sim::ground_orders::Navigation& navigation) override;
 
+    /// Plays a unit's speech category through the application's command sound.
+    ///
+    /// @param u speaking unit
+    /// @param category speech category
     void play_sound(sim::simulation_state::Unit& u, uint32_t category) override;
 
     /// Plays a unit's speech captioned with its order's own text.
@@ -506,18 +706,44 @@ class TickHost final : public sim::simulation_state::Host,
     /// @param caption The order's caption, or null for the category's own.
     void play_sound(sim::simulation_state::Unit& u, uint32_t category, const char* caption);
 
+    /// Searches an automatic target for a unit firing at will.
+    ///
+    /// @param unit the unit
+    /// @return the target, or null
     sim::simulation_state::Unit* find_target(sim::simulation_state::Unit& unit) override;
 
+    /// Sends a unit after another on its own account.
+    ///
+    /// @param from attacker
+    /// @param to target
+    /// @return true when an attack order was committed
     bool issue_attack(sim::simulation_state::Unit& from, sim::simulation_state::Unit& to) override;
 
+    /// Tests whether a moving unit fits a cell on an occupancy layer.
+    ///
+    /// @param u moving unit
+    /// @param cell footprint cell x and z
+    /// @param mode occupancy layer
+    /// @return true when it fits; false, which is noted, without the type's
+    ///     metadata or the collision plots
     bool can_occupy(
         const sim::unit_movement::Unit& u, std::array<int16_t, 2> cell, uint8_t mode
     ) override;
 
+    /// Takes a moving unit's footprint off the map; a removal the spatial state
+    /// rejects is noted.
+    ///
+    /// @param u moving unit
     void remove_occupancy(sim::unit_movement::Unit& u) override;
 
+    /// Puts a moving unit's footprint back on the map.
+    ///
+    /// @param u moving unit
     void insert_occupancy(sim::unit_movement::Unit& u) override;
 
+    /// Moves a moving unit's sight stamp to where it now stands.
+    ///
+    /// @param u moving unit
     void update_spatial_membership(sim::unit_movement::Unit& u) override;
 
     /// Scales damage by the target's armour and veteran level and applies it,
@@ -532,8 +758,16 @@ class TickHost final : public sim::simulation_state::Host,
         sim::unit_spawn::Slot* source, sim::unit_spawn::Slot& target, int32_t amount, uint32_t kind
     );
 
+    /// Deals damage to a unit with no attacker, scaled as scaled_damage scales it.
+    ///
+    /// @param record unit that takes the damage
+    /// @param amount damage before scaling, in health points
+    /// @param kind damage kind
     void apply_scaled_damage(oa::Unit& record, int32_t amount, uint32_t kind) override;
 
+    /// Runs one natural regeneration step of a unit on itself.
+    ///
+    /// @param record the unit
     void regenerate_health(oa::Unit& record) override;
 
     /// Works out a live unit's Killed percentage and wreck level, drops a
@@ -556,12 +790,21 @@ class TickHost final : public sim::simulation_state::Host,
     ///     no units.
     void destroy_player_units(uint8_t owner);
 
+    /// Tells the other players' machines that a player simulated here has ticked;
+    /// without a multiplayer handler this is noted.
     void local_player_ticked(oa::Player&) override;
 
+    /// Answers the unit sweep's key-state test: the observer's Shift state for the
+    /// Shift code, held for any other.
+    ///
+    /// @return true when the key counts as held
     bool is_key_down(uint32_t) override;
 
+    /// Selects the viewpoint player's next unit, as the periodic follow does.
     void select_next_viewpoint_unit() override;
 
+    /// Moves the view to the next selected unit, or the previous one for a nonzero
+    /// argument.
     void follow_next_selected(uint32_t) override;
 };
 
@@ -570,13 +813,25 @@ class TickHost::AttackAdapter final : public AttackOrderHost {
     sim::unit_spawn::Slot& source;
     Match::RuntimeOrder& record;
 
+    /// Replaces the order's ground goal, detaching the old one from the navigator
+    /// first.
+    ///
+    /// @param goal new goal, or null to leave the order without one
     void set_goal(std::unique_ptr<sim::ground_orders::Goal> goal);
 
   public:
 
+    /// Binds the adapter to an attacking unit and its order.
+    ///
+    /// @param h the tick host
+    /// @param s attacking unit
+    /// @param r its order's record
     AttackAdapter(TickHost& h, sim::unit_spawn::Slot& s, Match::RuntimeOrder& r)
         : host(h), source(s), record(r) {}
 
+    /// Plays the acknowledgement of an order given without the queue key, once.
+    ///
+    /// @param caption the order's caption
     void announce(const char* caption) override;
 
     /// Returns the weapon slot an attack uses when the order names none.
@@ -585,12 +840,25 @@ class TickHost::AttackAdapter final : public AttackOrderHost {
     ///     enabled bit itself, 2 when set and 0 when no slot is enabled.
     uint8_t selected_weapon() override;
 
+    /// Brings the stood-down weapon slots back.
+    ///
+    /// @param i weapon slot 0..2, or 3 for all three; another is noted
     void release_weapon_targets(uint32_t i) override;
 
+    /// Aims a weapon slot at a unit.
+    ///
+    /// @param target the target
+    /// @param index weapon slot 0..2; another is noted
     void assign_target(sim::simulation_state::Unit& target, int32_t index) override;
 
+    /// Stands every enabled weapon slot down and drops its target.
     void reset_weapons() override;
 
+    /// Tests whether a weapon slot reaches a unit.
+    ///
+    /// @param target the target
+    /// @param index weapon slot 0..2
+    /// @return true when in reach
     bool can_reach(sim::simulation_state::Unit& target, uint8_t index) override;
 
     /// Returns the range of the unit's weapon in a slot (WeaponDef.range).
@@ -599,14 +867,32 @@ class TickHost::AttackAdapter final : public AttackOrderHost {
     /// @return Range in world units.
     int32_t range(uint8_t index) override;
 
+    /// Leaves the order without a ground goal.
     void clear_goal() override;
 
+    /// Gives the order a ground goal around a point.
+    ///
+    /// @param point signed 16.16 centre
+    /// @param radius goal radius in world units
     void circle_goal(const AttackPoint& point, int32_t radius) override;
 
+    /// Draws from the match's shared random stream.
+    ///
+    /// @param limit exclusive upper limit
+    /// @return a value below limit, or 0 for a limit below 2
     uint32_t random(uint32_t limit) override;
 
+    /// Resolves the attack command again for the unit and a target, as the
+    /// command resolver does.
+    ///
+    /// @param target the target, or null for open ground
+    /// @return the mission kind the command now gives, or 0 for none
     uint8_t morph_attack_command(sim::simulation_state::Unit* target) override;
 
+    /// Aims a weapon slot at a point.
+    ///
+    /// @param point signed 16.16 point
+    /// @param slot weapon slot 0..2; another is noted
     void assign_ground(const AttackPoint& point, int32_t slot) override;
 };
 
@@ -615,18 +901,29 @@ class TickHost::ConstructionAdapter {
     sim::unit_spawn::Slot& source;
     Match::RuntimeOrder& record;
 
+    /// Returns the health fields a build step reads of a unit's type.
+    ///
+    /// @param s the unit
+    /// @return armour, energy and metal cost, build time and maximum health
     sim::unit_health::UnitType health_type(sim::unit_spawn::Slot& s) const;
 
   public:
 
+    /// Binds the adapter to a building unit and its order.
+    ///
+    /// @param h the tick host
+    /// @param s building unit
+    /// @param r its order's record
     ConstructionAdapter(TickHost& h, sim::unit_spawn::Slot& s, Match::RuntimeOrder& r)
         : host(h), source(s), record(r) {}
 
-    // Flags the build panel for a redraw when the viewpoint player has the
-    // unit selected.
+    /// Flags the build panel for a redraw when the viewpoint player has the unit
+    /// selected.
     void refresh_selected();
 
-    // The site test for the order's type at its snapped destination.
+    /// Tests the site of the order's type at its snapped destination.
+    ///
+    /// @return true when the type can be placed there
     bool site_clear();
 
     /// Snaps a building's site to the footprint grid and sets its height to
@@ -635,10 +932,14 @@ class TickHost::ConstructionAdapter {
     /// Changes the order's destination.
     void snap_build_height();
 
-    // An unfinished unit of the order's type at its destination.
+    /// Creates an unfinished unit of the order's type at its destination.
+    ///
+    /// @return the frame, or null when it could not be created
     sim::simulation_state::Unit* spawn_nanoframe();
 
-    // A GetBuilt order at the head of the frame's queue, aimed at the builder.
+    /// Puts a GetBuilt order aimed at the builder at the head of a frame's queue.
+    ///
+    /// @param nanoframe the unfinished unit
     void issue_get_built(sim::simulation_state::Unit& nanoframe);
 
     /// Starts StartBuilding(heading) on the builder's script, shares the
@@ -651,35 +952,66 @@ class TickHost::ConstructionAdapter {
     /// @param heading Direction to the site in 65536ths of a turn.
     void start_building(int16_t heading);
 
-    // Adds `rate` of worker time to an unfinished unit, or takes it away when
-    // negative; true when the builder could pay for the step. No nano spray.
+    /// Adds worker time to an unfinished unit, or takes it away when negative,
+    /// without the nano spray.
+    ///
+    /// @param nanoframe the unfinished unit
+    /// @param rate worker time this step
+    /// @return true when the builder could pay for the step
     bool build_progress(sim::simulation_state::Unit& nanoframe, float rate);
 
-    // build_progress with the build nano spray when the step was paid for.
+    /// Runs build_progress, with the build nano spray when the step was paid for.
+    ///
+    /// @param nanoframe the unfinished unit
+    /// @param rate worker time this step
+    /// @return true when the builder could pay for the step
     bool construct(sim::simulation_state::Unit& nanoframe, float rate);
 
-    // The builder link on `nanoframe` when both units are live: the
-    // native completion, which marks the frame finished and releases it from
-    // the pad. Its build-list test on the source holds for any factory; the
-    // match leaves UnitDef.build_ids unset.
+    /// Marks a frame finished by the builder and releases it from the pad, when
+    /// both units are live.
+    ///
+    /// Its build-list test on the source holds for any factory; the match leaves
+    /// UnitDef.build_ids unset.
+    ///
+    /// @param nanoframe the finished unit
     void link_built(sim::simulation_state::Unit& nanoframe);
 
-    // Negative rate at which an unattended frame of the source's type decays
-    // over `ticks`.
+    /// Returns the rate at which an unattended frame of the source's type decays.
+    ///
+    /// @param ticks ticks the decay takes
+    /// @return a negative worker-time rate
     float build_decay_rate(int32_t ticks) const;
 
+    /// Returns the footprint width of the order's type.
+    ///
+    /// @return width in cells; 0, which is noted, for a type that is not loaded
     int16_t footprint_x() const;
 
+    /// Returns the footprint depth of the order's type.
+    ///
+    /// @return depth in cells; 0, which is noted, for a type that is not loaded
     int16_t footprint_z() const;
 
-    // QueryBuildInfo: the pad piece's world position, or the unit's.
+    /// Runs QueryBuildInfo for the build pad's position, keeping the pad piece
+    /// on the order.
+    ///
+    /// @param[out] pad signed 16.16 world position of the pad piece; the unit's
+    ///     own when its script has none or answers below zero
+    /// @return true
     bool query_build_pad(sim::ground_orders::Point& pad);
 
-    // Carries the child on the factory pad (parent is the order owner). piece is
-    // QueryBuildInfo; mode 1 is the BuildingBuild constant.
+    /// Carries a unit on the factory pad of the order's owner.
+    ///
+    /// @param child carried unit
+    /// @param piece QueryBuildInfo piece
+    /// @param mode carry mode; 1 for BuildingBuild
     void attach_child(sim::simulation_state::Unit& child, int8_t piece, uint8_t mode);
 
-    // set_activation, with the build stance a scriptless unit never raises itself.
+    /// Sets or clears state flags, raising the build stance a unit without a
+    /// script never raises itself.
+    ///
+    /// @param mask state flag bits
+    /// @param enabled true sets them, false clears them
     void set_activation_mask(uint8_t mask, bool enabled);
 };
 
@@ -690,6 +1022,11 @@ class TickHost::PatrolAdapter {
 
   public:
 
+    /// Binds the adapter to a patrolling unit and its order.
+    ///
+    /// @param h the tick host
+    /// @param s patrolling unit
+    /// @param r its order's record
     PatrolAdapter(TickHost& h, sim::unit_spawn::Slot& s, Match::RuntimeOrder& r)
         : host(h), source(s), record(r) {}
 
@@ -709,6 +1046,10 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
     oa::UnitEconomy& economy_;
     sim::unit_health::Unit* stand_in_{}; // the projection bind() names; null for none
 
+    /// Returns the pool slot of a health projection.
+    ///
+    /// @param u projection, whose identity is its slot
+    /// @return its slot
     sim::unit_spawn::Slot& slot(const sim::unit_health::Unit& u);
 
     /// Copies the bound projection's health, flags, events and build fraction
@@ -725,12 +1066,17 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
 
   public:
 
+    /// Binds the host to a unit's economy block for one health or build step.
+    ///
+    /// @param match the match
+    /// @param index the paying unit's slot
     HealthHost(Match& match, uint16_t index)
         : match_(match), economy_(match_unit(match, index).economy) {
         debit_ = {economy_.energy.requested, economy_.energy.accepted, economy_.energy.gate};
         metal_ = {economy_.metal.requested, economy_.metal.accepted, economy_.metal.gate};
     }
 
+    /// Writes the energy and metal debits back into the unit's economy block.
     void store();
 
     /// Lets a projection stand in for its unit's record while a build step
@@ -746,30 +1092,68 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
     ///        host's use of it
     void bind(sim::unit_health::Unit& projection) noexcept { stand_in_ = &projection; }
 
+    /// Returns the energy debit of the bound unit's economy block.
+    ///
+    /// @return the debit, written back by store
     sim::unit_health::EconomyDebit& energy_debit(sim::unit_health::Unit&) override;
 
+    /// Returns the metal debit of the bound unit's economy block.
+    ///
+    /// @return the debit, written back by store
     sim::unit_health::EconomyDebit& metal_debit(sim::unit_health::Unit&) override;
 
+    /// Credits metal to a unit's owner.
+    ///
+    /// @param target unit whose owner is credited
+    /// @param amount metal credited
     void refund_metal(sim::unit_health::Unit& target, float amount) override;
 
+    /// Marks a frame finished by its builder, through the bound projection.
+    ///
+    /// @param target the finished unit
     void complete_construction(sim::unit_health::Unit&, sim::unit_health::Unit& target) override;
 
+    /// Tests whether a unit can take damage.
+    ///
+    /// @param u projection of the unit
+    /// @return true for a live target
     bool target_is_live(const sim::unit_health::Unit& u) override;
 
+    /// Applies a health event to a unit, through the bound projection.
+    ///
+    /// @param target unit hit
+    /// @param source unit responsible, or null
+    /// @param event amount, kind and direction
     void apply_health_event(
         sim::unit_health::Unit& target,
         const sim::unit_health::Unit* source,
         const sim::unit_health::HealthEvent& event
     ) override;
 
+    /// Tests whether a unit's owner is present.
+    ///
+    /// @param u projection of the unit
+    /// @return true when it has an owner in use
     bool target_owner_present(const sim::unit_health::Unit& u) override;
 
+    /// Returns the status of a unit's owner.
+    ///
+    /// @param u projection of the unit
+    /// @return Player.status, or 0 without an owner
     uint8_t target_owner_status(const sim::unit_health::Unit& u) override;
 
+    /// Returns the route a health event takes to the attacker's owner.
+    ///
+    /// @return the multiplayer handler's route; none, which is noted, without one
     sim::unit_health::RouteIdentity source_owner_route(const sim::unit_health::Unit&) override;
 
+    /// Returns the route a health event with no attacker takes.
+    ///
+    /// @return the multiplayer handler's route; none, which is noted, without one
     sim::unit_health::RouteIdentity fallback_route() override;
 
+    /// Shares a health event with the machine that simulates its target; without
+    /// a multiplayer handler this is noted.
     void share_health_event(
         sim::unit_health::RouteIdentity, const sim::unit_health::HealthEvent&
     ) override;

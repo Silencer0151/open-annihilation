@@ -3,18 +3,21 @@
 
 // Skirmish menu and map-selection modal host services.
 #include "oa/app/runtime.hpp"
+#include "map_picture_state.hpp"
 #include <algorithm>
 #include <cctype>
-#include <cerrno>
+#include <cstring>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -47,7 +50,9 @@ void Runtime::install_event_callback(skirmish::MenuHandle) {
 }
 
 void Runtime::load_background(std::string_view name) {
-    (void)load_named_background(std::string(name).c_str(), false, false, false);
+    // A bitmap that cannot be read throws; the result only says whether the
+    // backdrop changed, and the surface is rebuilt either way.
+    std::ignore = load_named_background(std::string(name).c_str(), false, false, false);
     rebuild_surface();
 }
 
@@ -125,10 +130,10 @@ void Runtime::set_text(
     auto* gadget = widget(name);
     if (gadget == nullptr)
         return;
-    if (auto* fields = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget->fields))
-        fields->text = text;
-    else if (auto* fields = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget->fields))
-        fields->text = text;
+    if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget->fields))
+        button->text = text;
+    else if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget->fields))
+        label->text = text;
 }
 
 void Runtime::set_enabled(std::string_view name, int32_t enabled) {
@@ -257,12 +262,14 @@ void Runtime::play_ui_sound(std::string_view name, uint32_t) {
     const auto selection =
         oa::audio::game_audio::select(audio_registry_, name, false, sound_playback_state());
     std::string error;
-    if (selection.status == oa::audio::game_audio::SelectionStatus::selected)
-        (void)audio_player_.play(selection, error);
+    if (selection.status == oa::audio::game_audio::SelectionStatus::selected &&
+        !audio_player_.play(selection, error))
+        std::cerr << "sound unavailable: " << error << '\n';
 }
 
 void Runtime::open_map_selection() {
-    (void)map_modal::open(map_modal_, skirmish_settings_, *this);
+    // With no map to choose, the modal shows its own message and stays shut.
+    std::ignore = map_modal::open(map_modal_, skirmish_settings_, *this);
 }
 
 int32_t Runtime::map_count() {
@@ -338,20 +345,31 @@ void Runtime::set_modal_text(std::string_view name, std::string_view text, int32
     set_text(frontend_menu(), name, text, argument);
 }
 
+void Runtime::destroy_map_picture_state(MapPictureState* state) noexcept {
+    delete state;
+}
+
+Runtime::MapPictureState& Runtime::map_picture_state() {
+    if (!map_picture_)
+        map_picture_.reset(new MapPictureState());
+    return *map_picture_;
+}
+
 map_modal::PictureHandle Runtime::picture() {
-    return map_picture_;
+    return map_picture_state().handle;
 }
 
 void Runtime::set_picture(map_modal::PictureHandle picture_value) {
-    map_picture_ = picture_value;
+    map_picture_state().handle = picture_value;
 }
 
 void Runtime::release_picture(map_modal::PictureHandle) {
-    preview_rgb_.clear();
-    preview_width_ = preview_height_ = 0;
-    preview_source_width_ = preview_source_height_ = 0;
-    preview_destination_x_ = preview_destination_y_ = 0;
-    preview_destination_width_ = preview_destination_height_ = 0;
+    auto& picture = map_picture_state();
+    picture.rgb.clear();
+    picture.width = picture.height = 0;
+    picture.source_width = picture.source_height = 0;
+    picture.destination_x = picture.destination_y = 0;
+    picture.destination_width = picture.destination_height = 0;
 }
 
 map_modal::LoadedPicture Runtime::load_picture(std::string_view terrain_path) {
@@ -360,28 +378,29 @@ map_modal::LoadedPicture Runtime::load_picture(std::string_view terrain_path) {
     if (!parsed.ok())
         throw std::runtime_error("cannot parse map terrain: " + parsed.error->message);
     selected_tnt_ = std::move(*parsed.map);
+    auto& picture = map_picture_state();
     if (selected_tnt_->minimap) {
         const auto palette_data = assets_.read("palettes/palette.pal").bytes;
         if (palette_data.size() != oa::PaletteBytes{}.size())
             throw std::runtime_error("game palette has invalid size");
-        std::copy_n(palette_data.begin(), preview_clear_rgb_.size(), preview_clear_rgb_.begin());
-        preview_rgb_.resize(selected_tnt_->minimap->palette_indices.size() * 3U);
-        preview_width_ = selected_tnt_->minimap->width;
-        preview_height_ = selected_tnt_->minimap->height;
-        preview_source_width_ = preview_width_;
-        preview_source_height_ = preview_height_;
+        std::copy_n(palette_data.begin(), picture.clear_rgb.size(), picture.clear_rgb.begin());
+        picture.rgb.resize(selected_tnt_->minimap->palette_indices.size() * 3U);
+        picture.width = selected_tnt_->minimap->width;
+        picture.height = selected_tnt_->minimap->height;
+        picture.source_width = picture.width;
+        picture.source_height = picture.height;
         for (std::size_t i = 0; i < selected_tnt_->minimap->palette_indices.size(); ++i) {
             const auto source =
                 static_cast<std::size_t>(selected_tnt_->minimap->palette_indices[i]) * 4U;
             std::copy_n(
                 palette_data.begin() + static_cast<std::ptrdiff_t>(source),
                 3,
-                preview_rgb_.begin() + static_cast<std::ptrdiff_t>(i * 3U)
+                picture.rgb.begin() + static_cast<std::ptrdiff_t>(i * 3U)
             );
         }
     }
     return {
-        {++next_picture_handle_},
+        {++picture.next_handle},
         static_cast<int32_t>(selected_tnt_->attribute_width),
         static_cast<int32_t>(selected_tnt_->attribute_height)
     };
@@ -404,24 +423,25 @@ void Runtime::fit_picture(
     const auto effective_height = world_height - 128;
     if (effective_width <= 0 || effective_height <= 0 || widget_width <= 0 || widget_height <= 0)
         throw std::runtime_error("map preview dimensions are invalid");
+    auto& picture = map_picture_state();
     if (effective_width < effective_height) {
-        preview_destination_width_ = static_cast<int32_t>(
+        picture.destination_width = static_cast<int32_t>(
             static_cast<int64_t>(effective_width) * widget_width / effective_height
         );
-        preview_destination_height_ = widget_height;
-        preview_destination_x_ = (widget_width - preview_destination_width_) / 2;
-        preview_destination_y_ = 0;
-        preview_source_width_ = preview_width_ * static_cast<std::size_t>(effective_width) /
-                                static_cast<std::size_t>(effective_height);
+        picture.destination_height = widget_height;
+        picture.destination_x = (widget_width - picture.destination_width) / 2;
+        picture.destination_y = 0;
+        picture.source_width = picture.width * static_cast<std::size_t>(effective_width) /
+                               static_cast<std::size_t>(effective_height);
     } else {
-        preview_destination_width_ = widget_width;
-        preview_destination_height_ = static_cast<int32_t>(
+        picture.destination_width = widget_width;
+        picture.destination_height = static_cast<int32_t>(
             static_cast<int64_t>(effective_height) * widget_height / effective_width
         );
-        preview_destination_x_ = 0;
-        preview_destination_y_ = (widget_height - preview_destination_height_) / 2;
-        preview_source_height_ = preview_height_ * static_cast<std::size_t>(effective_height) /
-                                 static_cast<std::size_t>(effective_width);
+        picture.destination_x = 0;
+        picture.destination_y = (widget_height - picture.destination_height) / 2;
+        picture.source_height = picture.height * static_cast<std::size_t>(effective_height) /
+                                static_cast<std::size_t>(effective_width);
     }
 }
 
@@ -449,12 +469,14 @@ int32_t Runtime::select_map(std::string_view name) {
     if (!terrain.ok())
         throw std::runtime_error("cannot parse selected map terrain: " + terrain.error->message);
     selected_map_metadata_ = std::move(*parsed.metadata);
-    auto scenario_document = oa::data::unit_definitions::parse_tdf(ota_text);
-    if (!scenario_document)
+    oa::formats::tdf::OwnedDocument scenario_document;
+    oa::formats::tdf::ParseError scenario_error{};
+    if (!scenario_document.parse(ota_text, &scenario_error))
         throw std::runtime_error(
-            "cannot parse selected scenario definitions: " + scenario_document.error.message
+            "cannot parse selected scenario definitions: " +
+            oa::formats::tdf::describe(scenario_error)
         );
-    selected_ota_document_ = std::move(scenario_document.value);
+    selected_ota_document_ = std::move(scenario_document);
     selected_tnt_ = std::move(*terrain.map);
     selected_map_name_runtime_ = name;
     selected_start_markers_.clear();
@@ -488,66 +510,44 @@ std::optional<std::vector<uint8_t>> Runtime::read(std::string_view path) {
 
 namespace {
 
-const oa::data::unit_definitions::TdfSection*
-global_header(const std::optional<oa::data::unit_definitions::TdfDocument>& document) {
+const oa::formats::tdf::Block*
+global_header(const std::optional<oa::formats::tdf::OwnedDocument>& document) {
     if (!document)
         return nullptr;
-    const auto header =
-        std::find_if(document->sections.begin(), document->sections.end(), [](const auto& section) {
-            return section.name == "GlobalHeader";
-        });
-    return header != document->sections.end() ? &*header : nullptr;
+    return oa::formats::tdf::find_child(document->root(), "GlobalHeader");
 }
 
-std::optional<int32_t> parse_tdf_int(const std::string* value) {
-    if (value == nullptr || value->empty())
-        return std::nullopt;
-    char* end = nullptr;
-    errno = 0;
-    const auto parsed = std::strtol(value->c_str(), &end, 10);
-    if (end == value->c_str() || errno == ERANGE)
-        return std::nullopt;
-    return static_cast<int32_t>(parsed);
-}
-
-std::optional<std::string>
-tdf_text(const oa::data::unit_definitions::TdfSection* section, std::string_view key) {
-    const auto* value = section != nullptr ? section->find(key) : nullptr;
+std::optional<std::string> tdf_text(const oa::formats::tdf::Block* section, std::string_view key) {
+    const char* value = oa::formats::tdf::find_value(section, std::string(key).c_str());
     if (value == nullptr)
         return std::nullopt;
-    if (value->size() >= 256)
+    if (std::strlen(value) >= 256)
         throw std::runtime_error("OTA scenario text exceeds 255 bytes");
-    return *value;
+    return std::string(value);
 }
 
 } // namespace
 
 int32_t Runtime::integer(std::string_view key, int32_t fallback) {
-    const auto* header = global_header(selected_ota_document_);
-    if (header == nullptr)
-        return fallback;
-    return parse_tdf_int(header->find(key)).value_or(fallback);
+    return oa::formats::tdf::get_int(
+        global_header(selected_ota_document_), std::string(key).c_str(), fallback
+    );
 }
 
 std::optional<std::string> Runtime::text(std::string_view key) {
     return tdf_text(global_header(selected_ota_document_), key);
 }
 
-const oa::data::unit_definitions::TdfSection* Runtime::session_schema_section() const {
-    const auto* header = global_header(selected_ota_document_);
-    if (header == nullptr || session_schema_.empty())
+const oa::formats::tdf::Block* Runtime::session_schema_section() const {
+    if (session_schema_.empty())
         return nullptr;
-    for (const auto& child : header->children)
-        if (tdf_names_equal(child.name, session_schema_))
-            return &child;
-    return nullptr;
+    return oa::formats::tdf::find_child(
+        global_header(selected_ota_document_), session_schema_.c_str()
+    );
 }
 
 int32_t Runtime::schema_integer(std::string_view key, int32_t fallback) {
-    const auto* schema = session_schema_section();
-    if (schema == nullptr)
-        return fallback;
-    return parse_tdf_int(schema->find(key)).value_or(fallback);
+    return oa::formats::tdf::get_int(session_schema_section(), std::string(key).c_str(), fallback);
 }
 
 std::optional<std::string> Runtime::schema_text(std::string_view key) {

@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/files.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <span>
 
 namespace oa::data::defs {
 namespace {
@@ -13,10 +15,7 @@ namespace {
 constexpr const char* gaf_extension = "GAF";
 
 void append(char* out, std::size_t capacity, const char* text) noexcept {
-    const std::size_t used = std::strlen(out);
-    if (used + 1 >= capacity)
-        return;
-    std::strncat(out, text, capacity - used - 1);
+    oa::base::text::append_terminated(std::span(out, capacity), text);
 }
 
 } // namespace
@@ -55,7 +54,7 @@ void format_with_extension(
 ) noexcept {
     if (capacity == 0)
         return;
-    std::strncpy(out, source, capacity - 1);
+    oa::base::text::copy_padded(out, source, capacity - 1);
     out[capacity - 1] = '\0';
     for (std::size_t index = std::strlen(out); index-- > 0;) {
         if (out[index] == '\\')

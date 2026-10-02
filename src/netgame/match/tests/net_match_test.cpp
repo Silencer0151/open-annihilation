@@ -15,6 +15,7 @@
 #include "oa/netgame/match/session_lobby.hpp"
 #include "oa/netgame/network.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -104,7 +105,7 @@ void packet_layer_over_memory() {
     CHECK(sender->ticks_between_sends == 6);
 
     ChatRecord chat{};
-    std::strncpy(chat.text, "one", sizeof chat.text);
+    oa::base::text::copy_padded(chat.text, "one", sizeof chat.text);
     uint8_t chat_bytes[65];
     CHECK(encode_record(chat, chat_bytes, sizeof chat_bytes, nullptr) == WireError::ok);
     const uint8_t probe = static_cast<uint8_t>(RecordType::probe);
@@ -1397,8 +1398,8 @@ void player_name_and_data_changes_reach_the_slot() {
     SeatedMachine m(view, 0);
     m.info(0).role = 0x01; // the game's host
     m.info(1).state = OA_PLAYER_STATUS_LOCAL;
-    std::strcpy(m.player(1).name, "before");
-    std::strcpy(m.player(1).second_name, "kept");
+    oa::base::text::copy_terminated(m.player(1).name, "before");
+    oa::base::text::copy_terminated(m.player(1).second_name, "kept");
 
     auto name = system_image(SystemMessageType::player_name_changed, kOther, sm::player_name_bytes);
     store_u32(name.data() + sm::player_name_name, sm::name_bytes);
@@ -1744,7 +1745,10 @@ void team_panel_changes_reach_the_other_machine() {
     }
     CHECK(a.debits.empty() && a.credits.empty());
     (void)net_match_pump(b.match.get());
-    CHECK((b.credits == std::vector<std::pair<uint8_t, float>>{{2, 100.0F}, {2, 50.0F}}));
+    CHECK(
+        (b.credits ==
+         std::vector<std::pair<uint8_t, float>>{{uint8_t{2}, 100.0F}, {uint8_t{2}, 50.0F}})
+    );
     // A receiver whose units are all gone is out of the game.
     a.player(2).units_created = 1;
     a.forget_sent();

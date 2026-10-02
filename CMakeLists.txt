@@ -42,8 +42,15 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaDemoInstaller.cmake")
 # and make_scratch_directory(), a temporary directory no other run shares
 # (oa/test/scratch_directory.hpp), in tests/support/include.
 add_library(oa-test-support INTERFACE)
+add_library(oa::test::support ALIAS oa-test-support)
 target_include_directories(oa-test-support INTERFACE "${CMAKE_CURRENT_LIST_DIR}/tests/support/include")
 target_compile_features(oa-test-support INTERFACE cxx_std_20)
+# What a test match asks of its application, done the plain way
+# (oa/test/match_services.hpp), and a handle that stays on one projectile
+# from tick to tick (oa/test/projectile_handle.hpp).
+add_library(oa-test-match INTERFACE)
+add_library(oa::test::match ALIAS oa-test-match)
+target_link_libraries(oa-test-match INTERFACE oa-test-support oa-sim-match-runtime oa-core-types)
 
 # oa-options, the compile options every target that compiles engine code
 # links (cmake/OaOptions.cmake).
@@ -116,6 +123,7 @@ add_subdirectory(src/sim/unit-activation)
 add_subdirectory(src/base/game-math)
 add_subdirectory(src/base/geometry)
 add_subdirectory(src/base/sha256)
+add_subdirectory(src/base/text)
 add_subdirectory(src/base/float-precision)
 add_subdirectory(src/base/threads)
 add_subdirectory(src/core)
@@ -255,7 +263,7 @@ if(OA_BUILD_PLATFORM)
   add_library(oa-app-director-output src/app/director_output.cpp)
   add_library(oa::app::director_output ALIAS oa-app-director-output)
   target_link_libraries(oa-app-director-output PUBLIC oa-app-headers oa-formats-zip oa-formats-oascript
-    oa-base-sha256 SDL3::SDL3 PRIVATE oa-audio-offline-mix oa-base-threads oa-options)
+    oa-base-sha256 SDL3::SDL3 PRIVATE oa-platform-shims oa-audio-offline-mix oa-base-threads oa-options)
   if(BUILD_TESTING)
     # File names, encoder arguments, the files of a render with encoding
     # off, the environment's settings and bundles, malformed ones included.
@@ -412,6 +420,12 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-extension-list-test PRIVATE oa-app-extensions oa-app-command-line
     oa-ui-console oa-ui-hud oa-sim-messages oa-options)
   add_test(NAME app-extension-list COMMAND oa-app-extension-list-test)
+  # The guarded call of the hooks (hook_call.hpp): a hook of each handling
+  # that throws, alone and in the combined table.
+  add_executable(oa-app-hook-call-test src/app/hook_call_test.cpp)
+  target_link_libraries(oa-app-hook-call-test PRIVATE oa-app-extensions oa-app-command-line
+    oa-test-support oa-options)
+  add_test(NAME app-hook-call COMMAND oa-app-hook-call-test)
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaExtensions.cmake")
 # Without SDL3's intro player, oa-game links the one that skips each movie
@@ -910,9 +924,13 @@ if(BUILD_TESTING)
   target_link_libraries(oa-hpi-codec-test PRIVATE oa-formats-sqsh)
   add_test(NAME hpi-codec COMMAND oa-hpi-codec-test)
   add_executable(oa-assets-test tests/assets_test.cpp)
-  target_link_libraries(oa-assets-test PRIVATE oa-formats-hpi)
+  target_link_libraries(oa-assets-test PRIVATE oa-formats-hpi oa-base-bytes)
   add_test(NAME assets COMMAND oa-assets-test)
   set_tests_properties(hpi-codec assets PROPERTIES TIMEOUT 30)
+  # The shared match fixture's projectile handle.
+  add_executable(oa-projectile-handle-test tests/support/tests/projectile_handle_test.cpp)
+  target_link_libraries(oa-projectile-handle-test PRIVATE oa-test-match oa-sim-weapon-execution oa-options)
+  add_test(NAME projectile-handle COMMAND oa-projectile-handle-test)
   if(OA_BUILD_PLATFORM)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_FOUND)
@@ -943,7 +961,7 @@ if(BUILD_TESTING)
     add_test(NAME branding-icons COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_icons.py --check)
     set_tests_properties(branding-icons PROPERTIES TIMEOUT 60)
     # The engine's sources keep to the style rules of tools/check_style.py
-    # within the counts per directory that tools/style-baseline.json allows,
+    # with exactly the counts per file that tools/style-baseline.json holds,
     # a baseline that may only shrink; the self-test plants a breach of every
     # rule in small trees and requires the check to find exactly those.
     add_test(NAME style-ratchet COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_style.py
@@ -956,9 +974,9 @@ if(BUILD_TESTING)
     # should in a small built-in tree.
     add_test(NAME doc-links COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_links.py
       --root ${CMAKE_CURRENT_SOURCE_DIR})
-    add_test(NAME doc-links-self-test COMMAND ${Python3_EXECUTABLE}
+    add_test(NAME doc-links-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_links.py --self-test)
-    set_tests_properties(doc-links doc-links-self-test PROPERTIES TIMEOUT 60)
+    set_tests_properties(doc-links doc-links-selftest PROPERTIES TIMEOUT 60)
     # The engine's C, C++ and Objective-C sources are laid out as
     # .clang-format says, by the clang-format release that
     # tools/format/requirements.txt pins (tools/format_sources.py, whose
@@ -1011,10 +1029,10 @@ endif()
 # Network play: the multiplayer screens, the network session and match, the
 # .tad recording format and its playback, and oa-game's extension
 # oa-app-netgame, which takes the 3.1c network switches -e -h -n -p -t the
-# game otherwise refuses. Its Runtime members
-# (src/app/include/oa/app/netgame_runtime_members.hpp) are part of Runtime in
-# every build. Registered before any other extension, so that the others
-# come after it in the extension list.
+# game otherwise refuses. Its state for each runtime
+# (src/app/netgame/network_play.hpp) is its extension's own, and Runtime's
+# friend. Registered before any other extension, so that the others come
+# after it in the extension list.
 add_subdirectory(src/formats/tad)
 add_subdirectory(src/ui/frontend-multiplayer)
 add_subdirectory(src/netgame)
@@ -1028,8 +1046,10 @@ endif()
 # record, for tests that check what a caller of network play's API asked
 # of it (oa/test/netgame_launch_record.hpp).
 add_library(oa-netgame-test-installs INTERFACE)
+add_library(oa::netgame::test_installs ALIAS oa-netgame-test-installs)
 target_link_libraries(oa-netgame-test-installs INTERFACE oa-test-game-data oa-formats-hpi)
 add_library(oa-netgame-test-launch STATIC tests/support/src/netgame_launch_record.cpp)
+add_library(oa::netgame::test_launch ALIAS oa-netgame-test-launch)
 target_include_directories(oa-netgame-test-launch PUBLIC tests/support/include)
 target_link_libraries(oa-netgame-test-launch PUBLIC oa-app-netgame-launch PRIVATE oa-app-netgame-launch-binding)
 
@@ -1059,6 +1079,8 @@ if(TARGET oa-game)
   # and runtime.hpp with the libraries oa-game's own sources use (those
   # above and the frontend dialogs).
   add_library(oa-extension-sdk INTERFACE)
+  add_library(oa::extension::sdk ALIAS oa-extension-sdk)
+  # The name the projects that build on the engine link.
   add_library(oa::extension-sdk ALIAS oa-extension-sdk)
   target_link_libraries(oa-extension-sdk INTERFACE oa-app-headers)
   target_link_libraries(oa-extension-sdk INTERFACE oa-ui-display-layout)
@@ -1069,8 +1091,9 @@ if(TARGET oa-game)
   # The registered extensions are listed and linked when the configure ends.
   oa_schedule_extension_list()
 endif()
-# tools/check_runtime_surface.py, which holds an extension's members header
-# and its use of Runtime's private names to tools/runtime-surface-baseline.json,
+# tools/check_runtime_surface.py, which holds an extension's members header,
+# when it has one, and its use of Runtime's private names to
+# tools/runtime-surface-baseline.json,
 # still measures what it should in a small built-in tree; and every name that
 # baseline allows is still a private name of Runtime, so renaming, removing
 # or publishing one changes the baseline, and the extension, with it.
@@ -1082,6 +1105,23 @@ if(BUILD_TESTING)
     add_test(NAME runtime-surface-names COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_runtime_surface.py --baseline-names)
     set_tests_properties(runtime-surface-selftest runtime-surface-names PROPERTIES TIMEOUT 60)
+    # Engine code calls every hook of the extension tables through call_hook
+    # (hook_call.hpp), and each hook's handling there agrees with its
+    # documentation.
+    add_test(NAME hook-calls-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_hook_calls.py --self-test)
+    add_test(NAME hook-calls COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_hook_calls.py)
+    set_tests_properties(hook-calls-selftest hook-calls PROPERTIES TIMEOUT 60)
+    # Every test of this build is named as the naming rule says
+    # (docs/development/conventions.md); the check asks ctest for the
+    # tests, so it sees every directory's.
+    add_test(NAME ctest-names-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_ctest_names.py --self-test)
+    add_test(NAME ctest-names COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_ctest_names.py --ctest ${CMAKE_CTEST_COMMAND}
+      --build ${CMAKE_CURRENT_BINARY_DIR} --config "$<CONFIG>" --skip-code ${OA_GAME_DATA_SKIP_CODE})
+    set_tests_properties(ctest-names-selftest ctest-names PROPERTIES TIMEOUT 120)
   endif()
 endif()
 # The project's licence, the attributions and the licence texts they link to

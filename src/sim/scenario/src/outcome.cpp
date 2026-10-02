@@ -7,7 +7,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::scenario {
 namespace {
@@ -59,16 +58,12 @@ bool build_unit_type_query(Condition& c, const QueryContext& context) {
 
 /// Runs the MoveUnitToRadius query through the host, which holds the terrain and unit positions.
 ///
-/// Throws std::invalid_argument when the host has no MoveUnitToRadius hook.
-///
 /// @param[in,out] c the condition
 /// @param context the host's hook
-/// @return true when met
+/// @return true when met; false when the host has no MoveUnitToRadius hook
 bool move_unit_to_radius_query(Condition& c, const QueryContext& context) {
     if (context.host.move_unit_to_radius_met == nullptr)
-        throw std::invalid_argument(
-            "MoveUnitToRadius needs the match's terrain and unit positions"
-        );
+        return false;
     return context.host.move_unit_to_radius_met(context.host.context, c);
 }
 
@@ -209,18 +204,13 @@ void finish_defeated(OutcomeState& state) {
     state.flags |= outcome_flag::defeat_transition;
 }
 
-/// Checks that a controller was registered and the view names a player of the table.
-///
-/// Throws std::logic_error before registration and std::invalid_argument for a local
-/// player outside the table.
+/// Tells whether a controller was registered and the view names a player of the table.
 ///
 /// @param c the controller
 /// @param view the outcome view
-void validate(const Controller& c, const OutcomeView& view) {
-    if (!c.registration_complete)
-        throw std::logic_error("scenario GlobalHeader registration was not completed");
-    if (view.local_player >= player_count)
-        throw std::invalid_argument("scenario local player outside ten player table");
+/// @return false before registration or for a local player outside the table
+bool registered_for(const Controller& c, const OutcomeView& view) noexcept {
+    return c.registration_complete && view.local_player < player_count;
 }
 
 /// Tests one group: victory needs every condition met, defeat any one.
@@ -232,7 +222,8 @@ void validate(const Controller& c, const OutcomeView& view) {
 /// @param context the match's world, view, tick and hooks
 /// @return true when the group decides the game
 bool evaluate_group(Controller& c, Group group, const QueryContext& context) {
-    validate(c, context.view);
+    if (!registered_for(c, context.view))
+        return false;
     auto& count = group == Group::victory ? c.victory_count : c.defeat_count;
     auto& entries = group == Group::victory ? c.victory : c.defeat;
     if (count == 0) {
@@ -244,7 +235,7 @@ bool evaluate_group(Controller& c, Group group, const QueryContext& context) {
     for (int32_t i = 0; i < count; ++i) {
         if (count < 0 || count > static_cast<int32_t>(handler_capacity) ||
             !entries[static_cast<std::size_t>(i)])
-            throw std::logic_error("invalid scenario objective array");
+            return false;
         bool satisfied = evaluate_condition(*entries[static_cast<std::size_t>(i)], context);
         if (group == Group::victory && !satisfied)
             return false;
@@ -299,10 +290,10 @@ bool all_units_killed_unit(Condition& c, const UnitStatus& unit) {
     return c.satisfied != 0;
 }
 
-Query query_of(Kind kind) {
+Query query_of(Kind kind) noexcept {
     const auto index = static_cast<std::size_t>(kind);
     if (index >= queries.size())
-        throw std::invalid_argument("unknown scenario condition kind");
+        return Query::stored_result;
     return queries[index].query;
 }
 
@@ -380,7 +371,8 @@ bool defeat_check(
 }
 
 bool offline_victory(const Controller& c, const OutcomeView& v) {
-    validate(c, v);
+    if (!registered_for(c, v))
+        return false;
     if (c.enabled == 0)
         return false;
     for (std::size_t i = 0; i < player_count; ++i)
@@ -390,7 +382,8 @@ bool offline_victory(const Controller& c, const OutcomeView& v) {
 }
 
 bool offline_defeat(const Controller& c, const OutcomeView& v) {
-    validate(c, v);
+    if (!registered_for(c, v))
+        return false;
     return c.enabled != 0 && v.live_units[v.local_player] == 0;
 }
 
@@ -402,7 +395,7 @@ bool diagnostic_defeat(
     if (diagnostic.deadline == 0) {
         auto value = random.rand15();
         if (value > 32767)
-            throw std::invalid_argument("diagnostic random value outside 15 bits");
+            return false;
         diagnostic.deadline = 9000U + static_cast<uint32_t>(value) * 9000U / 32768U;
     }
     if (diagnostic.deadline <= tick) {

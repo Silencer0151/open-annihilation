@@ -23,6 +23,8 @@ namespace {
 
 constexpr uint8_t building_build = 12, build_weapon = 13, follow_ground = 18, move_ground = 26,
                   patrol = 29;
+// Order flags bit: the order saw its target unit and kept the cell in seen_cell.
+constexpr uint8_t order_target_seen = 0x20;
 
 sim::ground_orders::Point point(int32_t x, int32_t z) {
     return {x << 16, 0, z << 16};
@@ -98,8 +100,8 @@ void orders_survive_a_save() {
         mover_orders.goals[1].empty()
     );
     CHECK(guard.kind == follow_ground && guard.target_id == yard.record.id);
-    CHECK(guard.seen_cell == (200u | 200u << 16) && (guard.flags & 0x20) != 0);
-    CHECK(first.seen_cell == 0 && (first.flags & 0x20) == 0);
+    CHECK(guard.seen_cell == (200u | 200u << 16) && (guard.flags & order_target_seen) != 0);
+    CHECK(first.seen_cell == 0 && (first.flags & order_target_seen) == 0);
     CHECK(build.kind == building_build && build.parameter_1 == 1 && build.parameter_2 == 5);
     CHECK(weapon.kind == build_weapon && (weapon.flags & 4) != 0 && weapon.parameter_2 == 4);
 

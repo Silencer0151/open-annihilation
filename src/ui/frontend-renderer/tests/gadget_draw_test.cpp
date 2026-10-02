@@ -134,7 +134,7 @@ void test_gadget_text() {
     TestFont font;
     build_font(font);
     auto buffer = oa::present::create_surface(12, 3);
-    std::fill(buffer.pixels.begin(), buffer.pixels.end(), 9);
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
     draw::draw_gadget_text(
         &buffer.surface,
         &font.gaf,
@@ -163,7 +163,7 @@ void test_gadget_text() {
     );
 
     // A width budget stops before the first glyph wider than what is left.
-    std::fill(buffer.pixels.begin(), buffer.pixels.end(), 9);
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
     draw::draw_gadget_text(&buffer.surface, &font.gaf, "A B", 0, 1, 5, 0);
     require(at(buffer, 0, 0) == 5 && at(buffer, 5, 1) == 9, "gadget text: the budget stops at 'B'");
 
@@ -175,7 +175,7 @@ void test_gadget_text() {
         for (int index = 0; index < 256; ++index)
             display.light_table[row * 256 + index] = static_cast<uint8_t>(index + row);
     oa::present::bind_display(&display);
-    std::fill(buffer.pixels.begin(), buffer.pixels.end(), 9);
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
     draw::draw_gadget_text(&buffer.surface, &font.gaf, "A", 0, 1, draw::gadget_text_unbounded, 30);
     require(
         at(buffer, 0, 0) == 35 && at(buffer, 1, 0) == 9 && at(buffer, 1, 1) == 36,

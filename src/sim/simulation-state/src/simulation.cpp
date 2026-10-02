@@ -6,7 +6,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::simulation_state {
 namespace {
@@ -16,12 +15,12 @@ constexpr uint32_t height_dirty = OA_UNIT_FLAG_POSITION_DIRTY,
                    can_hover_type = OA_UNIT_DEF_FLAG_CAN_HOVER;
 constexpr uint8_t live_multiplayer_game = 1, periodic_enabled = 2;
 
-void spend(std::size_t& budget) {
+// Takes one step from the budget; false when none is left.
+[[nodiscard]] bool spend(std::size_t& budget) noexcept {
     if (budget == 0)
-        throw std::runtime_error(
-            "order execution budget exhausted; unresolved handler failed to yield"
-        );
+        return false;
     --budget;
+    return true;
 }
 
 void wait(oa::World& w, Order& o, Host& h, uint32_t range) {
@@ -30,11 +29,8 @@ void wait(oa::World& w, Order& o, Host& h, uint32_t range) {
     o.wake_tick = w.game.tick + random + 30u;
 }
 
-const oa::UnitDef& type(oa::World& w, const oa::Unit& u) {
-    const auto* def = oa::world_unit_def_of(&w, &u);
-    if (!def)
-        throw std::invalid_argument("unit has no type");
-    return *def;
+const oa::UnitDef* type(oa::World& w, const oa::Unit& u) noexcept {
+    return oa::world_unit_def_of(&w, &u);
 }
 
 // UnitDef.water_line is read as an unsigned byte.
@@ -110,50 +106,61 @@ bool unit_selectable(const oa::World& w, const oa::Unit& u) {
         return false;
     const auto parent = oa::oa_unit_slot_from_ref(u.attach_parent);
     if (parent >= w.unit_slot_count)
-        throw std::out_of_range("selection parent outside pool");
+        return false;
     return !parent || (w.units[parent].flags & OA_UNIT_FLAG_AIR_BASE) != 0;
 }
 
-void remove_order(OrderQueue& q, oa::Unit& u, Order& o, Host& h) {
+StepFault remove_order(OrderQueue& q, oa::Unit& u, Order& o, Host& h) {
     Order* original = q.primary;
     Order** link = (o.flags & secondary_flag) ? &q.secondary : &q.primary;
     std::size_t budget = default_order_budget;
     while (*link && *link != &o) {
-        spend(budget);
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
         link = &(*link)->next;
     }
     if (!*link)
-        return;
+        return StepFault::none;
     *link = o.next;
     if (&o != original)
         o.flags |= detached_flag;
     h.destroy_order(u, o);
+    return StepFault::none;
 }
 
-void rotate_primary(OrderQueue& q, Order& o) {
+StepFault rotate_primary(OrderQueue& q, Order& o) {
     Order** link = &q.primary;
     std::size_t budget = default_order_budget;
     while (*link != &o) {
-        spend(budget);
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
         if (!*link)
-            throw std::invalid_argument("rotated order is not in primary queue");
+            return StepFault::order_not_queued;
         link = &(*link)->next;
     }
+    // The tail is found before the order is unlinked, so a walk that runs out
+    // of budget leaves the queue as it was.
+    Order** tail = &o.next;
+    while (*tail) {
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
+        tail = &(*tail)->next;
+    }
+    if (tail == &o.next)
+        return StepFault::none;
     *link = o.next;
-    while (*link) {
-        spend(budget);
-        link = &(*link)->next;
-    }
-    *link = &o;
+    *tail = &o;
     o.next = nullptr;
+    return StepFault::none;
 }
 
-void clear_orders(OrderQueue& q, oa::Unit& u, bool all, Host& h) {
+StepFault clear_orders(OrderQueue& q, oa::Unit& u, bool all, Host& h) {
     Order* original = q.primary;
     Order** link = &q.primary;
     std::size_t budget = default_order_budget;
     while (*link) {
-        spend(budget);
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
         Order& o = **link;
         if (!all && (o.preserve_flags & 4))
             link = &o.next;
@@ -166,19 +173,28 @@ void clear_orders(OrderQueue& q, oa::Unit& u, bool all, Host& h) {
     }
     if (all)
         while (q.secondary) {
-            spend(budget);
-            remove_order(q, u, *q.secondary, h);
+            if (!spend(budget))
+                return StepFault::order_budget_spent;
+            if (const auto fault = remove_order(q, u, *q.secondary, h); fault != StepFault::none)
+                return fault;
         }
+    return StepFault::none;
 }
 
-void primary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size_t budget) {
+StepFault primary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size_t budget) {
     for (;;) {
-        spend(budget);
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
         Order* o = q.primary;
         if (!o) {
-            if (locally_simulated(w, u) && type(w, u).default_mission_type != 0)
-                h.queue_default_mission(w, u);
-            return;
+            if (locally_simulated(w, u)) {
+                const auto* def = type(w, u);
+                if (!def)
+                    return StepFault::untyped_unit;
+                if (def->default_mission_type != 0)
+                    h.queue_default_mission(w, u);
+            }
+            return StepFault::none;
         }
         if (o->wake_tick <= w.game.tick) {
             o->wake_tick = 0xffffffffu;
@@ -186,7 +202,7 @@ void primary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size
         }
         const auto events = (static_cast<uint32_t>(u.events) | o->raised_events) & o->wait_events;
         if (o->wait_events && !events)
-            return;
+            return StepFault::none;
         u.events = static_cast<uint16_t>(u.events & ~events);
         o->wait_events = 0;
         o->raised_events &= ~events;
@@ -209,37 +225,41 @@ void primary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size
             break;
         case 5:
         case 8:
-            remove_order(q, u, *o, h);
+            if (const auto fault = remove_order(q, u, *o, h); fault != StepFault::none)
+                return fault;
             break;
         case 6:
-            rotate_primary(q, *o);
+            if (const auto fault = rotate_primary(q, *o); fault != StepFault::none)
+                return fault;
             break;
         case 9:
             o->flags |= retry_flag;
-            if (o->next)
-                remove_order(q, u, *o, h);
-            else {
+            if (o->next) {
+                if (const auto fault = remove_order(q, u, *o, h); fault != StepFault::none)
+                    return fault;
+            } else {
                 o->phase = 0;
                 wait(w, *o, h, 30);
             }
             break;
         default:
-            clear_orders(q, u, true, h);
-            return;
+            return clear_orders(q, u, true, h);
         }
     }
 }
 
-void secondary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size_t budget) {
+StepFault secondary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::size_t budget) {
     for (;;) {
         Order* o = q.secondary;
         while (o && o->wait_events && o->wake_tick > w.game.tick) {
-            spend(budget);
+            if (!spend(budget))
+                return StepFault::order_budget_spent;
             o = o->next;
         }
         if (!o)
-            return;
-        spend(budget);
+            return StepFault::none;
+        if (!spend(budget))
+            return StepFault::order_budget_spent;
         o->wait_events = 0;
         const auto result = h.dispatch_mission(w, u, *o, 0);
         switch (result) {
@@ -257,23 +277,26 @@ void secondary_orders(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h, std::si
             break;
         case 6:
         case 7:
-            remove_order(q, u, *o, h);
-            return;
+            return remove_order(q, u, *o, h);
         default:
-            remove_order(q, u, *o, h);
+            if (const auto fault = remove_order(q, u, *o, h); fault != StepFault::none)
+                return fault;
             break;
         }
     }
 }
 
-void update_height(oa::World& w, oa::Unit& u, Host& h) {
+StepFault update_height(oa::World& w, oa::Unit& u, Host& h) {
     const auto flags = u.flags;
-    const auto& t = type(w, u);
+    const auto* def = type(w, u);
+    if (!def)
+        return StepFault::untyped_unit;
+    const auto& t = *def;
     if (!(flags & height_dirty) && !(t.flags & can_hover_type))
-        return;
+        return StepFault::none;
     u.flags &= ~height_dirty;
     if (!u.movement || (flags & OA_UNIT_FLAG_OCCUPANCY_MASK) != 1)
-        return;
+        return StepFault::none;
     if (t.flags & OA_UNIT_DEF_FLAG_UPRIGHT) {
         int32_t height;
         if (!(t.flags & can_hover_type))
@@ -288,9 +311,10 @@ void update_height(oa::World& w, oa::Unit& u, Host& h) {
         u.position.y = static_cast<oa::oa_fixed>((waterline(t) * 0xffffu + w.game.sea_level) << 16);
     } else
         h.settle_on_ground(u);
+    return StepFault::none;
 }
 
-void update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
+StepFault update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
     if (u.script)
         h.tick_script(u, 1);
     if (u.damage_countdown)
@@ -299,10 +323,13 @@ void update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
         --u.capture_cooldown;
     if ((u.flags & OA_UNIT_FLAG_SELECTED) && !unit_selectable(w, u))
         u.flags &= ~OA_UNIT_FLAG_SELECTED;
+    const auto* def = type(w, u);
     if (w.game.tick % 30 == 0) {
-        const auto maximum = type(w, u).max_damage;
+        if (!def)
+            return StepFault::untyped_unit;
+        const auto maximum = def->max_damage;
         if (!maximum)
-            throw std::domain_error("health percentage divisor is zero");
+            return StepFault::zero_maximum_health;
         // The division treats the sign-extended health*100 as an unsigned word.
         const auto quotient = static_cast<uint32_t>(static_cast<int32_t>(u.health) * 100) / maximum;
         const auto percent = std::clamp(std::bit_cast<int32_t>(quotient), 0, 100);
@@ -310,29 +337,39 @@ void update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
         u.health_percent = static_cast<uint8_t>(percent);
     }
     if (locally_simulated(w, u)) {
+        if (!def)
+            return StepFault::untyped_unit;
         if (w.environment_enabled && w.environment_damage && w.game.tick % 30 == 0 &&
             std::bit_cast<int16_t>(static_cast<uint16_t>(position_word(u.position.y) >> 16)) <=
                 w.game.sea_level &&
-            !(type(w, u).flags & can_hover_type))
+            !(def->flags & can_hover_type))
             h.apply_scaled_damage(u, w.environment_damage, 11);
-        if (type(w, u).heal_time &&
-            static_cast<uint32_t>(static_cast<int32_t>(u.health)) < type(w, u).max_damage &&
+        // The regeneration test reads the type again, after the damage.
+        def = type(w, u);
+        if (!def)
+            return StepFault::untyped_unit;
+        if (def->heal_time &&
+            static_cast<uint32_t>(static_cast<int32_t>(u.health)) < def->max_damage &&
             (w.game.tick & 7) == 0)
             h.regenerate_health(u);
-        primary_orders(w, q, u, h);
-        secondary_orders(w, q, u, h);
+        if (const auto fault = primary_orders(w, q, u, h); fault != StepFault::none)
+            return fault;
+        if (const auto fault = secondary_orders(w, q, u, h); fault != StepFault::none)
+            return fault;
         if (u.movement) {
             h.movement_tick(u);
-            update_height(w, u, h);
+            if (const auto fault = update_height(w, u, h); fault != StepFault::none)
+                return fault;
         }
     }
     if (u.flags & OA_UNIT_FLAG_DEATH_PENDING)
         h.kill_unit(u, u.damage_kind);
+    return StepFault::none;
 }
 
-void update_units(oa::World& w, std::span<OrderQueue> orders, Host& h) {
+StepFault update_units(oa::World& w, std::span<OrderQueue> orders, Host& h) {
     if (orders.size() != w.unit_slot_count)
-        throw std::invalid_argument("order queues do not cover the unit pool");
+        return StepFault::orders_short;
     w.game.active_unit_count = 0;
     for (auto& p : w.game.players) {
         if (!player_active(p))
@@ -346,7 +383,9 @@ void update_units(oa::World& w, std::span<OrderQueue> orders, Host& h) {
                 h.update_wind_generator(u);
                 if (p.in_use && (p.status == 1 || p.status == 2))
                     h.tick_weapon_aim(u);
-                update_unit(w, orders[oa::world_unit_slot(&w, &u)], u, h);
+                const auto fault = update_unit(w, orders[oa::world_unit_slot(&w, &u)], u, h);
+                if (fault != StepFault::none)
+                    return fault;
             }
         }
         if ((w.game.session_flags & live_multiplayer_game) && p.in_use &&
@@ -363,5 +402,6 @@ void update_units(oa::World& w, std::span<OrderQueue> orders, Host& h) {
             h.follow_next_selected(0);
         }
     }
+    return StepFault::none;
 }
 } // namespace oa::sim::simulation_state

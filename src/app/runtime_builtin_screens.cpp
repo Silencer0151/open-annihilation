@@ -5,14 +5,17 @@
 // registered screen packages.
 #include "oa/app/runtime.hpp"
 #include "engine_settings_state.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
 #include "oa/ui/campaign/endgame.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace oa::app {
@@ -36,7 +39,8 @@ struct BuiltinScreens {
         if (runtime.options_.mute)
             return;
         std::string error;
-        (void)runtime.audio_player_.play_resource(runtime.screen_sound_resource(name), error);
+        if (!runtime.audio_player_.play_resource(runtime.screen_sound_resource(name), error))
+            std::cerr << "sound unavailable: " << error << '\n';
     }
 
     static void register_sound(void* host, const char* category, const char* file) {
@@ -146,8 +150,9 @@ struct BuiltinScreens {
     }
 
     static void play_sound_alternate(void* host, const char* name) {
+        // A sound that does not start is reported by play_alternate_sound.
         if (name != nullptr)
-            (void)static_cast<Runtime*>(host)->play_alternate_sound(name);
+            std::ignore = static_cast<Runtime*>(host)->play_alternate_sound(name);
     }
 
     // The pass runs from apply_screen_request, never inside a callback.
@@ -407,7 +412,9 @@ struct BuiltinScreens {
 
     // The main-menu reset drops the named background.
     static void step_load_default_palette(ScreenContext* ctx, void*) {
-        (void)host(ctx).load_named_background(nullptr, false, false, false);
+        // Selecting none reads no file; whether the backdrop changed is not
+        // needed.
+        std::ignore = host(ctx).load_named_background(nullptr, false, false, false);
     }
 
     // The end-game state runs as the ENDMSN.GUI screen's enter.
@@ -423,8 +430,10 @@ namespace {
 constexpr const char* kGuiPalette = "palettes/guipal.pal";
 constexpr const char* kCommonGaf = "anims/commongui.gaf";
 
+// A refused registration is recorded in the registry, and register_screens
+// reports it once every screen, overlay and step is in.
 void add_screen(ScreenRegistry* registry, const ScreenDesc& desc) {
-    (void)screen_register(registry, &desc);
+    screen_register(registry, &desc);
 }
 
 ScreenDesc gui_screen(
@@ -518,21 +527,22 @@ void BuiltinScreens::register_all(ScreenRegistry* registry) {
     );
 
     using frontend::Step;
-    (void)step_register(registry, Step::setup_main_menu, step_setup_main_menu, nullptr);
-    (void)step_register(registry, Step::setup_single_player, step_setup_single_player, nullptr);
-    (void)step_register(registry, Step::setup_skirmish, step_setup_skirmish, nullptr);
-    (void)step_register(registry, Step::reset_player_slots, step_reset_player_slots, nullptr);
-    (void)step_register(registry, Step::load_preferences, step_load_preferences, nullptr);
-    (void)step_register(registry, Step::save_preferences, step_save_preferences, nullptr);
-    (void)step_register(registry, Step::draw_current_frame, step_clear_selection, nullptr);
-    (void)step_register(registry, Step::load_default_palette, step_load_default_palette, nullptr);
+    // A refused step is recorded in the registry, as a refused screen is.
+    step_register(registry, Step::setup_main_menu, step_setup_main_menu, nullptr);
+    step_register(registry, Step::setup_single_player, step_setup_single_player, nullptr);
+    step_register(registry, Step::setup_skirmish, step_setup_skirmish, nullptr);
+    step_register(registry, Step::reset_player_slots, step_reset_player_slots, nullptr);
+    step_register(registry, Step::load_preferences, step_load_preferences, nullptr);
+    step_register(registry, Step::save_preferences, step_save_preferences, nullptr);
+    step_register(registry, Step::draw_current_frame, step_clear_selection, nullptr);
+    step_register(registry, Step::load_default_palette, step_load_default_palette, nullptr);
     for (const auto ignored :
          {Step::check_state_checksum,
           Step::present_frame,
           Step::get_video_context,
           Step::pop_input_event})
-        (void)step_register(registry, ignored, step_ignore, nullptr);
-    (void)step_register(registry, Step::enter_end_mission, step_enter_end_mission, nullptr);
+        step_register(registry, ignored, step_ignore, nullptr);
+    step_register(registry, Step::enter_end_mission, step_enter_end_mission, nullptr);
 }
 
 std::string Runtime::screen_sound_resource(std::string_view name) const {
@@ -628,8 +638,7 @@ void Runtime::register_screens() {
 #define OA_REGISTER(fn) fn(&screens_);
 #include "oa/ui/screen_registry/screens.inc"
 #undef OA_REGISTER
-    if (extension_.register_screens != nullptr)
-        extension_.register_screens(extension_.context, &screens_);
+    call_hook_or_raise<&Extension::register_screens>(extension_, &screens_);
     // The OA button and the settings dialog, on the main menu and in a match.
     register_engine_settings_overlays();
     register_engine_settings_match_overlay();
@@ -641,7 +650,7 @@ void Runtime::register_screens() {
           frontend::Step::shut_down_resource,
           frontend::Step::return_to_main_menu})
         if (step_find(&screens_, unclaimed) == nullptr)
-            (void)step_register(&screens_, unclaimed, BuiltinScreens::step_ignore, nullptr);
+            step_register(&screens_, unclaimed, BuiltinScreens::step_ignore, nullptr);
     if (screens_.rejected != nullptr)
         throw std::runtime_error(std::string("screen registration rejected: ") + screens_.rejected);
     if (screen_find(&screens_, screen_id(Screen::map_selection)) == nullptr)

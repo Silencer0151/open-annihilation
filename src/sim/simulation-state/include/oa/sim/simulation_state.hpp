@@ -54,14 +54,6 @@ struct OrderQueue {
     return player.in_use != 0 && (status == 1 || status == 2 || status == 3) && player.index != 10;
 }
 
-/// Tests whether a unit is live and not waiting to die.
-///
-/// @param unit unit record
-/// @return true when the live flag is set and the death-pending flag clear
-[[nodiscard]] inline bool unit_active(const oa::Unit& unit) noexcept {
-    return (unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & OA_UNIT_FLAG_DEATH_PENDING) == 0;
-}
-
 /// Tests whether a player is still in the game.
 ///
 /// @param player player record
@@ -388,6 +380,19 @@ inline void seed_placement_grids(PlacementGrids& grids, Host& host) {
 
 inline constexpr std::size_t default_order_budget = 100000;
 
+/// Why an order walk or a unit's tick stopped before its end.
+///
+/// The step stops where it finds the fault and leaves the rest of its work
+/// undone; what it did before stays done.
+enum class StepFault : uint8_t {
+    none,                ///< the step ran to its end
+    order_budget_spent,  ///< a queue walk or a scheduler took more steps than its budget
+    order_not_queued,    ///< the order to rotate is not in the primary queue
+    untyped_unit,        ///< the unit has no type
+    zero_maximum_health, ///< the unit's type has a maximum health of zero
+    orders_short,        ///< the order lists do not cover the unit pool
+};
+
 /// Tests whether a unit's owner is present and simulated here (status 1 or 2).
 ///
 /// @param world world the unit lives in
@@ -396,7 +401,7 @@ inline constexpr std::size_t default_order_budget = 100000;
 [[nodiscard]] bool locally_simulated(const oa::World& world, const oa::Unit& unit) noexcept;
 /// Tests whether a unit can stay selected.
 ///
-/// Throws std::out_of_range for a parent outside the unit pool.
+/// A unit whose attach parent lies outside the unit pool cannot.
 ///
 /// @param world world the unit lives in
 /// @param unit unit to test
@@ -409,20 +414,23 @@ inline constexpr std::size_t default_order_budget = 100000;
 /// An order that was not the primary head is marked detached first; an order not in
 /// its queue is left alone.
 ///
-/// Throws std::runtime_error when the queue is longer than the order budget.
-///
 /// @param[in,out] queue the unit's order lists
 /// @param unit unit carrying the order
 /// @param[in,out] order order to remove
 /// @param host destroys the order
-void remove_order(OrderQueue& queue, oa::Unit& unit, Order& order, Host& host);
+/// @return order_budget_spent, with the queue unchanged, when the walk to the
+///         order is longer than the order budget; else none
+StepFault remove_order(OrderQueue& queue, oa::Unit& unit, Order& order, Host& host);
 /// Moves a primary order to the tail of the primary queue.
 ///
-/// Throws std::invalid_argument when the order is not in the primary queue.
+/// A fault leaves the queue unchanged.
 ///
 /// @param[in,out] queue the unit's order lists
 /// @param[in,out] order order to move
-void rotate_primary(OrderQueue& queue, Order& order);
+/// @return order_not_queued when the order is not in the primary queue,
+///         order_budget_spent when the queue is longer than the order budget,
+///         else none
+StepFault rotate_primary(OrderQueue& queue, Order& order);
 /// Destroys a unit's orders.
 ///
 /// @param[in,out] queue the unit's order lists
@@ -430,21 +438,24 @@ void rotate_primary(OrderQueue& queue, Order& order);
 /// @param all true destroys every primary and secondary order; false only the primary
 ///        orders without preserve bit 2
 /// @param host destroys the orders
-void clear_orders(OrderQueue& queue, oa::Unit& unit, bool all, Host& host);
+/// @return order_budget_spent when the queues are longer than the order budget,
+///         the orders reached by then destroyed; else none
+StepFault clear_orders(OrderQueue& queue, oa::Unit& unit, bool all, Host& host);
 /// Runs the primary order scheduler until a handler yields.
 ///
 /// An order runs once its wake tick has passed or an awaited event is raised; the
 /// handler's result then restarts, advances, delays, removes, rotates or retries it.
 /// A unit simulated here with no order queues its default mission.
 ///
-/// Throws std::runtime_error when the budget runs out.
-///
 /// @param world world the unit lives in; its tick wakes waiting orders
 /// @param[in,out] queue the unit's order lists
 /// @param[in,out] unit unit whose events are consumed
 /// @param host mission handlers and random stream
 /// @param budget most scheduler steps before giving up
-void primary_orders(
+/// @return order_budget_spent when the budget runs out, untyped_unit when a unit
+///         simulated here with no order has no type, a fault of an order
+///         removal or rotation, else none
+StepFault primary_orders(
     oa::World& world,
     OrderQueue& queue,
     oa::Unit& unit,
@@ -453,14 +464,14 @@ void primary_orders(
 );
 /// Runs every ready secondary order.
 ///
-/// Throws std::runtime_error when the budget runs out.
-///
 /// @param world world the unit lives in; its tick wakes waiting orders
 /// @param[in,out] queue the unit's order lists
 /// @param unit unit carrying the orders
 /// @param host mission handlers and random stream
 /// @param budget most scheduler steps before giving up
-void secondary_orders(
+/// @return order_budget_spent when the budget runs out, a fault of an order
+///         removal, else none
+StepFault secondary_orders(
     oa::World& world,
     OrderQueue& queue,
     oa::Unit& unit,
@@ -475,7 +486,8 @@ void secondary_orders(
 /// @param world world the unit lives in
 /// @param[in,out] unit unit to place
 /// @param host terrain queries
-void update_height(oa::World& world, oa::Unit& unit, Host& host);
+/// @return untyped_unit, with nothing changed, for a unit without a type; else none
+StepFault update_height(oa::World& world, oa::Unit& unit, Host& host);
 /// Runs one unit's tick.
 ///
 /// In order: script, counters, selectability, the health percentage (every 30 ticks),
@@ -483,21 +495,23 @@ void update_height(oa::World& world, oa::Unit& unit, Host& host);
 /// schedulers and movement with height correction, and last the death of a unit
 /// flagged to die.
 ///
-/// Throws std::domain_error for a type with zero maximum health.
-///
 /// @param world world the unit lives in
 /// @param[in,out] queue the unit's order lists
 /// @param[in,out] unit unit to tick
 /// @param host operations owned by other systems
-void update_unit(oa::World& world, OrderQueue& queue, oa::Unit& unit, Host& host);
+/// @return untyped_unit when the unit's type is read and it has none,
+///         zero_maximum_health when the percentage divides by a zero maximum
+///         health, a fault of the order schedulers, else none
+StepFault update_unit(oa::World& world, OrderQueue& queue, oa::Unit& unit, Host& host);
 /// Ticks every active player's units and the periodic viewpoint follow.
 ///
 /// Call once per simulation tick with the game tick already incremented.
 ///
-/// Throws std::invalid_argument when `orders` does not cover the unit pool.
-///
 /// @param[in,out] world players, units and game fields; the active unit count is rebuilt
 /// @param orders order lists indexed by unit slot
 /// @param host operations owned by other systems
-void update_units(oa::World& world, std::span<OrderQueue> orders, Host& host);
+/// @return orders_short, with nothing done, when `orders` does not cover the
+///         unit pool; the first fault of a unit's tick, which ends the update
+///         there; else none
+StepFault update_units(oa::World& world, std::span<OrderQueue> orders, Host& host);
 } // namespace oa::sim::simulation_state

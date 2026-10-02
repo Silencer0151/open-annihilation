@@ -6,10 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <array>
 #include <optional>
-#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,7 +21,7 @@
 
 namespace oa::data::unit_definitions {
 
-enum class ErrorCode { none, io, malformed, limit, missing_unitinfo, invalid_number };
+enum class ErrorCode { none, io, malformed, missing_unitinfo, invalid_number };
 
 struct Error {
     ErrorCode code = ErrorCode::none;
@@ -39,44 +37,6 @@ struct Result {
     /// Returns whether no error was reported.
     [[nodiscard]] explicit operator bool() const noexcept { return error.code == ErrorCode::none; }
 };
-
-struct TdfSection {
-    std::string name;
-    // Lower-case ASCII keys. Later assignments replace earlier ones, as in 3.1c.
-    std::map<std::string, std::string, std::less<>> fields;
-    std::vector<TdfSection> children;
-
-    /// Finds the first child section with a name, ignoring ASCII case.
-    ///
-    /// @param name section name
-    /// @return the child, or null
-    [[nodiscard]] const TdfSection* child(std::string_view name) const;
-    /// Looks up a field value, ignoring ASCII case.
-    ///
-    /// @param key field name
-    /// @return the value text, or null when missing
-    [[nodiscard]] const std::string* find(std::string_view key) const;
-};
-
-struct TdfDocument {
-    std::vector<TdfSection> sections;
-};
-
-namespace limit {
-inline constexpr std::size_t input_bytes = 16U * 1024U * 1024U;
-inline constexpr std::size_t sections = 4096;
-inline constexpr std::size_t nesting_depth = 32;
-inline constexpr std::size_t fields_per_section = 4096;
-inline constexpr std::size_t name_bytes = 1024;
-inline constexpr std::size_t value_bytes = 1024U * 1024U;
-} // namespace limit
-
-/// Parses TDF text into sections with lower-cased keys.
-///
-/// @param source the whole text, at most limit::input_bytes
-/// @return the top-level sections, or an error when the text is malformed or
-///         exceeds a limit
-[[nodiscard]] Result<TdfDocument> parse_tdf(std::string_view source);
 
 // A unit type's typed fields, filled from the UnitDef record its FBI loaded
 // into (unit_definition_from). The *_fixed members are the record's signed

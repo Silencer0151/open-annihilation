@@ -52,7 +52,7 @@ inside_clockwise(std::span<const ScreenPoint> polygon, ScreenPoint point) noexce
 /// The four min-Y corners of the root object's box (formats::objects3d::object_bounds) are
 /// rotated by the unit's angles, projected, and tested as a clockwise polygon.
 ///
-/// Throws std::invalid_argument for a unit without a root model.
+/// A unit without a root model has no box and is never hit.
 ///
 /// @param unit unit with its model, position and rotation
 /// @param camera camera position, whole pixels
@@ -61,7 +61,7 @@ inside_clockwise(std::span<const ScreenPoint> polygon, ScreenPoint point) noexce
 [[nodiscard]] bool hits_root_bounds(const PickUnit& unit, const Camera& camera, ScreenPoint point);
 /// Lists the units whose root-object box is under the pointer.
 ///
-/// Throws std::invalid_argument for a unit without a root model.
+/// A unit without a root model is never hit.
 ///
 /// @param units candidate units in pick order
 /// @param camera camera position, whole pixels
@@ -77,8 +77,9 @@ hit_candidates(std::span<const PickUnit> units, const Camera& camera, ScreenPoin
 /// the next. The inputs are the camera-adjusted pointer position, or a campaign
 /// MoveUnitToRadius point.
 ///
-/// Throws std::invalid_argument for a non-positive map size and std::domain_error when
-/// the interpolation divisor is zero.
+/// A map with no width or height has no terrain: the result is the origin. When
+/// the row found and the next project to the same screen row, there is nothing
+/// to interpolate and the row found stands.
 ///
 /// @param terrain height and sea level queries
 /// @param map_x camera-adjusted map column, whole units; clamped to the map

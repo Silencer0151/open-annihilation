@@ -13,6 +13,7 @@
 #include "oa/sim/mission_units.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "match_fault.hpp"
 
 #include <algorithm>
 #include <array>
@@ -56,7 +57,7 @@ void Runtime::check_console_unit_commands(const std::function<void(const char*)>
     const auto tick = [&] {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
     };
     const uint8_t local = game.local_player_index;
     uint8_t other = OA_PLAYER_COUNT;

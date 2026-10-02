@@ -7,6 +7,7 @@
 #include "oa/netgame/records.hpp"
 #include "oa/netgame/unit_state.hpp"
 #include "oa/netgame/network.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,12 +121,10 @@ bool rebuild_frame(
 
 // The lobby block of the 0x20 record in a player's status datagram.
 bool status_player_info(const formats::tad::PlayerStatus& status, PlayerSetupInfo* info) {
-    std::vector<uint8_t> frame;
-    try {
-        frame = oa::netgame::network::decode_frame(status.datagram);
-    } catch (const std::exception&) {
+    const auto unwrapped = oa::netgame::network::unwrap_frame(status.datagram);
+    if (!unwrapped.ok())
         return false;
-    }
+    const auto& frame = *unwrapped.value;
     for (std::size_t offset = netgame::frame_header_bytes; offset < frame.size();) {
         const auto length =
             formats::tad::record_length({frame.data() + offset, frame.size() - offset});
@@ -154,7 +153,7 @@ void receive_unit_checks(DemoPlayback* playback) {
             continue;
         if (record.subtype == static_cast<uint8_t>(netgame::HandshakeSubtype::verdict))
             ++playback->recorded_verdicts;
-        ui::frontend_multiplayer::unit_sync_receive(battleroom, bytes.data(), 0);
+        ui::frontend_multiplayer::unit_sync_receive(battleroom, bytes, 0);
     }
 }
 
@@ -245,6 +244,10 @@ transport_receive(void* context, uint32_t* from, uint32_t* to, uint8_t* buffer, 
         return netgame::transport_result::ok;
     }
     return netgame::transport_result::no_messages;
+}
+
+DemoSession& session_of(void* context) {
+    return *static_cast<DemoSession*>(context);
 }
 
 // Chat text arrives with its "<name> " prefix.
@@ -370,6 +373,11 @@ bool demo_load(DemoPlayback* playback, std::vector<uint8_t> bytes, std::string* 
     // carries; frames without unit states follow the one before them.
     uint32_t due_tick = 0;
     for (const auto& packet : playback->demo.packets) {
+        // Transport id 0 would make the frame a system message.
+        if (playback->sender_ids[packet.sender] == 0) {
+            ++playback->stats.unknown_senders;
+            continue;
+        }
         uint32_t last_tick = 0;
         if (!rebuild_frame(packet, playback->unit_def_bits, &frame, &last_tick, &playback->stats)) {
             ++playback->stats.empty_packets;
@@ -466,12 +474,12 @@ bool demo_bind_players(const DemoPlayback& playback, World* world, uint8_t* watc
             player.in_use = 1;
             player.player_id = playback.sender_ids[recorded.number];
             player.status = OA_PLAYER_STATUS_MIRRORED;
-            std::strncpy(player.name, recorded.name.c_str(), player_name_capacity);
+            oa::base::text::copy_padded(player.name, recorded.name.c_str(), player_name_capacity);
         } else if (slot == count) {
             player.in_use = 1;
             player.player_id = playback.watcher_id;
             player.status = OA_PLAYER_STATUS_LOCAL;
-            std::strncpy(player.name, "Watcher", player_name_capacity);
+            oa::base::text::copy_padded(player.name, "Watcher", player_name_capacity);
             info.player_id = playback.watcher_id;
             info.options = OA_SETUP_OPTION_WATCHER;
         }
@@ -540,12 +548,27 @@ bool demo_session_begin(
     session->tracked_unit =
         static_cast<uint16_t>(oa_unit_slot_from_ref(world->game.players[0].first_unit));
     session->tracked.clear();
-    // The binding's credit/debit hooks act on the World alone, so the
-    // context can carry the session for chat and notices.
+    // The hooks' context is the session, for chat and notices; the
+    // binding's own hooks are reached through it.
     auto hooks = netgame::match::match_binding_hooks(&session->binding);
     hooks.context = session;
     hooks.chat = note_chat;
     hooks.notice = note_notice;
+    hooks.destroy_player_units = [](void* context, World*, uint8_t slot) {
+        netgame::match::match_binding_destroy_player_units(&session_of(context).binding, slot);
+    };
+    hooks.end_local_game = [](void* context) {
+        netgame::match::match_binding_end_local_game(&session_of(context).binding);
+    };
+    hooks.local_player_won = [](void* context) {
+        return netgame::match::match_binding_local_player_won(&session_of(context).binding);
+    };
+    hooks.alliance_changed = [](void* context, World*, uint8_t slot) {
+        netgame::match::match_binding_follow_alliances(&session_of(context).binding, slot);
+    };
+    hooks.share_sight = [](void* context, World*, uint8_t from, uint8_t to) {
+        netgame::match::match_binding_share_sight(&session_of(context).binding, from, to);
+    };
     netgame::match::net_match_begin(
         &session->net,
         &session->connection,

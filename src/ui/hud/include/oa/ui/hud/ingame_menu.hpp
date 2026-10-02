@@ -8,6 +8,7 @@
 #include "oa/ui/hud/order_panel.hpp"
 
 #include "oa/core/world.h"
+#include "oa/data/campaign/campaign_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -99,7 +100,7 @@ inline constexpr uint8_t kGuiFlagsTabMenu = 0x20u;
 /// @return Whether the menu opened.
 bool toggle_tab_menu(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     bool control_offered,
     const PanelLoader& loader,
     const PanelControls& controls,

@@ -5,7 +5,7 @@
 
 #include <bit>
 #include <cstdint>
-#include <stdexcept>
+#include <optional>
 
 namespace oa::base::game_loop::detail {
 // Finite binary arithmetic with a 53- or 64-bit significand, nearest-even rounding.
@@ -15,6 +15,11 @@ namespace oa::base::game_loop::detail {
 struct Wide {
     uint64_t hi{}, lo{};
 
+    /// Multiplies two 64-bit values exactly.
+    ///
+    /// @param a one factor
+    /// @param b the other factor
+    /// @return the 128-bit product
     static Wide multiply(uint64_t a, uint64_t b) noexcept {
         constexpr auto mask = uint64_t{0xffffffff};
         const auto a0 = a & mask, a1 = a >> 32, b0 = b & mask, b1 = b >> 32;
@@ -24,13 +29,28 @@ struct Wide {
         return {a1 * b1 + (t >> 32) + (w1 >> 32), (w1 << 32) | (w0 & mask)};
     }
 
+    /// Adds another 128-bit value, wrapping at 128 bits.
+    ///
+    /// @param b the value to add
+    /// @return the sum
     Wide add(Wide b) const noexcept {
         const auto low = lo + b.lo;
         return {hi + b.hi + (low < lo), low};
     }
 
+    /// Subtracts another 128-bit value, wrapping at 128 bits.
+    ///
+    /// @param b the value to subtract
+    /// @return the difference
     Wide subtract(Wide b) const noexcept { return {hi - b.hi - (lo < b.lo), lo - b.lo}; }
 
+    /// Shifts right, folding every bit shifted out into the lowest bit.
+    ///
+    /// The lowest bit of the result is set when it was set or when any bit
+    /// shifted out was set, so a later rounding still sees an inexact value.
+    ///
+    /// @param n bits to shift by; 128 or more leaves only the folded bit
+    /// @return the shifted value
     Wide right_jam(unsigned n) const noexcept {
         if (n == 0)
             return *this;
@@ -44,12 +64,23 @@ struct Wide {
     }
 };
 
+// A finite value at the working precision. A nonfinite input or an
+// unsupported precision gives a value that is not finite: arithmetic carries
+// it, and the conversions to binary64 and binary32 refuse it.
 class Extended {
     unsigned precision_ = 64;
+    bool finite_ = true; // false for a nonfinite input or an unsupported precision
     bool negative_{};
     uint64_t mantissa_{}; // normalized: top bit set except zero
     int exponent_{};      // value = (+/-) mantissa * 2^exponent
 
+    /// Builds a finite value, shifting the mantissa until its top bit is set.
+    ///
+    /// @param sign true for a negative value
+    /// @param mantissa the significand, zero for a zero
+    /// @param exponent power of two the mantissa is scaled by
+    /// @param precision significand bits of the working precision
+    /// @return the value
     static Extended
     normalized(bool sign, uint64_t mantissa, int exponent, unsigned precision = 64) noexcept {
         Extended result;
@@ -63,6 +94,11 @@ class Extended {
         return result;
     }
 
+    /// Shifts right, rounding to nearest with ties to even.
+    ///
+    /// @param value the value to shift
+    /// @param shift bits to shift by; more than 64 gives zero
+    /// @return the rounded quotient
     static uint64_t rounded_shift(uint64_t value, unsigned shift) noexcept {
         if (shift == 0)
             return value;
@@ -76,6 +112,13 @@ class Extended {
         return whole + (remainder > half || (remainder == half && (whole & 1)));
     }
 
+    /// Rounds a 128-bit significand to the working precision, ties to even.
+    ///
+    /// @param sign true for a negative value
+    /// @param value the significand, not zero
+    /// @param exponent power of two the significand is scaled by
+    /// @param precision significand bits to keep
+    /// @return the rounded value
     static Extended from_wide(bool sign, Wide value, int exponent, unsigned precision) noexcept {
         const int top =
             value.hi ? 127 - std::countl_zero(value.hi) : 63 - std::countl_zero(value.lo);
@@ -108,7 +151,27 @@ class Extended {
         return normalized(sign, mantissa, exponent, precision);
     }
 
-    uint64_t ieee(unsigned fraction, int bias, unsigned sign_bit) const {
+    /// Returns a value that is not finite at the given precision.
+    ///
+    /// @param precision significand bits of the working precision
+    /// @return the value
+    static Extended not_finite(unsigned precision) noexcept {
+        Extended result;
+        result.precision_ = precision;
+        result.finite_ = false;
+        return result;
+    }
+
+    /// Rounds the value to an IEEE binary format, ties to even, subnormals included.
+    ///
+    /// @param fraction stored fraction bits of the format
+    /// @param bias exponent bias of the format
+    /// @param sign_bit position of the sign bit
+    /// @return the format's bit pattern; empty when the value is not finite
+    ///         or lies outside the format's finite range
+    std::optional<uint64_t> ieee(unsigned fraction, int bias, unsigned sign_bit) const noexcept {
+        if (!finite_)
+            return std::nullopt;
         const auto sign = uint64_t{negative_} << sign_bit;
         if (!mantissa_)
             return sign;
@@ -125,20 +188,29 @@ class Extended {
             ++top;
         }
         if (top > bias)
-            throw std::overflow_error("extended timing value outside finite IEEE range");
+            return std::nullopt;
         return sign | (static_cast<uint64_t>(top + bias) << fraction) |
                (rounded & ((uint64_t{1} << fraction) - 1));
     }
 
   public:
 
-    explicit Extended(double value, unsigned precision = 64) {
-        if (precision != 53 && precision != 64)
-            throw std::invalid_argument("unsupported precision");
+    /// Widens a binary64 value to the working precision, exactly.
+    ///
+    /// @param value the value; an infinity or a NaN gives a value that is not finite
+    /// @param precision significand bits, 53 or 64; any other gives a value
+    ///        that is not finite
+    explicit Extended(double value, unsigned precision = 64) noexcept {
+        if (precision != 53 && precision != 64) {
+            *this = not_finite(precision);
+            return;
+        }
         const auto bits = std::bit_cast<uint64_t>(value);
         const auto field = (bits >> 52) & 0x7ff;
-        if (field == 0x7ff)
-            throw std::invalid_argument("nonfinite extended timing input");
+        if (field == 0x7ff) {
+            *this = not_finite(precision);
+            return;
+        }
         auto mantissa = bits & 0xfffffffffffffULL;
         int exponent = -1074;
         if (field) {
@@ -150,7 +222,13 @@ class Extended {
 
     Extended() = default;
 
+    /// Multiplies, rounding the exact product once to the working precision.
+    ///
+    /// @param b the other factor
+    /// @return the product; not finite when either factor is not
     Extended operator*(const Extended& b) const noexcept {
+        if (!finite_ || !b.finite_)
+            return not_finite(precision_);
         if (!mantissa_ || !b.mantissa_)
             return normalized(negative_ != b.negative_, 0, 0, precision_);
         return from_wide(
@@ -161,7 +239,15 @@ class Extended {
         );
     }
 
+    /// Adds, rounding the exact sum once to the working precision.
+    ///
+    /// Two zeros add to a negative zero only when both are negative.
+    ///
+    /// @param b the other addend
+    /// @return the sum; not finite when either addend is not
     Extended operator+(const Extended& b) const noexcept {
+        if (!finite_ || !b.finite_)
+            return not_finite(precision_);
         if (!mantissa_ && !b.mantissa_)
             return normalized(negative_ && b.negative_, 0, 0, precision_);
         if (!mantissa_)
@@ -187,15 +273,35 @@ class Extended {
         );
     }
 
+    /// Subtracts, rounding the exact difference once to the working precision.
+    ///
+    /// @param b the value to subtract
+    /// @return the difference; not finite when either operand is not
     Extended operator-(Extended b) const noexcept {
         b.negative_ = !b.negative_;
         return *this + b;
     }
 
-    double to_double() const { return std::bit_cast<double>(ieee(52, 1023, 63)); }
+    /// Rounds the value to a binary64, ties to even.
+    ///
+    /// @return the binary64; empty when the value is not finite or lies
+    ///         outside the binary64 finite range
+    std::optional<double> to_double() const noexcept {
+        const auto bits = ieee(52, 1023, 63);
+        if (!bits)
+            return std::nullopt;
+        return std::bit_cast<double>(*bits);
+    }
 
-    float to_float() const {
-        return std::bit_cast<float>(static_cast<uint32_t>(ieee(23, 127, 31)));
+    /// Rounds the value to a binary32, ties to even.
+    ///
+    /// @return the binary32; empty when the value is not finite or lies
+    ///         outside the binary32 finite range
+    std::optional<float> to_float() const noexcept {
+        const auto bits = ieee(23, 127, 31);
+        if (!bits)
+            return std::nullopt;
+        return std::bit_cast<float>(static_cast<uint32_t>(*bits));
     }
 };
 } // namespace oa::base::game_loop::detail

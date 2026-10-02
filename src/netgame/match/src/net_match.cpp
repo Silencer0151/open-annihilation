@@ -609,9 +609,10 @@ void apply_player_data(NetMatch* m, const Packet& packet) {
 /// @param[in,out] m Running match.
 /// @param packet The system message.
 void dispatch_system(NetMatch* m, const Packet& packet) {
-    if (packet.size < 12)
+    uint32_t message_type = 0;
+    if (!dplay::read_system_message_type(packet.data, packet.size, &message_type))
         return;
-    const auto type = static_cast<SystemMessageType>(load_u32(packet.data));
+    const auto type = static_cast<SystemMessageType>(message_type);
     if (type == SystemMessageType::player_name_changed) {
         apply_player_name(m, packet);
         return;
@@ -620,12 +621,12 @@ void dispatch_system(NetMatch* m, const Packet& packet) {
         apply_player_data(m, packet);
         return;
     }
-    if (type != SystemMessageType::player_destroyed)
-        return;
-    if (load_u32(packet.data + 4) != dplay::system_message::player_type_player)
+    dplay::PlayerDestroyedView destroyed{};
+    if (!dplay::decode_player_destroyed_image(packet.data, packet.size, &destroyed) ||
+        destroyed.player_type != dplay::system_message::player_type_player)
         return;
     auto* world = m->world;
-    const auto id = load_u32(packet.data + dplay::system_message::destroy_id);
+    const auto id = destroyed.id;
     auto* p = player_of(world, id);
     if (p == nullptr || !slot_active(*p))
         return;

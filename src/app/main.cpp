@@ -22,6 +22,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <SDL3/SDL_main.h>
 
@@ -41,12 +42,14 @@ std::string error_log_folder;
 /// (error_log_folder), shows it in an "Open Annihilation" error box, then
 /// exits at once with status 3 (kOutOfMemoryExitStatus).
 [[noreturn]] void handle_out_of_memory() {
-    (void)oa::platform::append_error_log(
+    // The process ends whatever happens: a log that cannot be written still
+    // leaves the box, and a box that cannot be shown the log.
+    std::ignore = oa::platform::append_error_log(
         error_log_folder.c_str(), oa::platform::out_of_memory_message
     );
     // The box needs the pointer, which full screen keeps on the window.
     release_pointer(SDL_GetGrabbedWindow());
-    (void)SDL_ShowSimpleMessageBox(
+    std::ignore = SDL_ShowSimpleMessageBox(
         SDL_MESSAGEBOX_ERROR, "Open Annihilation", oa::platform::out_of_memory_message, nullptr
     );
     std::_Exit(kOutOfMemoryExitStatus);
@@ -77,7 +80,7 @@ void set_window_icon(SDL_Window* window) {
         std::cerr << "open-annihilation: window icon: " << SDL_GetError() << '\n';
         return;
     }
-    (void)SDL_SetWindowIcon(window, surface);
+    std::ignore = SDL_SetWindowIcon(window, surface);
     SDL_DestroySurface(surface);
 }
 
@@ -167,9 +170,11 @@ void play_intro_file(
         // Alt+Enter switches full screen during the movies as it does in the
         // game.
         playback.hooks.context = host;
+        // The movie player does not hand its events on, so whether Alt+Enter
+        // took one does not matter.
         playback.hooks.window_event = [](void* context, const SDL_Event& event) {
             auto& display = *static_cast<HostDisplay*>(context);
-            (void)take_full_screen_event(display.window, display.full_screen, event);
+            std::ignore = take_full_screen_event(display.window, display.full_screen, event);
         };
     }
     if (snapshot)
@@ -217,8 +222,9 @@ void report_fatal(const std::string& message) {
     const auto line = "open-annihilation: " + message + "\n";
     if (!oa::platform::log_files::current_file().empty())
         std::fputs(line.c_str(), stderr);
+    // With neither a terminal nor a box, the log holds the message.
     if (!oa::platform::log_files::write_to_terminal(line))
-        (void)SDL_ShowSimpleMessageBox(
+        std::ignore = SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_ERROR, "Open Annihilation", message.c_str(), nullptr
         );
 }

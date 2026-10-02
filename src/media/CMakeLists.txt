@@ -54,7 +54,7 @@ target_link_libraries(oa-media-director PUBLIC oa-formats-oascript PRIVATE oa-op
 target_compile_features(oa-media-director PUBLIC cxx_std_20)
 if(BUILD_TESTING)
   add_executable(oa-media-director-test tests/director_test.cpp)
-  target_link_libraries(oa-media-director-test PRIVATE oa-media-director oa-base-sha256
+  target_link_libraries(oa-media-director-test PRIVATE oa-platform-shims oa-media-director oa-base-sha256
     oa-options)
   add_test(NAME media-director COMMAND oa-media-director-test)
   add_executable(oa-media-director-clock-test tests/director_clock_test.cpp)

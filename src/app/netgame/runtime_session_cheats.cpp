@@ -5,6 +5,7 @@
 // host's CHEATING option on both machines, the Game Settings sheet's Cheat
 // Codes row, and where an accepted cheat's line goes.
 #include "oa/app/runtime.hpp"
+#include "network_play.hpp"
 
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -71,13 +72,15 @@ settings_value(const oa::ui::frontend::GameSettingsSheet& sheet, std::string_vie
 
 } // namespace
 
-void Runtime::check_console_session_cheats(Runtime& peer, const std::function<void(bool)>& step) {
+void NetworkPlay::check_console_session_cheats(
+    Runtime& peer, const std::function<void(bool)>& step
+) {
     require(
-        match_session_kind() == oa::data::campaign::SessionKind::multiplayer &&
+        runtime_.match_session_kind() == oa::data::campaign::SessionKind::multiplayer &&
             peer.match_session_kind() == oa::data::campaign::SessionKind::multiplayer,
         "the loopback is not a multiplayer session"
     );
-    oa::World& world = match_->state();
+    oa::World& world = runtime_.match_->state();
     oa::Game& game = world.game;
     const auto host = sim::scenario::host_player_index(world);
     const auto* host_info =
@@ -85,10 +88,10 @@ void Runtime::check_console_session_cheats(Runtime& peer, const std::function<vo
     require(host_info != nullptr, "no host is seated");
     const bool allowed = (host_info->options & OA_SETUP_OPTION_CHEATS_ALLOWED) != 0;
     require(
-        session_cheats_allowed_ == allowed && peer.session_cheats_allowed_ == allowed,
+        runtime_.session_cheats_allowed_ == allowed && peer.session_cheats_allowed_ == allowed,
         "a machine's cheat flag is not the host's CHEATING option"
     );
-    for (Runtime* side : {this, &peer}) {
+    for (Runtime* side : {&runtime_, &peer}) {
         oa::ui::frontend::GameSettingsSheet sheet;
         oa::ui::frontend::ingame_build_game_settings(side->game_settings_view(), sheet);
         const char* shown = settings_value(sheet, "Cheat Codes:");
@@ -108,7 +111,7 @@ void Runtime::check_console_session_cheats(Runtime& peer, const std::function<vo
     require(reported_chat_ != prefix + "+clock", "an option command's echo was reported");
     const auto viewer = game.viewpoint_player;
     const float metal = game.players[viewer].metal;
-    enter_console_check_line("+atm");
+    runtime_.enter_console_check_line("+atm");
     require(
         game.players[viewer].metal == metal + (allowed ? kAtmMetal : 0.0F),
         allowed ? "+atm did not run with cheats allowed" : "+atm ran with cheats disallowed"
@@ -138,7 +141,7 @@ void Runtime::check_console_session_cheats(Runtime& peer, const std::function<vo
             "the peer's +atm did not follow the host's CHEATING option"
         );
         wait(
-            [&] { return logged(match_message_lines(), peer_atm); },
+            [&] { return logged(runtime_.match_message_lines(), peer_atm); },
             "the peer's +atm line did not reach this machine"
         );
     }

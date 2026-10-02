@@ -591,7 +591,7 @@ void test_progress(render::GadgetRenderer& renderer, TestDisplay& display) {
     layout::set_record_i32(bar, field::progress_scale, 10);
     layout::set_record_u32(bar, field::color_foreground, 0x33);
     layout::set_record_u32(bar, field::color_background, 0x44);
-    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), 0);
+    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), uint8_t{0});
     render::draw_progress(renderer, panel, index);
     require(
         test.face.surface.pixels == display.screen.pixels.data(),
@@ -612,7 +612,7 @@ void test_progress(render::GadgetRenderer& renderer, TestDisplay& display) {
     record(panel, 0).refs.surface = nullptr;
     const present::SurfaceBuffer backdrop = present::create_surface(20, 10);
     panel.backdrop = &backdrop.surface;
-    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), 0);
+    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), uint8_t{0});
     render::draw_progress(renderer, panel, index);
     require(
         at(display.screen, 0, 0) == color(render::color_slot::dark_edge) &&
@@ -710,7 +710,7 @@ void test_skin(render::GadgetRenderer& renderer) {
 void test_panel(
     render::GadgetRenderer& renderer, TestDisplay& display, TestArt& art, TestFile& font
 ) {
-    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), 0x77);
+    std::fill(display.screen.pixels.begin(), display.screen.pixels.end(), uint8_t{0x77});
     TestFile common;
     common.path = "COMMON";
     common.sequences.push_back({"BackTile", {}});

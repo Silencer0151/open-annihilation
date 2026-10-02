@@ -24,21 +24,21 @@ inline constexpr int32_t range_ring_step = 0x800;
 inline constexpr int32_t full_turn = 0x10000;
 
 struct PolygonVertex {
-    int32_t x;
-    int32_t y;
+    int32_t x{};
+    int32_t y{};
 };
 
 struct DepthVertex {
-    int32_t x;
-    int32_t y;
-    int32_t depth; // integer depth; interpolated as 16.16
+    int32_t x{};
+    int32_t y{};
+    int32_t depth{}; // integer depth; interpolated as 16.16
 };
 
 struct ShadedVertex {
-    int32_t x;
-    int32_t y;
-    int32_t depth;
-    int32_t shade; // row of the display shade table
+    int32_t x{};
+    int32_t y{};
+    int32_t depth{};
+    int32_t shade{}; // row of the display shade table
 };
 
 // One scanline of a span table. Edge x values are integers; depth and shade
@@ -46,16 +46,16 @@ struct ShadedVertex {
 // they take the names model::MeshSpanRow, which has the same layout, gives
 // its texture coordinates.
 struct PolygonSpanRow {
-    int32_t left;
-    int32_t right;   // exclusive
-    int32_t left_u;  // ? 16.16 texture u at the left edge
-    int32_t left_v;  // ? 16.16 texture v at the left edge
-    int32_t right_u; // ? 16.16 texture u at the right edge
-    int32_t right_v; // ? 16.16 texture v at the right edge
-    int32_t left_depth;
-    int32_t right_depth;
-    int32_t left_shade;
-    int32_t right_shade;
+    int32_t left{};
+    int32_t right{};   // exclusive
+    int32_t left_u{};  // ? 16.16 texture u at the left edge
+    int32_t left_v{};  // ? 16.16 texture v at the left edge
+    int32_t right_u{}; // ? 16.16 texture u at the right edge
+    int32_t right_v{}; // ? 16.16 texture v at the right edge
+    int32_t left_depth{};
+    int32_t right_depth{};
+    int32_t left_shade{};
+    int32_t right_shade{};
 };
 
 static_assert(sizeof(PolygonSpanRow) == 0x28);

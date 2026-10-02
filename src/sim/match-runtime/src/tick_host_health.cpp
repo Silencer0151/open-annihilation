@@ -97,8 +97,7 @@ void Match::finish_unit(uint16_t unit, uint16_t builder) {
 }
 
 bool TickHost::HealthHost::target_is_live(const sim::unit_health::Unit& u) {
-    const auto flags = slot(u).unit->flags;
-    return (flags & 0x10000000u) && !(flags & 0x4000u);
+    return unit_is_live_target(slot(u).unit->flags);
 }
 
 void TickHost::HealthHost::apply_health_event(
@@ -130,14 +129,16 @@ TickHost::HealthHost::source_owner_route(const sim::unit_health::Unit& u) {
     const auto& multiplayer = match_.multiplayer;
     if (multiplayer.health_route)
         return multiplayer.health_route(multiplayer.context, u.identity);
-    unsupported("health event route without a multiplayer handler");
+    match_.fault_.note("health event route without a multiplayer handler");
+    return {};
 }
 
 sim::unit_health::RouteIdentity TickHost::HealthHost::fallback_route() {
     const auto& multiplayer = match_.multiplayer;
     if (multiplayer.health_route)
         return multiplayer.health_route(multiplayer.context, 0);
-    unsupported("health event fallback route without a multiplayer handler");
+    match_.fault_.note("health event fallback route without a multiplayer handler");
+    return {};
 }
 
 void TickHost::HealthHost::share_health_event(
@@ -148,7 +149,7 @@ void TickHost::HealthHost::share_health_event(
         multiplayer.health_shared(multiplayer.context, route, event);
         return;
     }
-    unsupported("health event shared without a multiplayer handler");
+    match_.fault_.note("health event shared without a multiplayer handler");
 }
 
 bool TickHost::nano_repair(
@@ -158,8 +159,10 @@ bool TickHost::nano_repair(
     const auto* definition = match.fields(repairer_slot).definition;
     const auto* patient_definition = match.fields(patient_slot).definition;
     if (!definition || !patient_definition || !patient.type || !repairer_slot.unit ||
-        !repairer_slot.unit->type)
-        throw std::logic_error("natural repair is missing a definition");
+        !repairer_slot.unit->type) {
+        match.fault_.note("natural repair is missing a definition");
+        return false;
+    }
     auto make_type = [](const auto& fields, const sim::simulation_state::Unit& unit) {
         return sim::unit_health::UnitType{
             fields.damage_modifier_fixed,
@@ -265,7 +268,8 @@ void TickHost::kill_unit(oa::Unit& record, uint8_t kind) {
         return;
     const bool commander = side_commander(match.state(), s.record);
     if (commander)
-        match.world_.players.at(s.record.owner_index).resource_flags &= 0xfe;
+        match.world_.players.at(s.record.owner_index).resource_flags &=
+            static_cast<uint8_t>(~OA_PLAYER_RESOURCE_SHARES_STORAGE);
     int32_t killed_percent = 0;
     int32_t killed_flag = 0;
     if (kind == static_cast<uint8_t>(DeathKind::dismissed)) {
@@ -280,8 +284,10 @@ void TickHost::kill_unit(oa::Unit& record, uint8_t kind) {
         killed_flag = 0;
     } else {
         const auto maximum = u.type->maximum_health;
-        if (!maximum)
-            throw std::domain_error("Killed health divisor is zero");
+        if (!maximum) {
+            match.fault_.note("Killed health divisor is zero");
+            return;
+        }
         killed_percent =
             static_cast<int32_t>(
                 (static_cast<int32_t>(u.health) * -100) / static_cast<int32_t>(maximum) +
@@ -317,7 +323,7 @@ void TickHost::kill_unit(oa::Unit& record, uint8_t kind) {
     // unit down, while the record still names its owner and last attacker.
     if (local && match.multiplayer.unit_killed != nullptr)
         match.multiplayer.unit_killed(match.multiplayer.context, s.unit_index, outcome);
-    sim::simulation_state::clear_orders(u, true, *this);
+    match.note_step(sim::simulation_state::clear_orders(u, true, *this));
     const auto owner = s.record.owner_index;
     match.teardown_dead_unit(s, outcome);
     // Only the machine simulating the commander runs its player's sweep,
@@ -365,7 +371,7 @@ void Match::apply_kill(
     s.record.last_attacker_id = attacker;
     s.record.last_attacker_owner = attacker_owner;
     TickHost host(*this);
-    sim::simulation_state::clear_orders(*s.unit, true, host);
+    note_step(sim::simulation_state::clear_orders(*s.unit, true, host));
     teardown_dead_unit(s, outcome, true);
 }
 

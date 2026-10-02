@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/messages.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -127,7 +128,7 @@ void post_message(
     MessageLine* line = message_line(game, game.chat_head);
     if (line == nullptr)
         return;
-    std::strncpy(line->text, text, text_bytes);
+    oa::base::text::copy_padded(line->text, text, text_bytes);
     line->text[text_bytes - 1] = '\0';
     line->tick = game.tick;
     line->kind = static_cast<uint8_t>((line->kind & ~kind_mask) | (kind & kind_mask));

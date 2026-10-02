@@ -89,7 +89,7 @@ class ProjectileDamageHost final : public sim::unit_health::DamageHost {
     Match& match;
 
     sim::unit_spawn::Slot& slot(const sim::unit_health::Unit& u) {
-        return match.slots_.at(u.identity);
+        return match.spawn_slot(u.identity);
     }
 
   public:
@@ -97,8 +97,7 @@ class ProjectileDamageHost final : public sim::unit_health::DamageHost {
     explicit ProjectileDamageHost(Match& world) : match(world) {}
 
     bool target_is_live(const sim::unit_health::Unit& u) override {
-        const auto flags = slot(u).unit->flags;
-        return (flags & 0x10000000u) && !(flags & 0x4000u);
+        return unit_is_live_target(slot(u).unit->flags);
     }
 
     void apply_health_event(
@@ -127,14 +126,16 @@ class ProjectileDamageHost final : public sim::unit_health::DamageHost {
         const auto& multiplayer = match.multiplayer;
         if (multiplayer.health_route)
             return multiplayer.health_route(multiplayer.context, u.identity);
-        unsupported("health event route without a multiplayer handler");
+        match.note_fault("health event route without a multiplayer handler");
+        return {};
     }
 
     sim::unit_health::RouteIdentity fallback_route() override {
         const auto& multiplayer = match.multiplayer;
         if (multiplayer.health_route)
             return multiplayer.health_route(multiplayer.context, 0);
-        unsupported("health event fallback route without a multiplayer handler");
+        match.note_fault("health event fallback route without a multiplayer handler");
+        return {};
     }
 
     void share_health_event(
@@ -145,7 +146,7 @@ class ProjectileDamageHost final : public sim::unit_health::DamageHost {
             multiplayer.health_shared(multiplayer.context, route, event);
             return;
         }
-        unsupported("health event shared without a multiplayer handler");
+        match.note_fault("health event shared without a multiplayer handler");
     }
 };
 
@@ -167,8 +168,10 @@ void Match::explode_unit(sim::unit_spawn::Slot& slot, bool self_destruct) {
 int32_t
 Match::apply_projectile_damage(oa::Projectile& shot, sim::unit_spawn::Slot& target, float scale) {
     const auto* definition = projectile_weapon(shot);
-    if (!definition)
-        throw std::logic_error("projectile has no weapon definition");
+    if (!definition) {
+        fault_.note("projectile has no weapon definition");
+        return 0;
+    }
     // The DAMAGE entry for the target's UNITNAME, else the default.
     const auto* target_definition = fields(target).definition;
     const auto base =

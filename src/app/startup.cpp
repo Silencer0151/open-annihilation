@@ -5,7 +5,9 @@
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/platform/job_pool.hpp"
+#include "oa/platform/system.hpp"
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -49,9 +51,44 @@ const char* next_value(void* arguments) {
 
 // The extension's text for `which`, or `fallback` when it has none.
 const char* extension_text(const Extension& extension, ExtensionText which, const char* fallback) {
-    const char* text =
-        extension.text != nullptr ? extension.text(extension.context, which) : nullptr;
+    const char* text = call_hook_or_raise<&Extension::text>(extension, which);
     return text != nullptr ? text : fallback;
+}
+
+// The extension's switch handler as the command line's parse calls it,
+// which must not throw: each call goes through call_hook, and the first
+// error a call catches is kept until the parse returns.
+struct GuardedSwitches {
+    const command_line::SwitchHandler* handler{}; // the extension's
+    command_line::SwitchHandler guard{};          // what the parse is given
+    HookError error;                              // the first error caught
+};
+
+/// Offers a switch letter to the extension's handler (SwitchHandler::take).
+///
+/// @param context the GuardedSwitches
+/// @param letter the switch letter, in lower case
+/// @param arguments what follows the letter
+/// @param[out] effects switch effects of the handler
+/// @return the handler's answer; 0 once a call has thrown
+int take_guarded_switch(
+    void* context, char letter, const command_line::SwitchArguments* arguments, uint32_t* effects
+) noexcept {
+    auto& switches = *static_cast<GuardedSwitches*>(context);
+    if (switches.error.caught)
+        return 0;
+    return call_hook<&command_line::SwitchHandler::take>(
+        *switches.handler, switches.error, letter, arguments, effects
+    );
+}
+
+/// Resets the extension's handler (SwitchHandler::reset).
+///
+/// @param context the GuardedSwitches
+void reset_guarded_switches(void* context) noexcept {
+    auto& switches = *static_cast<GuardedSwitches*>(context);
+    if (!switches.error.caught)
+        call_hook<&command_line::SwitchHandler::reset>(*switches.handler, switches.error);
 }
 
 /// Returns the frames a second a --max-fps or --frame-rate value names.
@@ -476,8 +513,9 @@ void check_director_options(Options& options) {
             ArgumentCursor cursor{argc, argv, &index, argument};
             const OptionValues values{&cursor, next_value};
             uint32_t effects = 0;
-            if (extension.take_option == nullptr ||
-                !extension.take_option(extension.context, argv[index], values, effects))
+            if (!call_hook_or_raise<&Extension::take_option>(
+                    extension, argv[index], values, effects
+                ))
                 throw std::runtime_error("unknown option: " + std::string(argument));
             if ((effects & option_effect::headless_check) != 0)
                 result.headless_check = true;
@@ -490,9 +528,17 @@ void check_director_options(Options& options) {
             joined_line += argument;
         }
     }
-    const oa::app::command_line::SwitchHandler* switches =
-        extension.switch_handler != nullptr ? extension.switch_handler(extension.context) : nullptr;
-    switch (oa::app::command_line::parse(joined_line.c_str(), result.launch, switches)) {
+    GuardedSwitches switches;
+    switches.handler = call_hook_or_raise<&Extension::switch_handler>(extension);
+    switches.guard = {&switches, take_guarded_switch, reset_guarded_switches};
+    const auto parsed = oa::app::command_line::parse(
+        joined_line.c_str(), result.launch, switches.handler != nullptr ? &switches.guard : nullptr
+    );
+    // A handler that threw stops the start with its message, as a hook that
+    // raises its error does.
+    if (switches.error.caught)
+        throw std::runtime_error(switches.error.message);
+    switch (parsed) {
     case oa::app::command_line::Status::run:
         break;
     case oa::app::command_line::Status::register_application:
@@ -524,13 +570,13 @@ void check_director_options(Options& options) {
         throw std::runtime_error(
             "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate"
         );
-    if (extension.check_options != nullptr)
-        extension.check_options(extension.context);
-    if (const char* env = std::getenv("OA_DEBUG_ORDER_LINES"); env != nullptr && env[0] != '\0')
+    call_hook_or_raise<&Extension::check_options>(extension);
+    if (const auto env = oa::platform::environment_value("OA_DEBUG_ORDER_LINES");
+        env && !env->empty())
         result.debug_order_lines = true;
-    if (const char* env = std::getenv("OA_DRAW_THREADS");
-        !result.draw_threads && env != nullptr && env[0] != '\0')
-        result.draw_threads = parse_draw_threads(env, "OA_DRAW_THREADS");
+    if (const auto env = oa::platform::environment_value("OA_DRAW_THREADS");
+        !result.draw_threads && env && !env->empty())
+        result.draw_threads = parse_draw_threads(*env, "OA_DRAW_THREADS");
     // The director view check runs headless, where SDL is never started.
     if (result.check_director_view || result.check_director_render || result.check_interpolation ||
         result.check_unit_playout) {

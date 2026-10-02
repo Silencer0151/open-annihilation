@@ -82,9 +82,9 @@ struct FogPainter {
     Surface& surface;
     const FogView& view;
     const FogShading& shading;
-    uint32_t zoom_fp;
+    uint32_t zoom_fp{};
     // View-relative clip of the destination rectangle against the surface.
-    int32_t clip_x0, clip_x1, clip_y0, clip_y1;
+    int32_t clip_x0{}, clip_x1{}, clip_y0{}, clip_y1{};
 
     [[nodiscard]] uint8_t* pixel(int32_t x, int32_t y) noexcept {
         return surface.rgb.data() + (static_cast<std::size_t>(y + view.dest_y) * surface.width +

@@ -14,7 +14,6 @@
 namespace oa::ui::console {
 namespace {
 
-constexpr int32_t kSessionMultiplayer = 3;
 constexpr uint8_t kDebugOverlayModes = 5;
 constexpr uint8_t kNoAttackerOwner = OA_PLAYER_COUNT;
 constexpr size_t kPathBytes = 0x100;
@@ -99,8 +98,8 @@ void toggle_damage_bars(Console* console) noexcept {
 }
 
 struct HighestNumber {
-    size_t skip;
-    int32_t highest;
+    size_t skip{};
+    int32_t highest{};
 };
 
 /// Keeps the highest number a listed file name carries after its prefix (list_files visitor).
@@ -259,7 +258,7 @@ void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t code)
         break;
     case hotkey::tab:
         if (host.session_kind != nullptr &&
-            host.session_kind(host.context) != kSessionMultiplayer) {
+            host.session_kind(host.context) != oa::data::campaign::SessionKind::multiplayer) {
             options_key(console, host);
             break;
         }
@@ -327,7 +326,8 @@ void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t code)
             console_execute(console, nullptr, command_class::all);
         break;
     case 'h':
-        if (host.session_kind != nullptr && host.session_kind(host.context) == kSessionMultiplayer)
+        if (host.session_kind != nullptr &&
+            host.session_kind(host.context) == oa::data::campaign::SessionKind::multiplayer)
             call(host, host.open_share_panel);
         break;
     case 'n':

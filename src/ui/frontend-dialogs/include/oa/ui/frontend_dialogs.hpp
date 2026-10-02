@@ -30,27 +30,27 @@ enum class NoticeChoice : uint8_t {
 
 // Services the dialogs reach; null members act as absent services.
 struct DialogHost {
-    void* context;
-    void (*play_sound)(void* context, const char* name);
+    void* context{};
+    void (*play_sound)(void* context, const char* name){};
     // Text translation; a null member or result keeps the source text.
-    const char* (*translate)(void* context, const char* text);
+    const char* (*translate)(void* context, const char* text){};
     // CDCHECK.GUI clicks run the campaign screens' disc-check handler in the
     // host; a nonzero result releases the prompt.
-    int32_t (*cd_check_click)(void* context, const char* control);
+    int32_t (*cd_check_click)(void* context, const char* control){};
     // Palette of the screen below, which the panels are indexed against;
     // false (or a null member) falls back to the GUI palette.
-    bool (*active_palette)(void* context, PaletteBytes* out);
+    bool (*active_palette)(void* context, PaletteBytes* out){};
     // Root rectangle of the screen's own top panel on the drawn frame, which
     // a shading dialog darkens; false (or a null member) darkens the frame.
-    bool (*panel_below)(void* context, int32_t* x, int32_t* y, int32_t* width, int32_t* height);
+    bool (*panel_below)(void* context, int32_t* x, int32_t* y, int32_t* width, int32_t* height){};
     // Receives the reason a dialog could not be drawn (it is then closed).
-    void (*report)(void* context, const char* message);
+    void (*report)(void* context, const char* message){};
     // Width of the HUD strip a beside-HUD panel is centred right of on the
     // drawn frame; a null member or a non-positive width keeps 0x80.
-    int32_t (*hud_strip_width)(void* context);
+    int32_t (*hud_strip_width)(void* context){};
     // True while the host draws the dialogs with dialog_draw_layer; the
     // overlay then leaves the frame alone.
-    bool (*draws_layer)(void* context);
+    bool (*draws_layer)(void* context){};
 };
 
 /// Installs the services the dialogs reach.

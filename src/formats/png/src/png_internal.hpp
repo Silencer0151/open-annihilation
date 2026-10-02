@@ -61,11 +61,19 @@ inline constexpr Pass k_adam7_passes[k_adam7_pass_count] = {
 };
 inline constexpr Pass k_whole_image = {0, 0, 1, 1};
 
+/// Reads a 32-bit big-endian value.
+///
+/// @param p the first of four bytes
+/// @return the value
 inline uint32_t read_be32(const uint8_t* p) {
     return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
            (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
 
+/// Writes a 32-bit value big-endian.
+///
+/// @param[out] p the first of four bytes
+/// @param value the value
 inline void write_be32(uint8_t* p, uint32_t value) {
     p[0] = static_cast<uint8_t>(value >> 24);
     p[1] = static_cast<uint8_t>(value >> 16);
@@ -73,20 +81,41 @@ inline void write_be32(uint8_t* p, uint32_t value) {
     p[3] = static_cast<uint8_t>(value);
 }
 
+/// Returns the bits one pixel takes in an image's rows.
+///
+/// @param header the image header
+/// @return bit depth times the colour type's channel count
 inline uint32_t bits_per_pixel(const Header& header) {
     return header.bit_depth * channel_count(header.color_type);
 }
 
-// Bytes holding `pixels` pixels of `bits` each, rounded up.
+/// Returns the bytes that hold a run of pixels, rounded up to whole bytes.
+///
+/// @param pixels pixels in the run
+/// @param bits bits per pixel
+/// @return the bytes the run takes
 inline std::size_t packed_bytes(uint64_t pixels, uint32_t bits) {
     return static_cast<std::size_t>((pixels * bits + 7) / 8);
 }
 
-// Pixels a pass covers along an axis of `size` pixels.
+/// Returns the pixels an interlace pass covers along one axis.
+///
+/// @param size pixels along the axis
+/// @param start the pass's first pixel along it
+/// @param step pixels between the pass's pixels along it
+/// @return the pixels covered, zero when the pass starts past the end
 inline uint32_t pass_extent(uint32_t size, uint32_t start, uint32_t step) {
     return size > start ? (size - start + step - 1) / step : 0;
 }
 
+/// Predicts a byte from its left, upper and upper-left neighbours, as the
+/// Paeth filter does: the neighbour closest to left + up - up_left, ties going
+/// to left, then up.
+///
+/// @param left the byte to the left
+/// @param up the byte above
+/// @param up_left the byte above and to the left
+/// @return the predicted byte
 inline uint8_t paeth_predictor(int32_t left, int32_t up, int32_t up_left) {
     const int32_t estimate = left + up - up_left;
     const int32_t to_left = estimate > left ? estimate - left : left - estimate;
@@ -97,7 +126,10 @@ inline uint8_t paeth_predictor(int32_t left, int32_t up, int32_t up_left) {
     return static_cast<uint8_t>(to_up <= to_up_left ? up : up_left);
 }
 
-// Bytes a filter looks back to find the left neighbour: one pixel, at least one byte.
+/// Returns the bytes a filter looks back to find the left neighbour.
+///
+/// @param header the image header
+/// @return the bytes of one pixel, at least one
 inline std::size_t filter_stride(const Header& header) {
     const uint32_t bytes = bits_per_pixel(header) / 8;
     return bytes > 0 ? bytes : 1;

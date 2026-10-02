@@ -7,7 +7,7 @@
 using namespace oa::sim::match_runtime;
 
 int main() {
-    CommandSource source{true, true, true, 0x80000000u, 0, 0, 0, 0, 2};
+    CommandSource source{true, true, true, OA_UNIT_FLAG_HAS_WEAPONS, 0, 0, 0, 0, 2};
     CommandTarget target{false, 0x10000001u, 0, 20, 10};
     OA_CHECK(resolve_combat_command(2, source, {}, 10) == "Move_Ground");
     OA_CHECK(resolve_combat_command(3, source, {}, 10) == "Suppress");
@@ -17,7 +17,7 @@ int main() {
     source.object_present = false;
     OA_CHECK(resolve_combat_command(2, source, {}, 10) == "QMove");
     OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
-    source.unit_flags |= 0x20000000u;
+    source.unit_flags |= OA_UNIT_FLAG_BUILDING;
     OA_CHECK(resolve_combat_command(3, source, target, 10) == "Attack_NoMove");
     source.primary_weapon_flags = 0x20000;
     OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
@@ -44,7 +44,7 @@ int main() {
     source.type_primary_weapon_flags = 0;
     OA_CHECK(resolve_combat_command(3, source, target, 10) == "AirToAir");
     target.type_flags = 0;
-    source.type_flags |= 0x8000000;
+    source.type_flags |= OA_UNIT_DEF_FLAG_HOVER_ATTACK;
     OA_CHECK(resolve_combat_command(3, source, target, 10) == "AirToGroundHover");
     target.allied = true;
     source.type_flags = 0;
@@ -52,7 +52,7 @@ int main() {
     target.unit_flags = 0;
     OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
     source.unit_flags = 0;
-    source.type_flags = 0x10000000u;
+    source.type_flags = OA_UNIT_DEF_FLAG_KAMIKAZE;
     OA_CHECK(resolve_combat_command(3, source, {}, 10) == "Attack_Kamikaze");
     source.can_attack = false;
     OA_CHECK(resolve_combat_command(3, source, {}, 10).empty());
@@ -110,7 +110,7 @@ int main() {
     const auto make_target = [](bool allied, bool air_base = false) {
         CommandTarget t;
         t.allied = allied;
-        t.unit_flags = 0x10000000u;
+        t.unit_flags = OA_UNIT_FLAG_LIVE;
         t.object_present = true;
         t.health = 50;
         t.max_health = 100;

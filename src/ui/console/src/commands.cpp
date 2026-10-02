@@ -3,6 +3,7 @@
 
 // Console command handlers and the static command lists.
 #include "oa/ui/console/console.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/ui/console/game_fields.hpp"
 
 #include "oa/sim/ai.hpp"
@@ -28,6 +29,8 @@ constexpr const char* kOn = "ON";
 constexpr const char* kOff = "OFF";
 constexpr float kAtmAmount = 1000.0f;
 constexpr double kGammaStep = 0.1;
+// Game.session_flags bit set while a multiplayer game is live.
+constexpr uint8_t kSessionLiveGame = 0x01u;
 constexpr double kContourScale = 256.0;
 constexpr double kSearchWeightScale = 65536.0;
 constexpr float kContourSpacingDefault = 0.75f;
@@ -35,7 +38,6 @@ constexpr int32_t kPosterDefaultWidth = 0xc80;
 constexpr int32_t kPosterDefaultHeight = 0x960;
 constexpr int32_t kEdgeDefaultX = 0x20;
 constexpr int32_t kEdgeDefaultZ = 0x80;
-constexpr int32_t kCellPixels = 16;
 constexpr uint16_t kNoCursorFeature = 0xfffb;
 constexpr int32_t kCursorStep = 0x100000;     // 16 pixels in 16.16
 constexpr int32_t kSpawnColumnGap = 0x200000; // 32 pixels
@@ -133,11 +135,11 @@ PlayerSetupInfo* local_info() noexcept {
     return player != nullptr ? world_player_info(active().world, player) : nullptr;
 }
 
-/// Tests whether a multiplayer game is live (bit 0 of the game's session flag byte).
+/// Tests whether a multiplayer game is live (kSessionLiveGame in the game's session flags).
 ///
 /// @return Whether the flag is set.
 bool live_game() noexcept {
-    return (game().session_flags & 0x01u) != 0;
+    return (game().session_flags & kSessionLiveGame) != 0;
 }
 
 /// Has the host save the game options; nothing without a host callback.
@@ -820,20 +822,20 @@ void make_poster(TokenLine* line) {
         width = g.map_pixel_width;
         height = g.map_pixel_height;
     }
-    const int32_t view_width = g.view_cells_width * kCellPixels;
+    const int32_t view_width = g.view_cells_width * OA_MAP_CELL_PIXELS;
     if (width <= view_width)
         width = view_width;
     if (width >= g.map_pixel_width)
         width = g.map_pixel_width;
-    const int32_t view_height = g.view_cells_height * kCellPixels;
+    const int32_t view_height = g.view_cells_height * OA_MAP_CELL_PIXELS;
     if (height <= view_height)
         height = view_height;
     if (height >= g.map_pixel_height)
         height = g.map_pixel_height;
-    int32_t x =
-        static_cast<int32_t>(g.camera_x) + g.view_cells_width * (kCellPixels / 2) - width / 2;
-    int32_t y =
-        static_cast<int32_t>(g.camera_y) + g.view_cells_height * (kCellPixels / 2) - height / 2;
+    int32_t x = static_cast<int32_t>(g.camera_x) + g.view_cells_width * (OA_MAP_CELL_PIXELS / 2) -
+                width / 2;
+    int32_t y = static_cast<int32_t>(g.camera_y) + g.view_cells_height * (OA_MAP_CELL_PIXELS / 2) -
+                height / 2;
     if (x <= 0)
         x = 0;
     if (x >= g.map_pixel_width - width)
@@ -1399,7 +1401,7 @@ char upper_ascii(char c) noexcept {
 } // namespace
 
 bool console_init(Console* console, World* world, const ConsoleHost* host) noexcept {
-    std::memset(console, 0, sizeof *console);
+    std::memset(static_cast<void*>(console), 0, sizeof *console);
     console->world = world;
     console->host = host;
     bool ok = services::command_table_register(&console->commands, kOptionCommands);

@@ -6,6 +6,7 @@
 #include "oa/data/defs/unit_catalog.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/test/game_assets.hpp"
+#include "oa/base/text.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -102,7 +103,7 @@ struct Pool {
 
 void set_name(UnitDef& def, const char* name) {
     std::memset(def.unit_name, 0, sizeof def.unit_name);
-    std::strncpy(def.unit_name, name, sizeof def.unit_name - 1);
+    oa::base::text::copy_padded(def.unit_name, name, sizeof def.unit_name - 1);
 }
 
 void test_paging_values() {
@@ -123,7 +124,8 @@ void test_paging_values() {
     CHECK(build_page(build_menu_back(0, count, false)) == 4);
 
     // The cycling variants walk through the order page.
-    flags = 0x00100000u; // unrelated fire-order bits must survive
+    constexpr uint32_t fire_order_bit = 1u << kUnitFireOrderShift;
+    flags = fire_order_bit; // unrelated fire-order bits must survive
     flags = build_menu_forward(flags, count, true);
     CHECK((flags & kUnitFlagBuildMenu) != 0 && build_page(flags) == 1);
     for (uint32_t page = 2; page <= 4; ++page) {
@@ -132,7 +134,7 @@ void test_paging_values() {
     }
     flags = build_menu_forward(flags, count, true);
     CHECK((flags & kUnitFlagBuildMenu) == 0 && build_page(flags) == 4);
-    CHECK((flags & 0x00100000u) != 0);
+    CHECK((flags & fire_order_bit) != 0);
 
     flags = build_menu_back(page_bits(2), count, true);
     CHECK((flags & kUnitFlagBuildMenu) != 0 && build_page(flags) == 4);

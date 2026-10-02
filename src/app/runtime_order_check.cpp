@@ -823,8 +823,8 @@ void Runtime::check_order_overlays_over_fog(uint16_t commander, uint16_t scout) 
     const auto coverage = match_->player_coverage(match_view_player());
     const auto viewer_bit = static_cast<uint16_t>(1U << sight.viewpoint_player);
     const auto fog_over = [&](int32_t x, int32_t y) {
-        constexpr int32_t cell = oa::present::world_renderer::fog_cell_pixels;
         const auto map_cell = [&](int32_t camera, int32_t screen) {
+            constexpr int32_t cell = oa::present::world_renderer::fog_cell_pixels;
             return (camera + static_cast<int32_t>(std::lround(screen / zoom))) / cell;
         };
         std::optional<Fog> found;

@@ -105,8 +105,8 @@ up to four threads, one on a machine of one or two logical processors.
 `OA_DRAW_THREADS` (1 to 32) sets the count for every run of the game a test
 starts, and `--draw-threads N` for one run; every count draws the same
 frames, which `native-draw-threads`, `world-draw-bands`,
-`app-xrgb-conversion`, `present-surface-band-test`,
-`model-render-rgb-bridge-test` and `model-render-mesh-raster-test`
+`app-xrgb-conversion`, `present-surface-band`,
+`model-render-rgb-bridge` and `model-render-mesh-raster`
 check. To run the whole suite on one drawing thread, or on many:
 
 ```sh
@@ -200,8 +200,8 @@ and `--match-ticks N` it replays without a window.
   `-DOA_BUILD_PLATFORM=OFF -DOA_BUILD_INTRO_PLAYER=OFF`.
 - **Warnings as errors:** configure with `-DOA_WARNINGS_AS_ERRORS=ON` to
   fail the build on any compiler warning in the targets that link
-  `oa-options` (`-Werror`, or `/WX` with Visual Studio's compiler), as CI
-  does with Clang and GCC.
+  `oa-options` (`-Werror`, or `/WX` with Visual Studio's compiler, whose
+  linker then fails on its warnings too), as CI does with every compiler.
 - **Sanitizers:** configure with `-DOA_SANITIZERS=ON` (Clang or GCC) and run
   the suite as the CI sanitizer job does, since `platform-shims` ends a
   child process with SIGFPE on purpose.
@@ -255,9 +255,14 @@ Continuous integration (`.github/workflows/build.yml`) runs these jobs:
 | `extension-recorder` | Builds and tests on Linux with the recorder test extensions registered beside network play (`-DOA_RECORD_EXTENSION_HOOKS=ON`) |
 | `sanitizers` | Builds Debug with Clang on Linux under AddressSanitizer and UndefinedBehaviorSanitizer and runs the suite |
 
-Every job but the Windows ones configures with `-DOA_WARNINGS_AS_ERRORS=ON`,
-so a warning from Clang or GCC in engine code fails it. The warnings of
-Visual Studio's compiler do not fail the build yet.
+Every job configures with `-DOA_WARNINGS_AS_ERRORS=ON`, so a warning from
+Clang, GCC or Visual Studio's compiler in engine code fails it. Visual
+Studio's C library marks standard functions such as `strcpy`, `fopen`,
+`getenv` and `sscanf` as unsafe, in favour of variants the other platforms'
+C libraries lack: engine code copies text into fixed-size fields with
+`oa-base-text` (`oa/base/text.hpp`), opens files with
+`oa::platform::open_file` and reads the environment with
+`oa::platform::environment_value`.
 
 The installation of Total Annihilation 3.1c is not CI's to download: the
 game-data tests and the native checks over it run only on contributors'
@@ -268,7 +273,7 @@ machines, so run them before asking for review.
 | Kind | What it does | Examples |
 |---|---|---|
 | Unit | Exercises one module with inputs the test builds itself | `sim-detection`, `tdf-parser` |
-| Characterisation | Pins what a decoder, raster routine or table does today, edge cases stated byte by byte and seeded sweeps pinned by digest | `present-rle-test`, `hpi-read-node` |
+| Characterisation | Pins what a decoder, raster routine or table does today, edge cases stated byte by byte and seeded sweeps pinned by digest | `present-rle`, `hpi-read-node` |
 | Pinned values | Pins digests or bytes that must not move: a whole match, the random streams, the bytes the writers produce | `match-determinism`, `match-shared-random`, `hpi-writer-golden`, `persist-bank-golden` |
 | Game data | Reads the installed game named by `OA_GAME_DIR` | `unit-definitions-data`, `installed-content` |
 | Native | Runs the game headless over the installation and checks what it does | `native-saveload`, `native-trace` |
@@ -280,6 +285,9 @@ machines, so run them before asking for review.
 the installation, decodes every entry with the engine's decoders and runs the
 definition loaders a skirmish start runs, on every core (see
 [Threads](#threads)). A change to a decoder runs it before review.
+`installed-tdf-readers` digests what the feature, unit announcement, side
+layout, meteor and scenario readers take from the installation's TDF texts,
+so a change to how any of them reads shows there.
 
 ## Writing a test
 
@@ -289,9 +297,15 @@ A module's tests live in its `tests/` directory, one program per file named
 `<name>_test.cpp`. The executable and the ctest name start with the module's
 own names (`oa-sim-detection-test`, registered as `sim-detection`; a module
 with several tests adds each one's case, `<group>-<module>-<case>`), so that
-`ctest -R` finds a module's tests by its name. Tests that span modules live
+`ctest -R` finds a module's tests by its name. A ctest name never holds the
+word `test`; it ends in `-data` when the case reads the installed game and
+in `-selftest` when a check tests itself, and begins with `native-` exactly
+when it is a native check: its command is the game or a
+`tools/check_native_*.py` script. `ctest-names` checks these against the
+[naming rule](conventions.md#naming). Tests that span modules live
 under `tests/` at the root: `tests/content` for the installed-content sweep
-and `tests/extension` for the extension boundary.
+and the installed TDF readers, and `tests/extension` for the extension
+boundary.
 
 ```cmake
 if(BUILD_TESTING)
@@ -373,6 +387,15 @@ int main() {
   no other run shares, so test runs from several build trees at once never
   touch each other's files. Never use a fixed name under the temporary
   directory.
+- A test that builds a match links `oa-test-match` and takes what the match
+  asks of its application from `oa/test/match_services.hpp`:
+  `oa::test::QuietServices`, which takes every call and does nothing,
+  `oa::test::StrictServices`, on which every call fails the test, and
+  `oa::test::EmptyScenario`. Derive from them and override only the calls
+  the test watches. To follow one projectile across ticks, take an
+  `oa::test::ProjectileHandle` (`oa/test/projectile_handle.hpp`) and
+  `follow()` it after every tick: the pool moves projectiles as it closes
+  its gaps, and `Projectile.created_tick` changes after launch.
 - Never wait a fixed time for something to happen: a loaded machine can
   stall a test for longer. Drive the clock the code reads where it takes
   one, or poll with a generous limit, and make a check that something has
@@ -404,12 +427,16 @@ comment says what the pinned values cover and how to change them.
 
 ### Malformed input
 
-Every decoder of file data has a test that feeds it malformed input: a
-stream that ends early, a count or offset that points past the end, a
-length that would need an allocation beyond the decoder's limit. The test
-checks that the decoder stops there, allocates nothing unbounded and reports
-the error it should. `src/present/tests/rle_test.cpp` is an example
-(`test_malformed_streams`).
+Every decoder of file data or network messages has a test that feeds it
+malformed input: a stream that ends early, a count or offset that points
+past the end, a length that would need an allocation beyond the decoder's
+limit. The test checks that the decoder stops there, allocates nothing
+unbounded and reports the error it should. `src/present/tests/rle_test.cpp`
+is an example (`test_malformed_streams`). `net-wire-malformed`
+(`src/netgame/tests/wire_malformed_test.cpp`) also changes, cuts and splices
+real messages at random and feeds them to every network decoder; given
+.tad recordings, or directories of them, as arguments, it takes their
+packets as seeds too.
 
 ### Game data
 

@@ -6,6 +6,7 @@
 // or campaign mission from a savegame, and the match's meteor-storm state
 // they carry.
 #include "engine_settings_state.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/app/runtime.hpp"
 #include "oa/base/bytes.hpp"
 
@@ -44,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -67,7 +69,6 @@ constexpr std::size_t kSightWordBytes = sizeof(uint16_t);
 constexpr const char* kHeadlessSaveName = "headless.sav";
 
 // World units along one side of a map cell.
-constexpr int32_t kCellPixels = 16;
 
 // Units a save/load run's transport ship starts with in its hold. A unit
 // starting aboard, as a mission's can, hangs from no piece of its carrier and
@@ -358,27 +359,23 @@ ui::frontend::SaveSummaryReader bank_summary_reader() {
 }
 
 // A TDF section as the meteor-defaults reader sees it.
-persist::MeteorTdf meteor_tdf(const oa::data::unit_definitions::TdfSection& section) {
+persist::MeteorTdf meteor_tdf(const oa::formats::tdf::Block* section) {
     persist::MeteorTdf tdf{};
-    tdf.context = const_cast<oa::data::unit_definitions::TdfSection*>(&section);
+    tdf.context = const_cast<oa::formats::tdf::Block*>(section);
     tdf.text = [](void* context, const char* key, char* out, std::size_t out_bytes) {
-        const auto* value =
-            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
-        if (value == nullptr || out_bytes == 0)
-            return false;
-        std::snprintf(out, out_bytes, "%s", value->c_str());
-        return true;
+        return oa::formats::tdf::get_string(
+            static_cast<const oa::formats::tdf::Block*>(context), key, out, out_bytes, nullptr
+        );
     };
     tdf.integer = [](void* context, const char* key, int32_t fallback) {
-        const auto* value =
-            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
-        return value != nullptr ? static_cast<int32_t>(std::strtol(value->c_str(), nullptr, 10))
-                                : fallback;
+        return oa::formats::tdf::get_int(
+            static_cast<const oa::formats::tdf::Block*>(context), key, fallback
+        );
     };
     tdf.real = [](void* context, const char* key, double fallback) {
-        const auto* value =
-            static_cast<const oa::data::unit_definitions::TdfSection*>(context)->find(key);
-        return value != nullptr ? std::strtod(value->c_str(), nullptr) : fallback;
+        return oa::formats::tdf::get_double(
+            static_cast<const oa::formats::tdf::Block*>(context), key, fallback
+        );
     };
     return tdf;
 }
@@ -479,7 +476,7 @@ struct Runtime::SaveLoadState {
     bool resumed_players{};
     // The feature TDF set a load reads the types its save names from, held
     // from the Features section's set load to its link pass.
-    std::vector<oa::data::unit_definitions::TdfDocument> feature_documents;
+    std::vector<oa::formats::tdf::OwnedDocument> feature_documents;
     // Script, movement and economy state the last save could not write or the
     // last load could not restore, and feature types the last load could not
     // load.
@@ -568,23 +565,18 @@ void Runtime::reset_meteors() {
         if (!bytes)
             return;
         const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-        const auto document = oa::data::unit_definitions::parse_tdf(text);
-        if (!document)
+        oa::formats::tdf::OwnedDocument document;
+        if (!document.parse(text))
             throw std::runtime_error("cannot parse " + std::string(kMeteorDefaults));
-        for (const auto& section : document.value.sections) {
-            if (!tdf_names_equal(section.name, kMeteorDefaultSection))
-                continue;
-            const auto tdf = meteor_tdf(section);
-            if (persist::load_meteor_config(&tdf, &settings) == persist::MeteorConfigResult::bogus)
-                throw std::runtime_error(
-                    "bogus meteor defaults in " + std::string(kMeteorDefaults)
-                );
+        const auto* section = oa::formats::tdf::find_child(document.root(), kMeteorDefaultSection);
+        if (section == nullptr)
             return;
-        }
+        const auto tdf = meteor_tdf(section);
+        if (persist::load_meteor_config(&tdf, &settings) == persist::MeteorConfigResult::bogus)
+            throw std::runtime_error("bogus meteor defaults in " + std::string(kMeteorDefaults));
     };
     const auto real = [&](const char* key) {
-        const auto value = schema_text(key);
-        return value ? static_cast<float>(std::strtod(value->c_str(), nullptr)) : 0.0F;
+        return static_cast<float>(oa::formats::tdf::get_double(session_schema_section(), key, 0.0));
     };
     const auto weapon = schema_text(kMeteorWeapon).value_or("");
     if (weapon.empty()) {
@@ -621,7 +613,8 @@ void Runtime::step_meteors() {
     };
     host.spawn_projectile =
         [](void* context, oa_ref32 weapon, const FixedVec3* position, const FixedVec3* velocity) {
-            (void)static_cast<Runtime*>(context)->match_->launch_meteor(
+            // A meteor that finds the projectile pool full does not fall.
+            std::ignore = static_cast<Runtime*>(context)->match_->launch_meteor(
                 weapon, *position, *velocity, true
             );
         };
@@ -700,11 +693,9 @@ uint16_t Runtime::SaveLoadState::run_unit_limit(Runtime& runtime) {
 std::optional<uint16_t> Runtime::SaveLoadState::buildable_unit_limit(int32_t limit) {
     if (limit <= 0 || limit > std::numeric_limits<uint16_t>::max())
         return std::nullopt;
-    try {
-        (void)oa::sim::unit_spawn::offline_pool_size(static_cast<uint16_t>(limit));
-    } catch (const std::invalid_argument&) {
+    // Only whether the pool can be built matters, not its size.
+    if (oa::sim::unit_spawn::unit_pool_size(static_cast<uint16_t>(limit)) == 0)
         return std::nullopt;
-    }
     return static_cast<uint16_t>(limit);
 }
 
@@ -827,8 +818,10 @@ persist::SaveHooks Runtime::SaveLoadState::make_hooks(Bindings* bindings) {
                             void* walk) {
         static_cast<Bindings*>(context)->runtime->match_->visit_saved_orders(unit->id, visit, walk);
     };
+    // restore_saved_unit counts a unit it cannot create as a restore
+    // failure; an id the save holds no record for restores nothing.
     hooks.restore_unit = [](void* context, uint16_t id, persist::Bank* bank) {
-        (void)static_cast<Bindings*>(context)->runtime->restore_saved_unit(id, bank);
+        std::ignore = static_cast<Bindings*>(context)->runtime->restore_saved_unit(id, bank);
     };
     // The Features section's load reads the feature TDF set again, loads the
     // types its save names that the table lacks, links their remnants and
@@ -961,9 +954,8 @@ bool Runtime::write_saved_game(
         missions::CampaignFile* campaign{}; // null for a skirmish
         missions::CampaignEnv env{};
         persist::ImageRows radar{}; // Game.radar_final_surface's rows
-        bool mission_info_failed{}; // the next mission's info did not load
     } summary_bindings{
-        this, save.world, campaign ? &campaign_object() : nullptr, campaign_object_env()
+        this, save.world, campaign ? &campaign_object() : nullptr, campaign_dialog_env()
     };
 
     persist::SummaryHooks summary{};
@@ -974,10 +966,13 @@ bool Runtime::write_saved_game(
         const auto* campaign = static_cast<SummaryBindings*>(context)->campaign;
         return campaign != nullptr ? missions::campaign_name_if_loaded(campaign) : nullptr;
     };
+    // After the last mission there is no next one, and the Summary names the
+    // finished mission. A mission that does not load leaves the save as it
+    // is (write_saved_game).
     summary.advance_next_mission = [](void* context) {
         auto* b = static_cast<SummaryBindings*>(context);
         if (b->campaign != nullptr)
-            (void)missions::campaign_advance_next_mission(b->campaign, &b->env);
+            std::ignore = missions::campaign_advance_next_mission(b->campaign, &b->env);
     };
     summary.mission_name = [](void* context) -> const char* {
         const auto* b = static_cast<SummaryBindings*>(context);
@@ -991,9 +986,9 @@ bool Runtime::write_saved_game(
     };
     summary.bind_mission_info = [](void* context) {
         auto* b = static_cast<SummaryBindings*>(context);
-        if (b->campaign != nullptr &&
-            !missions::campaign_bind_mission(b->campaign, &b->env, b->world->game.mission_index))
-            b->mission_info_failed = true;
+        if (b->campaign != nullptr)
+            std::ignore =
+                missions::campaign_bind_mission(b->campaign, &b->env, b->world->game.mission_index);
     };
     // The radar image the match shows (Game.radar_final_surface), which the
     // load and save dialogs show for the save; none until the match is drawn.
@@ -1017,9 +1012,10 @@ bool Runtime::write_saved_game(
     };
     summary.save_conditions = [](void* context, persist::Bank* bank) {
         auto* runtime = static_cast<SummaryBindings*>(context)->runtime;
-        sim::scenario::save_conditions(
-            runtime->match_->scenario_controller(), bank, runtime->scenario_map_kind()
-        );
+        if (!sim::scenario::save_conditions(
+                runtime->match_->scenario_controller(), bank, runtime->scenario_map_kind()
+            ))
+            throw std::runtime_error("the campaign map's victory conditions cannot be saved");
     };
     std::error_code error;
     fs::create_directories(path.parent_path(), error);
@@ -1027,13 +1023,11 @@ bool Runtime::write_saved_game(
     const bool written = persist::save_write_game(
         &save, &summary, path.string().c_str(), description, game_id, &sink
     );
+    // Between missions the save loads the next mission's information to name
+    // it, then binds the finished mission again. The file holds none of that
+    // information, so a mission that does not load leaves the save as it is:
+    // the player sees only the mission loader's message boxes, as in 3.1c.
     status_ = written ? "Saved " + path.filename().string() : "Could not write " + path.string();
-    // Between missions the save binds the next mission's information; the
-    // file holds none of it, so the save stands, but the player is told.
-    if (written && summary_bindings.mission_info_failed) {
-        status_ += "; the next mission's information did not load";
-        std::cerr << "open-annihilation: " << status_ << '\n';
-    }
     return written;
 }
 
@@ -1225,7 +1219,7 @@ void Runtime::restore_saved_orders(
         goal.air_target.unit_id = restored(goal.air_target.unit_id);
         goal.air_target.target_id = restored(goal.air_target.target_id);
         goal.air_seek.unit_id = restored(goal.air_seek.unit_id);
-        (void)match_->restore_saved_order(unit.id, order, goal, tails);
+        match_->restore_saved_order(unit.id, order, goal, tails);
     }
     match_->install_head_goal(unit.id);
 }
@@ -1266,7 +1260,8 @@ bool Runtime::restore_saved_session(persist::Bank* bank) {
     persist::save_read_terrain_mapping(&save, bank);
     persist::save_read_units(&save, bank);
     persist::save_read_meteor(&state.meteor, bank);
-    sim::scenario::load_conditions(match_->scenario_controller(), bank, scenario_map_kind());
+    if (!sim::scenario::load_conditions(match_->scenario_controller(), bank, scenario_map_kind()))
+        throw std::runtime_error("the campaign map's victory conditions cannot be restored");
     match_->selection().frame_flags |= hud::kFrameRedrawBuildMenu;
     SaveLoadState::apply_plots(*this, state);
     rebuild_feature_draws();
@@ -1417,9 +1412,17 @@ bool Runtime::load_saved_campaign(
     selected_campaign_index_ = static_cast<std::size_t>(named - campaign_labels_.begin());
     load_campaign_missions(selected_campaign_index_);
     missions::CampaignFile& file = campaign_object();
-    const missions::CampaignEnv env = campaign_object_env();
+    const missions::CampaignEnv env = campaign_dialog_env();
     if (!missions::campaign_select_mission(&file, &env, summary.mission.data()) ||
         static_cast<std::size_t>(file.mission_index) >= campaign_mission_files_.size()) {
+        // Over the mission loader's message, as 3.1c shows a saved mission
+        // that does not load.
+        show_frontend_message(
+            translate_ui(ui::frontend::kInvalidSaveMessage),
+            ui::frontend::kInvalidSaveMessageWidth,
+            entry::message_show_ok,
+            entry::message_fit_width
+        );
         status_ = "Invalid savegame file: no mission '" + std::string(summary.mission.data()) + "'";
         return false;
     }
@@ -1527,7 +1530,7 @@ void Runtime::give_saveload_orders() {
     };
     const auto x = static_cast<int32_t>(slots[commander].unit->position[0] >> 16);
     const auto z = static_cast<int32_t>(slots[commander].unit->position[2] >> 16);
-    (void)match_->issue_mobile_build(commander, solar, at(x, z - 64), false);
+    match_->issue_mobile_build(commander, solar, at(x, z - 64), false);
     const auto spawn = [&](uint16_t spawned, const oa::sim::ground_orders::Point& point) {
         oa::sim::unit_spawn::Request request;
         request.player = match_local_player_;
@@ -1550,16 +1553,18 @@ void Runtime::give_saveload_orders() {
     // ring by ring outwards over the whole map.
     const auto nearest_site = [&](uint16_t placed, int32_t near_x, int32_t near_z) {
         const auto& footprint = spawn_types_[placed];
-        const int32_t cells_x = map_w / kCellPixels, cells_z = map_h / kCellPixels;
-        const int32_t cell_x = near_x / kCellPixels, cell_z = near_z / kCellPixels;
+        const int32_t cells_x = map_w / OA_MAP_CELL_PIXELS, cells_z = map_h / OA_MAP_CELL_PIXELS;
+        const int32_t cell_x = near_x / OA_MAP_CELL_PIXELS, cell_z = near_z / OA_MAP_CELL_PIXELS;
         for (int32_t ring = 0; ring < std::max(cells_x, cells_z); ++ring)
             for (int32_t dz = -ring; dz <= ring; ++dz)
                 for (int32_t dx = -ring; dx <= ring; ++dx)
                     if ((std::abs(dx) == ring || std::abs(dz) == ring) &&
                         match_->building_site(placed, cell_x + dx, cell_z + dz, 0))
                         return at(
-                            (cell_x + dx) * kCellPixels + footprint.footprint_x * kCellPixels / 2,
-                            (cell_z + dz) * kCellPixels + footprint.footprint_z * kCellPixels / 2
+                            (cell_x + dx) * OA_MAP_CELL_PIXELS +
+                                footprint.footprint_x * OA_MAP_CELL_PIXELS / 2,
+                            (cell_z + dz) * OA_MAP_CELL_PIXELS +
+                                footprint.footprint_z * OA_MAP_CELL_PIXELS / 2
                         );
         throw std::runtime_error(
             "saveload orders found no site for " + std::string(spawn_type_names_[placed])
@@ -1569,15 +1574,15 @@ void Runtime::give_saveload_orders() {
     for (std::size_t i = 0; i < walkers.size(); ++i)
         walkers[i] = spawn(peewee, at(x - 24 + static_cast<int32_t>(i) * 24, z + 100));
     const auto far_side = at(x < map_w / 2 ? map_w : 0, z < map_h / 2 ? map_h : 0);
-    (void)match_->issue_patrol(walkers[0], at(x, z + 300), false);
-    (void)match_->issue_guard(walkers[1], commander, false);
-    (void)match_->issue_ground_move(walkers[2], far_side, false);
+    match_->issue_patrol(walkers[0], at(x, z + 300), false);
+    match_->issue_guard(walkers[1], commander, false);
+    match_->issue_ground_move(walkers[2], far_side, false);
     // An Atlas lifts a Peewee onto its link piece, then carries it towards
     // the far side; a transport ship in the water nearest the commander
     // starts with Peewees in its hold.
     const auto atlas = spawn(type("ARMATLAS"), at(x - 160, z - 120));
-    (void)match_->issue_load(atlas, spawn(peewee, at(x - 200, z - 120)), false);
-    (void)match_->issue_unload(atlas, far_side, true);
+    match_->issue_load(atlas, spawn(peewee, at(x - 200, z - 120)), false);
+    match_->issue_unload(atlas, far_side, true);
     const auto transport_ship = type("ARMTSHIP");
     const auto ship = spawn(transport_ship, nearest_site(transport_ship, x, z));
     for (int32_t i = 0; i < kSaveloadShipCargo; ++i)
@@ -1743,7 +1748,8 @@ void Runtime::run_headless_saveload() {
         std::cout << "saveload: " << status_ << "; restore failures "
                   << saveload_state().restore_failures << '\n';
     } else if (options_.campaign_mission) {
-        (void)start_headless_campaign_mission();
+        // A mission that does not start throws; its file name is not needed.
+        std::ignore = start_headless_campaign_mission();
         if (options_.give_orders)
             give_mission_orders();
     } else {

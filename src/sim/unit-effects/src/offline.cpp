@@ -3,7 +3,6 @@
 
 #include "oa/sim/unit_effects/effects_offline.hpp"
 #include <bit>
-#include <stdexcept>
 
 namespace oa::sim::unit_effects {
 namespace {
@@ -94,9 +93,13 @@ void OfflineEffects::effect(const Event& e) {
 
 void OfflineEffects::add_piece_debris(const Event& e) {
     auto& slot = match_->world().slots[e.unit];
+    auto* instance = match_->instance(e.unit);
+    const auto* found = instance ? instance->model().find_piece(e.piece) : nullptr;
+    if (!found)
+        return;
     refresh_transform(slot);
     const auto origin = piece_origin(slot, e.piece);
-    const auto& piece = match_->instance(e.unit)->model().piece_for_script_index(e.piece);
+    const auto& piece = *found;
     sim::effect_particles::DebrisPiece debris{};
     debris.unit = e.unit;
     debris.piece = e.piece;
@@ -111,7 +114,7 @@ void OfflineEffects::add_piece_debris(const Event& e) {
     debris.spin[0] = piece.rotation.yz;
     debris.spin[1] = piece.rotation.xz;
     debris.spin[2] = piece.rotation.xy;
-    debris.model = &match_->instance(e.unit)->model().model();
+    debris.model = &instance->model().model();
     debris.object = piece.object_index;
     const auto& unit = *slot.unit;
     debris.position = {
@@ -129,8 +132,12 @@ void OfflineEffects::add_piece_debris(const Event& e) {
 void OfflineEffects::shatter_piece(
     sim::unit_spawn::Slot& slot, const sim::effect_particles::DebrisPiece& request
 ) {
-    const auto& instance = match_->instance(slot.unit_index)->model();
-    const auto& piece = instance.piece_for_script_index(request.piece);
+    auto* unit_instance = match_->instance(slot.unit_index);
+    const auto* found = unit_instance ? unit_instance->model().find_piece(request.piece) : nullptr;
+    if (!found)
+        return;
+    const auto& instance = unit_instance->model();
+    const auto& piece = *found;
     const auto& model = instance.model();
     sim::effect_particles::ShatterPiece shattered{};
     if (!match_->loaded_primitives(
@@ -161,34 +168,26 @@ void OfflineEffects::shatter_piece(
     );
 }
 
-Runtime& OfflineEffects::required() {
-    if (!runtime_)
-        throw std::logic_error("offline effects used before bind");
-    return *runtime_;
-}
-
-sim::match_runtime::Match& OfflineEffects::bound_match() {
-    if (!match_)
-        throw std::logic_error("offline effects used before bind");
-    return *match_;
-}
-
 void OfflineEffects::emit_sfx(sim::unit_spawn::Slot& s, uint32_t p, int32_t e) {
-    required().emit_sfx(s, p, e);
+    if (runtime_)
+        runtime_->emit_sfx(s, p, e);
 }
 
 void OfflineEffects::explode_piece(sim::unit_spawn::Slot& s, uint32_t p, int32_t f) {
-    required().explode_piece(s, p, f);
+    if (runtime_)
+        runtime_->explode_piece(s, p, f);
 }
 
 void OfflineEffects::attach_unit(
     sim::unit_spawn::Slot& s, int32_t target, int32_t piece, int32_t mode
 ) {
-    bound_match().script_attach_unit(s.unit_index, target, piece, mode);
+    if (match_)
+        match_->script_attach_unit(s.unit_index, target, piece, mode);
 }
 
 void OfflineEffects::drop_unit(sim::unit_spawn::Slot& s, int32_t target) {
-    bound_match().script_drop_unit(s.unit_index, target);
+    if (match_)
+        match_->script_drop_unit(s.unit_index, target);
 }
 
 bool OfflineEffects::visible(const sim::unit_spawn::Slot& slot) {
@@ -200,7 +199,7 @@ bool OfflineEffects::visible(const sim::unit_spawn::Slot& slot) {
 void OfflineEffects::refresh_transform(sim::unit_spawn::Slot& slot) {
     auto* i = match_->instance(slot.unit_index);
     if (!i)
-        throw std::logic_error("effect unit has no model instance");
+        return;
     const oa_angle heading = slot.record.heading;
     const sim::model_runtime::RotationWords rotation{
         slot.record.bank, std::bit_cast<int16_t>(heading), slot.record.pitch
@@ -218,37 +217,35 @@ void OfflineEffects::refresh_transform(sim::unit_spawn::Slot& slot) {
     refreshed_rotation_ = rotation;
 }
 
-Position OfflineEffects::piece_start(const sim::unit_spawn::Slot& slot, uint32_t p) {
+const sim::model_runtime::PieceState*
+OfflineEffects::find_piece(const sim::unit_spawn::Slot& slot, uint32_t piece) {
     auto* i = match_->instance(slot.unit_index);
-    if (!i)
-        throw std::logic_error("effect unit has no model instance");
-    const auto& piece = i->model().piece_for_script_index(p);
-    if (piece.transformed_vertices.size() < 2)
-        throw std::out_of_range("effect piece has fewer than two transformed vertices");
-    return position(piece.transformed_vertices[0]);
+    return i ? i->model().find_piece(piece) : nullptr;
+}
+
+Position OfflineEffects::piece_start(const sim::unit_spawn::Slot& slot, uint32_t p) {
+    const auto* piece = find_piece(slot, p);
+    if (!piece || piece->transformed_vertices.size() < 2)
+        return {};
+    return position(piece->transformed_vertices[0]);
 }
 
 Position OfflineEffects::piece_end(const sim::unit_spawn::Slot& slot, uint32_t p) {
-    auto* i = match_->instance(slot.unit_index);
-    if (!i)
-        throw std::logic_error("effect unit has no model instance");
-    const auto& piece = i->model().piece_for_script_index(p);
-    if (piece.transformed_vertices.size() < 2)
-        throw std::out_of_range("effect piece has fewer than two transformed vertices");
-    return position(piece.transformed_vertices[1]);
+    const auto* piece = find_piece(slot, p);
+    if (!piece || piece->transformed_vertices.size() < 2)
+        return {};
+    return position(piece->transformed_vertices[1]);
 }
 
 Position OfflineEffects::piece_origin(const sim::unit_spawn::Slot& slot, uint32_t p) {
-    auto* i = match_->instance(slot.unit_index);
-    if (!i)
-        throw std::logic_error("effect unit has no model instance");
-    return position(i->model().piece_for_script_index(p).transformed_origin);
+    const auto* piece = find_piece(slot, p);
+    return piece ? position(piece->transformed_origin) : Position{};
 }
 
 Position OfflineEffects::piece_world(const sim::unit_spawn::Slot& slot, uint32_t p) {
     auto* i = match_->instance(slot.unit_index);
     if (!i)
-        throw std::logic_error("effect unit has no model instance");
+        return {};
     const auto value = i->piece_world(p);
     return {
         std::bit_cast<int32_t>(value[0]),
@@ -267,14 +264,14 @@ uint32_t OfflineEffects::random_bounded(uint32_t n) {
 
 void OfflineEffects::set_piece_visible(sim::unit_spawn::Slot& slot, uint32_t p, bool visible) {
     auto* i = match_->instance(slot.unit_index);
-    if (!i)
-        throw std::logic_error("effect unit has no model instance");
-    auto& piece = i->model().piece_for_script_index(p);
+    auto* piece = i ? i->model().find_piece(p) : nullptr;
+    if (!piece)
+        return;
     constexpr auto bit = static_cast<uint16_t>(sim::model_runtime::PieceFlag::visible);
     if (visible)
-        piece.flags |= bit;
+        piece->flags |= bit;
     else
-        piece.flags &= static_cast<uint16_t>(~bit);
+        piece->flags &= static_cast<uint16_t>(~bit);
 }
 
 } // namespace oa::sim::unit_effects

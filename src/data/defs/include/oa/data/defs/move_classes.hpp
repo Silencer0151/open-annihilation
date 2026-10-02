@@ -18,7 +18,7 @@ inline constexpr std::size_t move_class_name_capacity = 100;
 // populated slot and 0 for an empty one; the text lives in names[slot].
 struct MoveClassTable {
     MoveClass classes[OA_MOVE_CLASS_COUNT];
-    char names[OA_MOVE_CLASS_COUNT][move_class_name_capacity];
+    char names[OA_MOVE_CLASS_COUNT][move_class_name_capacity]{};
 };
 
 /// Resets a movement class to the defaults a CLASSn section is read over.

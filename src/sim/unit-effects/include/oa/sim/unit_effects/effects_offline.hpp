@@ -35,7 +35,8 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     /// @param match match whose models, random stream and effect world are used; must
     ///        stay alive until unbind
     void bind(sim::match_runtime::Match& match);
-    /// Drops the binding; later calls throw until bind is called again.
+    /// Drops the binding; the emit, explode, attach and drop calls do nothing
+    /// until bind is called again.
     void unbind() noexcept;
 
     /// Returns whether a match is bound.
@@ -43,7 +44,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
 
     /// Runs a COB emit-sfx through Runtime::emit_sfx.
     ///
-    /// Throws std::logic_error before bind.
+    /// Does nothing before bind.
     ///
     /// @param slot emitting unit
     /// @param piece script piece index
@@ -51,7 +52,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     void emit_sfx(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t kind) override;
     /// Runs a COB explode through Runtime::explode_piece.
     ///
-    /// Throws std::logic_error before bind.
+    /// Does nothing before bind.
     ///
     /// @param slot exploding unit
     /// @param piece script piece index
@@ -59,7 +60,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     void explode_piece(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t flags) override;
     /// Forwards a COB attach-unit to Match::script_attach_unit.
     ///
-    /// Throws std::logic_error before bind.
+    /// Does nothing before bind.
     ///
     /// @param slot carrying unit
     /// @param target unit to attach
@@ -69,7 +70,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     attach_unit(sim::unit_spawn::Slot& slot, int32_t target, int32_t piece, int32_t mode) override;
     /// Forwards a COB drop-unit to Match::script_drop_unit.
     ///
-    /// Throws std::logic_error before bind.
+    /// Does nothing before bind.
     ///
     /// @param slot carrying unit
     /// @param target unit to drop
@@ -97,7 +98,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     bool visible(const sim::unit_spawn::Slot& slot) override;
     /// Rebuilds a unit's piece transforms from its bank, heading and pitch.
     ///
-    /// Throws std::logic_error for a unit without a model instance.
+    /// A unit without a model instance is left alone.
     ///
     /// @param slot unit whose model is refreshed
     /// @quirk Every transform is rebuilt; 3.1c keeps a piece's transform while its angles
@@ -108,37 +109,30 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     void refresh_transform(sim::unit_spawn::Slot& slot) override;
     /// Returns a piece's first transformed vertex.
     ///
-    /// Throws std::logic_error without a model instance and std::out_of_range for a
-    /// piece with fewer than two vertices.
-    ///
     /// @param slot unit owning the piece
     /// @param piece script piece index
-    /// @return model-space position, 16.16
+    /// @return model-space position, 16.16; the origin without a model instance,
+    ///         for a piece the instance lacks, or for one with fewer than two vertices
     Position piece_start(const sim::unit_spawn::Slot& slot, uint32_t piece) override;
     /// Returns a piece's second transformed vertex.
     ///
-    /// Throws std::logic_error without a model instance and std::out_of_range for a
-    /// piece with fewer than two vertices.
-    ///
     /// @param slot unit owning the piece
     /// @param piece script piece index
-    /// @return model-space position, 16.16
+    /// @return model-space position, 16.16; the origin without a model instance,
+    ///         for a piece the instance lacks, or for one with fewer than two vertices
     Position piece_end(const sim::unit_spawn::Slot& slot, uint32_t piece) override;
     /// Returns a piece's transformed origin.
     ///
-    /// Throws std::logic_error for a unit without a model instance.
-    ///
     /// @param slot unit owning the piece
     /// @param piece script piece index
-    /// @return model-space position, 16.16
+    /// @return model-space position, 16.16; the origin without a model instance or
+    ///         for a piece the instance lacks
     Position piece_origin(const sim::unit_spawn::Slot& slot, uint32_t piece) override;
     /// Returns a piece's world position from the model instance.
     ///
-    /// Throws std::logic_error for a unit without a model instance.
-    ///
     /// @param slot unit owning the piece
     /// @param piece script piece index
-    /// @return world position, 16.16
+    /// @return world position, 16.16; the origin without a model instance
     Position piece_world(const sim::unit_spawn::Slot& slot, uint32_t piece) override;
     /// Returns the match's sea level as a 16.16 height.
     ///
@@ -151,7 +145,7 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     uint32_t random_bounded(uint32_t exclusive_limit) override;
     /// Sets or clears a piece's visible flag.
     ///
-    /// Throws std::logic_error for a unit without a model instance.
+    /// A unit without a model instance, or a piece the instance lacks, is left alone.
     ///
     /// @param slot unit owning the piece
     /// @param piece script piece index
@@ -167,29 +161,26 @@ class OfflineEffects final : public sim::match_runtime::Effects, private Host, p
     void effect(const Event& event) override;
     /// Turns a debris event into a debris piece at the piece origin plus the unit position.
     ///
-    /// A shattering piece goes to shatter_piece instead.
+    /// A shattering piece goes to shatter_piece instead. A unit without a model
+    /// instance, or a piece the instance lacks, makes no debris.
     ///
     /// @param event debris_piece event
     void add_piece_debris(const Event& event);
     /// Breaks a piece into fragments from its transformed vertices and loaded primitives.
     ///
-    /// Does nothing when the match has no primitive loader.
+    /// Does nothing when the match has no primitive loader, the unit has no model
+    /// instance or the instance lacks the piece.
     ///
     /// @param slot unit owning the piece
     /// @param request the piece's debris request
     void
     shatter_piece(sim::unit_spawn::Slot& slot, const sim::effect_particles::DebrisPiece& request);
-    /// Returns the bound runtime.
+    /// Returns a piece of a unit's model instance.
     ///
-    /// Throws std::logic_error before bind.
-    ///
-    /// @return the runtime
-    Runtime& required();
-    /// Returns the bound match.
-    ///
-    /// Throws std::logic_error before bind.
-    ///
-    /// @return the match
-    sim::match_runtime::Match& bound_match();
+    /// @param slot unit owning the piece
+    /// @param piece script piece index
+    /// @return the piece, or null without a model instance or for a piece the instance lacks
+    const sim::model_runtime::PieceState*
+    find_piece(const sim::unit_spawn::Slot& slot, uint32_t piece);
 };
 } // namespace oa::sim::unit_effects

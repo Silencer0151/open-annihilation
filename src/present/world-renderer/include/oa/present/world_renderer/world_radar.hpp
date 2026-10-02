@@ -168,16 +168,17 @@ struct RadarContactHost {
 /// blip (blinking while its damage countdown runs), the marker over the unit
 /// under the cursor, the radar, sonar, jammer and interceptor rings of selected
 /// units and each projectile as a dot or its owner's icon. Shown units are
-/// listed in `hot_units` with their screen position and counted in
-/// Game.hot_radar_unit_count; units past the end of `hot_units` are drawn but
-/// neither listed nor counted. The redraw bit is set last.
+/// listed in `hot_units` with their screen position, and the count of them is
+/// returned; units past the end of `hot_units` are drawn but neither listed nor
+/// counted. The redraw bit is set last.
 ///
 /// @param[in,out] world world holding the game block, units and projectiles
 /// @param surfaces radar surfaces; `final_image` is written
 /// @param sprites radar blip and icon sequences
 /// @param host sight test for contacts
 /// @param[out] hot_units shown units and their radar positions
-void radar_compose_final(
+/// @return how many entries of `hot_units` were written
+uint32_t radar_compose_final(
     World& world,
     const RadarSurfaces& surfaces,
     const RadarSprites& sprites,

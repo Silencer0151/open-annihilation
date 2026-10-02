@@ -6,7 +6,7 @@
 #include "oa/base/game_math.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/sim/simulation_state.hpp"
-#include "oa/data/unit_definitions.hpp"
+#include "oa/formats/tdf.hpp"
 #include "oa/sim/unit_health.hpp"
 
 #include <cmath>
@@ -68,9 +68,9 @@ int32_t clamp_percent(int32_t value) noexcept {
 
 /// Line tokens: up to twenty whitespace-separated words; '#' ends the line.
 struct TokenLine {
-    char storage[token_bytes + max_tokens];
-    const char* tokens[max_tokens];
-    uint32_t count;
+    char storage[token_bytes + max_tokens]{};
+    const char* tokens[max_tokens]{};
+    uint32_t count{};
 };
 
 void tokenize(TokenLine& line, const char* begin, const char* end) noexcept {
@@ -361,33 +361,38 @@ void load_build_lists(ComputerPlayers* state, std::string_view text) noexcept {
     }
     if (text.empty())
         return;
-    const auto document = data::unit_definitions::parse_tdf(text);
-    if (!document)
+    formats::tdf::OwnedDocument document;
+    if (!document.parse(text))
         return;
-    const data::unit_definitions::TdfSection* lists = nullptr;
-    for (const auto& section : document.value.sections)
-        if (equal_nocase(section.name.c_str(), "canbuild"))
-            lists = &section;
+    // The last section and the last entry of a name are the ones read.
+    const formats::tdf::Block* lists = nullptr;
+    for (uint32_t index = 0; index < formats::tdf::child_count(document.root()); ++index) {
+        const auto* section = formats::tdf::child_at(document.root(), index);
+        if (equal_nocase(section->name, "canbuild"))
+            lists = section;
+    }
     if (lists == nullptr)
         return;
     for (uint32_t t = 1; t < state->type_count; ++t) {
         auto& type = state->types[t];
         if (!type.has_build_list)
             continue;
-        const data::unit_definitions::TdfSection* entry = nullptr;
-        for (const auto& child : lists->children)
-            if (equal_nocase(child.name.c_str(), type.unit_name))
-                entry = &child;
+        const formats::tdf::Block* entry = nullptr;
+        for (uint32_t index = 0; index < formats::tdf::child_count(lists); ++index) {
+            const auto* child = formats::tdf::child_at(lists, index);
+            if (equal_nocase(child->name, type.unit_name))
+                entry = child;
+        }
         if (entry == nullptr)
             continue;
         char key[24];
         for (uint32_t n = 1;; ++n) {
             std::snprintf(key, sizeof key, "canbuild%u", n);
-            const auto* value = entry->find(key);
+            const char* value = formats::tdf::find_value(entry, key);
             if (value == nullptr)
                 break;
             char name[32];
-            copy_bounded(name, sizeof name, *value);
+            copy_bounded(name, sizeof name, value);
             const auto id = type_by_name(state, name);
             if (id != 0 && type.build_count < build_list_capacity)
                 type.build_ids[type.build_count++] = id;

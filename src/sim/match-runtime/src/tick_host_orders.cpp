@@ -58,7 +58,7 @@ void TickHost::queue_default_mission(oa::World&, oa::Unit& record) {
         kind != sim::ground_orders::vtol_land_if_can_kind)
         return;
     auto& order = match.insert_ground_order(slot(u).unit_index, kind);
-    owned(order).extra.command_flags |= 0x40;
+    owned(order).extra.command_flags |= command_overlay;
 }
 
 uint32_t TickHost::dispatch_mission(
@@ -80,12 +80,16 @@ uint32_t TickHost::dispatch_mission(
     }
     if (order.kind == vtol_get_repaired_kind) {
         // VTOL_GetRepaired does not use a ground controller.
-        const auto& record = owned(order);
+        const auto& order_record = owned(order);
         if (!u.type && order.phase == 0 &&
-            (record.construction.target != nullptr || record.attack.target != nullptr))
-            throw std::logic_error("VTOL_GetRepaired unit has no type");
+            (order_record.construction.target != nullptr ||
+             order_record.attack.target != nullptr)) {
+            match.fault_.note("VTOL_GetRepaired unit has no type");
+            write_flags(s, flags);
+            return mission_fault_result;
+        }
         const auto step = vtol_get_repaired(
-            record.construction.target != nullptr || record.attack.target != nullptr,
+            order_record.construction.target != nullptr || order_record.attack.target != nullptr,
             order.phase,
             u.health,
             u.type ? u.type->maximum_health : 0
@@ -133,7 +137,8 @@ uint32_t TickHost::dispatch_mission(
     else if (order.kind == sim::ground_orders::vtol_standby_kind) {
         // VTOL_Standby. Phase 0 enables weapons and waits one tick. Phase 1
         // orders an attack on the automatic target and restarts, or returns 1.
-        if (!s.unit->object_present || !s.unit->type || (s.unit->type->flags & 0x800u) == 0)
+        if (!s.unit->object_present || !s.unit->type ||
+            (s.unit->type->flags & OA_UNIT_DEF_FLAG_CAN_FLY) == 0)
             result = 7;
         else if (order.phase == 0) {
             release_tracked_weapons(s, flags);
@@ -154,7 +159,7 @@ uint32_t TickHost::dispatch_mission(
             match.prepare_spatial_state();
             auto& projected = match.project_spatial(s);
             const bool airborne = (s.unit->flags & 3u) == 2;
-            if ((s.unit->type->flags & 0x800u) == 0 || !airborne) {
+            if ((s.unit->type->flags & OA_UNIT_DEF_FLAG_CAN_FLY) == 0 || !airborne) {
                 order.phase = 1;
                 order.wait_events |= weapon_wake_event | 1;
                 order.wake_tick = world.tick + random(0x1e) + 0x1e;
@@ -234,8 +239,10 @@ uint32_t TickHost::dispatch_mission(
             order.wake_tick = world.tick + static_cast<uint32_t>(step.wait_ticks);
         }
         result = step.result;
-    } else
-        unsupported("mission kind outside the ground order handlers");
+    } else {
+        match.fault_.note("mission kind outside the ground order handlers");
+        result = mission_fault_result;
+    }
     write_flags(s, flags);
     return result;
 }

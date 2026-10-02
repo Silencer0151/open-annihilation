@@ -43,7 +43,6 @@ constexpr uint8_t kSoundModeOff = 0;
 constexpr uint8_t kSoundModeTest = 1;
 constexpr uint8_t kSoundModeSpatial = 2;
 constexpr uint8_t kCdModeTrackType = 4;
-constexpr uint8_t kSessionMultiplayer = 3;
 
 void play(OptionsContext& context, std::string_view name) {
     if (context.host.play_sound != nullptr)
@@ -479,7 +478,7 @@ void options_enter_tabs(Panel& panel, OptionsContext& context) noexcept {
     if (context.in_game)
         context.realtime_panels = true;
     panel_set_grayed(panel, "MUSIC", context.audio_device_missing);
-    if (context.in_game && context.session_kind != kSessionMultiplayer)
+    if (context.in_game && context.session_kind != oa::data::campaign::SessionKind::multiplayer)
         context.hold_game = true;
 }
 

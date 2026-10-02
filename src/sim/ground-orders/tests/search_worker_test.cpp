@@ -418,7 +418,7 @@ int main() {
         CHECK(heap.insert({1, 2, 3, 4}) == 0);
         heap.pop();
         CHECK(heap.capacity() != 0 && heap.deferred_pop());
-        SearchCellGrid grid;
+        SearchCellGrid search_grid;
         std::vector<uint32_t> touched{0x11111111u};
         SearchPlayerJobState jobs;
         jobs.round_robin = 3;
@@ -431,12 +431,12 @@ int main() {
         jobs.base_heuristic = 2;
         jobs.slice_cost = 8;
         jobs.active_heuristic = 6;
-        construct_search(heap, grid, touched, jobs, 20, 13);
+        construct_search(heap, search_grid, touched, jobs, 20, 13);
         CHECK(heap.empty() && heap.allocated_slots() == 0 && heap.capacity() == 0);
         CHECK(heap.free_head() == -1 && !heap.deferred_pop());
-        CHECK(grid.width == 20 && grid.height == 13 && grid.count == 264);
-        CHECK(grid.cells.size() == 264);
-        for (const auto& cell : grid.cells)
+        CHECK(search_grid.width == 20 && search_grid.height == 13 && search_grid.count == 264);
+        CHECK(search_grid.cells.size() == 264);
+        for (const auto& cell : search_grid.cells)
             CHECK(cell.flags == 0 && cell.predecessor == 0 && cell.handle == 0);
         CHECK(touched.size() == 2 && touched[0] == 0 && touched[1] == 0);
         CHECK(jobs.tick_credit == search_tick_credit);
@@ -450,13 +450,13 @@ int main() {
             CHECK(jobs.job_picks[player] == 7);
         }
 
-        construct_search(heap, grid, touched, jobs, 7, 1);
-        CHECK(grid.width == 7 && grid.height == 1 && grid.count == 8);
-        CHECK(grid.cells.size() == 8 && touched.size() == 1 && touched[0] == 0);
+        construct_search(heap, search_grid, touched, jobs, 7, 1);
+        CHECK(search_grid.width == 7 && search_grid.height == 1 && search_grid.count == 8);
+        CHECK(search_grid.cells.size() == 8 && touched.size() == 1 && touched[0] == 0);
         CHECK(jobs.refresh_tick == 42);
 
-        construct_search(heap, grid, touched, jobs, 0, 5);
-        CHECK(grid.count == 0 && grid.cells.empty() && touched.empty());
+        construct_search(heap, search_grid, touched, jobs, 0, 5);
+        CHECK(search_grid.count == 0 && search_grid.cells.empty() && touched.empty());
         CHECK(jobs.tick_credit == search_tick_credit && jobs.refresh_tick == 42);
     }
 

@@ -25,10 +25,6 @@ int32_t sea_fixed(const World& world) noexcept {
     return static_cast<int32_t>(static_cast<uint32_t>(world.game.sea_level) << fixed_shift);
 }
 
-bool unit_active(const Unit& unit) noexcept {
-    return (unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & OA_UNIT_FLAG_DEATH_PENDING) == 0;
-}
-
 // An unordered (NaN) fraction also counts as zero.
 bool finished(const Unit& unit) noexcept {
     return !(unit.build_remaining < 0.0F) && !(unit.build_remaining > 0.0F);
@@ -93,19 +89,20 @@ void clear_sightings(Sightings& sightings) noexcept {
 }
 
 bool finished_unit(const Unit& unit) noexcept {
-    return unit_active(unit) && finished(unit);
+    return unit_is_live_target(unit.flags) && finished(unit);
 }
 
 bool sighting_candidate(const World& world, const Player& player, const Unit& unit) noexcept {
     uint8_t owner = 0;
-    return unit_active(unit) && owner_index(world, unit, owner) && !allied(player, owner);
+    return unit_is_live_target(unit.flags) && owner_index(world, unit, owner) &&
+           !allied(player, owner);
 }
 
 bool file_sighting(
     Sightings& sightings, const World& world, const Player& player, const Unit& unit, bool seen
 ) noexcept {
     uint8_t owner = 0;
-    if (!unit_active(unit) || !owner_index(world, unit, owner))
+    if (!unit_is_live_target(unit.flags) || !owner_index(world, unit, owner))
         return false;
     const auto slot = static_cast<uint16_t>(world_unit_slot(&world, &unit));
     if (!allied(player, owner)) {
@@ -131,7 +128,7 @@ bool sighted_within(
     for (uint32_t i = 0; i < sightings.seen_count; ++i) {
         const auto* unit = world_unit_at(&world, sightings.seen[i]);
         if (unit != nullptr && squared_distance_high(position, unit->position) <= reach &&
-            unit_active(*unit))
+            unit_is_live_target(unit->flags))
             return true;
     }
     return false;

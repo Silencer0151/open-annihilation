@@ -269,7 +269,7 @@ void synthetic_tests() {
     game.session_record[3] = 0;
     CampaignEnv env{&services, &game, 0, 0};
     auto* file = new CampaignFile;
-    std::memset(file, 0xcd, sizeof(*file));
+    std::memset(static_cast<void*>(file), 0xcd, sizeof(*file));
     campaign_file_construct(file, SessionKind::campaign, &env);
     expect(file->kind == SessionKind::campaign, "constructor stores the session kind");
     // campaign_kind returns the object's session kind: 1 for a campaign.
@@ -698,7 +698,10 @@ void directory_list_tests() {
     );
 
     char list[] = "d\0b\0c\0a";
-    char second[] = "4\0002\0003\0001";
+    char second[] = "4\0"
+                    "2\0"
+                    "3\0"
+                    "1";
     uint32_t keys[] = {1, 3, 2, 4};
     sort_paired_lists(list, second, keys, 4);
     expect(

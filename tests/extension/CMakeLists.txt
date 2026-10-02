@@ -24,8 +24,10 @@ option(OA_RECORD_EXTENSION_HOOKS
 if(OA_RECORD_EXTENSION_HOOKS)
   set(OA_RUNTIME_EXTENSION_MEMBERS "${CMAKE_CURRENT_SOURCE_DIR}/recorder_runtime_members.hpp" PARENT_SCOPE)
   add_library(oa-extension-recorder STATIC recorder.cpp)
-  target_link_libraries(oa-extension-recorder PRIVATE oa::extension-sdk oa-options)
+  add_library(oa::extension::recorder ALIAS oa-extension-recorder)
+  target_link_libraries(oa-extension-recorder PRIVATE oa::extension::sdk oa-options)
   add_library(oa-extension-recorder-follower STATIC follower.cpp)
+  add_library(oa::extension::recorder_follower ALIAS oa-extension-recorder-follower)
   target_link_libraries(oa-extension-recorder-follower PRIVATE oa-extension-recorder oa::app::headers
     oa-options)
   oa_add_extension(oa-extension-recorder-follower INIT oa_extension_init_recorder_follower)

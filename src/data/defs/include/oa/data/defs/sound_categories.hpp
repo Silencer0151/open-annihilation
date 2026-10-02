@@ -22,20 +22,20 @@ extern const char* const sound_event_keys[sound_event_count];
 
 // Alternatives for one event: KEY, KEY1, KEY2, ... and their KEYtext captions.
 struct SoundChoices {
-    int32_t count;
+    int32_t count{};
     char (*sounds)[sound_choice_capacity];
     char (*texts)[sound_choice_capacity];
 };
 
 // One sound category: its name and each event's sound choices.
 struct SoundCategory {
-    char name[64];
+    char name[64]{};
     SoundChoices events[sound_event_slots];
 };
 
 struct SoundCategoryTable {
-    SoundCategory* categories;
-    uint32_t count;
+    SoundCategory* categories{};
+    uint32_t count{};
 };
 
 /// Appends the sound a key names, and its "<key>text" caption, to an event's alternatives.
@@ -89,9 +89,9 @@ inline constexpr std::size_t allsound_sound_capacity = 0x100;
 
 // The named-sound cache (counted by Game.sound_count) the allsound entries go into.
 struct SoundCache {
-    void* context;
-    void (*clear)(void* context);
-    void (*add)(void* context, const char* name, const char* sound);
+    void* context{};
+    void (*clear)(void* context) = nullptr;
+    void (*add)(void* context, const char* name, const char* sound) = nullptr;
 };
 
 /// Refills the named-sound cache from GAMEDATA/ALLSOUND.TDF, then loads the sound categories.

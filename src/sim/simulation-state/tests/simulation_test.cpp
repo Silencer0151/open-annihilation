@@ -108,18 +108,18 @@ int main() {
     TestWorld near(11, 1);
     auto& units = near.units;
     auto& ghost = units[1];
-    ghost.flags = 0x10000000;
+    ghost.flags = OA_UNIT_FLAG_LIVE;
     units[2].flags = 0x10000003;
     units[2].position = {3 << 16, -1, 0};
     units[3].flags = 0x10000003;
     units[3].position = {2 << 16, 0, 0};
     auto& ally = units[4];
-    ally.flags = 0x10000000;
+    ally.flags = OA_UNIT_FLAG_LIVE;
     units[6].flags = 0x10000002;
     units[7].flags = 0x10008000;
-    units[8].flags = 0x10000000;
+    units[8].flags = OA_UNIT_FLAG_LIVE;
     units[8].state_flags = 4;
-    units[9].flags = 0x10000000;
+    units[9].flags = OA_UNIT_FLAG_LIVE;
     auto& closer = units[10];
     closer.flags = 0x10000001;
     closer.position = {1 << 16, 0x7fffffff, 0};
@@ -160,9 +160,9 @@ int main() {
     one.player(0).in_use = 1;
     one.player(0).status = 1;
     one.range(0, 1, 2);
-    one.units[1].flags = 0x10000000;
+    one.units[1].flags = OA_UNIT_FLAG_LIVE;
     one.units[1].position = {0x00018000, 0, 0};
-    one.units[2].flags = 0x10000000;
+    one.units[2].flags = OA_UNIT_FLAG_LIVE;
     one.units[2].position = {0x00010000, 0, 0};
     CHECK(nearest_candidate_unit(*one, open, 0, 0) == &one.units[2]);
     one.units[1].position = {2 << 16, 0, 0};
@@ -277,13 +277,7 @@ int main() {
     q.primary = &a;
     a = {};
     h.handler = [](Unit&, Order&) { return 2; };
-    bool exhausted = false;
-    try {
-        primary_orders(w, q, u, h, 4);
-    } catch (const std::runtime_error&) {
-        exhausted = true;
-    }
-    CHECK(exhausted);
+    CHECK(primary_orders(w, q, u, h, 4) == StepFault::order_budget_spent);
     q.primary = nullptr;
     h.handler = {};
     u.owner = 0;

@@ -333,9 +333,9 @@ std::unique_ptr<oa::World> owning_world(oa::Unit& unit, uint8_t color, int32_t g
 
 // The fragment record and arena slot built for the pieces below.
 struct Shard {
-    int16_t slot;
+    int16_t slot{};
     FixedVec3 velocity;
-    int32_t rates[3];
+    int32_t rates[3]{};
     FixedVec3 carried;
     FixedVec3 points[fragment_point_count];
 };

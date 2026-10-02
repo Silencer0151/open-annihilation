@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -163,7 +164,9 @@ void Runtime::begin_loop_frame() {
         frame_pacing::frame_allowance_ns(frame_stats_notes().paced_frames_per_second, frame_wait_);
     frame_time_ns_ = begin_paced_frame(frame_pacer_, frame_clock_ns());
     loop_frame_time_ = true;
-    (void)roll_frame_stats(frame_stats_, now);
+    // The statistics are drawn from the shown second whenever they are
+    // drawn, so whether this frame ended a second does not matter here.
+    std::ignore = roll_frame_stats(frame_stats_, now);
     // A gap of a second or more (the loop waited for the window's focus) is
     // no frame's time.
     if (previous_loop_frame_start_ns_ != 0 && now > previous_loop_frame_start_ns_ &&
@@ -679,7 +682,8 @@ void Runtime::check_console_stats(const std::function<void(const char*)>& enter_
     frame_stats_ = {};
     frame_stats_.allowance_ns = allowance;
     uint64_t now = 0;
-    (void)roll_frame_stats(frame_stats_, now);
+    // The synthetic seconds are read once they are all rolled.
+    std::ignore = roll_frame_stats(frame_stats_, now);
     for (int frame = 0; now < kSeconds * frame_pacing::kNanosecondsPerSecond; ++frame) {
         const uint64_t frame_ns = frame % kSlowEvery == kSlowEvery - 1   ? slow
                                   : frame % kLateEvery == kLateEvery - 1 ? late
@@ -687,7 +691,7 @@ void Runtime::check_console_stats(const std::function<void(const char*)>& enter_
         now += frame_ns;
         note_frame_measure(frame_stats_, FrameMeasure::frame, frame_ns);
         note_frame_measure(frame_stats_, FrameMeasure::work, frame_ns);
-        (void)roll_frame_stats(frame_stats_, now);
+        std::ignore = roll_frame_stats(frame_stats_, now);
     }
     note_frame_measure(frame_stats_, FrameMeasure::frame, last);
     const auto synthetic = frame_stats_;

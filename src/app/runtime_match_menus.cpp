@@ -3,6 +3,7 @@
 
 // In-match HUD layout, pause, outcome and options menus.
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/sim/speed.hpp"
@@ -37,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -615,7 +617,9 @@ int save_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenI
     } else if (input.key == SDLK_ESCAPE) {
         overlay.panel.selected = ui::panel_find(overlay.panel, "CANCEL");
         overlay.context = ctx;
-        (void)ui::savegame_on_save_click(overlay.panel, overlay.saves);
+        // CANCEL only plays its sound and asks for the dialog to close, which
+        // follows.
+        std::ignore = ui::savegame_on_save_click(overlay.panel, overlay.saves);
         overlay.context = nullptr;
         static_cast<Runtime*>(ctx->host)->close_save_dialog();
     }
@@ -699,7 +703,8 @@ void load_overlay_text(
     std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height);
     std::vector<uint8_t> coverage(pixels.size());
     const oa::formats::fnt::IndexedSurface target{width, height, width, pixels, coverage};
-    (void)oa::formats::fnt::raster_text(target, *overlay.font, text, x, y);
+    // Where the pen stops is not needed: the text is copied out whole.
+    std::ignore = oa::formats::fnt::raster_text(target, *overlay.font, text, x, y);
     // The font's indices are shown in the palette the dialog is drawn in.
     const auto& palette = static_cast<const Runtime*>(ctx->host)->screen_palette();
     for (std::size_t offset = 0; offset < pixels.size(); ++offset) {
@@ -1137,14 +1142,16 @@ void register_load_game_screens(ScreenRegistry* registry) {
     load_game.event = load_overlay_event;
     load_game.tick = load_overlay_tick;
     load_game.draw = load_overlay_draw;
-    (void)overlay_register(registry, &load_game);
+    // A refused overlay is recorded in the registry, and register_screens
+    // reports it once every screen and overlay is in.
+    overlay_register(registry, &load_game);
     // The match frame draws the lightbar itself (draw_options_lightbar).
     OverlayDesc lightbar{};
     lightbar.name = "options_lightbar";
     lightbar.screen = screen_id(Screen::match);
     lightbar.z = 0;
     lightbar.tick = options_lightbar_tick;
-    (void)overlay_register(registry, &lightbar);
+    overlay_register(registry, &lightbar);
 }
 
 void Runtime::open_save_dialog(Screen parent) {
@@ -1566,7 +1573,8 @@ void Runtime::present_match_outcome() {
 }
 
 void Runtime::finish_match_outcome() {
-    if (extension_.outcome_ready != nullptr && !extension_.outcome_ready(extension_.context, *this))
+    if (extension_.outcome_ready != nullptr &&
+        !call_hook_or_raise<&Extension::outcome_ready>(extension_, *this))
         return;
     keep_finished_match();
     leave_match();
@@ -1595,7 +1603,7 @@ const char* Runtime::campaign_end_background() {
 
 void Runtime::enter_campaign_end() {
     auto& session = end_mission_session();
-    session.env = campaign_object_env();
+    session.env = campaign_dialog_env();
     auto& context = session.context;
     context = {};
     context.host.context = this;
@@ -1685,7 +1693,9 @@ void Runtime::open_end_panel(oa::ui::campaign::ScoreLayout* reopened) {
 void Runtime::close_end_panel() {
     auto& session = end_mission_session();
     session.panel.selected = ui::kNoSelection;
-    (void)ui::end_mission_on_click(session.panel, session.context);
+    // With nothing selected the click closes the panel and asks for nothing
+    // more.
+    std::ignore = ui::end_mission_on_click(session.panel, session.context);
     end_mission_rows_.clear();
 }
 
@@ -2971,7 +2981,9 @@ void Runtime::restart_match() {
             const auto& map = runtime.skirmish_settings_.map_name;
             if (runtime.select_map(map) == 0)
                 throw std::runtime_error("the skirmish map '" + map + "' is not available");
-            (void)runtime.map_player_capacity();
+            // It keeps the map's start markers for the refilled slots; the
+            // count itself is not needed.
+            std::ignore = runtime.map_player_capacity();
         });
     };
     // A restart plays at the limit the match was started with, whatever the
@@ -2992,7 +3004,9 @@ void Runtime::restart_match() {
                 runtime.enter_match_view();
         });
     };
-    (void)ui::ingame_run_restart(session.ingame, state_, host);
+    // Which way the restart went is not needed: a restart that fails leaves
+    // no match on screen, and that is reported below.
+    std::ignore = ui::ingame_run_restart(session.ingame, state_, host);
     // The restart request, which the in-game menu keeps in place of
     // Game.restart_requested, clears as the restarted game loads.
     session.ingame.restart_requested = false;
@@ -3243,7 +3257,7 @@ void Runtime::bind_options_context() {
         context.hold_game = false;
     }
     const bool multiplayer = (current_extension_state() & extension_state::multiplayer) != 0;
-    context.session_kind = static_cast<uint8_t>(ingame_session(campaign_mission_, multiplayer));
+    context.session_kind = ingame_session(campaign_mission_, multiplayer);
     // A watcher's game speed slider is locked.
     context.game_speed_locked = (current_extension_state() & extension_state::local_watcher) != 0;
     context.host = {};
@@ -3306,14 +3320,14 @@ void Runtime::bind_options_context() {
             if (!runtime.match_)
                 return;
             auto& world = runtime.match_->state();
-            (void)oa::sim::speed::set_speed(world, speed, runtime.message_hooks());
+            // The speed set is read back from the Game block below.
+            std::ignore = oa::sim::speed::set_speed(world, speed, runtime.message_hooks());
             runtime.match_timing_.requested_rate = world.game.requested_speed;
             runtime.match_timing_.actual_rate = world.game.current_speed;
             runtime.preferences_.current_game_speed = world.game.current_speed;
-            if (runtime.extension_.speed_changed != nullptr)
-                runtime.extension_.speed_changed(
-                    runtime.extension_.context, runtime, world.game.requested_speed
-                );
+            call_hook_or_report<&Extension::speed_changed>(
+                runtime.extension_, runtime.hook_error_report(), runtime, world.game.requested_speed
+            );
         };
 
     // The OPTIONS lightbar: the top panel's own picture as FLIPSURFACE. Over
@@ -3379,7 +3393,9 @@ void Runtime::bind_options_context() {
         panel_from_widgets(panel, runtime.resources_.layout, runtime.widget_text_stages_);
     };
     context.host.load_background = [](void* host, const char* name) {
-        (void)static_cast<Runtime*>(host)->load_named_background(name, false, false, false);
+        // A bitmap that cannot be read throws; whether the backdrop changed
+        // is not needed.
+        std::ignore = static_cast<Runtime*>(host)->load_named_background(name, false, false, false);
     };
 }
 
@@ -3559,7 +3575,9 @@ void Runtime::activate_options_gadget() {
                  "anims/commongui.gaf",
                  "anims/commongui.gaf"}
             );
-            (void)load_named_background(background.c_str(), false, false, false);
+            // A bitmap that cannot be read throws, as the screen's other
+            // files do; whether the backdrop changed is not needed.
+            std::ignore = load_named_background(background.c_str(), false, false, false);
             auto parsed = oa::ui::gui_layout::parse(assets_.read("guis/" + sub).bytes);
             if (!parsed.ok())
                 throw std::runtime_error(

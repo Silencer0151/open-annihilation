@@ -14,6 +14,7 @@
 #include "oa/netgame/session.hpp"
 #include "oa/netgame/socket_host.hpp"
 #include "oa/netgame/network.hpp"
+#include "oa/base/text.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -146,7 +147,7 @@ void emit_frame(void* context, uint32_t from, uint32_t to, const uint8_t* frame,
 
 std::vector<uint8_t> chat_record(const char* text) {
     ChatRecord chat{};
-    std::strncpy(chat.text, text, sizeof chat.text - 1);
+    oa::base::text::copy_padded(chat.text, text, sizeof chat.text - 1);
     std::vector<uint8_t> bytes(record_length_table[static_cast<uint8_t>(RecordType::chat)]);
     std::size_t written = 0;
     CHECK(encode_record(chat, bytes.data(), bytes.size(), &written) == WireError::ok);
@@ -363,8 +364,8 @@ void native_host_and_client_play_over_loopback() {
     ses::session_uninit(client.get());
     sock::host_close(host_machine.get());
     sock::host_close(client_machine.get());
-    for (auto& host : g_hosts)
-        host = nullptr;
+    for (auto& machine_host : g_hosts)
+        machine_host = nullptr;
 }
 
 // A client that searches (a blank address) finds a game hosted on the same
@@ -411,8 +412,8 @@ void client_search_finds_host_on_this_machine() {
     ses::session_uninit(client.get());
     sock::host_close(host_machine.get());
     sock::host_close(client_machine.get());
-    for (auto& host : g_hosts)
-        host = nullptr;
+    for (auto& machine_host : g_hosts)
+        machine_host = nullptr;
 }
 
 /// Pumps every machine until a condition holds or the wait limit passes.

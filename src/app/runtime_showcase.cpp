@@ -271,7 +271,8 @@ void Runtime::run_showcase() {
     // it, as SDL delivers them.
     int window_width = 0;
     int window_height = 0;
-    (void)SDL_GetWindowSize(sdl_.window, &window_width, &window_height);
+    if (!SDL_GetWindowSize(sdl_.window, &window_width, &window_height))
+        fail(std::string("cannot read the window's size: ") + SDL_GetError());
     float pointer_x = static_cast<float>(window_width) / 2.0F;
     float pointer_y = static_cast<float>(window_height) / 2.0F;
     const auto send = [&](SDL_EventType type, uint8_t button) {

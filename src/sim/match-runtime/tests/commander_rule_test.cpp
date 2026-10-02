@@ -6,6 +6,7 @@
 // multiplayer game's victory test and abandoned-game countdown.
 #include "combat_fixture.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -52,7 +53,7 @@ void kill_board_ranking() {
 
         // Side 0, every setup record's side here, names the type as its
         // commander.
-        std::strcpy(game.sides[0].commander, "testunit");
+        oa::base::text::copy_terminated(game.sides[0].commander, "testunit");
         auto& commander = f.spawn(0, 64, 96);
         game.graphics_flags = 0x80;
         kill(f, commander, winner);
@@ -74,7 +75,7 @@ void bind_setup(Fixture& f) {
     world.player_info[1].role = setup_role_host;
     world.player_info[1].energy_hundreds = 12;
     world.player_info[1].metal_hundreds = 7;
-    std::strcpy(world.game.sides[0].commander, "testunit");
+    oa::base::text::copy_terminated(world.game.sides[0].commander, "testunit");
 }
 
 struct RespawnNotices {
@@ -158,7 +159,7 @@ void skirmish_respawn_reads_the_eleventh_record() {
         sim::visibility_state::terrain_mapping | sim::visibility_state::update_sight_grid
     );
     world.player_info[0].side = 0;
-    std::strcpy(world.game.sides[0].commander, "testunit");
+    oa::base::text::copy_terminated(world.game.sides[0].commander, "testunit");
     CHECK(sim::scenario::host_player_index(world) == OA_PLAYER_COUNT);
     CHECK(world.game.no_player.index == OA_PLAYER_COUNT);
     CHECK(world_player_info(&world, &world.game.no_player) == &world.player_info[OA_PLAYER_COUNT]);
@@ -323,7 +324,11 @@ void defeated_player_watches() {
             CHECK(notices.announcements == 0 && notices.notices == 0);
             continue;
         }
-        CHECK((world.game.visibility_flags & 0x07) == 0x04);
+        CHECK(
+            (world.game.visibility_flags & (OA_VISIBILITY_MAPPING | OA_VISIBILITY_LINE_OF_SIGHT |
+                                            OA_VISIBILITY_ALTITUDE_SIGHT)) ==
+            OA_VISIBILITY_ALTITUDE_SIGHT
+        );
         CHECK(notices.announcements == 1 && notices.notices == 1);
         CHECK(
             notices.last == (which == Case::allowed

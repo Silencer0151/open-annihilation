@@ -128,7 +128,7 @@ void host_stage(const FrontendHost* host, const char* name, uint8_t stage) {
 }
 
 void campaign_setup_init(CampaignSetup* setup) {
-    std::memset(setup, 0, sizeof(*setup));
+    std::memset(static_cast<void*>(setup), 0, sizeof(*setup));
     setup->player_side[1] = 1;
     setup->player_color[1] = 1;
 }

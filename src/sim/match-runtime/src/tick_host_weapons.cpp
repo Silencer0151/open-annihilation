@@ -35,8 +35,10 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
             if (!weapon_slot.target_a)
                 return false;
             const auto target_index = static_cast<uint16_t>(weapon_slot.target_a);
-            if (target_index >= match.slots_.size())
-                throw std::out_of_range("weapon target outside pool");
+            if (target_index >= match.slots_.size()) {
+                match.fault_.note("weapon target outside pool");
+                return false;
+            }
             auto& target = match.slots_[target_index];
             if (!target.unit->record.type_index) {
                 match.stop_weapon(source, index);

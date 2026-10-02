@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/world_renderer/world_camera.hpp"
+#include "oa/core/map_plot.h"
 
 #include <cstdint>
 
@@ -199,8 +200,8 @@ void mouse_look_begin(Game& game, const CursorSink& cursor) noexcept {
     game.mouse_look_active = 1;
     for (int32_t word = 0; word < pointer_state_words; ++word)
         game.saved_pointer_state[word] = game.pointer_state[word];
-    game.mouse_look_cell_x = camera_x(game) / map_cell_pixels;
-    game.mouse_look_cell_y = camera_y(game) / map_cell_pixels;
+    game.mouse_look_cell_x = camera_x(game) / OA_MAP_CELL_PIXELS;
+    game.mouse_look_cell_y = camera_y(game) / OA_MAP_CELL_PIXELS;
     const auto width = cursor.screen_width != nullptr ? cursor.screen_width(cursor.user) : 0;
     game.mouse_look_anchor_x = width / 2;
     const auto height = cursor.screen_height != nullptr ? cursor.screen_height(cursor.user) : 0;
@@ -230,13 +231,13 @@ void mouse_look_update(Game& game, const CursorSink& cursor) noexcept {
     camera_set_position(
         game,
         ((state[0] - anchor_x) / mouse_look_pixels_per_cell + game.mouse_look_cell_x) *
-            map_cell_pixels,
+            OA_MAP_CELL_PIXELS,
         ((state[1] - anchor_y) / mouse_look_pixels_per_cell + game.mouse_look_cell_y) *
-            map_cell_pixels,
+            OA_MAP_CELL_PIXELS,
         0
     );
-    game.mouse_look_cell_x = camera_x(game) / map_cell_pixels;
-    game.mouse_look_cell_y = camera_y(game) / map_cell_pixels;
+    game.mouse_look_cell_x = camera_x(game) / OA_MAP_CELL_PIXELS;
+    game.mouse_look_cell_y = camera_y(game) / OA_MAP_CELL_PIXELS;
     if (cursor.set_position != nullptr)
         cursor.set_position(cursor.user, anchor_x, anchor_y);
     if ((static_cast<uint32_t>(state[2]) & pointer_button_look) == 0)
@@ -277,8 +278,8 @@ bool radar_view_rect(const Game& game, Rect32& rect) noexcept {
     const int32_t radar_h = game.radar_height;
     rect.x1 = radar_w * camera_x(game) / map_w + game.radar_offset_x;
     rect.y1 = radar_h * camera_y(game) / map_h + game.radar_offset_y;
-    rect.x2 = radar_w * game.view_cells_width * map_cell_pixels / map_w - 1 + rect.x1;
-    rect.y2 = radar_h * game.view_cells_height * map_cell_pixels / map_h - 1 + rect.y1;
+    rect.x2 = radar_w * game.view_cells_width * OA_MAP_CELL_PIXELS / map_w - 1 + rect.x1;
+    rect.y2 = radar_h * game.view_cells_height * OA_MAP_CELL_PIXELS / map_h - 1 + rect.y1;
     return true;
 }
 

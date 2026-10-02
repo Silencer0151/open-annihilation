@@ -14,6 +14,11 @@ key byte is rotated left by two bits; every later encrypted byte is XORed with
 that key and the low byte of its absolute file position. A zero key leaves the
 archive plaintext.
 
+`HpiArchive::open` reads an archive through an `ArchiveSource` that the code
+opening it supplies: the asset store's open file, or bytes in memory. It does
+not open files itself; a malformed archive comes back as a `DecodeError` at
+its archive offset, as entry reads do.
+
 The directory consists of absolute offsets to directory nodes, nine-byte
 entries, names, and file records. Paths returned by `entries()` use `/`
 separators. Lookup by `read()` is ASCII case-insensitive and accepts either

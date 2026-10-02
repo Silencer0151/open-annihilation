@@ -3,9 +3,10 @@
 
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -70,14 +71,6 @@ struct ParseLimits {
     std::size_t max_name_bytes = 4096;
 };
 
-struct ParseResult {
-    std::optional<CobProgram> program;
-    std::string error;
-
-    /// Returns whether a program was parsed.
-    explicit operator bool() const noexcept { return program.has_value(); }
-};
-
 /// Decodes a COB image into its code, entry, name and piece tables.
 ///
 /// The table offsets are copied into bounded tables; overlapping or
@@ -86,14 +79,14 @@ struct ParseResult {
 ///
 /// @param bytes the whole COB file
 /// @param limits allocation and count bounds
-/// @return the program and its file hash, or an error message
-[[nodiscard]] ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits = {});
-
-/// Loads and decodes a COB from a host file path.
-///
-/// @param path host file path
-/// @param limits allocation and count bounds; max_file_bytes also bounds the read
-/// @return the program, or an error message when the file cannot be read or parsed
-[[nodiscard]] ParseResult load_cob_file(const char* path, const ParseLimits& limits = {});
+/// @return the program, with a file hash of zero for the caller to record;
+///         or, at its file offset, truncated for a file shorter than its
+///         header, limit_exceeded for a file or count over its bound,
+///         unsupported_version for a version other than 4 or a non-zero
+///         sound count, malformed for sections out of order, or
+///         out_of_range for a section, entry point or name outside the
+///         file, its section or the name pool
+[[nodiscard]] base::bytes::Decoded<CobProgram>
+parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits = {});
 
 } // namespace oa::formats::cob

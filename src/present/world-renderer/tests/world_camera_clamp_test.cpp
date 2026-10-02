@@ -8,6 +8,7 @@
 // does today.
 
 #include "oa/present/world_renderer/world_camera.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/present/world_renderer/world_radar.hpp"
 
 #include <cstdint>
@@ -103,8 +104,8 @@ void set_map_and_view(
     game.map_pixel_height = height;
     game.viewport_width = viewport_width;
     game.viewport_height = viewport_height;
-    game.view_cells_width = viewport_width / wr::map_cell_pixels;
-    game.view_cells_height = viewport_height / wr::map_cell_pixels;
+    game.view_cells_width = viewport_width / OA_MAP_CELL_PIXELS;
+    game.view_cells_height = viewport_height / OA_MAP_CELL_PIXELS;
 }
 
 /// Allocates a zeroed Game block set up with the synthetic map, view and its radar.

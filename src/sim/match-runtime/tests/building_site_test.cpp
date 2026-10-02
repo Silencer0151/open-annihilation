@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
+#include "oa/test/match_services.hpp"
 using namespace oa;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -13,30 +14,9 @@ using namespace oa;
             throw std::runtime_error(#x);                                                          \
     } while (false)
 
-struct Services : sim::match_runtime::OfflineServices {
-#define UNEXPECTED(type, name, args)                                                               \
-    type name args override {                                                                      \
-        throw std::runtime_error("unexpected " #name);                                             \
-    }
-    UNEXPECTED(void, activation_sound, (sim::unit_spawn::Slot&, sim::unit_activation::Sound))
-    UNEXPECTED(void, command_sound, (sim::unit_spawn::Slot&, uint32_t))
-    UNEXPECTED(void, attachment_notification, (sim::unit_spawn::Slot&, uint32_t))
-    UNEXPECTED(void, refresh_selected_unit, (sim::unit_spawn::Slot&))
-    UNEXPECTED(void, emit_sfx, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, explode_piece, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
-    UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
-    UNEXPECTED(void, refresh_plot_height_range, (std::array<int16_t, 2>, std::array<int16_t, 2>))
-    UNEXPECTED(void, notify_object_footprint_removed, (oa::sim::spatial_state::Unit&, uint32_t))
-    UNEXPECTED(void, notify_footprint_changed, (std::array<int16_t, 2>, std::array<int16_t, 2>))
-#undef UNEXPECTED
-};
+using Services = oa::test::StrictServices;
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 int main() {
     formats::tnt::Map map;

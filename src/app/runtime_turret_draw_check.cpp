@@ -5,6 +5,7 @@
 // several frames, is drawn with exactly its current pieces.
 #include "oa/app/runtime.hpp"
 #include "oa/present/model/model_draw.hpp"
+#include "match_fault.hpp"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -128,7 +129,7 @@ void Runtime::check_turret_draws(const fs::path& report_directory) {
     const auto tick = [&] {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
     };
     const auto set_zoom = [&](float zoom) {
         match_zoom_ = zoom;

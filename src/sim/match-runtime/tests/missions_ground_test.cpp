@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
+#include "oa/base/text.hpp"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -26,7 +28,7 @@ constexpr uint8_t repair_unit_kind = 35;
 constexpr uint8_t standby_mine_kind = 42;
 constexpr int32_t map_cells = 32;
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<uint32_t> speech;
     uint32_t footprint_changes{};
     uint32_t refreshes{};
@@ -45,34 +47,14 @@ struct Services : sim::match_runtime::OfflineServices {
 
     std::string caption; // the last speech's caption; empty for none
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
     void refresh_selected_unit(sim::unit_spawn::Slot&) override { ++refreshes; }
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
 
     void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {
         ++footprint_changes;
     }
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Dispatches the order once and applies the sweep's phase rule for results 0 and 1.
 uint32_t step(
@@ -81,7 +63,7 @@ uint32_t step(
     sim::simulation_state::Order& order,
     uint32_t events = 0
 ) {
-    sim::match_runtime::TickHost host(match);
+    sim::match_runtime::MatchTickAccess host(match);
     order.wait_events = 0;
     const auto result = host.dispatch_mission(match.state(), unit.record, order, events);
     if (result == 0)
@@ -112,18 +94,18 @@ void place_features(std::vector<sim::spatial_state::Plot>& plots) {
 
 std::vector<FeatureDef> feature_table() {
     std::vector<FeatureDef> table(3);
-    std::strcpy(table[0].name, "ROCK01");
+    oa::base::text::copy_terminated(table[0].name, "ROCK01");
     table[0].footprint_x = table[0].footprint_z = 2;
     table[0].height = 10;
     table[0].energy = 10.0F;
     table[0].metal = 50.0F;
     table[0].flags = OA_FEATURE_FLAG_RECLAIMABLE | OA_FEATURE_FLAG_AUTO_RECLAIMABLE;
-    std::strcpy(table[1].name, "ARMPW_DEAD");
+    oa::base::text::copy_terminated(table[1].name, "ARMPW_DEAD");
     table[1].footprint_x = table[1].footprint_z = 1;
     table[1].metal = 20.0F;
     table[1].flags = OA_FEATURE_FLAG_RECLAIMABLE;
     // Tree1 of the green world: energy only.
-    std::strcpy(table[2].name, "TREE1");
+    oa::base::text::copy_terminated(table[2].name, "TREE1");
     table[2].footprint_x = table[2].footprint_z = 1;
     table[2].height = 40;
     table[2].energy = 250.0F;
@@ -244,7 +226,10 @@ int main() {
         CHECK(step(match, *builder, order, sim::ground_orders::path_failed_event) == 8);
         order.phase = 1;
         CHECK(step(match, *builder, order) == 1);
-        CHECK((order.flags & 0x40) && (builder->record.build_flags & 1));
+        CHECK(
+            (order.flags & sim::match_runtime::MatchTickAccess::building_flag) &&
+            (builder->record.build_flags & 1)
+        );
         CHECK(step(match, *builder, order) == 1 && order.phase == 3);
         services.speech.clear();
         CHECK(step(match, *builder, order) == 2);
@@ -474,14 +459,14 @@ int main() {
         };
         auto& order =
             match.insert_ground_order(builder_id, sim::match_runtime::wait_kind, std::nullopt, 40);
-        sim::match_runtime::TickHost host(match);
-        order.flags |= 0x40;
+        sim::match_runtime::MatchTickAccess host(match);
+        order.flags |= sim::match_runtime::MatchTickAccess::building_flag;
         host.stop_building(*builder, order);
-        CHECK((order.flags & 0x40) == 0);
+        CHECK((order.flags & sim::match_runtime::MatchTickAccess::building_flag) == 0);
         CHECK(forwarded.count == 1 && forwarded.unit == builder_id && forwarded.function == 1);
         CHECK(forwarded.arguments == 0 && forwarded.locals == (std::array<uint32_t, 4>{}));
         host.stop_building(*builder, order);
-        CHECK((order.flags & 0x40) == 0);
+        CHECK((order.flags & sim::match_runtime::MatchTickAccess::building_flag) == 0);
         CHECK(forwarded.count == 1);
         match.multiplayer = {};
         match.stop_orders(builder_id);
@@ -495,24 +480,24 @@ int main() {
         oa::UnitDef def{};
         def.move_rate1 = 2 << 16;
         def.move_rate2 = 4 << 16;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 0);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 0);
         movement.turn = 1;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 1);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 1);
         movement.speed = 2 << 16;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 1);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 1);
         movement.speed = (2 << 16) + 1;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 2);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 2);
         movement.speed = 4 << 16;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 2);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 2);
         movement.speed = (4 << 16) + 1;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 3);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 3);
         movement.speed = -(8 << 16);
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 1);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 1);
         movement.flags = 0x04;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 0);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 0);
         movement.flags = 0;
         unit.attach_parent = 1;
-        CHECK(sim::match_runtime::movement_rate(movement, unit, def) == 0);
+        CHECK(sim::match_runtime::MatchTickAccess::movement_rate(movement, unit, def) == 0);
     }
 
     // PATROL given to a type with the repair bit is RepairPatrol (command 9). With energy in store the builder repairs the raised ARMPW

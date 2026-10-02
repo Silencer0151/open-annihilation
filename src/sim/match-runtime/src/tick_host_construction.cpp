@@ -21,8 +21,8 @@ TickHost::ConstructionAdapter::health_type(sim::unit_spawn::Slot& s) const {
 
 void TickHost::ConstructionAdapter::refresh_selected() {
     if (source.record.owner_index == host.match.world_.viewpoint_player &&
-        (source.unit->flags & 0x10))
-        host.match.selection_.frame_flags |= 0x10;
+        (source.unit->flags & OA_UNIT_FLAG_SELECTED))
+        host.match.selection_.frame_flags |= OA_FRAME_FLAG_REFRESH_ORDER_PANEL;
 }
 
 bool TickHost::ConstructionAdapter::site_clear() {
@@ -52,8 +52,10 @@ bool TickHost::ConstructionAdapter::site_clear() {
 
 void TickHost::ConstructionAdapter::snap_build_height() {
     const auto index = static_cast<uint16_t>(record.construction.type_index);
-    if (index >= host.match.world_.types.size())
-        throw std::out_of_range("construction type is not loaded");
+    if (index >= host.match.world_.types.size()) {
+        host.match.fault_.note("construction type is not loaded");
+        return;
+    }
     if (host.match.world_.types[index].bm_code != 0)
         return;
     const auto fx = footprint_x();
@@ -67,8 +69,10 @@ void TickHost::ConstructionAdapter::snap_build_height() {
     };
     const auto yard = host.match.input_.fields[index].yard_mask;
     if (fx < 0 || fz < 0 ||
-        yard.size() < static_cast<std::size_t>(fx) * static_cast<std::size_t>(fz))
-        throw std::invalid_argument("building yard map does not cover its footprint");
+        yard.size() < static_cast<std::size_t>(fx) * static_cast<std::size_t>(fz)) {
+        host.match.fault_.note("building yard map does not cover its footprint");
+        return;
+    }
     const auto height = sim::spatial_state::footprint_build_height(
         fx,
         fz,
@@ -95,7 +99,7 @@ sim::simulation_state::Unit* TickHost::ConstructionAdapter::spawn_nanoframe() {
     auto* created = host.match.create(request);
     if (!created)
         return nullptr;
-    created->unit->flags |= 0x10000020u;
+    created->unit->flags |= OA_UNIT_FLAG_LIVE | OA_UNIT_FLAG_SELECTABLE;
     record.construction.target = created->unit;
     return created->unit;
 }
@@ -199,15 +203,19 @@ float TickHost::ConstructionAdapter::build_decay_rate(int32_t ticks) const {
 
 int16_t TickHost::ConstructionAdapter::footprint_x() const {
     const auto index = static_cast<uint16_t>(record.construction.type_index);
-    if (index >= host.match.world_.types.size())
-        throw std::out_of_range("construction type is not loaded");
+    if (index >= host.match.world_.types.size()) {
+        host.match.fault_.note("construction type is not loaded");
+        return 0;
+    }
     return host.match.world_.types[index].footprint_x;
 }
 
 int16_t TickHost::ConstructionAdapter::footprint_z() const {
     const auto index = static_cast<uint16_t>(record.construction.type_index);
-    if (index >= host.match.world_.types.size())
-        throw std::out_of_range("construction type is not loaded");
+    if (index >= host.match.world_.types.size()) {
+        host.match.fault_.note("construction type is not loaded");
+        return 0;
+    }
     return host.match.world_.types[index].footprint_z;
 }
 

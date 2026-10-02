@@ -12,7 +12,8 @@ nothing.
 Binding a COB case-insensitively moves matching 3DO pieces into the COB
 piece-name prefix, then rebuilds hierarchy links after that reorder.
 `make_instance` performs both operations, ignoring COB names beyond the model
-piece count as 3.1c does. `ModelHost` implements the model portion of the
+piece count as 3.1c does. A model whose hierarchy `model_hierarchy_error`
+refuses gives an instance with no pieces. `ModelHost` implements the model portion of the
 script VM Host; gameplay callbacks remain abstract for match-runtime.
 
 `attachment_position` accumulates piece offsets through the three pair

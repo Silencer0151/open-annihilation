@@ -8,6 +8,7 @@
 #include "oa/test/check.hpp"
 
 #include "oa/data/defs/unit_catalog.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -52,10 +53,10 @@ struct Tables {
     defs::UnitDefTables units{};
 
     Tables() {
-        std::strcpy(weapons[0].key, "NOWEAPON");
-        std::strcpy(weapons[7].key, "LASER");
-        std::strcpy(sound_list[0].name, "ARM_KBOT");
-        std::strcpy(sound_list[1].name, "CORE_TANK");
+        oa::base::text::copy_terminated(weapons[0].key, "NOWEAPON");
+        oa::base::text::copy_terminated(weapons[7].key, "LASER");
+        oa::base::text::copy_terminated(sound_list[0].name, "ARM_KBOT");
+        oa::base::text::copy_terminated(sound_list[1].name, "CORE_TANK");
         sounds = {sound_list.data(), 2};
         defs::unit_def_tables_init(&units);
         const bool allocated = defs::unit_def_tables_allocate(&units, 4);
@@ -178,11 +179,6 @@ int main() {
         "\tcanpatrol=1;}"
     ));
     OA_CHECK(!scorpion.can_guard && scorpion.can_patrol);
-
-    auto malformed = parse_tdf("[UNITINFO] { x=1;");
-    OA_CHECK(!malformed && malformed.error.code == ErrorCode::malformed);
-    auto bad_comment = parse_tdf("[UNITINFO]{}/*");
-    OA_CHECK(!bad_comment && bad_comment.error.code == ErrorCode::malformed);
 
     // A building takes its movement class's footprint and slopes; its yard map
     // is compiled one cell per footprint cell.

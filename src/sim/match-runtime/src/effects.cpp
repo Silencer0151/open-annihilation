@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/match_runtime.hpp"
+#include "oa/core/map_plot.h"
 
 #include <algorithm>
 #include <bit>
@@ -9,8 +10,7 @@
 namespace oa::sim::match_runtime {
 namespace {
 constexpr std::string_view fx_archive{};
-constexpr int32_t cell_shift = 20; // 16.16 world units per map cell, as a shift
-constexpr int32_t cell_pixels = 16;
+constexpr int32_t cell_shift = 20;            // 16.16 world units per map cell, as a shift
 constexpr uint8_t camera_flag_shaking = 0x01; // Game.camera_flags
 
 FixedVec3 fixed_point(const std::array<uint32_t, 3>& position) noexcept {
@@ -72,14 +72,16 @@ void Match::play_sound_at(const char* name, const FixedVec3& at) {
     PointSound sound{at, point_sound_volume_near};
     if (point_sound.spatial != nullptr && point_sound.spatial(point_sound.context)) {
         sound.placed = true;
-        sound.x = x - camera_x - game.view_cells_width / 2 * cell_pixels;
-        sound.z = (y >> 1) - z + game.view_cells_height / 2 * cell_pixels + camera_y;
-        sound.min_distance =
-            static_cast<float>((game.view_cells_width + game.view_cells_height) / 2 * cell_pixels);
-        sound.max_distance = static_cast<float>((game.map_width + game.map_height) * cell_pixels);
+        sound.x = x - camera_x - game.view_cells_width / 2 * OA_MAP_CELL_PIXELS;
+        sound.z = (y >> 1) - z + game.view_cells_height / 2 * OA_MAP_CELL_PIXELS + camera_y;
+        sound.min_distance = static_cast<float>(
+            (game.view_cells_width + game.view_cells_height) / 2 * OA_MAP_CELL_PIXELS
+        );
+        sound.max_distance =
+            static_cast<float>((game.map_width + game.map_height) * OA_MAP_CELL_PIXELS);
     } else if (
-        x < camera_x || z < camera_y || x > camera_x + game.view_cells_width * cell_pixels ||
-        z > camera_y + game.view_cells_height * cell_pixels
+        x < camera_x || z < camera_y || x > camera_x + game.view_cells_width * OA_MAP_CELL_PIXELS ||
+        z > camera_y + game.view_cells_height * OA_MAP_CELL_PIXELS
     ) {
         sound.volume = point_sound_volume_far;
     }

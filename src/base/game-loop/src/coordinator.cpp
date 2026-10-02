@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <stdexcept>
 
 namespace oa::base::game_loop {
 namespace {
@@ -76,9 +75,29 @@ uint32_t scaled_clock_elapsed(uint32_t later, uint32_t earlier) noexcept {
     return later + (scaled_clock_turn - earlier);
 }
 
-void update_timing(Timing& s, uint32_t now) {
+const char* loop_error_text(LoopError error) noexcept {
+    switch (error) {
+    case LoopError::none:
+        return "none";
+    case LoopError::nonfinite_remainder:
+        return "the clock's carried fraction is not finite";
+    case LoopError::unsupported_precision:
+        return "the clock's precision is neither 53 nor 64 significand bits";
+    case LoopError::accumulation_out_of_range:
+        return "the clock's accumulated steps leave the 64-bit range";
+    case LoopError::negative_pending_steps:
+        return "the clock's pending steps are below zero";
+    case LoopError::unterminated_capture_path:
+        return "the capture path is not terminated";
+    case LoopError::zero_capture_rate:
+        return "the capture rate is zero";
+    }
+    return "unknown loop error";
+}
+
+LoopError update_timing(Timing& s, uint32_t now) noexcept {
     if (!std::isfinite(s.remainder))
-        throw std::invalid_argument("nonfinite timing remainder");
+        return LoopError::nonfinite_remainder;
     s.elapsed_bits = now - s.previous_clock;
     s.previous_clock = now;
     s.flags = static_cast<uint16_t>(
@@ -87,6 +106,8 @@ void update_timing(Timing& s, uint32_t now) {
     );
     // The constants are binary64 values widened to the working precision.
     using detail::Extended;
+    if (s.precision != Precision::significand_53 && s.precision != Precision::significand_64)
+        return LoopError::unsupported_precision;
     const auto extended = [&](double value) {
         return Extended(value, static_cast<unsigned>(s.precision));
     };
@@ -115,14 +136,18 @@ void update_timing(Timing& s, uint32_t now) {
     }
     const Extended elapsed_product = extended(signed32(s.elapsed_bits)) * rate;
     // Rounded to a binary64, then floored (rounded toward negative infinity).
-    const double accumulated = (elapsed_product + extended(s.remainder)).to_double();
+    const std::optional<double> rounded = (elapsed_product + extended(s.remainder)).to_double();
+    if (!rounded)
+        return LoopError::accumulation_out_of_range;
+    const double accumulated = *rounded;
     const double whole = std::floor(accumulated);
     if (!std::isfinite(whole) || whole < -9223372036854775808.0 || whole >= 9223372036854775808.0)
-        throw std::out_of_range("timing accumulation outside the signed 64-bit conversion range");
+        return LoopError::accumulation_out_of_range;
     // The truncation yields 64 bits and only the low 32 are kept; preserve that wrap.
     const auto integer = static_cast<int64_t>(whole);
     s.pending_steps = signed32(static_cast<uint32_t>(integer));
-    s.remainder = (extended(accumulated) - extended(whole)).to_float();
+    // The fraction lies in [0, 1), always inside the binary32 range.
+    s.remainder = (extended(accumulated) - extended(whole)).to_float().value_or(0.0f);
     if (s.pending_steps < 0)
         s.pending_steps = 0;
     if ((s.flags & timing_paused) != 0) {
@@ -143,12 +168,13 @@ void update_timing(Timing& s, uint32_t now) {
                 ++s.actual_rate;
         }
     }
+    return LoopError::none;
 }
 
-void run_ticks(State& s, Host& h, bool live) {
+LoopError run_ticks(State& s, Host& h, bool live) {
     const auto count = s.timing.pending_steps;
     if (count < 0)
-        throw std::invalid_argument("negative pending simulation count");
+        return LoopError::negative_pending_steps;
     for (int32_t i = 0; i < count; ++i) {
         ++s.timing.tick;
         if (live) {
@@ -184,6 +210,7 @@ void run_ticks(State& s, Host& h, bool live) {
     // 3.1c always forces the expiry here (see Host::expire_area_coverage).
     h.expire_area_coverage(s, true);
     mark(s, h, 8);
+    return LoopError::none;
 }
 
 void reset_mode_timing(Timing& t, bool multiplayer) noexcept {
@@ -194,13 +221,15 @@ void reset_mode_timing(Timing& t, bool multiplayer) noexcept {
     t.remainder = 0.0f;
 }
 
-void run_frame(State& s, Host& h) {
+LoopError run_frame(State& s, Host& h) {
     h.begin_sample_window(s);
     bool skip_pre = false;
     if ((s.session_flags & session_live_game) != 0) {
-        update_timing(s.timing, h.current_tick(s));
+        if (const auto error = update_timing(s.timing, h.current_tick(s)); error != LoopError::none)
+            return error;
         if (s.timing.pending_steps != 0) {
-            run_ticks(s, h, true);
+            if (const auto error = run_ticks(s, h, true); error != LoopError::none)
+                return error;
             mark(s, h, 8);
             h.step(Step::always_true, s);
             h.step(Step::always_true, s);
@@ -227,9 +256,11 @@ void run_frame(State& s, Host& h) {
     } else if ((s.frame_flags & frame_options_open) != 0) {
         skip_pre = true;
     } else if ((s.timing.flags & timing_paused) == 0) {
-        update_timing(s.timing, h.current_tick(s));
+        if (const auto error = update_timing(s.timing, h.current_tick(s)); error != LoopError::none)
+            return error;
         if (s.timing.pending_steps != 0) {
-            run_ticks(s, h, false);
+            if (const auto error = run_ticks(s, h, false); error != LoopError::none)
+                return error;
             mark(s, h, 8);
         }
     }
@@ -253,7 +284,7 @@ void run_frame(State& s, Host& h) {
     if (s.capture_enabled > 0 && s.next_capture_tick <= s.timing.tick) {
         const auto end = std::find(s.capture_path.begin(), s.capture_path.end(), '\0');
         if (end == s.capture_path.end())
-            throw std::invalid_argument("unterminated capture path");
+            return LoopError::unterminated_capture_path;
         h.capture_frame(
             s,
             std::string_view(
@@ -262,11 +293,12 @@ void run_frame(State& s, Host& h) {
             "FRAM"
         );
         if (s.capture_rate == 0)
-            throw std::domain_error("capture divisor is zero");
+            return LoopError::zero_capture_rate;
         s.next_capture_tick += static_cast<uint32_t>(30 / s.capture_rate);
         s.timing.previous_clock = h.current_tick(s);
     }
     h.step(Step::noop, s);
+    return LoopError::none;
 }
 
 void set_mode(ModeState& s, int32_t mode, const ModeEnvironment& env, ModeHost& host) {

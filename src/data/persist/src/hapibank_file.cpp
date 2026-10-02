@@ -5,6 +5,8 @@
 #include "oa/data/persist/squash.hpp"
 
 #include "bank_util.hpp"
+#include "oa/base/text.hpp"
+#include "oa/platform/files.hpp"
 
 #include <cstdarg>
 #include <cstdint>
@@ -41,9 +43,9 @@ bool reserve(ByteImage* image, uint32_t bytes) {
 
 // Positioned writes over the image of a file.
 struct Stream {
-    ByteImage* image;
-    uint32_t position;
-    bool failed;
+    ByteImage* image{};
+    uint32_t position{};
+    bool failed{};
 };
 
 void stream_write(Stream& s, const void* data, uint32_t bytes) {
@@ -523,7 +525,7 @@ bool bank_read_image(
 
 FileSink stdio_file_sink() {
     return FileSink{nullptr, [](void*, const char* path, const uint8_t* data, std::size_t size) {
-                        std::FILE* file = std::fopen(path, "wb");
+                        std::FILE* file = oa::platform::open_file(path, "wb");
                         if (file == nullptr)
                             return false;
                         const bool written = size == 0 || std::fwrite(data, 1, size, file) == size;
@@ -533,7 +535,7 @@ FileSink stdio_file_sink() {
 
 FileSource stdio_file_source() {
     return FileSource{nullptr, [](void*, const char* path, ByteImage* out) {
-                          std::FILE* file = std::fopen(path, "rb");
+                          std::FILE* file = oa::platform::open_file(path, "rb");
                           if (file == nullptr)
                               return false;
                           bool ok = std::fseek(file, 0, SEEK_END) == 0;
@@ -571,7 +573,7 @@ bool bank_write_file(
         if (dot != nullptr && slash == nullptr)
             *dot = '\0';
         if (std::strlen(audit_path) + sizeof(audit_extension) <= sizeof(audit_path))
-            std::strcat(audit_path, audit_extension);
+            oa::base::text::append_terminated(audit_path, audit_extension);
         ByteImage text{};
         if (bank_format_audit(bank, &text))
             files->write_file(files->context, audit_path, text.data, text.size);

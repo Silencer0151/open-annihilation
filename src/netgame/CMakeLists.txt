@@ -57,7 +57,7 @@ if(BUILD_TESTING)
   set_tests_properties(net-dplay-protocol PROPERTIES TIMEOUT 30)
 
   add_executable(oa-netgame-loopback-test tests/dplay_loopback_test.cpp)
-  target_link_libraries(oa-netgame-loopback-test PRIVATE oa-netgame)
+  target_link_libraries(oa-netgame-loopback-test PRIVATE oa-base-text oa-netgame)
   add_test(NAME net-dplay-loopback COMMAND oa-netgame-loopback-test)
   set_tests_properties(net-dplay-loopback PROPERTIES TIMEOUT 60)
 
@@ -65,6 +65,13 @@ if(BUILD_TESTING)
   target_link_libraries(oa-netgame-socket-search-test PRIVATE oa-netgame)
   add_test(NAME net-socket-search COMMAND oa-netgame-socket-search-test)
   set_tests_properties(net-socket-search PROPERTIES TIMEOUT 30)
+
+  # Malformed and mutated messages, frames, records and recordings; .tad
+  # recordings given as arguments, or directories of them, join the seeds.
+  add_executable(oa-netgame-wire-malformed-test tests/wire_malformed_test.cpp)
+  target_link_libraries(oa-netgame-wire-malformed-test PRIVATE oa-netgame oa-formats-tad oa-test-support)
+  add_test(NAME net-wire-malformed COMMAND oa-netgame-wire-malformed-test)
+  set_tests_properties(net-wire-malformed PROPERTIES TIMEOUT 120)
 
   # The condenser's datagram envelope, pinned for every platform.
   add_executable(oa-netgame-condenser-golden-test tests/condenser_golden_test.cpp)

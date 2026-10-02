@@ -5,13 +5,14 @@
 // creation makes one for bmcode 1 types only): a tower hit by an enemy
 // attacks it without moving (command case 3), is paralysed, holds a fire order and
 // ends a Standby, and the match ticks through all of it.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 
@@ -42,35 +43,9 @@ constexpr uint32_t roam = 2;
 constexpr uint32_t fire_at_will = 2;
 constexpr uint32_t hold_fire = 0;
 
-struct Services : sim::match_runtime::OfflineServices {
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
+using Services = oa::test::QuietServices;
 
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Two players on a flat 16x16-cell map; the tank and the tower carry the same
 // 400-unit gun, whose script aims at once and counts shots in static 1.
@@ -225,7 +200,7 @@ struct Fixture {
     uint32_t dispatch(
         sim::unit_spawn::Slot& unit, sim::simulation_state::Order& order, uint32_t events = 0
     ) {
-        sim::match_runtime::TickHost host(*match);
+        sim::match_runtime::MatchTickAccess host(*match);
         return host.dispatch_mission(match->state(), unit.record, order, events);
     }
 };

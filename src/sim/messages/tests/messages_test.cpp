@@ -90,7 +90,7 @@ int main() {
     char text[128];
     std::memset(text, 'b', 70);
     text[60] = ' ';
-    std::strcpy(text + 70, "");
+    text[70] = '\0';
     post_notice(*v, text, h);
     CHECK(v->game.chat_head == 2);
     CHECK(

@@ -188,12 +188,14 @@ void enter_skirmish_setup(Session* session, const SessionHost* host) {
 
 void apply_session_flags(Game* game, const int32_t* record) {
     game->session_rules = record[0];
+    game->visibility_flags = static_cast<uint8_t>(
+        (game->visibility_flags & ~OA_VISIBILITY_ALTITUDE_SIGHT) | ((record[3] & 1) << 2)
+    );
     game->visibility_flags =
-        static_cast<uint8_t>((game->visibility_flags & ~0x04) | ((record[3] & 1) << 2));
-    game->visibility_flags =
-        static_cast<uint8_t>((game->visibility_flags & ~0x01) | (record[1] & 1));
-    game->visibility_flags =
-        static_cast<uint8_t>((game->visibility_flags & ~0x02) | ((record[2] & 1) << 1));
+        static_cast<uint8_t>((game->visibility_flags & ~OA_VISIBILITY_MAPPING) | (record[1] & 1));
+    game->visibility_flags = static_cast<uint8_t>(
+        (game->visibility_flags & ~OA_VISIBILITY_LINE_OF_SIGHT) | ((record[2] & 1) << 1)
+    );
 }
 
 bool begin_mission(Session* session, const SessionHost* host) {
@@ -231,7 +233,7 @@ bool begin_mission(Session* session, const SessionHost* host) {
         return false;
     run(host, SessionStep::init_mission_state);
     if (kind == oa::data::campaign::SessionKind::multiplayer) {
-        game->load_flags |= 0x0004;
+        game->load_flags |= OA_LOAD_FLAG_BARRIER;
         run(host, SessionStep::wait_multiplayer_units);
         run(host, SessionStep::spawn_multiplayer_commanders);
         run(host, SessionStep::center_camera);

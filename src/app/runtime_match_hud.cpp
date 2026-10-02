@@ -162,9 +162,9 @@ namespace {
 namespace armed = oa::ui::hud::armed_order;
 
 struct ArmedCommand {
-    uint8_t order;
-    MatchCommand command;
-    const char* prompt;
+    uint8_t order = 0;
+    MatchCommand command{};
+    const char* prompt = nullptr;
 };
 
 constexpr ArmedCommand kArmedCommands[] = {
@@ -266,8 +266,9 @@ void Runtime::play_match_interface_sound(std::string_view name) {
     const auto selection =
         oa::audio::game_audio::select(audio_registry_, name, false, sound_playback_state());
     std::string error;
-    if (selection.status == oa::audio::game_audio::SelectionStatus::selected)
-        (void)audio_player_.play(selection, error);
+    if (selection.status == oa::audio::game_audio::SelectionStatus::selected &&
+        !audio_player_.play(selection, error))
+        std::cerr << "sound unavailable: " << error << '\n';
 }
 
 void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target) {
@@ -296,7 +297,7 @@ void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target
             const auto order = flies ? oa::sim::gameplay_input::UnitOrder::vtol_mobile_build
                                      : oa::sim::gameplay_input::UnitOrder::mobile_build;
             if (!cancels_queued_order(id, order, 0, site->world, queueing()))
-                (void)match_->issue_mobile_build(id, pending_build_type_, site->world, queueing());
+                match_->issue_mobile_build(id, pending_build_type_, site->world, queueing());
         });
         play_match_interface_sound("oktobuild");
         status_ = "Build " + spawn_type_names_.at(pending_build_type_);
@@ -433,7 +434,7 @@ bool Runtime::try_reclaim_feature_at(float x, float y) {
             if (!cancels_queued_command(
                     id, oa::sim::gameplay_input::OrderCommand::reclaim, 0, destination, queueing()
                 ))
-                (void)match_->issue_feature_reclaim(id, *destination, queueing());
+                match_->issue_feature_reclaim(id, *destination, queueing());
         });
     } catch (const std::exception& error) {
         status_ = std::string("reclaim command: ") + error.what();

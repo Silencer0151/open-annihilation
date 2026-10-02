@@ -16,6 +16,7 @@
 #include "oa/ui/frontend_renderer.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/test/game_assets.hpp"
+#include "oa/platform/system.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -784,8 +785,8 @@ struct DemoData {
     // Unpacks the installer OA_DEMO_INSTALLER names and mounts its archive;
     // without the variable the test skips, and a failed unpacking fails it.
     oa::AssetStore open() {
-        const char* named = std::getenv("OA_DEMO_INSTALLER");
-        if (named == nullptr || *named == '\0')
+        const auto named = oa::platform::environment_value("OA_DEMO_INSTALLER");
+        if (!named || named->empty())
             oa::test::skip_test(
                 "the DEMOMSG.GUI notice",
                 "OA_DEMO_INSTALLER is not set; set it to the Total Annihilation demo (1997) "
@@ -795,12 +796,12 @@ struct DemoData {
                  ("oa-frontend-dialogs-notice-" +
                   std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         const auto demo =
-            oa::app::set_up_demo(oa::app::path_from_utf8(named).parent_path(), folder);
+            oa::app::set_up_demo(oa::app::path_from_utf8(named->c_str()).parent_path(), folder);
         if (demo.outcome != oa::app::DemoOutcome::ready) {
             std::fprintf(
                 stderr,
                 "FAILED: the demo's data could not be unpacked from %s%s%s\n",
-                named,
+                named->c_str(),
                 demo.problem.empty() ? "" : ": ",
                 demo.problem.c_str()
             );

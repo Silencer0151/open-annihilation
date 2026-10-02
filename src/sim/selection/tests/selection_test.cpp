@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/selection.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -87,7 +88,7 @@ World* make_world() {
         d.size_y = fx(10);
         d.size_z = fx(16);
     }
-    std::strcpy(w->unit_defs[3].unit_name, "ARMCOM");
+    oa::base::text::copy_terminated(w->unit_defs[3].unit_name, "ARMCOM");
     for (uint32_t slot = 1; slot <= 5; ++slot) {
         Unit& u = w->units[slot];
         u.id = static_cast<uint16_t>(slot);
@@ -263,7 +264,7 @@ int main() {
         r = Recorder{};
         w->player_info[0].side = 0;
         w->game.players[0].info = oa_ref_from_index(0);
-        std::strcpy(w->game.sides[0].commander, "ARMCOM");
+        oa::base::text::copy_terminated(w->game.sides[0].commander, "ARMCOM");
         w->units[3].def = oa_ref_from_index(3);
         find_commander(*w, true, h);
         CHECK(r.stops == 1);
@@ -299,15 +300,16 @@ int main() {
         r = Recorder{};
         const uint32_t marks =
             OA_UNIT_FLAG_SELECTED | OA_UNIT_FLAG_CYCLE_VISITED | OA_UNIT_FLAG_CYCLE_SKIP;
+        const uint32_t low_byte = 0xffu; // the flag byte the two clears mask
         w->units[1].flags |= marks | OA_UNIT_FLAG_HAS_WEAPONS;
         w->units[4].flags |= marks;
         clear_cycle_marks(*w);
-        CHECK((w->units[1].flags & 0xffu) == (OA_UNIT_FLAG_SELECTED | OA_UNIT_FLAG_SELECTABLE));
+        CHECK((w->units[1].flags & low_byte) == (OA_UNIT_FLAG_SELECTED | OA_UNIT_FLAG_SELECTABLE));
         CHECK(selected(*w, 1) && selected(*w, 4) && r.cleared == 0);
         w->units[4].flags |= marks;
         clear_selection(*w, h);
-        CHECK((w->units[1].flags & 0xffu) == OA_UNIT_FLAG_SELECTABLE);
-        CHECK((w->units[4].flags & 0xffu) == OA_UNIT_FLAG_SELECTABLE);
+        CHECK((w->units[1].flags & low_byte) == OA_UNIT_FLAG_SELECTABLE);
+        CHECK((w->units[4].flags & low_byte) == OA_UNIT_FLAG_SELECTABLE);
         CHECK((w->units[1].flags & OA_UNIT_FLAG_HAS_WEAPONS) != 0 && r.cleared == 1);
         world_destroy(w);
     }

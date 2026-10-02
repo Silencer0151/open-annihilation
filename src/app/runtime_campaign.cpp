@@ -19,6 +19,7 @@
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 #include "oa/ui/hud/player_records.hpp"
+#include "match_fault.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -37,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -76,6 +78,8 @@ constexpr int32_t kFirstSideFontRecord = 1;
 constexpr uint32_t kInGameBriefingFlags = 0;
 constexpr const char* kDefaultAiProfile = "ai/default.txt";
 constexpr const char* kSideBuildLists = "gamedata/sidedata.tdf";
+// Width of the message box the mission loader's messages open in.
+constexpr int32_t kMissionMessageWidth = 480;
 
 // Messages and actions raised by package callbacks, applied by the runtime
 // after the package call returns.
@@ -94,6 +98,10 @@ struct CampaignRuntime {
     missions::CampaignFile map{};
     campaign::BriefingPanel panel{};
     missions::CampaignFiles files{};
+    // `files` with the mission loader's messages shown in message boxes
+    // (Runtime::campaign_dialog_env), and the runtime that shows them.
+    missions::CampaignFiles dialog_files{};
+    Runtime* dialog_owner = nullptr;
     PackageEvents events;
     const oa::formats::fnt::Font* font = nullptr;
 };
@@ -418,7 +426,10 @@ void Runtime::enter_new_game_panel(bool any_mission) {
     campaign_mission_first_visible_ = 0;
     auto host = single_player_host();
     host.load_background = [](void* context, const char* name) {
-        (void)static_cast<Runtime*>(context)->load_named_background(name, false, false, false);
+        // A bitmap that cannot be read throws; whether the backdrop changed
+        // is not needed.
+        std::ignore =
+            static_cast<Runtime*>(context)->load_named_background(name, false, false, false);
     };
     host.set_control_y = set_widget_y;
     host.set_control_height = [](void* context, const char* name, uint8_t type, int16_t height) {
@@ -496,6 +507,27 @@ missions::CampaignEnv Runtime::campaign_object_env() {
     return campaign_env(assets_, preferences_.difficulty);
 }
 
+missions::CampaignEnv Runtime::campaign_dialog_env() {
+    missions::CampaignEnv env = campaign_env(assets_, preferences_.difficulty);
+    auto& state = campaign_runtime();
+    state.dialog_files = state.files;
+    state.dialog_owner = this;
+    state.dialog_files.message = [](void*, const char* text) {
+        auto& campaign = campaign_runtime();
+        campaign.events.message = text;
+        std::cerr << "open-annihilation: " << text << '\n';
+        if (campaign.dialog_owner != nullptr)
+            campaign.dialog_owner->show_frontend_message(
+                campaign.dialog_owner->translate_ui(text),
+                kMissionMessageWidth,
+                entry::message_show_ok,
+                entry::message_fit_width
+            );
+    };
+    env.files = &state.dialog_files;
+    return env;
+}
+
 const missions::CampaignFile* Runtime::match_map_context() {
     auto& state = campaign_runtime();
     if (campaign_mission_)
@@ -540,13 +572,15 @@ bool Runtime::load_campaign_map(std::string_view mission_file) {
         throw std::runtime_error(
             "cannot parse campaign mission terrain: " + terrain.error->message
         );
-    auto scenario_document = oa::data::unit_definitions::parse_tdf(ota_text);
-    if (!scenario_document)
+    oa::formats::tdf::OwnedDocument scenario_document;
+    oa::formats::tdf::ParseError scenario_error{};
+    if (!scenario_document.parse(ota_text, &scenario_error))
         throw std::runtime_error(
-            "cannot parse campaign scenario definitions: " + scenario_document.error.message
+            "cannot parse campaign scenario definitions: " +
+            oa::formats::tdf::describe(scenario_error)
         );
     selected_map_metadata_ = std::move(*parsed.metadata);
-    selected_ota_document_ = std::move(scenario_document.value);
+    selected_ota_document_ = std::move(scenario_document);
     selected_tnt_ = std::move(*terrain.map);
     selected_map_name_runtime_ = stem;
     selected_start_markers_.clear();
@@ -589,7 +623,10 @@ void Runtime::spawn_campaign_units() {
         throw std::runtime_error("campaign schema has no unit list");
     // Mission start: the schema's units and their scripts, then the
     // view on the schema's first start position.
-    oa::sim::match_runtime::create_mission_units(*match_, file.units, file.unit_count);
+    if (!oa::sim::match_runtime::create_mission_units(*match_, file.units, file.unit_count)) {
+        raise_match_fault(*match_);
+        throw std::runtime_error("campaign mission units were not created");
+    }
     place_campaign_camera();
     std::size_t placed = 0;
     for (const auto& slot : match_->world().slots)
@@ -607,7 +644,7 @@ void Runtime::spawn_campaign_units() {
     std::memcpy(resources.metal, file.metal, sizeof resources.metal);
     std::memcpy(resources.energy, file.energy, sizeof resources.energy);
     oa::ui::hud::set_starting_resources(
-        match_->state(), oa::ui::hud::kSessionCampaign, &resources, nullptr
+        match_->state(), oa::data::campaign::SessionKind::campaign, &resources, nullptr
     );
     status_ = "Campaign mission " + selected_map_name_runtime_ + " with " + std::to_string(placed) +
               " placed units.";
@@ -665,11 +702,18 @@ void Runtime::campaign_session_rules(int32_t (&record)[4]) {
 
 void Runtime::mark_campaign_units(oa::UnitDef* headers, uint32_t count) {
     auto& state = campaign_runtime();
-    (void)campaign::load_unit_availability(headers, count, &state.file, &state.files);
+    if (campaign::load_unit_availability(headers, count, &state.file, &state.files))
+        return;
+    // Without a use-only file every unit stays buildable. One that is there
+    // but cannot be read leaves them buildable too, and is reported.
+    const char* path = missions::campaign_path(&state.file, missions::CampaignPath::use_only);
+    if (path != nullptr && state.files.size != nullptr &&
+        state.files.size(state.files.context, path) >= 0)
+        std::cerr << "use-only file " << path << " unreadable; every unit stays buildable\n";
 }
 
 void Runtime::load_mission_features(
-    std::span<const oa::data::unit_definitions::TdfDocument> documents,
+    std::span<const oa::formats::tdf::OwnedDocument> documents,
     const oa::sim::map_runtime::FeatureDefHost& host
 ) {
     mission_features_.clear();
@@ -1199,7 +1243,9 @@ void Runtime::click_briefing_gadget(std::string name) {
 void Runtime::tick_mission_briefing() {
     auto& panel = campaign_runtime().panel;
     const bool narration_on = panel.narration_on;
-    (void)campaign::briefing_ticker(
+    // With no rotation frames the ticker's redraw request can only follow
+    // SHUTUP switching off, which is followed below.
+    std::ignore = campaign::briefing_ticker(
         &panel,
         static_cast<uint32_t>(SDL_GetTicks()),
         frontend_tick(),
@@ -1286,11 +1332,12 @@ void Runtime::draw_briefing_overlays() {
             pixel[2] = pal[pal_i + 2];
         }
     };
-    // Each text's top row is at its y.
+    // Each text's pen row is at its y; the font's lift raises its glyphs.
+    // Every text has its own place, so where a pen stops is not needed.
     const auto& font = briefing_text_font();
     const bool fnt_font = briefing_text_font_.has_value();
     for (uint32_t i = 0; i < page.row_count; ++i)
-        (void)oa::formats::fnt::raster_text(
+        std::ignore = oa::formats::fnt::raster_text(
             target, font, page.rows[i].text, page.rows[i].x, page.rows[i].y
         );
     copy_glyphs(colours[kBriefingRowColour], fnt_font);
@@ -1307,7 +1354,7 @@ void Runtime::draw_briefing_overlays() {
             const auto& highlight = page.highlights[i];
             if (!flash && highlight.color != slot)
                 continue;
-            (void)oa::formats::fnt::raster_text(
+            std::ignore = oa::formats::fnt::raster_text(
                 target, font, highlight.text, highlight.x, highlight.y
             );
             drawn = true;
@@ -1334,7 +1381,9 @@ void Runtime::draw_briefing_overlays() {
         x += more->common.width - width;
     else if ((attributes & oa::ui::gui_layout::attribute::centered) != 0)
         x += more->common.width / 2 - width / 2;
-    (void)oa::formats::fnt::raster_text(
+    // The caption is placed from its measured width; where the pen stops is
+    // not needed.
+    std::ignore = oa::formats::fnt::raster_text(
         target,
         briefing_more_font_ ? *briefing_more_font_ : resources_.font,
         caption,

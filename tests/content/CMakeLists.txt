@@ -19,4 +19,13 @@ if(BUILD_TESTING)
   # native checks.
   set_tests_properties(installed-content PROPERTIES TIMEOUT 600 COST 100 LABELS "content;data")
   oa_game_data_tests(installed-content)
+  # What the feature, announcement, side layout, meteor and scenario readers
+  # take from the installed game's TDF texts, digested.
+  add_executable(oa-installed-tdf-readers-test installed_tdf_readers_test.cpp)
+  target_link_libraries(oa-installed-tdf-readers-test PRIVATE oa-formats-hpi oa-formats-tdf
+    oa-data-unit-definitions oa-data-persist oa-sim-map-runtime oa-audio oa-ui-hud
+    oa-platform-shims oa-test-game-data oa-options)
+  add_test(NAME installed-tdf-readers COMMAND oa-installed-tdf-readers-test)
+  set_tests_properties(installed-tdf-readers PROPERTIES LABELS "content;data")
+  oa_game_data_tests(installed-tdf-readers)
 endif()

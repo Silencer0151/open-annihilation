@@ -29,6 +29,9 @@ inline constexpr std::size_t kSaveFileBytes = 0x100;       // one name slot
 inline constexpr std::size_t kSaveDescriptionBytes = 0x40; // one description slot
 inline constexpr int32_t kSaveTicksPerSecond = 30;
 inline constexpr int32_t kNoSavesMessageWidth = 0x140;
+// The message a save that cannot be loaded shows, in a box this wide.
+inline constexpr const char* kInvalidSaveMessage = "Invalid savegame file";
+inline constexpr int32_t kInvalidSaveMessageWidth = 0x140;
 inline constexpr int32_t kRestrictNoLimit = -1;
 inline constexpr int32_t kRestrictLimitCeiling = 100;
 /// Smallest width and height, in pixels, of a saved radar image the preview

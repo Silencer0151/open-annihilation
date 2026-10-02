@@ -3,6 +3,7 @@
 
 // Bounded headless navigation checks.
 #include "oa/app/runtime.hpp"
+#include "map_picture_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -13,6 +14,7 @@
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
+#include "match_fault.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -32,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -488,7 +491,8 @@ void Runtime::check_match_overlays(
     frame_of(frame);
     write_ppm(snapshot, frame);
     const auto bar_changed = require_change(bar, before, "the open chat line");
-    (void)require_change(
+    // Only that the outline changed is checked; by how much is not needed.
+    std::ignore = require_change(
         outline, without_outline, "the build outline under the chat line", kOutlineMinPixels
     );
     close_chat_line();
@@ -1189,7 +1193,7 @@ void Runtime::check_navigation() {
     match_->issue_ground_move(local_commander, bounded_destination, false);
     match_timing_.tick = 1;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
     const auto* navigation = match_->ground_runtime(local_commander);
     if (navigation == nullptr || navigation->navigation.goal == nullptr)
         throw std::runtime_error("navigation check unit sweep skipped active commander");
@@ -1202,7 +1206,7 @@ void Runtime::check_navigation() {
     for (int step = 0; step < 24; ++step) {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
     }
     render_match_surface();
     write_ppm(report_directory / "native-match-moved.ppm", surface_);
@@ -1229,7 +1233,7 @@ void Runtime::check_navigation() {
         for (int step = 0; step < 30; ++step) {
             ++match_timing_.tick;
             match_->simulation().tick = match_timing_.tick;
-            match_->tick();
+            tick_or_raise(*match_);
         }
         render_match_surface();
         write_ppm(report_directory / "native-match-fire.ppm", surface_);
@@ -1243,7 +1247,7 @@ void Runtime::check_navigation() {
             std::bit_cast<int32_t>(at[2])
         };
         try {
-            (void)match_->issue_mobile_build(local_commander, solar, yard, false);
+            match_->issue_mobile_build(local_commander, solar, yard, false);
         } catch (const std::exception& error) {
             std::cerr << "navigation check build: " << error.what() << '\n';
         }
@@ -1252,7 +1256,7 @@ void Runtime::check_navigation() {
             ++match_timing_.tick;
             match_->simulation().tick = match_timing_.tick;
             try {
-                match_->tick();
+                tick_or_raise(*match_);
             } catch (const std::exception& error) {
                 std::cerr << "navigation check build tick: " << error.what() << '\n';
                 break;
@@ -1306,7 +1310,7 @@ void Runtime::check_navigation() {
         throw std::runtime_error("map list row did not update the selected preview");
     state_.player_count = 2;
     const auto alternate_capacity = map_player_capacity();
-    if (alternate_capacity < 2 || preview_rgb_.empty())
+    if (alternate_capacity < 2 || !map_picture_ || map_picture_->rgb.empty())
         throw std::runtime_error("map selection preview lacks terrain or start positions");
     rebuild_surface();
     write_ppm(report_directory / "native-map-select.ppm", surface_);
@@ -1685,7 +1689,7 @@ void Runtime::check_skirmish_victory(const fs::path& report_directory) {
     for (uint32_t step = 0; step < kVictoryTickLimit && !match_finished_; ++step) {
         ++match_timing_.tick;
         match_->simulation().tick = match_timing_.tick;
-        match_->tick();
+        tick_or_raise(*match_);
         present_match_outcome();
     }
     if (!match_finished_ || match_->outcome() != sim::scenario::Outcome::victory)
@@ -1801,8 +1805,10 @@ Runtime::check_save_dialog(const fs::path& report_directory, const std::string& 
     SDL_Event key{};
     key.type = SDL_EVENT_KEY_DOWN;
     key.key.key = SDLK_BACKSPACE;
+    // The typed name below is checked; the erasing keys need not be taken
+    // once the field is empty.
     for (int erase = 0; erase < 32; ++erase)
-        (void)dispatch_screen_input(key);
+        std::ignore = dispatch_screen_input(key);
     SDL_Event text{};
     text.type = SDL_EVENT_TEXT_INPUT;
     text.text.text = name.c_str();
@@ -1811,7 +1817,8 @@ Runtime::check_save_dialog(const fs::path& report_directory, const std::string& 
     rebuild_surface();
     write_ppm(report_directory / ("native-save-" + name + ".ppm"), surface_);
     key.key.key = SDLK_RETURN;
-    (void)dispatch_screen_input(key);
+    // What Return did is checked below.
+    std::ignore = dispatch_screen_input(key);
     if (screen_ != parent || save_dialog_open())
         throw std::runtime_error(
             "the save did not return to the screen it was opened over: " + status_

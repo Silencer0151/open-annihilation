@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/match_runtime.hpp"
+#include "oa/base/text.hpp"
 #include <iostream>
 #include <bit>
 #include <cstring>
 #include <stdexcept>
 #include <cstdint>
+#include "oa/test/match_services.hpp"
 
 // Raw words of a unit's economy block (energy then metal accumulators).
 std::array<uint32_t, 12>& economy_words(oa::Unit& unit) {
@@ -20,14 +22,13 @@ using namespace oa;
             throw std::runtime_error(#x);                                                          \
     } while (false)
 
-struct Services : sim::match_runtime::OfflineServices {
+// A UnitWeapon.flags bit the sound callback sets, to show mission dispatch keeps it.
+constexpr uint8_t weapon_bit_set_by_sound = 0x40;
+
+struct Services : oa::test::QuietServices {
     std::vector<std::string> calls;
     uint16_t expected_id{1};
     bool strict_activation{true};
-#define UNEXPECTED(type, name, args)                                                               \
-    type name args override {                                                                      \
-        throw std::runtime_error("unexpected " #name);                                             \
-    }
 
     void activation_sound(sim::unit_spawn::Slot& slot, sim::unit_activation::Sound sound) override {
         if (strict_activation)
@@ -42,17 +43,32 @@ struct Services : sim::match_runtime::OfflineServices {
             throw std::runtime_error("unexpected command sound");
         command(slot, category);
     }
-    UNEXPECTED(void, attachment_notification, (sim::unit_spawn::Slot&, uint32_t))
+
+    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {
+        oa::test::unexpected_call("attachment_notification");
+    }
 
     void refresh_selected_unit(sim::unit_spawn::Slot& slot) override {
         if (strict_activation)
             CHECK(slot.unit_index == expected_id);
         calls.push_back("refresh");
     }
-    UNEXPECTED(void, emit_sfx, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, explode_piece, (sim::unit_spawn::Slot&, uint32_t, int32_t))
-    UNEXPECTED(void, attach_unit, (sim::unit_spawn::Slot&, int32_t, int32_t, int32_t))
-    UNEXPECTED(void, drop_unit, (sim::unit_spawn::Slot&, int32_t))
+
+    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {
+        oa::test::unexpected_call("emit_sfx");
+    }
+
+    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {
+        oa::test::unexpected_call("explode_piece");
+    }
+
+    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {
+        oa::test::unexpected_call("attach_unit");
+    }
+
+    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {
+        oa::test::unexpected_call("drop_unit");
+    }
 
     void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {
         calls.push_back("masked");
@@ -65,15 +81,9 @@ struct Services : sim::match_runtime::OfflineServices {
     void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {
         calls.push_back("footprint");
     }
-
-#undef UNEXPECTED
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 struct Start : sim::unit_spawn::StartHost {
     uint16_t commander_type_for_side(uint8_t side) override {
@@ -107,8 +117,8 @@ void loader_records_become_the_world_table() {
     std::array<sim::match_runtime::RuntimeTypeFields, 2> fields{};
     fields[1].target_masks = &target_masks;
     std::array<UnitDef, 2> records{};
-    std::strcpy(records[0].unit_name, "None");
-    std::strcpy(records[1].unit_name, "ARMSOLAR");
+    oa::base::text::copy_terminated(records[0].unit_name, "None");
+    oa::base::text::copy_terminated(records[1].unit_name, "ARMSOLAR");
     records[1].type_id = 1;
     records[1].flags = OA_UNIT_DEF_FLAG_AVAILABLE | OA_UNIT_DEF_FLAG_Z_BUFFER;
     records[1].footprint_x = records[1].footprint_z = 5;
@@ -160,13 +170,9 @@ void loader_records_become_the_world_table() {
     CHECK(def.damage_modifier == 0x10000 && def.primary_bad_target_category == 1);
     std::array<UnitDef, 1> short_table{};
     input.unit_defs = short_table;
-    bool rejected = false;
-    try {
-        sim::match_runtime::Match mismatched(input, services);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    CHECK(rejected);
+    CHECK(sim::match_runtime::Match::input_error(input) != nullptr);
+    sim::match_runtime::Match mismatched(input, services);
+    CHECK(mismatched.fault() != nullptr);
 }
 
 int main() {
@@ -310,7 +316,7 @@ int main() {
         ground->movement.speed == 0 && ground->movement.flags == 1 && ground->navigation.flags == 8
     );
     CHECK(ground->geometry.position[0] == 96 * 65536);
-    moving->unit->flags |= 0x20;
+    moving->unit->flags |= OA_UNIT_FLAG_SELECTABLE;
     const auto saved_unfinished = moving->record.build_remaining;
     moving->record.build_remaining = std::bit_cast<float>(uint32_t{0x7fc00000});
     CHECK(match.selectable(2));
@@ -319,7 +325,8 @@ int main() {
     slot->unit->record.type_index = 0;
     types[1].simulation.default_mission_type = sim::ground_orders::standby_kind;
     match.reload_unit_defs();
-    moving->unit->flags = (moving->unit->flags & ~0x300000u) | 0x200000u;
+    moving->unit->flags = (moving->unit->flags & ~OA_UNIT_FLAG_FIRE_ORDER_MASK) |
+                          (2u << OA_UNIT_FLAG_FIRE_ORDER_SHIFT);
     std::array<uint8_t, 10> allies{};
     allies[0] = 1;
     match.configure_outcomes(0, allies, true);
@@ -338,8 +345,8 @@ int main() {
     // must not write its earlier geometry/weapon projection over those changes.
     services.command = [&](sim::unit_spawn::Slot& subject, uint32_t category) {
         CHECK(category == 6);
-        subject.unit->flags |= 0x20000u;
-        subject.record.weapons[0].flags |= 0x40;
+        subject.unit->flags |= OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE;
+        subject.record.weapons[0].flags |= weapon_bit_set_by_sound;
     };
     auto& completed = match.insert_ground_order(2, sim::ground_orders::move_ground_kind);
     completed.phase = 1;
@@ -347,12 +354,18 @@ int main() {
     completed.raised_events = sim::ground_orders::arrived_event;
     match.simulation().tick = 35;
     match.tick();
-    CHECK((moving->unit->flags & 0x20000u) && (match.state().units[2].weapons[0].flags & 0x40));
-    moving->unit->flags |= 0x20000u;
+    CHECK(
+        (moving->unit->flags & OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE) &&
+        (match.state().units[2].weapons[0].flags & weapon_bit_set_by_sound)
+    );
+    moving->unit->flags |= OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE;
     match.state().units[2].attach_first_child = oa::oa_unit_ref_from_slot(1);
     match.prepare_spatial_state();
     match.synchronize_spatial_state();
-    CHECK((moving->unit->flags & 0x20000u) && match.spatial().units[2].first_attachment == 1);
+    CHECK(
+        (moving->unit->flags & OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE) &&
+        match.spatial().units[2].first_attachment == 1
+    );
     // The local slot's one deadline (Player.next_economy_tick) carries both
     // the outcome checks and the economy: due at 0 and 30, it now waits for 60.
     CHECK(
@@ -484,8 +497,8 @@ int main() {
     // ordinary replacement destruction must compose without dangling links.
     def.can_attack = true;
     def.can_move = true;
-    moving->unit->flags |= 0x80000000u;
-    opponent->unit->flags |= 0x10000000u;
+    moving->unit->flags |= OA_UNIT_FLAG_HAS_WEAPONS;
+    opponent->unit->flags |= OA_UNIT_FLAG_LIVE;
     CHECK(match.issue_attack(2, 3, true));
     CHECK(moving->unit->primary->kind == 6);
     auto* attacked = moving->unit->primary;
@@ -510,18 +523,18 @@ int main() {
     services.strict_activation = false;
     match.capture_unit(*opponent, *moving);
     sim::unit_spawn::Slot* copy = nullptr;
-    for (auto& slot : match.world().slots) {
-        if (slot.unit_index != 0 && slot.unit && slot.unit->record.type_index &&
-            slot.record.owner_index == 0 && slot.unit_index != moving->unit_index &&
-            slot.unit_index != opponent->unit_index)
-            copy = &slot;
+    for (auto& candidate : match.world().slots) {
+        if (candidate.unit_index != 0 && candidate.unit && candidate.unit->record.type_index &&
+            candidate.record.owner_index == 0 && candidate.unit_index != moving->unit_index &&
+            candidate.unit_index != opponent->unit_index)
+            copy = &candidate;
     }
     CHECK(copy && copy->unit);
     CHECK(copy->unit->health == 77);
     CHECK(std::bit_cast<uint32_t>(copy->record.build_remaining) == 0x3f000000);
     CHECK(copy->record.bank == 0x11 && copy->yaw == 0x1234 && copy->record.pitch == 0x22);
     CHECK(copy->record.owner_index == 0);
-    CHECK((opponent->unit->flags & 0x4000u) != 0);
+    CHECK((opponent->unit->flags & OA_UNIT_FLAG_DEATH_PENDING) != 0);
     CHECK(match.world().players[0].current_count == count0 + 1);
     services.strict_activation = true;
     services.command = {};
@@ -544,7 +557,7 @@ int main() {
         def.makes_metal = 30;
         def.energy_use = 0;
         def.extracts_metal = 0;
-        opponent->unit->flags = saved_flags | 0x20000000u | 0x10000000u;
+        opponent->unit->flags = saved_flags | OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_LIVE;
         opponent->record.state_flags = static_cast<uint8_t>(saved_state_flags | 1u);
         opponent->record.build_remaining = std::bit_cast<float>(uint32_t{0x3f800000});
         match.simulation().players[1].status = 1;
@@ -579,13 +592,13 @@ int main() {
         CHECK(std::bit_cast<float>(words[10]) == 0.0F);
         opponent->record.state_flags = static_cast<uint8_t>(opponent->record.state_flags | 1u);
         words.fill(0);
-        opponent->unit->flags &= ~0x20000000u;
+        opponent->unit->flags &= ~OA_UNIT_FLAG_BUILDING;
         match.reload_unit_defs();
 
         match.update_player_economy(1);
         CHECK(match.world().players[1].metal_produced == 0.0F);
         CHECK(std::bit_cast<float>(words[10]) == 0.0F);
-        opponent->unit->flags |= 0x20000000u;
+        opponent->unit->flags |= OA_UNIT_FLAG_BUILDING;
         match.simulation().players[1].status = 2;
         match.set_difficulty(0);
         words.fill(0);
@@ -621,7 +634,7 @@ int main() {
         const auto saved_words = words;
         def.extracts_metal = 1.0F;
         def.energy_use = 0;
-        opponent->unit->flags = saved_flags | 0x20000000u | 0x10000000u;
+        opponent->unit->flags = saved_flags | OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_LIVE;
         opponent->record.state_flags = static_cast<uint8_t>(saved_state_flags | 1u);
         opponent->record.build_remaining = std::bit_cast<float>(uint32_t{0});
         opponent->record.extracted_metal = 30.0F;

@@ -182,11 +182,10 @@ encoded_size(std::size_t static_count, std::size_t piece_count) noexcept;
 
 /// Serializes one payload in the 3.1c save layout.
 ///
-/// The callback word of every context is written as zero. Throws
-/// std::invalid_argument when a vector count exceeds the codec bounds.
+/// The callback word of every context is written as zero.
 ///
 /// @param state state to serialize
-/// @return the payload bytes
+/// @return the payload bytes, or no bytes when a vector count exceeds the codec bounds
 [[nodiscard]] std::vector<uint8_t> encode(const State& state);
 
 /// Parses one payload.

@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <cstdio>
 
+#if defined(_WIN32)
+#include <share.h>
+#endif
+
 namespace oa::platform {
 namespace {
 
@@ -17,7 +21,7 @@ std::FILE* stream(FileHandle* file) noexcept {
 }
 
 FileHandle* stdio_open(void*, const char* path, const char* mode) {
-    return reinterpret_cast<FileHandle*>(std::fopen(path, mode));
+    return reinterpret_cast<FileHandle*>(open_file(path, mode));
 }
 
 std::size_t stdio_read(void*, FileHandle* file, void* buffer, std::size_t size, std::size_t count) {
@@ -69,6 +73,31 @@ union LogLock {
 constinit LogLock log_lock;
 
 } // namespace
+
+std::FILE* open_file(const char* path, const char* mode) noexcept {
+#if defined(_WIN32)
+    // fopen's own sharing: other opens may read and write the file.
+    return _fsopen(path, mode, _SH_DENYNO);
+#else
+    return std::fopen(path, mode);
+#endif
+}
+
+std::FILE* open_file(const std::filesystem::path& path, const char* mode) noexcept {
+#if defined(_WIN32)
+    // A mode is a few ASCII letters; one too long to be valid opens nothing.
+    constexpr std::size_t mode_capacity = 16;
+    wchar_t wide_mode[mode_capacity]{};
+    for (std::size_t index = 0; mode[index] != '\0'; ++index) {
+        if (index + 1 >= mode_capacity)
+            return nullptr;
+        wide_mode[index] = static_cast<wchar_t>(static_cast<unsigned char>(mode[index]));
+    }
+    return _wfsopen(path.c_str(), wide_mode, _SH_DENYNO);
+#else
+    return std::fopen(path.c_str(), mode);
+#endif
+}
 
 Files stdio_files() noexcept {
     return {nullptr, stdio_open, stdio_read, stdio_write, stdio_tell, stdio_seek, stdio_close};

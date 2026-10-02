@@ -7,6 +7,10 @@
 
 #include "oa/core/types.h"
 
+#ifndef __cplusplus
+#include <stdbool.h>
+#endif
+
 #define OA_UNIT_WEAPON_COUNT 3
 #define OA_UNIT_TARGET_IS_UNIT (-0x8000)
 
@@ -42,13 +46,19 @@
    carrying it. It does not stop selection: OA_UNIT_FLAG_SELECTABLE does. */
 #define OA_UNIT_FLAG_NOT_SELECTABLE 0x00008000u
 #define OA_UNIT_FLAG_POSITION_DIRTY 0x00010000u
-#define OA_UNIT_FLAG_MOVE_ORDER_MASK 0x000c0000u /* standing move order */
+#define OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE 0x00020000u /* carried with attach piece -1 */
+#define OA_UNIT_FLAG_MOVE_ORDER_MASK 0x000c0000u        /* standing move order */
 #define OA_UNIT_FLAG_MOVE_ORDER_SHIFT 18
 #define OA_UNIT_FLAG_FIRE_ORDER_MASK 0x00300000u /* standing fire order */
 #define OA_UNIT_FLAG_FIRE_ORDER_SHIFT 20
 #define OA_UNIT_FLAG_BUILD_MENU 0x00400000u /* order panel shows the build pages */
 #define OA_UNIT_FLAG_BUILD_PAGE_MASK 0x03800000u
 #define OA_UNIT_FLAG_BUILD_PAGE_SHIFT 23
+/* Set on a unit whose plot word another unit took; removing a unit carrying
+   it rewrites the occupancy of every unit it overlaps. */
+#define OA_UNIT_FLAG_COLLISION_OTHER 0x04000000u
+/* The unit's plot occupancy must be rewritten; the rewrite clears it. */
+#define OA_UNIT_FLAG_COLLISION_SELF 0x08000000u
 #define OA_UNIT_FLAG_LIVE 0x10000000u
 #define OA_UNIT_FLAG_BUILDING 0x20000000u    /* bmcode 0 structure */
 #define OA_UNIT_FLAG_AIR_BASE 0x40000000u    /* from UnitDef isairbase */
@@ -57,6 +67,13 @@
 /* Bits of Unit.state_flags. */
 #define OA_UNIT_STATE_ACTIVE 0x01u /* Activate script state; radar, sonar and jammers run */
 #define OA_UNIT_STATE_CLOAKED 0x04u
+
+/* Bits of Unit.build_flags, which unit scripts read and write. */
+#define OA_UNIT_BUILD_IN_BUILD_STANCE 0x01u
+#define OA_UNIT_BUILD_BUSY 0x02u
+#define OA_UNIT_BUILD_YARD_OPEN 0x04u
+#define OA_UNIT_BUILD_BUGGER_OFF 0x08u
+#define OA_UNIT_BUILD_SCRIPT_MASK 0x0fu /* the four bits above */
 
 /* Bits of Unit.flags2. */
 #define OA_UNIT_FLAG2_Z_BUFFER 0x00000001u /* from UnitDef zbuffer */
@@ -154,7 +171,7 @@ typedef struct Unit {
     int16_t health;
     uint8_t last_occupy_code[0x4];
     uint8_t state_flags;
-    uint8_t build_flags; /* ? bit0 build stance, bit2 yard open */
+    uint8_t build_flags; /* OA_UNIT_BUILD_* */
     uint32_t flags;      /* UNIT_FLAG_* */
     uint32_t flags2;     /* UNIT_FLAG2_* */
 } Unit;
@@ -238,6 +255,15 @@ OA_ASSERT_OFFSET(Unit, state_flags, 0x10e);
 OA_ASSERT_OFFSET(Unit, build_flags, 0x10f);
 OA_ASSERT_OFFSET(Unit, flags, 0x110);
 OA_ASSERT_OFFSET(Unit, flags2, 0x114);
+
+/// Tests whether a unit may be targeted, damaged or counted as present: it
+/// is live and not waiting to die.
+///
+/// @param flags the unit's Unit.flags
+/// @return true when OA_UNIT_FLAG_LIVE is set and OA_UNIT_FLAG_DEATH_PENDING clear
+static inline bool unit_is_live_target(uint32_t flags) {
+    return (flags & OA_UNIT_FLAG_LIVE) != 0 && (flags & OA_UNIT_FLAG_DEATH_PENDING) == 0;
+}
 
 OA_CORE_END
 

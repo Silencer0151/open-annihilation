@@ -7,11 +7,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <unordered_map>
 
 namespace oa::sim::model_runtime {
 namespace {
@@ -32,10 +30,9 @@ bool equal_fold_ascii(std::string_view a, std::string_view b) {
     return true;
 }
 
-int32_t checked(int64_t value, const char* operation) {
-    if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max())
-        throw std::overflow_error(operation);
-    return static_cast<int32_t>(value);
+// A coordinate outside 32 bits keeps its low 32 bits.
+int32_t low32(int64_t value) noexcept {
+    return std::bit_cast<int32_t>(static_cast<uint32_t>(static_cast<uint64_t>(value)));
 }
 
 void rotate_pair(int32_t& a, int32_t& b, int16_t angle) {
@@ -43,8 +40,8 @@ void rotate_pair(int32_t& a, int32_t& b, int16_t angle) {
         return;
     const auto rotated = base::game_math::rotate_pair(a, b, angle);
     // Each coordinate rounds to the nearest integer, ties to even.
-    a = checked(std::llrint(rotated.first), "3DO rotation overflow");
-    b = checked(std::llrint(rotated.second), "3DO rotation overflow");
+    a = low32(std::llrint(rotated.first));
+    b = low32(std::llrint(rotated.second));
 }
 
 void rotate(oa::formats::objects3d::FixedVector3& value, RotationWords words) {
@@ -54,10 +51,9 @@ void rotate(oa::formats::objects3d::FixedVector3& value, RotationWords words) {
     rotate_pair(value.x, value.z, words.xz);
 }
 
-int32_t negate(int32_t value) {
-    if (value == std::numeric_limits<int32_t>::min())
-        throw std::overflow_error("3DO coordinate negation overflow");
-    return -value;
+// The negation wraps: -2^31 stays -2^31.
+int32_t negate(int32_t value) noexcept {
+    return std::bit_cast<int32_t>(0U - std::bit_cast<uint32_t>(value));
 }
 
 } // namespace
@@ -70,7 +66,7 @@ rotate_vector(oa::formats::objects3d::FixedVector3 value, RotationWords words) {
 
 uint32_t count_linked_objects(const oa::formats::objects3d::Model& model, uint32_t object_index) {
     if (object_index >= model.objects.size())
-        throw std::out_of_range("3DO object index is out of range");
+        return 0;
     const auto& object = model.objects[object_index];
     // The count starts at 1, becomes child_count + 1 when the child link is
     // present, then adds the sibling chain.
@@ -82,13 +78,10 @@ uint32_t count_linked_objects(const oa::formats::objects3d::Model& model, uint32
     return count;
 }
 
-Instance make_instance(
-    std::shared_ptr<const oa::formats::objects3d::Model> model,
-    uintptr_t owner_token,
-    std::span<const std::string_view> script_piece_names
-) {
+const char*
+model_hierarchy_error(const std::shared_ptr<const oa::formats::objects3d::Model>& model) {
     if (!model || model->objects.empty())
-        throw std::invalid_argument("3DO model is empty");
+        return "3DO model is empty";
 
     // Public callers may construct Models without going through load_3do.
     const auto count = model->objects.size();
@@ -97,14 +90,14 @@ Instance make_instance(
         const auto& object = model->objects[i];
         if (!valid_link(object.parent) || !valid_link(object.first_child) ||
             !valid_link(object.next_sibling))
-            throw std::invalid_argument("3DO model contains an out-of-range hierarchy link");
+            return "3DO model contains an out-of-range hierarchy link";
         if (object.parent != kNoPiece && object.parent >= i)
-            throw std::invalid_argument("3DO model hierarchy is not parent-before-child preorder");
+            return "3DO model hierarchy is not parent-before-child preorder";
     }
 
     struct Pending {
-        uint32_t object;
-        uint32_t expected_parent;
+        uint32_t object{};
+        uint32_t expected_parent{};
     };
 
     std::vector<Pending> pending{{0, kNoPiece}};
@@ -113,20 +106,32 @@ Instance make_instance(
         const auto [current, expected_parent] = pending.back();
         pending.pop_back();
         if (topology_seen[current] != 0)
-            throw std::invalid_argument("3DO model hierarchy contains a cycle or duplicate link");
+            return "3DO model hierarchy contains a cycle or duplicate link";
         topology_seen[current] = 1;
         const auto& object = model->objects[current];
         if (object.parent != expected_parent)
-            throw std::invalid_argument(
-                "3DO model parent link disagrees with child/sibling topology"
-            );
+            return "3DO model parent link disagrees with child/sibling topology";
         if (object.next_sibling != kNoPiece)
             pending.push_back({object.next_sibling, expected_parent});
         if (object.first_child != kNoPiece)
             pending.push_back({object.first_child, current});
     }
     if (std::find(topology_seen.begin(), topology_seen.end(), 0) != topology_seen.end())
-        throw std::invalid_argument("3DO model contains an unreachable object");
+        return "3DO model contains an unreachable object";
+    return nullptr;
+}
+
+Instance make_instance(
+    std::shared_ptr<const oa::formats::objects3d::Model> model,
+    uintptr_t owner_token,
+    std::span<const std::string_view> script_piece_names
+) {
+    if (model_hierarchy_error(model) != nullptr) {
+        Instance empty;
+        empty.model_ = std::move(model);
+        empty.owner_token_ = owner_token;
+        return empty;
+    }
 
     Instance instance;
     instance.model_ = std::move(model);
@@ -181,40 +186,45 @@ Instance make_instance(
     return instance;
 }
 
+PieceState* Instance::find_piece(uint32_t index) noexcept {
+    return index < pieces_.size() ? &pieces_[index] : nullptr;
+}
+
+const PieceState* Instance::find_piece(uint32_t index) const noexcept {
+    return index < pieces_.size() ? &pieces_[index] : nullptr;
+}
+
 PieceState& Instance::piece_for_script_index(uint32_t index) {
-    if (index >= pieces_.size())
-        throw std::out_of_range("COB piece index is out of range");
-    return pieces_[index];
+    if (index < pieces_.size())
+        return pieces_[index];
+    spare_piece_ = {};
+    return spare_piece_;
 }
 
 const PieceState& Instance::piece_for_script_index(uint32_t index) const {
-    if (index >= pieces_.size())
-        throw std::out_of_range("COB piece index is out of range");
-    return pieces_[index];
+    static const PieceState no_piece{};
+    return index < pieces_.size() ? pieces_[index] : no_piece;
 }
 
 oa::formats::objects3d::FixedVector3
 Instance::attachment_position(uint32_t piece_index, RotationWords root_rotation) const {
-    if (piece_index >= pieces_.size())
-        throw std::out_of_range("3DO piece index is out of range");
     oa::formats::objects3d::FixedVector3 result{};
+    if (piece_index >= pieces_.size())
+        return result;
     auto current = piece_index;
     while (current != kNoPiece) {
         const auto& piece = pieces_[current];
         const auto& object = model_->objects[piece.object_index];
-        result.x = checked(
+        result.x = low32(
             static_cast<int64_t>(result.x) + negate(object.offset_from_parent.x) +
-                piece.translation.x,
-            "3DO attachment X overflow"
+            piece.translation.x
         );
-        result.y = checked(
-            static_cast<int64_t>(result.y) + object.offset_from_parent.y + piece.translation.y,
-            "3DO attachment Y overflow"
+        result.y = low32(
+            static_cast<int64_t>(result.y) + object.offset_from_parent.y + piece.translation.y
         );
-        result.z = checked(
+        result.z = low32(
             static_cast<int64_t>(result.z) + negate(object.offset_from_parent.z) +
-                piece.translation.z,
-            "3DO attachment Z overflow"
+            piece.translation.z
         );
         if (piece.parent == kNoPiece)
             break;
@@ -258,17 +268,13 @@ void place_in_parent(
     const PieceState& state
 ) {
     rotate(point, turn);
-    point.x = checked(
-        static_cast<int64_t>(point.x) + negate(source.offset_from_parent.x) + state.translation.x,
-        "3DO transformed X overflow"
+    point.x = low32(
+        static_cast<int64_t>(point.x) + negate(source.offset_from_parent.x) + state.translation.x
     );
-    point.y = checked(
-        static_cast<int64_t>(point.y) + source.offset_from_parent.y + state.translation.y,
-        "3DO transformed Y overflow"
-    );
-    point.z = checked(
-        static_cast<int64_t>(point.z) + negate(source.offset_from_parent.z) + state.translation.z,
-        "3DO transformed Z overflow"
+    point.y =
+        low32(static_cast<int64_t>(point.y) + source.offset_from_parent.y + state.translation.y);
+    point.z = low32(
+        static_cast<int64_t>(point.z) + negate(source.offset_from_parent.z) + state.translation.z
     );
 }
 

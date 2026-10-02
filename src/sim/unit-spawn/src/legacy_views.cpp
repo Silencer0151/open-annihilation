@@ -3,6 +3,7 @@
 
 #include "oa/sim/unit_spawn/legacy_views.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace oa::sim::unit_spawn::legacy {
@@ -16,7 +17,8 @@ TypeField& TypeField::operator=(sim::simulation_state::UnitType* target) {
             ref_ = oa::oa_ref_from_index(static_cast<uint32_t>(i));
             return *this;
         }
-    throw std::invalid_argument("unit type is outside the canonical type table");
+    ref_ = 0;
+    return *this;
 }
 
 TypeField::operator sim::simulation_state::UnitType*() const noexcept {
@@ -121,14 +123,6 @@ World::World(
       total_slots(w.game, &oa::Game::unit_slot_count), viewpoint_player(w.game.viewpoint_player) {
 }
 
-namespace {
-std::span<PlayerSetupState> checked_setups(std::span<PlayerSetupState> setups) {
-    if (setups.size() < OA_PLAYER_COUNT)
-        throw std::invalid_argument("player setup table has fewer than ten players");
-    return setups;
-}
-} // namespace
-
 LegacyViews::LegacyViews(
     oa::World& w,
     std::span<Type> types,
@@ -136,12 +130,18 @@ LegacyViews::LegacyViews(
     std::span<PlayerSetupState> setups,
     std::span<sim::simulation_state::OrderQueue> orders
 )
-    : record_(w), simulation_(w), world_(w, simulation_, types, checked_setups(setups)) {
-    if (assets.size() != w.unit_slot_count || orders.size() != w.unit_slot_count)
-        throw std::invalid_argument("legacy view side tables do not match the unit pool");
-    units_.reserve(w.unit_slot_count);
-    slots_.reserve(w.unit_slot_count);
-    for (uint32_t i = 0; i < w.unit_slot_count; ++i) {
+    : record_(w), simulation_(w),
+      world_(
+          w,
+          simulation_,
+          types,
+          setups.size() < OA_PLAYER_COUNT ? std::span<PlayerSetupState>(spare_setups_) : setups
+      ) {
+    const auto viewed =
+        std::min<std::size_t>(w.unit_slot_count, std::min(assets.size(), orders.size()));
+    units_.reserve(viewed);
+    slots_.reserve(viewed);
+    for (uint32_t i = 0; i < viewed; ++i) {
         units_.emplace_back(w.units[i], orders[i], types, std::span(simulation_.players));
         slots_.emplace_back(units_.back(), assets[i]);
     }
@@ -153,18 +153,21 @@ void LegacyViews::bind_player_ranges() {
     for (std::size_t player = 0; player < OA_PLAYER_COUNT; ++player) {
         uint32_t count = 0;
         auto* first = oa::world_player_units(&record_, &record_.game.players[player], &count);
-        const auto slot = first ? oa::world_unit_slot(&record_, first) : 0u;
+        auto slot = first ? oa::world_unit_slot(&record_, first) : 0u;
+        // A range past the viewed slots is viewed as empty.
+        if (slot > units_.size() || count > units_.size() - slot) {
+            slot = 0;
+            count = 0;
+        }
         simulation_.players[player].units = std::span(units_).subspan(slot, count);
         world_.players[player].first = slot;
         world_.players[player].count = count;
     }
 }
 
-Slot& LegacyViews::slot(const oa::Unit& unit) {
+Slot& LegacyViews::slot(const oa::Unit& unit) noexcept {
     const auto index = oa::world_unit_slot(&record_, &unit);
-    if (index >= slots_.size())
-        throw std::out_of_range("unit is outside the viewed pool");
-    return slots_[index];
+    return index < slots_.size() ? slots_[index] : slots_.front();
 }
 
 LegacyWorld::LegacyWorld(std::size_t unit_slots, std::size_t type_count)
@@ -188,7 +191,7 @@ void LegacyWorld::load_types() {
 
 void LegacyWorld::range(std::size_t index, std::size_t first, std::size_t count) {
     if (index >= OA_PLAYER_COUNT)
-        throw std::out_of_range("player index outside the ten players");
+        return;
     auto& player = world_->game.players[index];
     player.first_unit = count ? oa::oa_ref_from_index(static_cast<uint32_t>(first)) : 0u;
     player.last_unit = count ? oa::oa_ref_from_index(static_cast<uint32_t>(first + count - 1)) : 0u;

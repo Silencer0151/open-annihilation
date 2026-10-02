@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The network session a Runtime keeps from start-up: the connection behind
+// The network session network play keeps for a runtime from start-up
+// (NetworkPlay::net_, network_play.hpp): the connection behind
 // the multiplayer screens, the running match's binding and whether a match
 // report runs.
 #pragma once
@@ -20,7 +21,7 @@
 
 namespace oa::app {
 
-struct Runtime::NetState {
+struct NetState {
     oa::netgame::match::NetConnection connection{};
     bool connected{}; // connection storage allocated
     std::unique_ptr<oa::netgame::match::NetMatch> net =
@@ -51,7 +52,7 @@ struct Runtime::NetState {
     uint16_t speed_seen{};
     uint32_t stalled_player{oa::netgame::match::no_player_id};
     bool finish_pending{}; // the finished game waits on the final economy
-    // A match report started (Runtime::start_reporter) and has not closed;
+    // A match report started (NetworkPlay::start_reporter) and has not closed;
     // the extension built on network play keeps the report itself
     // (extension_api::Hooks::report_start). Used only once the end-of-game
     // screen's state exists.

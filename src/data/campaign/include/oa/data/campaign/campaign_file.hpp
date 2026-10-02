@@ -57,36 +57,36 @@ inline constexpr uint8_t immunity = 0x80;
 // One schema `units` entry. Strings point into the object's unit string pool
 // and are null when the key is absent.
 struct MissionUnit {
-    const char* unit_name;       // Unitname
-    const char* ident;           // Ident
-    const char* initial_mission; // InitialMission
-    int32_t x;                   // XPos << 16
-    int32_t y;                   // YPos << 16
-    int32_t z;                   // ZPos << 16
-    int16_t angle;               // (Angle << 16) / 360
-    int16_t health_percent;      // HealthPercentage, default 100
-    int32_t creation_countdown;
-    int16_t build_priority;
-    uint8_t player; // 1-based; 0 in the file becomes 1
-    uint8_t flags;  // mission_unit_flag
+    const char* unit_name{};       // Unitname
+    const char* ident{};           // Ident
+    const char* initial_mission{}; // InitialMission
+    int32_t x{};                   // XPos << 16
+    int32_t y{};                   // YPos << 16
+    int32_t z{};                   // ZPos << 16
+    int16_t angle{};               // (Angle << 16) / 360
+    int16_t health_percent{};      // HealthPercentage, default 100
+    int32_t creation_countdown{};
+    int16_t build_priority{};
+    uint8_t player{}; // 1-based; 0 in the file becomes 1
+    uint8_t flags{};  // mission_unit_flag
 };
 
 enum class MissionRuleType : int32_t { none = 0, start_position = 1 };
 
 // One schema `specials` entry.
 struct MissionRule {
-    MissionRuleType type;
-    int32_t index; // zero-based start position
-    int16_t x;
-    int16_t z;
+    MissionRuleType type{};
+    int32_t index{}; // zero-based start position
+    int16_t x{};
+    int16_t z{};
 };
 
 // One schema `features` entry. An empty name marks an entry skipped for a
 // negative coordinate.
 struct MissionFeature {
-    char name[0x80]; // Featurename
-    int32_t x;       // XPos, default -1
-    int32_t z;       // ZPos, default -1
+    char name[0x80]{}; // Featurename
+    int32_t x{};       // XPos, default -1
+    int32_t z{};       // ZPos, default -1
 };
 
 // File services. `size` returns -1 when the file is missing; `read` returns
@@ -94,84 +94,84 @@ struct MissionFeature {
 // directory with the given extension. `translate` localises UI text and may
 // return null for "no translation"; `message` shows a modal error.
 struct CampaignFiles {
-    void* context;
-    int32_t (*size)(void* context, const char* path);
-    int32_t (*read)(void* context, const char* path, char* buffer, uint32_t capacity);
+    void* context{};
+    int32_t (*size)(void* context, const char* path) = nullptr;
+    int32_t (*read)(void* context, const char* path, char* buffer, uint32_t capacity) = nullptr;
     void (*list)(
         void* context,
         const char* directory,
         const char* extension,
         void (*visit)(void* visit_context, const char* name),
         void* visit_context
-    );
-    const char* (*translate)(void* context, const char* text);
-    void (*message)(void* context, const char* text);
-    const char* language; // optional directory variant ("camps-<language>")
+    ) = nullptr;
+    const char* (*translate)(void* context, const char* text) = nullptr;
+    void (*message)(void* context, const char* text) = nullptr;
+    const char* language{}; // optional directory variant ("camps-<language>")
     // Entries a find over the wildcard `pattern` reports other than "." and
     // "..", directories included.
-    int32_t (*count)(void* context, const char* pattern);
+    int32_t (*count)(void* context, const char* pattern) = nullptr;
     // The find walk over the wildcard `pattern`, entry by entry.
     void (*find)(
         void* context,
         const char* pattern,
         void (*visit)(void* user, const FindRecord& record),
         void* user
-    );
+    ) = nullptr;
 };
 
 // The campaign object: the loaded campaign, the bound mission's resolved
 // paths and header values, and its placement tables.
 struct CampaignFile {
-    SessionKind kind;
-    char campaign_name[kCampaignNameBytes];
-    char paths[kCampaignPathCount][kCampaignPathBytes]; // indexed by CampaignPath
-    int32_t mission_file_size;
+    SessionKind kind{};
+    char campaign_name[kCampaignNameBytes]{};
+    char paths[kCampaignPathCount][kCampaignPathBytes]{}; // indexed by CampaignPath
+    int32_t mission_file_size{};
     oa::formats::tdf::Document campaign;
-    char mission_name[kCampaignNameBytes];
-    char localized_name[kCampaignNameBytes];
-    char* briefing_text;
-    int32_t mission_index;
-    uint32_t content_hash; // map content hash, 0 until computed
-    uint32_t header_hash;  // GlobalHeader body hash
-    char description[kCampaignShortTextBytes];
-    char planet[kCampaignShortTextBytes];
-    int32_t surface_metal;
-    int32_t min_wind;
-    int32_t max_wind;
-    int32_t gravity;
-    float tidal_strength; // -1 when unloaded
-    int32_t lava_world;
-    int32_t no_sea_level_trigger;
-    int32_t water_does_damage;
-    int32_t water_damage;
-    float kill_multiplier;
-    float time_multiplier;
-    float metal[10];  // per player: [0] HumanMetal, [1] ComputerMetal
-    float energy[10]; // per player: [0] HumanEnergy, [1] ComputerEnergy
-    MissionUnit* units;
-    int32_t unit_count;
-    MissionRule* rules;
-    int32_t rule_count;
-    MissionFeature* features;
-    int32_t feature_count;
-    char memory[kCampaignShortTextBytes];
-    char num_players[kCampaignShortTextBytes];
+    char mission_name[kCampaignNameBytes]{};
+    char localized_name[kCampaignNameBytes]{};
+    char* briefing_text{};
+    int32_t mission_index{};
+    uint32_t content_hash{}; // map content hash, 0 until computed
+    uint32_t header_hash{};  // GlobalHeader body hash
+    char description[kCampaignShortTextBytes]{};
+    char planet[kCampaignShortTextBytes]{};
+    int32_t surface_metal{};
+    int32_t min_wind{};
+    int32_t max_wind{};
+    int32_t gravity{};
+    float tidal_strength{}; // -1 when unloaded
+    int32_t lava_world{};
+    int32_t no_sea_level_trigger{};
+    int32_t water_does_damage{};
+    int32_t water_damage{};
+    float kill_multiplier{};
+    float time_multiplier{};
+    float metal[10]{};  // per player: [0] HumanMetal, [1] ComputerMetal
+    float energy[10]{}; // per player: [0] HumanEnergy, [1] ComputerEnergy
+    MissionUnit* units{};
+    int32_t unit_count{};
+    MissionRule* rules{};
+    int32_t rule_count{};
+    MissionFeature* features{};
+    int32_t feature_count{};
+    char memory[kCampaignShortTextBytes]{};
+    char num_players[kCampaignShortTextBytes]{};
     // The selected schema and copies of the values the loader also stores in
     // the game block.
-    char schema[0x40];
-    int32_t units_per_player; // GlobalHeader maxunits (campaign only)
-    int32_t mapping;
-    int32_t line_of_sight;
-    int32_t no_movie;
+    char schema[0x40]{};
+    int32_t units_per_player{}; // GlobalHeader maxunits (campaign only)
+    int32_t mapping{};
+    int32_t line_of_sight{};
+    int32_t no_movie{};
 };
 
 // What the loaders need from their caller: file services, the game block (may
 // be null in tools and tests) and the difficulty the schema is chosen by.
 struct CampaignEnv {
-    const CampaignFiles* files;
-    Game* game;
-    int32_t difficulty;   // 0 easy, 1 medium, 2 hard
-    int32_t player_count; // skirmish/multiplayer schema match; 0 = any
+    const CampaignFiles* files{};
+    Game* game{};
+    int32_t difficulty{};   // 0 easy, 1 medium, 2 hard
+    int32_t player_count{}; // skirmish/multiplayer schema match; 0 = any
 };
 
 // Game.session_record entries a mission's GlobalHeader sets when the map loads.

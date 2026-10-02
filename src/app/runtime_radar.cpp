@@ -59,6 +59,7 @@ void Runtime::RadarState::release() {
     radar_host_free(nullptr, well);
     well = nullptr;
     built_for = nullptr;
+    hot_unit_count = 0;
 }
 
 Runtime::RadarState::~RadarState() {
@@ -200,7 +201,7 @@ void Runtime::compose_radar_final() {
             return false;
         }
     };
-    oa::present::world_renderer::radar_compose_final(
+    radar.hot_unit_count = oa::present::world_renderer::radar_compose_final(
         match_->state(), radar.surfaces, radar.sprites, host, radar.hot_units
     );
 }

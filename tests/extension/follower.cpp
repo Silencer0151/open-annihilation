@@ -13,8 +13,8 @@
 // recorder, it checks the recorder's counts and counts
 // "follower.order <hook>" when the order holds, or
 // "follower.misordered <hook>" when it does not: its startup after the
-// recorder's, its shutdown before, and its take_option, run_mode,
-// return_label and open_recording each before the recorder's.
+// recorder's, its shutdown and release_runtime before, and its take_option,
+// run_mode, return_label and open_recording each before the recorder's.
 //
 // It includes extension.hpp alone, never runtime.hpp: an extension that
 // adds no Runtime members needs no more.
@@ -193,6 +193,10 @@ void fill(Extension* table) {
             );
             return false;
         };
+    table->release_runtime = [](void*, Runtime&) {
+        count("release_runtime");
+        count_order("release_runtime", calls("release_runtime") == 0);
+    };
 }
 
 } // namespace

@@ -19,6 +19,16 @@ constexpr uint32_t with_page_of(uint32_t flags, uint32_t source) noexcept {
     return ((source ^ flags) & kUnitBuildPageMask) ^ flags;
 }
 
+// The flag word with its page field set to the first page.
+constexpr uint32_t on_first_page(uint32_t flags) noexcept {
+    return (flags & ~kUnitBuildPageMask) | (1u << kUnitBuildPageShift);
+}
+
+// The 16-bit flag word with the bits of `field` cleared.
+constexpr uint32_t without(uint32_t flags, uint16_t field) noexcept {
+    return flags & ~static_cast<uint32_t>(field);
+}
+
 void set_group_value(const PanelControls& controls, int32_t index, int32_t value) {
     if (index != -1 && controls.set_group_value != nullptr)
         controls.set_group_value(controls.user, index, value);
@@ -70,13 +80,14 @@ void order_panel_store(Game& game, const OrderPanelState& state) noexcept {
 uint32_t build_menu_forward(uint32_t flags, uint8_t page_count, bool cycle) noexcept {
     const bool last =
         static_cast<int32_t>(build_page(flags)) == static_cast<int32_t>(page_count) - 1;
-    const auto next = with_page_of(flags, (flags & 0xff800000u) + (1u << kUnitBuildPageShift));
+    const auto next =
+        with_page_of(flags, (flags & kUnitBuildPageMask) + (1u << kUnitBuildPageShift));
     if (!cycle) {
-        const auto paged = last ? ((flags & 0xfcffffffu) | (1u << kUnitBuildPageShift)) : next;
+        const auto paged = last ? on_first_page(flags) : next;
         return paged | kUnitFlagBuildMenu;
     }
     if ((flags & kUnitFlagBuildMenu) == 0)
-        return (flags & 0xfcffffffu) | kUnitFlagBuildMenu | (1u << kUnitBuildPageShift);
+        return on_first_page(flags) | kUnitFlagBuildMenu;
     return last ? flags & ~kUnitFlagBuildMenu : next;
 }
 
@@ -85,7 +96,7 @@ uint32_t build_menu_back(uint32_t flags, uint8_t page_count, bool cycle) noexcep
     if (!cycle) {
         const auto base = (flags & kUnitBuildPageMask) < (2u << kUnitBuildPageShift)
                               ? last_page
-                              : flags & 0xff800000u;
+                              : flags & kUnitBuildPageMask;
         return with_page_of(flags, base - 1u) | kUnitFlagBuildMenu;
     }
     if ((flags & kUnitFlagBuildMenu) == 0) {
@@ -94,7 +105,7 @@ uint32_t build_menu_back(uint32_t flags, uint8_t page_count, bool cycle) noexcep
     }
     if ((flags & kUnitBuildPageMask) == (1u << kUnitBuildPageShift))
         return flags & ~kUnitFlagBuildMenu;
-    return with_page_of(flags, (flags & 0xff800000u) - 1u);
+    return with_page_of(flags, (flags & kUnitBuildPageMask) - 1u);
 }
 
 uint32_t build_menu_select(uint32_t flags, uint8_t page_count, uint32_t page) noexcept {
@@ -230,8 +241,9 @@ SelectionSummary summarize_selection(
             can2 |= kOrder2CanBlast;
         ++summary.count;
     }
-    summary.frame_flags =
-        static_cast<uint16_t>((fire << kFrameFireOrderShift) | (state.frame_flags & 0x8fffu));
+    summary.frame_flags = static_cast<uint16_t>(
+        (fire << kFrameFireOrderShift) | without(state.frame_flags, kFrameFireOrderMask)
+    );
     summary.order_flags = static_cast<uint16_t>(
         (move & 7u) | (cloak << kOrderCloakShift) | (onoff << kOrderOnOffShift) | can
     );
@@ -398,39 +410,43 @@ bool order_panel_toggle(
         if (move <= 3) {
             const auto next = next_standing_order(move);
             apply_order(events, "STANDING_MOVEORDER", static_cast<int32_t>(next));
-            state.order_flags = static_cast<uint16_t>((state.order_flags & 0xfff8u) | next);
+            state.order_flags =
+                static_cast<uint16_t>(without(state.order_flags, kOrderMoveMask) | next);
         }
         play_sound(events, "setmoveorders");
         shown = state.order_flags & 7u;
     } else if (std::strstr(name, "FIREORD") != nullptr) {
-        const auto fire = (state.frame_flags & 0x7000u) >> kFrameFireOrderShift;
+        const auto fire = (state.frame_flags & kFrameFireOrderMask) >> kFrameFireOrderShift;
         if (fire <= 3) {
             const auto next = next_standing_order(fire);
             apply_order(events, "STANDING_FIREORDER", static_cast<int32_t>(next));
             state.frame_flags = static_cast<uint16_t>(
-                (state.frame_flags & 0x8fffu) | (next << kFrameFireOrderShift)
+                without(state.frame_flags, kFrameFireOrderMask) | (next << kFrameFireOrderShift)
             );
         }
         play_sound(events, "setfireorders");
         shown = (state.frame_flags >> kFrameFireOrderShift) & 7u;
     } else if (std::strstr(name, "STATUS") != nullptr || std::strstr(name, "ONOFF") != nullptr) {
-        const auto onoff = (state.order_flags & 0x60u) >> kOrderOnOffShift;
+        const auto onoff = (state.order_flags & kOrderOnOffMask) >> kOrderOnOffShift;
         if (onoff == 0 || onoff == 2) {
             apply_order(events, "ACTIVATE", 0);
-            state.order_flags = static_cast<uint16_t>((state.order_flags & 0xffbfu) | 0x20u);
+            state.order_flags = static_cast<uint16_t>(
+                without(state.order_flags, kOrderOnOffMask) | kOrderOnOffActive
+            );
         } else if (onoff == 1) {
             apply_order(events, "DEACTIVATE", 0);
-            state.order_flags = static_cast<uint16_t>(state.order_flags & 0xff9fu);
+            state.order_flags = static_cast<uint16_t>(without(state.order_flags, kOrderOnOffMask));
         }
         play_sound(events, "specialorders");
         shown = (state.order_flags >> kOrderOnOffShift) & 3u;
     } else if (std::strstr(name, "CLOAK") != nullptr) {
-        if ((state.order_flags & 0x18u) == 0) {
+        if ((state.order_flags & kOrderCloakMask) == 0) {
             apply_order(events, "CLOAK_ON", 0);
-            state.order_flags = static_cast<uint16_t>((state.order_flags & 0xffefu) | 0x08u);
+            state.order_flags =
+                static_cast<uint16_t>(without(state.order_flags, kOrderCloakMask) | kOrderCloakOn);
         } else {
             apply_order(events, "CLOAK_OFF", 0);
-            state.order_flags = static_cast<uint16_t>(state.order_flags & 0xffe7u);
+            state.order_flags = static_cast<uint16_t>(without(state.order_flags, kOrderCloakMask));
         }
         play_sound(events, "specialorders");
         shown = (state.order_flags >> kOrderCloakShift) & 3u;
@@ -585,8 +601,10 @@ void update_order_panel(
     int32_t count = 1;
     if (state.unit_id == 0) {
         const auto summary = summarize_selection(state, table, first_unit, last_unit);
-        state.frame_flags =
-            static_cast<uint16_t>((summary.frame_flags & 0x7000u) | (state.frame_flags & 0x8fffu));
+        state.frame_flags = static_cast<uint16_t>(
+            (summary.frame_flags & kFrameFireOrderMask) |
+            without(state.frame_flags, kFrameFireOrderMask)
+        );
         state.order_flags = summary.order_flags;
         state.order_flags2 = summary.order_flags2;
         count = summary.count;

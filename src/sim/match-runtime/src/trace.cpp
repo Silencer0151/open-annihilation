@@ -36,23 +36,21 @@ TraceRecorder::~TraceRecorder() {
 }
 
 void TraceRecorder::close() noexcept {
-    if (stream_ != nullptr)
-        std::fclose(stream_);
-    if (units_ != nullptr)
-        std::fclose(units_);
-    stream_ = nullptr;
-    units_ = nullptr;
+    if (stream_.is_open())
+        stream_.close();
+    if (units_.is_open())
+        units_.close();
 }
 
 bool TraceRecorder::open(const std::string& path, const std::string& unit_path, uint32_t seed) {
     close();
-    stream_ = std::fopen(path.c_str(), "wb");
-    if (stream_ != nullptr && !unit_path.empty())
-        units_ = std::fopen(unit_path.c_str(), "w");
+    stream_.open(path, std::ios::binary);
+    if (stream_.is_open() && !unit_path.empty())
+        units_.open(unit_path);
     uint8_t header[trace::header_size];
     trace::encode_header(header, seed);
-    if (stream_ == nullptr || (!unit_path.empty() && units_ == nullptr) ||
-        std::fwrite(header, sizeof header, 1, stream_) != 1) {
+    if (!stream_.is_open() || (!unit_path.empty() && !units_.is_open()) ||
+        !stream_.write(reinterpret_cast<const char*>(header), sizeof header)) {
         close();
         return false;
     }
@@ -60,7 +58,7 @@ bool TraceRecorder::open(const std::string& path, const std::string& unit_path, 
 }
 
 void TraceRecorder::sample(const Match& match) {
-    if (stream_ == nullptr)
+    if (!stream_.is_open())
         return;
     const auto& world = match.state();
     sides_.resize(world.unit_slot_count);
@@ -68,16 +66,16 @@ void TraceRecorder::sample(const Match& match) {
     const trace::RandomState random{match.random_state(), match.lcg_state()};
     uint8_t record[trace::record_size];
     trace::encode_tick_record(record, trace::sample_tick_record(world, sides_.data(), random.core));
-    std::fwrite(record, sizeof record, 1, stream_);
+    stream_.write(reinterpret_cast<const char*>(record), sizeof record);
     const auto digest = trace::tick_digest(world, sides_.data(), random);
     for (std::size_t index = 0; index < trace::section_count; ++index) {
         trace::encode_section_record(
             record, digest.tick, static_cast<trace::Section>(index), digest.sections[index]
         );
-        std::fwrite(record, sizeof record, 1, stream_);
+        stream_.write(reinterpret_cast<const char*>(record), sizeof record);
     }
-    std::fflush(stream_);
-    if (units_ == nullptr)
+    stream_.flush();
+    if (!units_.is_open())
         return;
     std::array<char, 1024> line{};
     for (uint32_t slot = 1; slot < world.unit_slot_count; ++slot) {
@@ -85,9 +83,9 @@ void TraceRecorder::sample(const Match& match) {
             continue;
         const auto length =
             trace::format_unit(world, slot, sides_.data(), digest.tick, line.data(), line.size());
-        std::fwrite(line.data(), 1, std::min(length, line.size() - 1), units_);
+        units_.write(line.data(), static_cast<std::streamsize>(std::min(length, line.size() - 1)));
     }
-    std::fflush(units_);
+    units_.flush();
 }
 
 bool Match::record_trace(const std::string& path, const std::string& unit_path) {

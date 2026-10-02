@@ -46,7 +46,7 @@ int main() {
         Random random;
         random.lcg = {0};
         random.shared = {500, 0x4000};
-        require(refresh_wind(game, random), "Game refresh due");
+        require(refresh_wind(game, random) == WindRefresh::changed, "Game refresh due");
         require(
             game.wind_change_tick == 250 && game.wind_strength == 1500 &&
                 game.wind_direction == 0x4000 && game.wind_vector.x == -3000 &&
@@ -56,7 +56,7 @@ int main() {
         );
         game.tick = 250;
         require(
-            !refresh_wind(game, random) && game.wind_changed == 0,
+            refresh_wind(game, random) == WindRefresh::waiting && game.wind_changed == 0,
             "Game refresh waits for the deadline"
         );
     }
@@ -83,7 +83,7 @@ int main() {
         random.lcg = {0};
         random.shared = {500, 0x4000};
         state.vector_y = 42;
-        require(refresh_wind(state, random), "due refresh");
+        require(refresh_wind(state, random) == WindRefresh::changed, "due refresh");
         require(
             state.change_deadline == 250 && state.strength == 1500 && state.direction == 0x4000 &&
                 state.vector_x == -3000 && state.vector_y == 42 && state.vector_z == 0 &&
@@ -91,8 +91,8 @@ int main() {
             "wind sample and transforms"
         );
         require(
-            !refresh_wind(state, random) && state.changed == 0 && random.lcg_position == 1 &&
-                random.shared_position == 2,
+            refresh_wind(state, random) == WindRefresh::waiting && state.changed == 0 &&
+                random.lcg_position == 1 && random.shared_position == 2,
             "not-due refresh consumes no random values"
         );
     }
@@ -126,6 +126,32 @@ int main() {
         require(
             std::bit_cast<uint32_t>(state.normalized_strength) == 0x3f800000u,
             "normalized strength clamps to one"
+        );
+    }
+    {
+        // A zero divisor ends the run before the normalized strength and the
+        // changed flag; a rand() value above 32767 ends it before anything.
+        WindState state{};
+        state.current_tick = 1;
+        state.maximum_strength = 10;
+        state.normalized_strength = 0.5f;
+        Random random;
+        random.lcg = {0};
+        random.shared = {5, 0};
+        require(
+            refresh_wind(state, random) == WindRefresh::zero_strength_divisor &&
+                state.strength == 5 && state.normalized_strength == 0.5f && state.changed == 0,
+            "zero strength divisor"
+        );
+        WindState early{};
+        early.current_tick = 1;
+        early.strength_divisor = 5000;
+        Random high;
+        high.lcg = {0x8000};
+        require(
+            refresh_wind(early, high) == WindRefresh::random_out_of_range &&
+                early.change_deadline == 0 && high.shared_position == 0,
+            "rand() value above 32767"
         );
     }
     {

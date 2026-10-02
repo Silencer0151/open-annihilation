@@ -6,7 +6,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::scenario {
 namespace {
@@ -68,15 +67,11 @@ static_assert(persisted_in_kind_order());
 
 /// Returns the savegame entry of a condition kind.
 ///
-/// Throws std::invalid_argument for a kind outside the table.
-///
 /// @param kind condition kind
-/// @return its account name and counter
-const Persisted& entry(Kind kind) {
+/// @return its account name and counter, or null for a kind outside the table
+const Persisted* entry(Kind kind) noexcept {
     const auto index = static_cast<std::size_t>(kind);
-    if (index >= persisted.size())
-        throw std::invalid_argument("unknown scenario condition kind");
-    return persisted[index];
+    return index < persisted.size() ? &persisted[index] : nullptr;
 }
 
 /// Restores the Satisfied and Celebrated flags every condition shares.
@@ -90,12 +85,16 @@ void load_common_flags(Condition& condition, data::persist::Bank* bank) {
 
 } // namespace
 
-const char* condition_record_name(Kind kind) {
-    return entry(kind).record;
+const char* condition_record_name(Kind kind) noexcept {
+    const auto* p = entry(kind);
+    return p ? p->record : nullptr;
 }
 
 void save_condition(const Condition& condition, data::persist::Bank* bank) {
-    const Persisted& p = entry(condition.kind);
+    const auto* found = entry(condition.kind);
+    if (!found)
+        return;
+    const Persisted& p = *found;
     data::persist::bank_open_account(bank, p.record);
     if (p.counter_field != nullptr)
         data::persist::bank_set_int(bank, p.counter_field, condition.*p.counter);
@@ -104,23 +103,30 @@ void save_condition(const Condition& condition, data::persist::Bank* bank) {
 }
 
 void load_condition(Condition& condition, data::persist::Bank* bank) {
-    const Persisted& p = entry(condition.kind);
+    const auto* found = entry(condition.kind);
+    if (!found)
+        return;
+    const Persisted& p = *found;
     data::persist::bank_open_account(bank, p.record);
     if (p.counter_field != nullptr)
         condition.*p.counter = data::persist::bank_get_int(bank, p.counter_field, 0);
     load_common_flags(condition, bank);
 }
 
-void save_conditions(Controller& controller, data::persist::Bank* bank, int32_t map_kind) {
+bool save_conditions(Controller& controller, data::persist::Bank* bank, int32_t map_kind) {
     if (map_kind != campaign_map_kind)
-        return;
-    visit_conditions(controller, [bank](Condition& condition) { save_condition(condition, bank); });
+        return true;
+    return visit_conditions(controller, [bank](Condition& condition) {
+        save_condition(condition, bank);
+    });
 }
 
-void load_conditions(Controller& controller, data::persist::Bank* bank, int32_t map_kind) {
+bool load_conditions(Controller& controller, data::persist::Bank* bank, int32_t map_kind) {
     if (map_kind != campaign_map_kind)
-        return;
-    visit_conditions(controller, [bank](Condition& condition) { load_condition(condition, bank); });
+        return true;
+    return visit_conditions(controller, [bank](Condition& condition) {
+        load_condition(condition, bank);
+    });
 }
 
 } // namespace oa::sim::scenario

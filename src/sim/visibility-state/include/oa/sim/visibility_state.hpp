@@ -64,7 +64,7 @@ struct SpeedHost {
 ///
 /// @param[in,out] unit extractor whose speed is set
 /// @param terrain metal grid the footprint is summed over; cells off the grid are skipped
-/// @param script SetSpeed receiver; required when the unit has a script
+/// @param script SetSpeed receiver for a unit with a script; null skips the call
 /// @return the unsigned sum and whether the rate was set; nothing for a non-positive type rate
 [[nodiscard]] SpeedResult
 initialize_terrain_speed(SpeedUnit& unit, const TerrainGrid& terrain, SpeedHost* script);
@@ -96,6 +96,7 @@ struct SightRay {
 
 struct AltitudeSightPattern {
     std::vector<SightRay> rays;
+    const char* error{}; // why build_altitude_pattern refused the lines, or null
 };
 
 struct AltitudeSightData {
@@ -116,7 +117,8 @@ struct AltitudeSightData {
 /// @param terrain_width lattice width in plots
 /// @param terrain_height lattice height in plots
 /// @param minimum_height lowest high and low height of a cell, the sea-level height
-/// @return half-width by half-height cells, row-major
+/// @return half-width by half-height cells, row-major; none when a dimension is
+///         negative or past 32767, or the heights do not fill the lattice
 [[nodiscard]] std::vector<AltitudeCell> build_altitude_cells(
     std::span<const uint8_t> terrain_heights,
     int32_t terrain_width,
@@ -130,7 +132,9 @@ struct AltitudeSightData {
 /// missing line is an empty ray.
 ///
 /// @param lines the table's line values in order
-/// @return rays grouped by direction: all north rays first, then east, south and west
+/// @return rays grouped by direction: all north rays first, then east, south and
+///         west; no rays and an error for more than 8191 lines, a value that is not
+///         a 32-bit integer, or a line with fewer pairs than its count
 [[nodiscard]] AltitudeSightPattern build_altitude_pattern(std::span<const std::string_view> lines);
 
 // The record every sight stamp is added, moved and removed through. A unit's

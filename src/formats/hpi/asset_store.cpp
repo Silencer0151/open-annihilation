@@ -10,9 +10,13 @@
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace oa {
 namespace {
@@ -40,10 +44,12 @@ constexpr uint8_t kShadowedByLoose = 0x02;
 /// the archive.
 ///
 /// @param error the archive's error
-/// @param archive the archive read
+/// @param archive_path host path of the archive read
 /// @param node the entry read
 [[noreturn]] void fail_entry_read(
-    const base::bytes::DecodeError& error, const HpiArchive& archive, const ArchiveNode& node
+    const base::bytes::DecodeError& error,
+    const std::filesystem::path& archive_path,
+    const ArchiveNode& node
 ) {
     // A chunk that fails to decode carries its SQUASHERR_* name.
     const std::string what = error.detail != 0
@@ -51,7 +57,7 @@ constexpr uint8_t kShadowedByLoose = 0x02;
                                  : std::string(error.message);
     fail(
         what + " (" + node.name + ", length " + std::to_string(node.size) + ", at byte " +
-        std::to_string(error.offset) + " of " + archive.path().filename().string() + ")"
+        std::to_string(error.offset) + " of " + archive_path.filename().string() + ")"
     );
 }
 
@@ -123,6 +129,64 @@ std::vector<uint8_t> read_loose(const std::filesystem::path& path) {
     return bytes;
 }
 
+/// An archive file kept open for reads of its entries.
+class ArchiveFile final : public ArchiveSource {
+  public:
+
+    /// Takes over an open file.
+    ///
+    /// @param stream the file, opened for binary reads
+    /// @param size its size in bytes
+    ArchiveFile(std::ifstream stream, uint64_t size) : stream_(std::move(stream)), size_(size) {}
+
+    /// Returns the file's size when it was opened.
+    ///
+    /// @return the size in bytes
+    [[nodiscard]] uint64_t size() const noexcept override { return size_; }
+
+    /// Reads file bytes from an offset.
+    ///
+    /// @param offset file offset of the first byte
+    /// @param[out] output receives up to output.size() bytes
+    /// @return the count read; short past the end of the file
+    std::size_t read_at(uint64_t offset, std::span<uint8_t> output) override {
+        stream_.clear();
+        stream_.seekg(static_cast<std::streamoff>(offset));
+        if (!stream_)
+            return 0;
+        stream_.read(
+            reinterpret_cast<char*>(output.data()), static_cast<std::streamsize>(output.size())
+        );
+        return static_cast<std::size_t>(stream_.gcount());
+    }
+
+  private:
+
+    std::ifstream stream_;
+    uint64_t size_{};
+};
+
+/// Opens an archive file for reads, saying why it cannot be opened.
+///
+/// @param path host path of the archive
+/// @param[out] reason receives why the file cannot be opened
+/// @return the open file, or null
+std::unique_ptr<ArchiveFile>
+open_archive_file(const std::filesystem::path& path, std::string& reason) {
+    std::error_code status;
+    const auto size = std::filesystem::file_size(path, status);
+    if (status) {
+        reason = "cannot stat HPI archive '" + path.string() + "': " + status.message();
+        return nullptr;
+    }
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        reason = "cannot open HPI archive '" + path.string() + "'";
+        return nullptr;
+    }
+    return std::make_unique<ArchiveFile>(std::move(stream), size);
+}
+
 struct LooseItem {
     std::string name;
     std::filesystem::path path;
@@ -161,6 +225,8 @@ struct ResourceFile {
     std::ifstream loose;
     uint32_t loose_size = 0;
     const HpiArchive* archive = nullptr;
+    // Host path of the archive, named in the errors of its reads.
+    const std::filesystem::path* archive_path = nullptr;
     uint32_t node = 0;
     uint32_t size = 0;
     uint32_t position = 0;
@@ -270,9 +336,9 @@ bool AssetStore::is_mounted(const std::filesystem::path& archive) const {
 void AssetStore::mount(const std::filesystem::path& archive) {
     if (is_mounted(archive))
         return;
-    const auto absolute = std::filesystem::weakly_canonical(archive);
-    mounts_.push_back(Mount{absolute, HpiArchive(absolute), {}});
-    mount_paths_.push_back(absolute);
+    std::string error;
+    if (!try_mount(archive, &error))
+        fail(error);
 }
 
 bool AssetStore::try_mount(const std::filesystem::path& archive, std::string* error) {
@@ -281,16 +347,26 @@ bool AssetStore::try_mount(const std::filesystem::path& archive, std::string* er
             *error = "already mounted";
         return false;
     }
-    try {
-        const auto absolute = std::filesystem::weakly_canonical(archive);
-        mounts_.push_back(Mount{absolute, HpiArchive(absolute), {}});
-        mount_paths_.push_back(absolute);
-        return true;
-    } catch (const std::exception& failure) {
+    std::error_code status;
+    const auto absolute = std::filesystem::weakly_canonical(archive, status);
+    std::string reason;
+    if (status)
+        reason = "cannot resolve HPI archive path '" + archive.string() + "': " + status.message();
+    auto file = status ? nullptr : open_archive_file(absolute, reason);
+    if (!file) {
         if (error != nullptr)
-            *error = failure.what();
+            *error = std::move(reason);
         return false;
     }
+    auto opened = HpiArchive::open(std::move(file));
+    if (!opened.ok()) {
+        if (error != nullptr)
+            *error = opened.error.message;
+        return false;
+    }
+    mounts_.push_back(Mount{absolute, std::move(*opened.value), {}});
+    mount_paths_.push_back(absolute);
+    return true;
 }
 
 void AssetStore::drop_vanished_mounts() {
@@ -460,7 +536,7 @@ AssetStore::read_skipping(std::string_view resource, const std::filesystem::path
         const auto& mounted = mounts_[found->mount];
         auto bytes = mounted.archive.read_node(found->node);
         if (!bytes.ok())
-            fail_entry_read(bytes.error, mounted.archive, mounted.archive.nodes()[found->node]);
+            fail_entry_read(bytes.error, mounted.path, mounted.archive.nodes()[found->node]);
         return {std::move(*bytes.value), mounted.path, true};
     }
     fail("asset not found: " + normalized_path(resource));
@@ -677,6 +753,7 @@ ResourceFile* AssetStore::open(std::string_view resource) const {
             continue;
         auto* file = new ResourceFile;
         file->archive = &mounted.archive;
+        file->archive_path = &mounted.path;
         file->node = *node;
         file->size = mounted.archive.nodes()[*node].size;
         return file;
@@ -739,7 +816,7 @@ int32_t AssetStore::read(ResourceFile* file, std::span<uint8_t> output) {
         const auto count =
             file->archive->read_node_range(file->node, file->position, output.first(wanted));
         if (!count.ok())
-            fail_entry_read(count.error, *file->archive, node);
+            fail_entry_read(count.error, *file->archive_path, node);
         file->position += *count.value;
         return static_cast<int32_t>(*count.value);
     }
@@ -755,7 +832,7 @@ int32_t AssetStore::read(ResourceFile* file, std::span<uint8_t> output) {
                 // to decode is fatal, as in 3.1c.
                 if (read.error.code == base::bytes::DecodeCode::truncated)
                     return -1;
-                fail_entry_read(read.error, *file->archive, node);
+                fail_entry_read(read.error, *file->archive_path, node);
             }
         }
         const uint32_t offset = file->position - base;
@@ -768,6 +845,16 @@ int32_t AssetStore::read(ResourceFile* file, std::span<uint8_t> output) {
         (void)seek(file, file->position + static_cast<uint32_t>(take));
     }
     return static_cast<int32_t>(copied);
+}
+
+base::bytes::Decoded<HpiArchive> open_hpi_file(const std::filesystem::path& path) {
+    std::string reason;
+    auto file = open_archive_file(path, reason);
+    if (!file)
+        return base::bytes::DecodeError{
+            base::bytes::DecodeCode::not_found, 0, "cannot open HPI archive"
+        };
+    return HpiArchive::open(std::move(file));
 }
 
 int32_t write_loose_file(const std::filesystem::path& path, std::span<const uint8_t> bytes) {

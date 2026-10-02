@@ -838,7 +838,7 @@ void close_top_panel(GadgetPanel& panel) {
         panel.owner->redraw = 1;
     closed.reset();
     if ((flags & panel_flag::shade_below) != 0)
-        draw_panel(panel, 0x40);
+        draw_panel(panel, panel_flag::redraw);
 }
 
 GadgetOwner* load_panel(
@@ -875,7 +875,7 @@ GadgetOwner* load_panel(
         int32_t dx = i16(loaded_root, field::x);
         int32_t dy = i16(loaded_root, field::y);
         if (target != kNoGadget) {
-            flags |= 0x20;
+            flags |= panel_flag::no_save_under;
             auto& frame = records[static_cast<std::size_t>(target)];
             frame.bytes[field::active] = 0;
             dx = (i16(frame, field::width) - i16(loaded_root, field::width)) / 2 +

@@ -20,6 +20,9 @@
 #define OA_PLAYER_STATUS_MIRRORED 3
 #define OA_PLAYER_STATUS_CLOSED 4
 
+/* Player.resource_flags bit: the player shares its allies' storage. */
+#define OA_PLAYER_RESOURCE_SHARES_STORAGE 0x01u
+
 OA_CORE_BEGIN
 
 #pragma pack(push, 1)

@@ -130,11 +130,13 @@ class TickHost::VtolBuildMissions {
 
     const UnitDef* def_of(const oa::Unit& u) { return oa::world_unit_def_of(&world(), &u); }
 
+    // A builder without a type is noted and reads the reserved type 0.
     const UnitDef& def() {
         const auto* d = def_of(unit);
-        if (!d)
-            unsupported("aircraft builder without a unit def");
-        return *d;
+        if (d)
+            return *d;
+        match.fault_.note("aircraft builder without a unit def");
+        return world().unit_defs[0];
     }
 
     sim::simulation_state::Unit* target() {
@@ -178,7 +180,7 @@ class TickHost::VtolBuildMissions {
     void refresh_selection() {
         if (unit.owner_index == world().game.viewpoint_player &&
             (unit.flags & OA_UNIT_FLAG_SELECTED) != 0)
-            match.selection_.frame_flags |= 0x10;
+            match.selection_.frame_flags |= OA_FRAME_FLAG_REFRESH_ORDER_PANEL;
     }
 
     // Waits `ticks` ticks for the timer event.

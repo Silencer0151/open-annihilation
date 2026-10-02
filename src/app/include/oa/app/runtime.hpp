@@ -28,6 +28,7 @@
 #include "oa/sim/map_runtime/feature_defs.hpp"
 #include "oa/sim/map_runtime.hpp"
 #include "oa/formats/ota.hpp"
+#include "oa/formats/tdf.hpp"
 #include "oa/present/display.hpp"
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.hpp"
@@ -454,6 +455,26 @@ class Runtime final : public menu::Host,
     ///
     /// @param message the tick's error
     void report_match_tick_error(std::string_view message);
+
+    /// Reports an error a hook threw where the engine carries on without the
+    /// hook's work (HookErrorHandling::report and must_not_throw, hook_call.hpp).
+    ///
+    /// One line goes to standard error (the game's log when it plays):
+    /// "open-annihilation: extension hook <hook>: <message>". Repeats of the
+    /// same hook and message are counted and reported only when the count
+    /// reaches a power of two, since a hook called every frame may throw
+    /// every frame.
+    ///
+    /// @param hook the hook's name
+    /// @param message what it threw
+    void report_hook_error(const char* hook, const char* message) noexcept;
+
+    /// Returns the report call_hook_or_report takes for report_hook_error.
+    ///
+    /// @return a callable taking the hook's name and the message
+    [[nodiscard]] auto hook_error_report() noexcept {
+        return [this](const char* hook, const char* message) { report_hook_error(hook, message); };
+    }
 
     /// Returns the match clock's units per real second.
     ///
@@ -1056,12 +1077,12 @@ class Runtime final : public menu::Host,
     friend struct BuiltinScreens;
     // The check host's entries (check_host.hpp, runtime_check_host.cpp).
     friend struct CheckHostAccess;
-    // Defined by network play's extension (src/app/netgame/extension.cpp),
-    // whose hooks reach the runtime through it; to be replaced by hooks and
-    // declared headers (src/app/README.md). An extension outside the engine
-    // that adds members through OA_RUNTIME_EXTENSION_MEMBERS declares a
-    // friend of its own there.
-    friend struct RuntimeExtension;
+    // Network play's state for one runtime (src/app/netgame/network_play.hpp),
+    // which its extension owns and through which its hooks reach the
+    // runtime; to be replaced by hooks and declared headers
+    // (src/app/README.md). An extension outside the engine that adds members
+    // through OA_RUNTIME_EXTENSION_MEMBERS declares a friend of its own there.
+    friend class NetworkPlay;
 
     /// Registers the screen packages of screens.inc and the extension's.
     ///
@@ -1559,6 +1580,16 @@ class Runtime final : public menu::Host,
     ///
     /// @return the environment
     [[nodiscard]] oa::data::campaign::CampaignEnv campaign_object_env();
+
+    /// Returns campaign_object_env() with the mission loader's messages shown
+    /// as 3.1c shows them: each in a 480-pixel MSGBOX.GUI message box with OK,
+    /// fitted to its text, and written to the standard error stream.
+    ///
+    /// The end-of-mission panel, the saves made from it and the loading of a
+    /// campaign save bind missions through it.
+    ///
+    /// @return the environment
+    [[nodiscard]] oa::data::campaign::CampaignEnv campaign_dialog_env();
 
     /// Draws an igtitles.gaf title at the battlefield centre.
     ///
@@ -2297,7 +2328,7 @@ class Runtime final : public menu::Host,
     /// Returns the GlobalHeader's [Schema N] section session_schema_ names.
     ///
     /// @return the section, or null without a map header or schema
-    const oa::data::unit_definitions::TdfSection* session_schema_section() const;
+    const oa::formats::tdf::Block* session_schema_section() const;
 
     /// Reads an integer key of the session's schema section.
     ///
@@ -2343,7 +2374,7 @@ class Runtime final : public menu::Host,
     /// @param documents the parsed feature TDF set
     /// @param host feature definition loader
     void load_mission_features(
-        std::span<const oa::data::unit_definitions::TdfDocument> documents,
+        std::span<const oa::formats::tdf::OwnedDocument> documents,
         const oa::sim::map_runtime::FeatureDefHost& host
     );
 
@@ -2741,44 +2772,6 @@ class Runtime final : public menu::Host,
         HudRect name{132, 452, 11, 9};         // NAME: build button cost or feature line
         HudRect description{132, 465, 11, 8};  // DESCRIPTION: build button description
     };
-
-    /// Reads an integer key of a TDF section.
-    ///
-    /// @param section TDF section
-    /// @param key key name
-    /// @param fallback value for a missing, empty or malformed key
-    /// @return the key's value, or `fallback`
-    static int tdf_int(
-        const oa::data::unit_definitions::TdfSection& section,
-        std::string_view key,
-        int fallback = 0
-    );
-
-    /// Declared for a SIDEDATA rectangle; no definition exists and nothing calls it.
-    ///
-    /// @param side side section of SIDEDATA.TDF
-    /// @param name rectangle name
-    /// @return the rectangle
-    static HudRect
-    tdf_rect(const oa::data::unit_definitions::TdfSection& side, std::string_view name);
-
-    /// Declared for a SIDEDATA x position; no definition exists and nothing calls it.
-    ///
-    /// @param side side section of SIDEDATA.TDF
-    /// @param name position name
-    /// @param fallback value without the key
-    /// @return the column
-    static int
-    tdf_x(const oa::data::unit_definitions::TdfSection& side, std::string_view name, int fallback);
-
-    /// Declared for a SIDEDATA y position; no definition exists and nothing calls it.
-    ///
-    /// @param side side section of SIDEDATA.TDF
-    /// @param name position name
-    /// @param fallback value without the key
-    /// @return the row
-    static int
-    tdf_y(const oa::data::unit_definitions::TdfSection& side, std::string_view name, int fallback);
 
     /// Loads the viewed side's HUD layout (bars, colours and readout positions) from SIDEDATA.TDF;
     /// the defaults stay without it.
@@ -4186,10 +4179,10 @@ class Runtime final : public menu::Host,
     [[nodiscard]] oa::ui::display_layout::Point game_screen_canvas(int32_t x, int32_t y) const;
 
     /// Returns the on-screen unit list (on_screen_units_) and the radar's hot units as the
-    /// selection module reads them, with the radar's blip count and picture rectangle as
-    /// the radar renderer last stored them in the running match's Game.
+    /// selection module reads them, with the count of blips the radar last listed and the
+    /// picture rectangle the radar renderer stored in the running match's Game.
     ///
-    /// @return the buffers Game.hot_unit_count and hot_radar_unit_count count into
+    /// @return the buffers Game.hot_unit_count and RadarState::hot_unit_count count into
     [[nodiscard]] oa::sim::selection::VisibleLists on_screen_lists();
 
     /// Returns the selection module's services over the running match.
@@ -4611,7 +4604,7 @@ class Runtime final : public menu::Host,
     /// Loads and parses the feature TDF set, every features/**/*.tdf document in listing order.
     ///
     /// @return the documents, or the first listing, read or parse error
-    oa::data::unit_definitions::Result<std::vector<oa::data::unit_definitions::TdfDocument>>
+    oa::data::unit_definitions::Result<std::vector<oa::formats::tdf::OwnedDocument>>
     load_feature_tdf_set() const;
 
     /// Reads one frame of a feature sequence reference (feature_assets_), as the match's feature
@@ -7357,6 +7350,21 @@ class Runtime final : public menu::Host,
     /// @param argument text-box length; unused here
     void set_modal_text(std::string_view name, std::string_view text, int32_t argument) override;
 
+    // The map selection's picture (map_picture_state.hpp,
+    // runtime_skirmish_host.cpp): the selected map's minimap and where it
+    // is fitted in MAPPIC.
+    struct MapPictureState;
+
+    /// Frees a map picture state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_map_picture_state(MapPictureState* state) noexcept;
+
+    /// Returns the map picture state, creating it on first use.
+    ///
+    /// @return the state
+    MapPictureState& map_picture_state();
+
     /// Returns the MAPPIC gadget's picture.
     ///
     /// @return the picture handle
@@ -7651,6 +7659,15 @@ class Runtime final : public menu::Host,
     /// CI, or the dummy or offscreen video driver) a record of the requests.
     void choose_web_links();
 
+    // The web link hooks the run chose and the requests a record of them
+    // keeps (web_link_state.hpp, runtime_notices.cpp).
+    struct WebLinkState;
+
+    /// Frees a web link state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_web_link_state(WebLinkState* state) noexcept;
+
     Options options_;
     oa::AssetStore& assets_;
     Extension extension_;
@@ -7685,7 +7702,8 @@ class Runtime final : public menu::Host,
     std::string first_map_name_;
     std::vector<std::string> eligible_map_names_;
     std::optional<oa::formats::ota::MapMetadata> selected_map_metadata_;
-    std::optional<oa::data::unit_definitions::TdfDocument> selected_ota_document_;
+    // The selected map's OTA, whose GlobalHeader the session and scenario read.
+    std::optional<oa::formats::tdf::OwnedDocument> selected_ota_document_;
     // [Schema N] the session object selected for the match being built.
     std::string session_schema_;
     std::optional<oa::formats::tnt::Map> selected_tnt_;
@@ -7767,8 +7785,9 @@ class Runtime final : public menu::Host,
         std::array<uint8_t, 256> gray_table{};
         std::vector<uint16_t> sight_bits{};
         std::vector<uint8_t> coverage{};
-        std::vector<oa::RadarHotUnit> hot_units{};           // Game.hot_radar_units
-        oa::present::GafSprites fx{};                        // anims/FX.GAF, kept across matches
+        std::vector<oa::RadarHotUnit> hot_units{}; // Game.hot_radar_units
+        uint32_t hot_unit_count = 0;  // entries of hot_units the last composed picture listed
+        oa::present::GafSprites fx{}; // anims/FX.GAF, kept across matches
         oa::present::world_renderer::RadarSprites sprites{}; // sequences of fx
         uint32_t tick = 0;                                   // simulation tick last composed
         uint32_t viewer_deadline = 0; // viewpoint Player.next_economy_tick then
@@ -7995,18 +8014,10 @@ class Runtime final : public menu::Host,
     map_modal::ModalState map_modal_{};
     std::vector<std::string> bound_map_names_;
     std::string pending_parent_map_name_;
-    std::vector<uint8_t> preview_rgb_;
-    std::array<uint8_t, 3> preview_clear_rgb_{}; // palette index 0 behind the fitted map
-    std::size_t preview_width_ = 0;
-    std::size_t preview_height_ = 0;
-    std::size_t preview_source_width_ = 0;
-    std::size_t preview_source_height_ = 0;
-    int32_t preview_destination_x_ = 0;
-    int32_t preview_destination_y_ = 0;
-    int32_t preview_destination_width_ = 0;
-    int32_t preview_destination_height_ = 0;
-    map_modal::PictureHandle map_picture_{};
-    uintptr_t next_picture_handle_ = 0;
+    // The map selection's picture; null until a map's picture is first used.
+    std::unique_ptr<MapPictureState, void (*)(MapPictureState*) noexcept> map_picture_{
+        nullptr, destroy_map_picture_state
+    };
     int16_t modal_map_index_ = 0;
     uintptr_t next_map_list_handle_ = 0;
     int32_t map_list_mode_ = 0; // map list mode of the last map selection
@@ -8493,6 +8504,8 @@ class Runtime final : public menu::Host,
     bool match_tick_blocked_ = false;
     std::string last_tick_error_{};
     uint32_t tick_error_repeats_{};
+    std::string last_hook_error_{}; // the last report_hook_error line, its count left out
+    uint32_t hook_error_repeats_{}; // times that line has been reported in a row
     uint8_t match_local_player_ = 0;
     uint16_t selected_match_unit_ = 0;
     uint16_t hovered_match_unit_ = 0;
@@ -8518,9 +8531,19 @@ class Runtime final : public menu::Host,
     bool cursors_loaded_ = false;
     bool menu_music_playing_ = false;
     std::unique_ptr<MusicHost, void (*)(MusicHost*) noexcept> music_{nullptr, destroy_music_host};
-    // Network play's members; frozen, and only to shrink (src/app/README.md).
-    // Declared after match_, they go before the match they bind.
-#include "netgame_runtime_members.hpp"
+
+    // Has the extensions release what they keep for this runtime as it is
+    // destroyed (Extension::release_runtime). Declared after match_, it
+    // releases them before the match they bind goes, also when the
+    // constructor throws.
+    struct ExtensionRelease {
+        Runtime& runtime;
+
+        /// Calls Extension::release_runtime for the runtime, reporting on stderr what it throws.
+        ~ExtensionRelease();
+    };
+
+    ExtensionRelease extension_release_{*this};
 #ifdef OA_RUNTIME_EXTENSION_MEMBERS
     // The members of the one extension outside the engine that adds any,
     // from the header its project names in OA_RUNTIME_EXTENSION_MEMBERS;
@@ -8599,9 +8622,11 @@ class Runtime final : public menu::Host,
     oa::present::unit_playout::Playout unit_playout_{};
     uintptr_t next_document_ = 0;
     std::string status_;
-    // Opens web addresses: the browser in a watched run, else a record of the requests.
-    WebLinkHooks web_links_{};
-    std::vector<std::string> web_link_requests_;
+    // Opens web addresses: the browser in a watched run, else a record of the
+    // requests; chosen as the runtime starts.
+    std::unique_ptr<WebLinkState, void (*)(WebLinkState*) noexcept> web_links_{
+        nullptr, destroy_web_link_state
+    };
     // Set by a notice's OK; the main menu replaces the screen after the frame's input.
     bool notice_returns_to_main_menu_ = false;
     // A final campaign victory without ending movies shows its notice over the main menu.

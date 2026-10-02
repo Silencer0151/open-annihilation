@@ -149,9 +149,9 @@ void player_slots() {
     for (std::size_t i = 0; i < 11; ++i) {
         std::array<uint8_t, sizeof(oa::Player)> expected{};
         const auto player_id = offsetof(oa::Player, player_id);
-        std::fill_n(expected.begin() + player_id, sizeof(uint32_t), 0xff);
+        std::fill_n(expected.begin() + player_id, sizeof(uint32_t), uint8_t{0xff});
         const auto info = offsetof(oa::Player, info);
-        std::fill_n(expected.begin() + info, sizeof(oa::oa_ref32), 0xab);
+        std::fill_n(expected.begin() + info, sizeof(oa::oa_ref32), uint8_t{0xab});
         const auto first = "Player " + std::to_string(i) + " First",
                    second = "Player " + std::to_string(i) + " Second";
         std::copy(first.begin(), first.end(), expected.begin() + offsetof(oa::Player, name));

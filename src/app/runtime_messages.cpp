@@ -4,6 +4,7 @@
 // The in-game message log (Game.chat_lines) drawn over the battlefield, and
 // the game speed keys that post to it.
 #include "oa/app/asset_files.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/present/model/mesh_raster.hpp"
@@ -103,9 +104,18 @@ messages::Hooks Runtime::message_hooks() {
     hooks.random = [](void* context) -> uint32_t {
         return static_cast<Runtime*>(context)->message_random_.next();
     };
-    if (extension_.message_hooks != nullptr)
-        extension_.message_hooks(extension_.context, *this, hooks);
-    return hooks;
+    // The extension adds its hooks to a copy, which replaces the engine's
+    // only when the hook returns: one that throws leaves the log with the
+    // engine's own hooks for this call. The report goes to standard error
+    // alone, since a line posted to the log would build its hooks again.
+    messages::Hooks filled = hooks;
+    HookError error;
+    call_hook<&Extension::message_hooks>(extension_, error, *this, filled);
+    if (error.caught) {
+        report_hook_error(HookTraits<&Extension::message_hooks>::entry.name, error.message.c_str());
+        return hooks;
+    }
+    return filled;
 }
 
 void Runtime::bind_message_log() {
@@ -136,9 +146,16 @@ void Runtime::bind_message_log() {
                              const oa::Player* owner = oa::world_player(&world, player);
                              if (owner == nullptr)
                                  return;
-                             const auto& extension = runtime.extension_;
-                             if (extension.player_gone != nullptr &&
-                                 extension.player_gone(extension.context, runtime, world, *owner))
+                             // Called inside the tick: what the hook throws
+                             // is reported as a simulation error, and the
+                             // tick goes on as for a null hook.
+                             const auto report_in_tick =
+                                 [&runtime](const char*, const char* message) {
+                                     runtime.report_match_tick_error(message);
+                                 };
+                             if (call_hook_or_report<&Extension::player_gone>(
+                                     runtime.extension_, report_in_tick, runtime, world, *owner
+                                 ))
                                  return;
                              if (!runtime.campaign_mission_)
                                  messages::post_elimination(world, *owner, runtime.message_hooks());
@@ -252,7 +269,7 @@ void Runtime::draw_match_message_log() {
             );
         };
     // Gadget text: the GUI's font when it has one, else a label in the
-    // line's colour, its rows the font's lift above the pen.
+    // line's colour.
     sink.text = [](void* user, const char* text, int32_t x, int32_t y) {
         auto& target = *static_cast<Paint*>(user);
         auto& runtime = *target.runtime;
@@ -264,14 +281,7 @@ void Runtime::draw_match_message_log() {
             runtime.overlay_gui_text(runtime.gui_font_, pen, text, kGuiTextRowsBelowPen);
             return;
         }
-        runtime.paint_text(
-            *target.font,
-            pen.x,
-            pen.y - oa::formats::fnt::row_lift(*target.font) * target.scale,
-            text,
-            target.color,
-            target.scale
-        );
+        runtime.paint_text(*target.font, pen.x, pen.y, text, target.color, target.scale);
     };
     oa::ui::hud::draw_message_log(match_->state(), sink);
 }

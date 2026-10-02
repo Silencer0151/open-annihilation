@@ -15,6 +15,7 @@
 
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/data/persist/save_sections.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -113,13 +114,13 @@ std::string hex(const uint8_t* bytes, std::size_t count) {
 /// die and are reclaimed, and a wreck object.
 std::vector<FeatureDef> fixture_defs() {
     std::vector<FeatureDef> defs(3);
-    std::strcpy(defs[tree].name, "Tree");
+    oa::base::text::copy_terminated(defs[tree].name, "Tree");
     defs[tree].flags = feature_def_flag_sprite;
     defs[tree].seq_name_burn = tree_burn;
     defs[tree].seq_name_die = tree_die;
     defs[tree].seq_name_reclamate = tree_reclamate;
-    std::strcpy(defs[wreck].name, "Wreck");
-    std::strcpy(defs[rock].name, "Rock");
+    oa::base::text::copy_terminated(defs[wreck].name, "Wreck");
+    oa::base::text::copy_terminated(defs[rock].name, "Rock");
     defs[rock].flags = feature_def_flag_sprite;
     defs[rock].seq_name_burn = rock_burn;
     defs[rock].seq_name_die = rock_die;
@@ -324,7 +325,7 @@ struct Match {
             return -1;
         std::vector<FeatureDef> grown(m.defs.size() + 1);
         std::copy(m.defs.begin(), m.defs.end(), grown.begin());
-        std::strncpy(grown.back().name, name, sizeof grown.back().name - 1);
+        oa::base::text::copy_padded(grown.back().name, name, sizeof grown.back().name - 1);
         grown.back().flags = feature_def_flag_sprite;
         m.defs.swap(grown); // the old table is freed on return
         m.bind_defs();

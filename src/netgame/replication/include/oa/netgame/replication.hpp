@@ -363,11 +363,14 @@ void movement_apply_delta(
 /// A zero def index marks a live unit for death. A changed def index first
 /// recreates the unit through create_unit. Health, build fraction, state
 /// flags and either the attachment or the position, angles and speed follow.
+/// The record is read whole before any of it applies: a truncated record
+/// changes nothing, except that a recreate has already happened when only
+/// the speed word, which the recreated unit's movement calls for, is missing.
 ///
 /// @param world Receiving world.
 /// @param sim Receiver hooks, or null.
 /// @param[in,out] unit Unit the record is for.
-/// @param[in,out] reader Reader positioned at the record.
+/// @param[in,out] reader Reader positioned at the record; past it on success, unchanged otherwise.
 /// @return ok; bad_argument when Game.unit_def_id_bits is outside 1..16; truncated.
 [[nodiscard]] WireError replication_apply_full_record(
     World* world, const ReplicationSim* sim, Unit* unit, BitReader* reader

@@ -20,10 +20,10 @@ namespace oa::ui::campaign {
 // Planet artwork: the briefing GAF and its panorama and rotating-planet
 // sequence names.
 struct PlanetArt {
-    const char* planet;
-    const char* gaf;
-    const char* panorama;
-    const char* rotation;
+    const char* planet{};
+    const char* gaf{};
+    const char* panorama{};
+    const char* rotation{};
 };
 
 inline constexpr std::size_t kPlanetCount = 15;
@@ -54,21 +54,21 @@ inline constexpr uint32_t kRotationTickDivisor = 3;
 inline constexpr uint32_t kNarrationDelay = 60;
 
 struct BriefingPanel {
-    std::size_t planet;
-    int32_t wind_walk; // shown wind speed
-    int32_t wind_regen_countdown;
-    int32_t panorama_scroll;    // pixels scrolled through the panorama strip
-    uint32_t panorama_deadline; // game tick of the next scroll step
-    uint32_t ticker_next_ms;
-    uint32_t ticker_last_tick;
-    int32_t rotation_frame;
-    bool narration_on; // SHUTUP button state
-    char wrapped[kBriefingTextBytes];
-    char text[kBriefingTextBytes + kReflowSlack];
+    std::size_t planet{};
+    int32_t wind_walk{}; // shown wind speed
+    int32_t wind_regen_countdown{};
+    int32_t panorama_scroll{};    // pixels scrolled through the panorama strip
+    uint32_t panorama_deadline{}; // game tick of the next scroll step
+    uint32_t ticker_next_ms{};
+    uint32_t ticker_last_tick{};
+    int32_t rotation_frame{};
+    bool narration_on{}; // SHUTUP button state
+    char wrapped[kBriefingTextBytes]{};
+    char text[kBriefingTextBytes + kReflowSlack]{};
     BriefingPager pager;
     BriefingPage page;
-    char wind_label[52];
-    char gravity_label[52];
+    char wind_label[52]{};
+    char gravity_label[52]{};
 };
 
 /// Sets up the briefing panel for the bound mission.

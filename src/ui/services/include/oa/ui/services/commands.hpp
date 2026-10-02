@@ -18,9 +18,9 @@ inline constexpr int32_t token_slot_count = 20;
 inline constexpr std::size_t token_text_limit = 126;
 
 struct TokenLine {
-    const char* tokens[token_slot_count];
-    char text[token_text_limit + 2];
-    int32_t count;
+    const char* tokens[token_slot_count]{};
+    char text[token_text_limit + 2]{};
+    int32_t count{};
 };
 
 /// Empties a token line.
@@ -104,25 +104,25 @@ inline constexpr std::size_t command_name_capacity = 48;
 inline constexpr std::size_t command_table_capacity = 256;
 
 struct CommandEntry {
-    char name[command_name_capacity];
+    char name[command_name_capacity]{};
     CommandHandler handler;
-    uint32_t mask; // command classes the handler accepts
+    uint32_t mask{}; // command classes the handler accepts
 };
 
 // Registration record of the static command lists: {name, handler, mask},
 // terminated by a null name.
 struct CommandRegistration {
-    const char* name;
+    const char* name{};
     CommandHandler handler;
-    uint32_t mask;
+    uint32_t mask{};
 };
 
 // Case-insensitive name -> (handler, mask) map plus an optional fallback.
 struct CommandTable {
     CommandEntry entries[command_table_capacity];
-    std::size_t count;
+    std::size_t count{};
     CommandHandler fallback;
-    uint32_t fallback_mask;
+    uint32_t fallback_mask{};
 };
 
 /// Inserts one command, or replaces the entry with the same name ignoring case.

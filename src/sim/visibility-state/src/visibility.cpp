@@ -5,7 +5,6 @@
 #include <bit>
 #include <algorithm>
 #include <cstdlib>
-#include <stdexcept>
 #include <charconv>
 #include <cstdint>
 
@@ -33,11 +32,8 @@ initialize_terrain_speed(SpeedUnit& unit, const TerrainGrid& terrain, SpeedHost*
     const auto signed_sum = std::bit_cast<int16_t>(sum);
     unit.speed =
         static_cast<float>(static_cast<double>(unit.type_speed) * static_cast<double>(signed_sum));
-    if (unit.script_present) {
-        if (!script)
-            throw std::invalid_argument("scripted unit requires SetSpeed host");
+    if (unit.script_present && script)
         script->set_speed(signed_sum);
-    }
     return {sum, true};
 }
 
@@ -45,10 +41,9 @@ std::vector<AltitudeCell> build_altitude_cells(
     std::span<const uint8_t> heights, int32_t width, int32_t height, uint8_t minimum_height
 ) {
     if (width < 0 || height < 0 ||
-        heights.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height))
-        throw std::invalid_argument("terrain height lattice dimensions are invalid");
-    if (width > 32767 || height > 32767)
-        throw std::invalid_argument("terrain height lattice exceeds signed-word bounds");
+        heights.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height) ||
+        width > 32767 || height > 32767)
+        return {};
     const auto out_width = width / 2, out_height = height / 2;
     std::vector<AltitudeCell> result(
         static_cast<std::size_t>(out_width) * static_cast<std::size_t>(out_height),
@@ -111,9 +106,14 @@ std::vector<AltitudeCell> build_altitude_cells(
 }
 
 AltitudeSightPattern build_altitude_pattern(std::span<const std::string_view> lines) {
-    if (lines.size() > 8191)
-        throw std::invalid_argument("LOS table line count exceeds signed-word storage");
     AltitudeSightPattern result;
+    const auto refuse = [&result](const char* error) {
+        result.rays.clear();
+        result.error = error;
+        return result;
+    };
+    if (lines.size() > 8191)
+        return refuse("LOS table line count exceeds signed-word storage");
     result.rays.resize(lines.size() * 4U);
     for (std::size_t line_index = 0; line_index < lines.size(); ++line_index) {
         auto text = lines[line_index];
@@ -130,7 +130,7 @@ AltitudeSightPattern build_altitude_pattern(std::span<const std::string_view> li
             int32_t value{};
             const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
             if (parsed.ptr == token.data() || parsed.ec == std::errc::result_out_of_range)
-                throw std::invalid_argument("LOS line contains an invalid integer");
+                return refuse("LOS line contains an invalid integer");
             values.push_back(static_cast<int16_t>(value));
             if (comma == std::string_view::npos)
                 break;
@@ -138,7 +138,7 @@ AltitudeSightPattern build_altitude_pattern(std::span<const std::string_view> li
         }
         const auto count = values.empty() ? 0 : static_cast<int16_t>(values[0]);
         if (count < 0 || static_cast<std::size_t>(count) * 2U + 1U > values.size())
-            throw std::invalid_argument("LOS line coordinate list is truncated");
+            return refuse("LOS line coordinate list is truncated");
         auto& north = result.rays[line_index];
         auto& east = result.rays[line_index + lines.size()];
         auto& south = result.rays[line_index + lines.size() * 2U];

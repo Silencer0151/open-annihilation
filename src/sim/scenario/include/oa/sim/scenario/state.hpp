@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -105,13 +104,29 @@ struct Descriptor {
     std::string_view key{}; // the GlobalHeader key that registers the kind
 };
 
+/// What is wrong with a GlobalHeader condition.
+enum class DefinitionError : uint8_t {
+    none,                 ///< the conditions are registered
+    type_name_too_long,   ///< a unit type name does not fit the 32-byte field with its NUL
+    group_full,           ///< the condition's group already holds handler_capacity conditions
+    missing_unit_type,    ///< the condition text does not start with a unit type of letters
+    missing_comma,        ///< a comma before an integer is missing
+    missing_integer,      ///< an integer after a comma is missing
+    integer_out_of_range, ///< an integer lies outside the signed 32-bit range
+    embedded_nul,         ///< the condition text holds a NUL
+};
+
+/// Says what a definition error means.
+///
+/// @param error the error
+/// @return static text for messages
+[[nodiscard]] const char* definition_error_text(DefinitionError error) noexcept;
+
 /// Returns the descriptor of a condition kind.
 ///
-/// Throws std::invalid_argument for a value outside Kind.
-///
 /// @param kind condition kind
-/// @return its group and GlobalHeader key
-const Descriptor& descriptor(Kind kind);
+/// @return its group and GlobalHeader key, or null for a value outside Kind
+[[nodiscard]] const Descriptor* descriptor(Kind kind) noexcept;
 
 struct Controller {
     std::array<std::optional<Condition>, handler_capacity> victory, defeat;
@@ -153,59 +168,52 @@ void destroy(Controller& controller);
 /// Adds the default pair (DestroyAllUnits victory, AllUnitsKilled defeat) when a group
 /// stays empty, and marks the controller registered.
 ///
-/// Throws std::invalid_argument for malformed condition text.
+/// A condition whose text is malformed ends the registration there: the
+/// conditions before it stay in the controller, which is not marked registered.
 ///
 /// @param[in,out] controller controller to fill
 /// @param host reads the selected OTA GlobalHeader
-void register_conditions(Controller& controller, DefinitionHost& host);
+/// @return none, or what is wrong with the first malformed condition
+DefinitionError register_conditions(Controller& controller, DefinitionHost& host);
 /// Builds a BuildUnitType condition: the type name, unresolved.
 ///
-/// Throws std::invalid_argument for a name that does not fit the 32-byte field.
-///
 /// @param type unit type name
-/// @return the condition
-Condition build_unit_type_condition(std::string_view type);
+/// @return the condition, or nullopt for a name that does not fit the 32-byte field
+[[nodiscard]] std::optional<Condition> build_unit_type_condition(std::string_view type);
 /// Builds a MoveUnitToRadius condition.
 ///
 /// Stores the type name (none for ANYTYPE), the point with the unplaced height, and
 /// the radius as 16.16.
 ///
-/// Throws std::invalid_argument for a name that does not fit the 32-byte field.
-///
 /// @param type unit type name, or ANYTYPE
 /// @param x point x, world units
 /// @param z point z, world units
 /// @param radius radius, world units
-/// @return the condition
-Condition
+/// @return the condition, or nullopt for a name that does not fit the 32-byte field
+[[nodiscard]] std::optional<Condition>
 move_unit_to_radius_condition(std::string_view type, int32_t x, int32_t z, int32_t radius);
 /// Builds a UnitTypePassesX or UnitTypePassesZ condition.
 ///
 /// Stores the type name (none for ANYTYPE) and the line in cells (world units >> 4,
 /// arithmetic).
 ///
-/// Throws std::invalid_argument for another kind or a name that does not fit the
-/// 32-byte field.
-///
 /// @param kind unit_type_passes_x or unit_type_passes_z
 /// @param type unit type name, or ANYTYPE
 /// @param line line position, world units
-/// @return the condition
-Condition unit_type_passes_condition(Kind kind, std::string_view type, int32_t line);
+/// @return the condition, or nullopt for another kind or a name that does not
+///         fit the 32-byte field
+[[nodiscard]] std::optional<Condition>
+unit_type_passes_condition(Kind kind, std::string_view type, int32_t line);
 /// Builds a KillAllOfType condition: the type name, unresolved.
 ///
-/// Throws std::invalid_argument for a name that does not fit the 32-byte field.
-///
 /// @param type unit type name
-/// @return the condition
-Condition kill_all_of_type_condition(std::string_view type);
+/// @return the condition, or nullopt for a name that does not fit the 32-byte field
+[[nodiscard]] std::optional<Condition> kill_all_of_type_condition(std::string_view type);
 /// Builds an AllUnitsKilledOfType condition: the type name, unresolved.
 ///
-/// Throws std::invalid_argument for a name that does not fit the 32-byte field.
-///
 /// @param type unit type name
-/// @return the condition
-Condition all_units_killed_of_type_condition(std::string_view type);
+/// @return the condition, or nullopt for a name that does not fit the 32-byte field
+[[nodiscard]] std::optional<Condition> all_units_killed_of_type_condition(std::string_view type);
 /// Clears Controller.enabled, turning the victory and defeat tests off.
 ///
 /// An empty mission schema and the console Kill command leave the game without an
@@ -213,44 +221,44 @@ Condition all_units_killed_of_type_condition(std::string_view type);
 ///
 /// @param[in,out] controller controller to disable
 void disable(Controller& controller);
-/// Checks a group's condition count.
-///
-/// Throws std::invalid_argument for a count outside 0..handler_capacity.
+/// Tells whether a group's condition count fits its array.
 ///
 /// @param count the count
-void check_condition_count(int32_t count);
+/// @return true for a count in 0..handler_capacity
+[[nodiscard]] bool condition_count_valid(int32_t count) noexcept;
 
 /// Calls a function on every victory condition, then on every defeat condition.
 ///
-/// Each group's count is re-read and checked after every call.
-///
-/// Throws std::logic_error for a controller whose conditions were never registered or
-/// for a missing condition, and std::invalid_argument for a count outside the arrays.
+/// Each group's count is re-read and checked after every call. A controller
+/// whose conditions were never registered visits nothing; a count outside the
+/// array or an empty slot within the count ends the visit there.
 ///
 /// @param[in,out] controller registered conditions
 /// @param visit called with each condition
+/// @return false when the visit ended early or never began
 template <typename Visit>
-void visit_conditions(Controller& controller, Visit&& visit) {
+[[nodiscard]] bool visit_conditions(Controller& controller, Visit&& visit) {
     if (!controller.registration_complete)
-        throw std::logic_error("scenario GlobalHeader registration was not completed");
+        return false;
     for (const Group group : {Group::victory, Group::defeat}) {
         const int32_t& count =
             group == Group::victory ? controller.victory_count : controller.defeat_count;
         auto& conditions = group == Group::victory ? controller.victory : controller.defeat;
-        check_condition_count(count);
+        if (!condition_count_valid(count))
+            return false;
         for (int32_t i = 0; i < count; ++i) {
             std::optional<Condition>& condition = conditions[static_cast<std::size_t>(i)];
             if (!condition)
-                throw std::logic_error("missing scenario handler");
+                return false;
             visit(*condition);
-            check_condition_count(count);
+            if (!condition_count_valid(count))
+                return false;
         }
     }
+    return true;
 }
 
 /// Tells every victory then defeat condition that a unit was created.
-///
-/// Throws std::logic_error for a controller whose conditions were never registered.
 ///
 /// @param[in,out] controller registered conditions
 /// @param unit unit created

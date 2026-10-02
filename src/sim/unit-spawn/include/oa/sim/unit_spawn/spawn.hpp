@@ -204,13 +204,35 @@ struct Host {
     virtual void notify_scenario_created(oa::Unit& unit) = 0;
 };
 
+/// What stopped a spawn part way, or refused a malformed request.
+///
+/// A spawn that stops part way leaves the claimed unit record as far as it got.
+enum class SpawnFault : uint8_t {
+    none,                             ///< the spawn ran, or was refused as the game refuses
+    player_outside_table,             ///< the player is not one of the ten, or has no setup
+    type_outside_table,               ///< the type lies outside the world's or the runtime tables
+    asset_table_mismatch,             ///< the slot asset table does not cover the unit pool
+    player_slot_range,                ///< the player owns no slots but its range is set
+    no_owner,                         ///< the claimed slot has no preassigned owner
+    type_removed,                     ///< a callback left the unit without a type
+    model_allocation_failed,          ///< Host::create_model_instance returned 0
+    script_allocation_failed,         ///< Host::allocate_script returned 0
+    scripted_model_allocation_failed, ///< Host::create_scripted_model returned 0
+};
+
+/// Says what a spawn fault means.
+///
+/// @param fault the fault
+/// @return static text for messages
+[[nodiscard]] const char* spawn_fault_text(SpawnFault fault) noexcept;
+
 /// Returns the unit pool length for a per-player limit: ten equal ranges plus reserved slot 0.
 ///
-/// Throws std::invalid_argument for a zero limit or one that would pass the 16-bit count.
-///
 /// @param per_player_limit units each player may own
-/// @return `per_player_limit * 10 + 1`
-std::size_t offline_pool_size(uint16_t per_player_limit);
+/// @return `per_player_limit * 10 + 1`; 0 for a zero limit or one that would pass
+///         the 16-bit count
+[[nodiscard]] std::size_t unit_pool_size(uint16_t per_player_limit) noexcept;
+
 /// Lays out the unit pool for a single-player game.
 ///
 /// Reserves slot 0, gives each of the ten players an equal owner range, and sets
@@ -218,56 +240,62 @@ std::size_t offline_pool_size(uint16_t per_player_limit);
 /// (World.units/unit_defs). Multiplayer player ordering depends on a separate key and
 /// is not inferred here.
 ///
-/// Throws std::invalid_argument when the tables do not match the pool size or type zero
-/// is missing.
-///
 /// @param[in,out] world units and players are initialized
 /// @param per_player_limit units each player may own
-void init_unit_pool(oa::World& world, uint16_t per_player_limit);
+/// @return false, with nothing changed, for a limit unit_pool_size refuses, unit
+///         tables that do not match the pool size, or a missing type zero
+bool init_unit_pool(oa::World& world, uint16_t per_player_limit) noexcept;
 /// Chooses a free slot in the player's range and constructs a unit there.
 ///
 /// Runs numeric initialization, model and script attachment, weapons, extraction rate,
 /// the movement object (bmcode 1), placement and the creation notifications, then counts
 /// the unit for its owner.
 ///
-/// Throws std::out_of_range or std::invalid_argument for malformed tables.
-///
 /// @param[in,out] world world the unit joins
 /// @param[in,out] tables runtime types, slot assets and player setups
 /// @param request owner, type, position, finished state and slot choice
 /// @param host work owned by other systems
+/// @param[out] fault when given: none, or what stopped the spawn or refused the request
 /// @return the unit, or null for the game's ordinary failures: a disabled or zero type,
-///         an exhausted limit, an occupied exact slot, or no free slot
-oa::Unit* create(oa::World& world, Tables& tables, const Request& request, Host& host);
+///         an exhausted limit, an occupied exact slot, or no free slot; null too for a
+///         fault
+oa::Unit* create(
+    oa::World& world,
+    Tables& tables,
+    const Request& request,
+    Host& host,
+    SpawnFault* fault = nullptr
+);
 /// Initializes the numeric fields of a freshly claimed unit record.
 ///
 /// Sets the type, flags, health and build state, position and cell, a random heading
 /// from the type's build angle, the weapon target records, the economy block, a random
 /// bob phase and the squad.
 ///
-/// Throws for a slot without an owner, a type out of range, or a callback that removes
-/// the type.
-///
 /// @param[in,out] world world the unit lives in
 /// @param[in,out] unit claimed unit record; its owner must be set
 /// @param request type, position and finished state
 /// @param host random stream and weapon, economy and squad setup
+/// @return none; no_owner for a slot without an owner, type_outside_table for a type
+///         out of range, type_removed for a callback that removes the type, each
+///         stopping the initialization there
 /// @quirk The heading's half-angle is read from the type the unit holds after the
 ///        random draw, and the type is reloaded after the weapon callbacks.
-void initialize_numeric(oa::World& world, oa::Unit& unit, const Request& request, Host& host);
+SpawnFault initialize_numeric(oa::World& world, oa::Unit& unit, const Request& request, Host& host);
 /// Attaches the model and COB script of a freshly claimed unit.
 ///
 /// A scripted type allocates a VM, loads the COB, creates the scripted model instance,
 /// binds them and starts Create; a type without a script gets a plain instance linked
 /// to the unit. Last, Host::model_reset clears the model instance word nothing reads.
 ///
-/// Throws std::runtime_error when an allocation returns 0.
-///
 /// @param world world the unit lives in
 /// @param[in,out] tables slot assets receive the handles
 /// @param[in,out] unit claimed unit record
 /// @param host model and script services
-void attach_model_script(oa::World& world, Tables& tables, oa::Unit& unit, Host& host);
+/// @return none; type_outside_table for a type or slot outside the tables, the
+///         allocation fault when an allocation returns 0, type_removed when a
+///         callback removes the type, each stopping the attachment there
+SpawnFault attach_model_script(oa::World& world, Tables& tables, oa::Unit& unit, Host& host);
 
 struct StartMarker {
     int32_t kind{}, index{};
@@ -338,7 +366,7 @@ void grant_start_storage(oa::Player& player, int32_t metal, int32_t energy) noex
 /// When the start marker is missing the report is made and no commander is
 /// spawned; 3.1c can carry on with the player's start after the report.
 ///
-/// Throws std::out_of_range for a player past the ten players or the setup table.
+/// A player past the ten players or the setup table places nothing.
 ///
 /// @param[in,out] world world the commander joins
 /// @param[in,out] tables runtime types, slot assets and player setups
@@ -351,6 +379,7 @@ void grant_start_storage(oa::Player& player, int32_t metal, int32_t energy) noex
 /// @param viewport_height game view height, pixels
 /// @param host unit creation services
 /// @param start commander type, missing-start report and camera services
+/// @param[out] fault when given: none, player_outside_table, or the commander's spawn fault
 /// @return whether the start position was found, and the commander (null when creation
 ///         failed)
 StartResult spawn_player_commander(
@@ -364,15 +393,15 @@ StartResult spawn_player_commander(
     int32_t viewport_width,
     int32_t viewport_height,
     Host& host,
-    StartHost& start
+    StartHost& start,
+    SpawnFault* fault = nullptr
 );
 
 /// Counts the units attached to a unit.
 ///
 /// Walks the Unit.attach_first_child and attach_next chain and counts the children whose
-/// attach_parent is this unit.
-///
-/// Throws std::invalid_argument for a chain longer than the 16-bit unit index space.
+/// attach_parent is this unit. A chain longer than the 16-bit unit index space,
+/// which must cycle, is counted to its 65535th link.
 ///
 /// @param world world the units live in
 /// @param unit carrier

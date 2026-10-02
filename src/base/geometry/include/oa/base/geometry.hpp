@@ -71,7 +71,7 @@ inline constexpr unsigned trig_quarter_turn_samples = trig_samples_per_turn / 4;
 
 // 1.13 fixed-point rotation matrix, row major (m[row][column]).
 struct RotationMatrix {
-    int32_t m[3][3];
+    int32_t m[3][3]{};
 };
 
 /// Builds a rotation matrix from an object's three angle words.
@@ -97,9 +97,9 @@ void rotation_matrix_apply(
 ) noexcept;
 
 struct Vec3f {
-    float x;
-    float y;
-    float z;
+    float x{};
+    float y{};
+    float z{};
 };
 
 /// Subtracts one vector from another.

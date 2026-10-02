@@ -5,7 +5,6 @@
 
 #include <bit>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 
@@ -13,31 +12,31 @@ int32_t SearchHeap::score(const Node& value) noexcept {
     return std::bit_cast<int32_t>(value.value[2]);
 }
 
-SearchHeap::Node& SearchHeap::node(Handle handle) {
-    if (handle >= nodes_.size())
-        throw std::out_of_range("search heap handle is outside allocated slots");
-    return nodes_[handle];
+SearchHeap::Node& SearchHeap::node(Handle handle) noexcept {
+    if (handle < nodes_.size())
+        return nodes_[handle];
+    spare_ = {};
+    return spare_;
 }
 
-const SearchHeap::Node& SearchHeap::node(Handle handle) const {
-    if (handle >= nodes_.size())
-        throw std::out_of_range("search heap handle is outside allocated slots");
-    return nodes_[handle];
+const SearchHeap::Node& SearchHeap::node(Handle handle) const noexcept {
+    static const Node no_node{};
+    return handle < nodes_.size() ? nodes_[handle] : no_node;
 }
 
-SearchHeap::Payload& SearchHeap::payload(Handle handle) {
+SearchHeap::Payload& SearchHeap::payload(Handle handle) noexcept {
     return node(handle).value;
 }
 
-const SearchHeap::Payload& SearchHeap::payload(Handle handle) const {
+const SearchHeap::Payload& SearchHeap::payload(Handle handle) const noexcept {
     return node(handle).value;
 }
 
-std::size_t SearchHeap::position(Handle handle) const {
+std::size_t SearchHeap::position(Handle handle) const noexcept {
     const auto value = node(handle).heap_position_or_next_free;
     if (value < 0 || static_cast<std::size_t>(value) >= heap_.size() ||
         heap_[static_cast<std::size_t>(value)] != handle)
-        throw std::out_of_range("search heap handle is not active");
+        return no_position;
     return static_cast<std::size_t>(value);
 }
 
@@ -48,26 +47,27 @@ void SearchHeap::reset_open_set() {
     deferred_pop_ = false;
 }
 
-void SearchHeap::reserve(int32_t requested_capacity) {
+bool SearchHeap::reserve(int32_t requested_capacity) {
     std::size_t next{};
     if (requested_capacity < 0 || static_cast<std::size_t>(requested_capacity) < capacity_) {
         if (capacity_ > (std::numeric_limits<std::size_t>::max() - 16) / 3 * 2)
-            throw std::length_error("search heap capacity overflow");
+            return false;
         next = capacity_ + capacity_ / 2 + 16;
     } else {
         next = static_cast<std::size_t>(requested_capacity);
     }
     if (next < nodes_.size())
-        throw std::length_error("search heap capacity is below allocated slots");
+        return false;
     nodes_.reserve(next);
     heap_.reserve(next);
     capacity_ = next;
+    return true;
 }
 
 SearchHeap::Handle SearchHeap::allocate_slot() {
     if (free_head_ == -1) {
-        if (nodes_.size() >= std::numeric_limits<Handle>::max())
-            throw std::length_error("search heap handle space exhausted");
+        if (nodes_.size() >= no_handle)
+            return no_handle;
         const auto result = static_cast<Handle>(nodes_.size());
         nodes_.emplace_back();
         return result;
@@ -122,6 +122,8 @@ void SearchHeap::sift_down(std::size_t position_value) {
 
 void SearchHeap::remove_slot(Handle handle) {
     const auto removed_position = position(handle);
+    if (removed_position == no_position)
+        return;
     node(handle).heap_position_or_next_free = free_head_;
     free_head_ = static_cast<int32_t>(handle);
     const auto last = heap_.back();
@@ -134,9 +136,11 @@ void SearchHeap::remove_slot(Handle handle) {
 }
 
 SearchHeap::Handle SearchHeap::insert(const Payload& value) {
+    // A second pop can empty the heap with a pop still pending; the insert
+    // then starts a new root.
+    if (deferred_pop_ && heap_.empty())
+        deferred_pop_ = false;
     if (deferred_pop_) {
-        if (heap_.empty())
-            throw std::out_of_range("cannot replace an empty deferred search heap root");
         const auto result = heap_.front();
         node(result).value = value;
         sift_down(0);
@@ -144,8 +148,10 @@ SearchHeap::Handle SearchHeap::insert(const Payload& value) {
         return result;
     }
     if (heap_.size() == capacity_)
-        reserve(-1);
+        (void)reserve(-1);
     const auto result = allocate_slot();
+    if (result == no_handle)
+        return no_handle;
     const auto position_value = heap_.size();
     node(result).value = value;
     node(result).heap_position_or_next_free = static_cast<int32_t>(position_value);
@@ -155,35 +161,36 @@ SearchHeap::Handle SearchHeap::insert(const Payload& value) {
 }
 
 void SearchHeap::decrease_key(Handle handle) {
+    const auto handle_position = position(handle);
+    if (handle_position == no_position)
+        return;
     if (deferred_pop_) {
-        if (heap_.empty())
-            throw std::out_of_range("cannot decrease a key in an empty deferred search heap");
         const auto deferred_root = heap_.front();
-        sift_up(position(handle));
+        sift_up(handle_position);
         if (node(deferred_root).heap_position_or_next_free != 0) {
             deferred_pop_ = false;
             remove_slot(deferred_root);
         }
         return;
     }
-    sift_up(position(handle));
+    sift_up(handle_position);
 }
 
 const SearchHeap::Payload& SearchHeap::peek() {
     if (deferred_pop_) {
-        if (heap_.empty())
-            throw std::out_of_range("cannot realize a pop on an empty search heap");
         deferred_pop_ = false;
-        remove_slot(heap_.front());
+        if (!heap_.empty())
+            remove_slot(heap_.front());
     }
+    static const Payload no_payload{};
     if (heap_.empty())
-        throw std::out_of_range("cannot peek an empty search heap");
+        return no_payload;
     return node(heap_.front()).value;
 }
 
 void SearchHeap::pop() {
     if (heap_.empty())
-        throw std::out_of_range("cannot pop an empty search heap");
+        return;
     if (!deferred_pop_) {
         deferred_pop_ = true;
         return;

@@ -8,6 +8,16 @@
 #include <string_view>
 
 namespace oa::sim::match_runtime {
+// Bits of an order's command flags (Match::OrderRecordView::command_flags).
+inline constexpr uint8_t command_counts_builds =
+    0x01; // its second parameter shows on the build button
+inline constexpr uint8_t command_has_target = 0x02; // the order keeps its target unit
+inline constexpr uint8_t command_has_point = 0x04;  // the order keeps its destination point
+inline constexpr uint8_t command_queue_tail =
+    0x10;                                         // the order the next queued order is placed after
+inline constexpr uint8_t command_unqueued = 0x20; // given without the queue key
+inline constexpr uint8_t command_overlay = 0x40;  // dropped from the queue head by the next insert
+
 // Projections consumed by command cases 2 (move) and 3 (attack) of the
 // command resolver.
 struct CommandSource {
@@ -101,7 +111,7 @@ inline CommandCapabilities pack_command_capabilities(
 /// landing/load/guard mission or a plain move; case 3 (attack) applies the
 /// water-weapon, aircraft, alliance and availability gates.
 ///
-/// @param command Command case: 2 move, 3 attack; another throws.
+/// @param command Command case: 2 move, 3 attack; another gives no mission.
 /// @param source The commanded unit's projection.
 /// @param target The unit under the cursor, if any; an inactive target gives
 ///     no mission.

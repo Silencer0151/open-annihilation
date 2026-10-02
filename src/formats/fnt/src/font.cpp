@@ -17,7 +17,7 @@ constexpr std::size_t fnt_data_start = file_preamble_bytes;
 
 struct FileHeader {
     uint16_t height = 0;
-    uint16_t word_after_height = 0; // low byte: rows a label's glyphs start above the pen
+    uint16_t word_after_height = 0; // low byte: rows every glyph starts above the pen
     std::array<uint16_t, limit::glyph_count> offsets{};
 };
 
@@ -254,6 +254,7 @@ raster_text(IndexedSurface dst, const Font& f, std::string_view text, int32_t x,
         throw std::runtime_error("indexed destination has inconsistent bounds");
     if (!dst.coverage.empty() && (dst.height != 0 && dst.stride > dst.coverage.size() / dst.height))
         throw std::runtime_error("indexed destination coverage has inconsistent bounds");
+    const int64_t lift = row_lift(f);
     for (const unsigned char c : text) {
         if (c < first_printable || !f.glyphs[c])
             continue;
@@ -263,7 +264,7 @@ raster_text(IndexedSurface dst, const Font& f, std::string_view text, int32_t x,
             throw std::runtime_error("font glyph has inconsistent buffers");
         if (c != first_printable) {
             const auto left = static_cast<int64_t>(x) - g.origin_x;
-            const auto top = static_cast<int64_t>(y) - g.origin_y;
+            const auto top = static_cast<int64_t>(y) - g.origin_y - lift;
             for (uint32_t row = 0; row < g.height; ++row)
                 for (uint32_t col = 0; col < g.width; ++col) {
                     const auto source = static_cast<std::size_t>(row) * g.width + col;

@@ -151,7 +151,7 @@ void frontend_states(void* context, oa::ui::frontend_state::StateHandler& handle
 /// Answers init_score_reporting: 0, as joining never waits for a match report to start.
 ///
 /// The report starts as the battle room's match launches instead
-/// (Runtime::start_reporter).
+/// (NetworkPlay::start_reporter).
 ///
 /// @param ctx Unused.
 /// @param state Unused.

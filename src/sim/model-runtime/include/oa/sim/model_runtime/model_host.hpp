@@ -27,19 +27,17 @@ class ModelHost : public oa::sim::script_vm::Host {
     [[nodiscard]] const Instance& model_instance() const noexcept { return instance_; }
 
     // The unit script host's piece slots. No piece render or draw cache is
-    // kept, so the setters change only the piece state.
+    // kept, so the setters change only the piece state. A piece index past the
+    // instance's pieces, or an axis outside 0..2, reads as zero and takes no
+    // write.
 
     /// Returns a piece's translation on one axis (PieceState.translation).
-    ///
-    /// Throws std::out_of_range for a bad piece or axis.
     ///
     /// @param piece COB piece index
     /// @param axis 0 X, 1 Y, 2 Z
     /// @return signed 16.16 translation
     int32_t piece_position(uint32_t piece, uint32_t axis) const override;
     /// Returns a piece's rotation word on one axis (PieceState.rotation).
-    ///
-    /// Throws std::out_of_range for a bad piece or axis.
     ///
     /// @param piece COB piece index
     /// @param axis 0 X, 1 Y, 2 Z

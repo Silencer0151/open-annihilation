@@ -83,7 +83,9 @@ void Match::react_to_damage(sim::unit_spawn::Slot& target, sim::unit_spawn::Slot
         auto& match = *static_cast<Match*>(context);
         sim::ai::hold_capturer_builds(match, victim.owner_index, tick);
         TickHost host(match);
-        sim::simulation_state::clear_orders(match.units_.at(victim.id), false, host);
+        match.note_step(
+            sim::simulation_state::clear_orders(match.units_.at(victim.id), false, host)
+        );
     };
     oa::Unit* attacker = source != nullptr && source->unit != nullptr ? &source->record : nullptr;
     const auto reaction = sim::weapon_execution::retaliate(state(), target.record, attacker, hooks);
@@ -509,8 +511,10 @@ void Match::teardown_dead_unit(
     spatial_.tick = simulation_.tick;
     const auto removed = sim::spatial_state::remove_unit(projected, spatial_, map_listeners_);
     synchronize_spatial_state();
-    if (removed != sim::spatial_state::Error::none)
-        throw std::runtime_error("death occupancy removal rejected spatial state");
+    if (removed != sim::spatial_state::Error::none) {
+        fault_.note("death occupancy removal rejected spatial state");
+        return;
+    }
     if (auto* ground = ground_runtime(slot.unit_index))
         ground->project_slot();
     // Then, under line of sight, its own stamp leaves its owner's coverage.

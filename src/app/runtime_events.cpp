@@ -3,6 +3,7 @@
 
 // SDL event dispatch, menu audio and movie playback.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
 #include "oa/media/intro_player.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
@@ -15,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -28,8 +30,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         const bool asked = event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || sdl_.window != nullptr;
         // The extension answers first; one that declines leaves the request
         // to the engine.
-        if (asked && extension_.close_requested != nullptr &&
-            extension_.close_requested(extension_.context, *this))
+        if (asked && call_hook_or_raise<&Extension::close_requested>(extension_, *this))
             return;
         // A page opened over the running match (its load and save pages, its
         // briefing) goes back to the match to ask there; the preferences a
@@ -222,7 +223,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             // radar scrolls the view with it until the button comes up.
             namespace input = oa::sim::gameplay_input;
             if (event.button.button == SDL_BUTTON_LEFT) {
-                (void)pick_match_cursor();
+                // The pick is wanted for what it writes into the Game block
+                // (the pointer's unit, armed order and ground), which the
+                // radar scroll reads; the cursor it returns is not needed.
+                std::ignore = pick_match_cursor();
                 if (input::start_left_radar_scroll(match_->state().game)) {
                     select_game_cursor(static_cast<uint8_t>(input::OrderCursor::normal));
                     return;
@@ -411,7 +415,8 @@ void Runtime::start_menu_music() {
 void Runtime::play_menu_voice(std::string_view sound) {
     if (menu_music_playing_)
         return;
-    (void)play_alternate_sound(sound);
+    // A voice that does not start is reported by play_alternate_sound.
+    std::ignore = play_alternate_sound(sound);
 }
 
 bool Runtime::play_alternate_sound(std::string_view sound) {
@@ -464,8 +469,10 @@ void Runtime::play_movie_resource(std::string_view filename) {
         // Alt+Enter switches full screen during the movie as it does in the
         // game.
         playback.hooks.context = this;
+        // The movie player does not hand its events on, so whether Alt+Enter
+        // took one does not matter.
         playback.hooks.window_event = [](void* context, const SDL_Event& event) {
-            (void)static_cast<Runtime*>(context)->take_full_screen_event(event);
+            std::ignore = static_cast<Runtime*>(context)->take_full_screen_event(event);
         };
         const auto result = opened.player->play(playback);
         if (!result.ok())

@@ -5,7 +5,7 @@
 #include "oa/base/game_math.hpp"
 #include <algorithm>
 #include <bit>
-#include <stdexcept>
+#include <optional>
 
 namespace oa::sim::unit_movement {
 namespace {
@@ -127,10 +127,10 @@ AimAngles aim_angles(std::array<Fixed, 3> from, std::array<Fixed, 3> to) noexcep
     };
 }
 
-int64_t braking_distance(Fixed speed, Fixed deceleration) {
+std::optional<int64_t> braking_distance(Fixed speed, Fixed deceleration) noexcept {
     const auto denominator = add(deceleration, deceleration);
     if (denominator == 0)
-        throw std::domain_error("Braking-distance divisor is zero");
+        return std::nullopt;
     const auto squared = low((int64_t(speed) * speed) >> fraction_bits);
     return (int64_t(squared) * fixed_one) / denominator;
 }

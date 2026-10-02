@@ -19,9 +19,9 @@ jobs:
   # but keeps assertions and must compute the same results bit for bit, so
   # the pinned-digest tests (match-determinism, match-trace,
   # persist-bank-golden, game-math, game-math-extended) fail when an
-  # optimised build drifts from Debug. macos-latest runs on arm64. Clang and
-  # GCC treat every warning in engine code as an error
-  # (OA_WARNINGS_AS_ERRORS); Visual Studio's compiler does not yet.
+  # optimised build drifts from Debug. macos-latest runs on arm64. Every
+  # compiler treats a warning in engine code as an error
+  # (OA_WARNINGS_AS_ERRORS).
   build:
     strategy:
       fail-fast: false
@@ -61,7 +61,7 @@ jobs:
       - name: Configure Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cmake -S . -B build -DOA_REQUIRE_GAME=ON -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: cmake -S . -B build -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }} --parallel 4
       # Clang reads the /// blocks of the public headers; a @param that names

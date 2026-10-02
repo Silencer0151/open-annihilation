@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 // Raw words of a unit's economy block (energy then metal accumulators).
 std::array<uint32_t, 12>& economy_words(oa::Unit& unit) {
@@ -28,10 +29,8 @@ using namespace oa;
 // computer credit scales, and the unit set exercises inactive,
 // storage-full, storage-free, and negative-income branches. Every player
 // economy output field is asserted after each tick.
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<std::string> calls;
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
 
     void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {
         calls.push_back("sound");
@@ -42,27 +41,9 @@ struct Services : sim::match_runtime::OfflineServices {
     }
 
     void refresh_selected_unit(sim::unit_spawn::Slot&) override { calls.push_back("refresh"); }
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(oa::sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 int main() {
     formats::tnt::Map map;
@@ -196,7 +177,7 @@ int main() {
     // keep the create-time building flag; B..D, F and G are active, E is not.
     // D, F and G stay unfinished so their storage is not credited: the income
     // branches still run before the finished test.
-    a->unit->flags = (a->unit->flags & ~0x20000000u) | 0x800u | 0x4u;
+    a->unit->flags = (a->unit->flags & ~OA_UNIT_FLAG_BUILDING) | 0x800u | 0x4u;
     a->record.state_flags |= 1;
     b->record.state_flags |= 1;
     c->record.state_flags |= 1;

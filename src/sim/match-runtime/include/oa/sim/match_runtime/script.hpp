@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "oa/sim/match_runtime/fault.hpp"
 #include "oa/sim/script_vm.hpp"
 #include "oa/formats/cob.hpp"
 #include "oa/sim/unit_spawn/spawn.hpp"
@@ -42,21 +43,29 @@ class SharedRandom {
 
 // COB scheduler ownership and the named-call wrappers. Host is a real
 // model/world adapter, never an internal successful no-op implementation.
+// An interpreter error, other than a start that finds no free context, is
+// noted in the instance's fault record and fails the call it stopped.
 class ScriptInstance {
   public:
 
     /// Builds the COB interpreter for a program against a model/world host.
     ///
-    /// @param program Loaded COB program; must not be null.
+    /// A null program, or one the interpreter refuses, leaves an instance that
+    /// starts no script; the refusal is noted.
+    ///
+    /// @param program Loaded COB program.
     /// @param host Model and world adapter the interpreter calls for piece
     ///     and unit-value operations; must outlive the instance.
     /// @param clock_scale SLEEP multiplier supplied by the owning
     ///     application (delay = scale * ms / 1000); not derived from the
     ///     simulation frequency.
+    /// @param fault Where interpreter errors are noted, or null to drop them;
+    ///     must outlive the instance.
     ScriptInstance(
         std::shared_ptr<const formats::cob::CobProgram> program,
         sim::script_vm::Host& host,
-        int32_t clock_scale
+        int32_t clock_scale,
+        MatchFault* fault = nullptr
     );
     /// Starts the first script with this exact name without writing any
     /// locals.
@@ -77,7 +86,8 @@ class ScriptInstance {
     /// arguments; omitted trailing locals are zeroed.
     ///
     /// @param name Script name; the lookup is case-sensitive.
-    /// @param arguments At most four argument values; more throws.
+    /// @param arguments At most four argument values; more starts nothing
+    ///     and is noted.
     /// @param immediate Runs a full scheduler step with elapsed zero right
     ///     after the start.
     /// @param callback Receives the script's RETURN value when it finishes,
@@ -95,7 +105,8 @@ class ScriptInstance {
     ///
     /// @param name Script name; the lookup is case-sensitive.
     /// @param locals Values of the four locals.
-    /// @param count Number of locals that are arguments, 0..4; more throws.
+    /// @param count Number of locals that are arguments, 0..4; more starts
+    ///     nothing and is noted.
     /// @param immediate Runs a full scheduler step with elapsed zero right
     ///     after the start.
     /// @param callback Receives the script's RETURN value when it finishes,
@@ -116,8 +127,9 @@ class ScriptInstance {
     ///
     /// @param name Script name; the lookup is case-sensitive.
     /// @param[in,out] arguments Initial locals on entry, local slots 0..3 on
-    ///     return; left unchanged when the query does not start.
-    /// @return False when no script has the name or no context is free.
+    ///     return; left unchanged when the query does not start or fails.
+    /// @return False when no script has the name, no context is free, or the
+    ///     interpreter fails the start or the run.
     bool query(std::string_view name, std::array<int32_t, 4>& arguments);
     /// Finds the first script with this exact name, as a start looks it up.
     ///
@@ -128,7 +140,8 @@ class ScriptInstance {
     ///
     /// @param elapsed Clock time since the last step, in the units the clock
     ///     scale converts SLEEP milliseconds into.
-    void tick(uint32_t elapsed);
+    /// @return False when the interpreter failed the step, which is noted.
+    bool tick(uint32_t elapsed);
 
     /// Returns the interpreter.
     sim::script_vm::Vm& vm() noexcept { return vm_; }
@@ -138,8 +151,15 @@ class ScriptInstance {
 
   private:
 
+    /// Notes an interpreter error in the fault record, when there is one.
+    ///
+    /// @param what What failed.
+    /// @param detail The interpreter's message or the script's name.
+    void note(std::string_view what, std::string_view detail) noexcept;
+
     std::shared_ptr<const formats::cob::CobProgram> program_;
     sim::script_vm::Vm vm_;
+    MatchFault* fault_{};
 };
 
 // Services the unit-value GET/SET handlers need outside the unit record.
@@ -186,7 +206,7 @@ struct UnitValueHost {
 /// Reads a COB unit value (GET) for a unit.
 ///
 /// @param world Canonical world the value is read from.
-/// @param slot Unit running the script; must be bound to a unit.
+/// @param slot Unit running the script; one bound to no unit reads 0.
 /// @param pool Unit slot pool (unused by the lookup).
 /// @param selector Unit-value selector; an unknown one reads 0.
 /// @param second First extra operand of the selector.
@@ -205,7 +225,7 @@ int32_t get_unit_value(
 /// Writes a COB unit value (SET) for a unit, with the selector's flag
 /// changes; every SET raises the unit's script-state-changed event.
 ///
-/// @param slot Unit running the script; must be bound to a unit.
+/// @param slot Unit running the script; one bound to no unit takes no value.
 /// @param selector Unit-value selector.
 /// @param value New value.
 /// @param host Activation and yard services the selectors reach.

@@ -5,7 +5,7 @@
 add_library(oa-ui-console src/commands.cpp src/debug_hotkeys.cpp src/unit_tags.cpp)
 add_library(oa::ui::console ALIAS oa-ui-console)
 target_include_directories(oa-ui-console PUBLIC include)
-target_link_libraries(oa-ui-console PUBLIC oa-core-types oa-ui-services
+target_link_libraries(oa-ui-console PUBLIC oa-core-types oa-data-campaign oa-ui-services
   PRIVATE oa-sim-simulation-state oa-options oa-sim-ai oa-data-mission-types)
 target_compile_features(oa-ui-console PUBLIC cxx_std_20)
 

@@ -46,7 +46,6 @@ WorldPoint point_of(const oa::FixedVec3& position) noexcept {
 }
 
 /// The side of a map cell, in map pixels.
-constexpr int32_t cell_pixels = 16;
 /// Percent: the whole of something.
 constexpr uint32_t whole_percent = 100;
 
@@ -330,9 +329,9 @@ void record_water(TimelineHeader& header, const oa::World& world) {
             if (plot == nullptr)
                 continue;
             const WorldPoint middle{
-                x * cell_pixels + cell_pixels / 2,
+                x * OA_MAP_CELL_PIXELS + OA_MAP_CELL_PIXELS / 2,
                 plot->height,
-                z * cell_pixels + cell_pixels / 2,
+                z * OA_MAP_CELL_PIXELS + OA_MAP_CELL_PIXELS / 2,
             };
             const int64_t column{int64_t{middle.x} / water_square_pixels};
             const int32_t row_pixels{ground_row(middle)};

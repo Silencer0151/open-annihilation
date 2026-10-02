@@ -14,7 +14,7 @@ namespace oa::ui::hud {
 
 /// Screen rectangle in 640x480 source space; width/height are pixel counts.
 struct Rect {
-    int32_t x, y, width, height;
+    int32_t x{}, y{}, width{}, height{};
 };
 
 /// SIDEDATA.TDF HUD positions of one side, defaulting to the game's ARM layout.
@@ -63,10 +63,10 @@ bool parse_side_layout(std::string_view sidedata, int32_t side, SideLayout& layo
 /// column; a share level the store exceeds is marked by the three columns from
 /// `marker_left`. Nothing is drawn without capacity.
 struct TroughColumns {
-    bool fill;
-    int32_t fill_right;
-    bool marker;
-    int32_t marker_left;
+    bool fill{};
+    int32_t fill_right{};
+    bool marker{};
+    int32_t marker_left{};
 };
 
 /// Computes the fill and share-marker columns of a resource trough.
@@ -111,8 +111,8 @@ void update_resource_readout(ResourceReadout& readout, Player& player, uint32_t 
 
 /// Readout text and the palette colour it is drawn in.
 struct RateText {
-    char text[16];
-    uint8_t color;
+    char text[16]{};
+    uint8_t color{};
 };
 
 inline constexpr uint8_t kPaletteWhite = 255;

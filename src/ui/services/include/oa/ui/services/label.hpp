@@ -14,11 +14,11 @@ namespace oa::ui::services {
 
 // Text drawing state of the display context.
 struct TextState {
-    const void* font; // metrics passed to measure
-    int32_t color;    // colour of the set glyph bits of the next draw
+    const void* font{}; // metrics passed to measure
+    int32_t color{};    // colour of the set glyph bits of the next draw
     // Colour of the clear glyph bits; each colour change sets it to transparent.
-    int32_t background;
-    int32_t transparent; // the colour value a text draw never writes
+    int32_t background{};
+    int32_t transparent{}; // the colour value a text draw never writes
 };
 
 // Colour value meaning "leave unchanged".
@@ -27,10 +27,10 @@ inline constexpr int32_t text_color_keep = -1;
 inline constexpr int32_t label_unbounded = -1;
 
 struct LabelDraw {
-    void* context;
-    int32_t (*measure)(void* context, const void* font, const char* text);
-    bool (*lock_screen)(void* context, Surface* out);
-    void (*unlock_screen)(void* context);
+    void* context{};
+    int32_t (*measure)(void* context, const void* font, const char* text){};
+    bool (*lock_screen)(void* context, Surface* out){};
+    void (*unlock_screen)(void* context){};
     void (*draw_label)(
         void* context,
         Surface* target,
@@ -39,7 +39,7 @@ struct LabelDraw {
         int32_t x,
         int32_t y,
         int32_t max_width
-    );
+    ){};
 };
 
 /// Draws a line of text centred horizontally with a one-pixel outline.

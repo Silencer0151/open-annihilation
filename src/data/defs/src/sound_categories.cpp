@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/sound_categories.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -72,7 +73,7 @@ bool sound_category_table_load(formats::tdf::Document* sound, SoundCategoryTable
         if (!formats::tdf::step_entry(sound, index))
             continue;
         const formats::tdf::Block* section = formats::tdf::cursor(sound);
-        std::strncpy(category->name, section->name, sizeof category->name - 1);
+        oa::base::text::copy_padded(category->name, section->name, sizeof category->name - 1);
         for (uint32_t event = 0; event < sound_event_count; ++event) {
             SoundChoices* choices = &category->events[event + 1];
             sound_choices_add(section, sound_event_keys[event], choices);
@@ -127,7 +128,7 @@ void load_all_sounds(
         for (uint32_t entry = 0; formats::tdf::step_entry(&document, entry); ++entry) {
             const formats::tdf::Block* section = formats::tdf::cursor(&document);
             char name[allsound_name_capacity + 1] = {};
-            std::strncpy(name, section->name, allsound_name_capacity);
+            oa::base::text::copy_padded(name, section->name, allsound_name_capacity);
             char sound[allsound_sound_capacity];
             if (formats::tdf::get_string(section, "sound", sound, sizeof sound, ""))
                 cache.add(cache.context, name, sound);

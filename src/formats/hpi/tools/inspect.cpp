@@ -33,7 +33,12 @@ std::string lower(std::string text) {
 }
 
 int list(const char* path) {
-    const oa::HpiArchive archive(path);
+    const auto opened = oa::open_hpi_file(path);
+    if (!opened.ok()) {
+        std::cerr << "oa-hpi-inspect: " << path << ": " << opened.error.message << '\n';
+        return 1;
+    }
+    const oa::HpiArchive& archive = *opened.value;
     for (const auto& entry : archive.entries()) {
         const auto node = archive.lookup(entry.path);
         std::cout << entry.path << '\t' << entry.size << '\t';

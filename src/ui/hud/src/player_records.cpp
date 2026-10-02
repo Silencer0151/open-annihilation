@@ -55,7 +55,7 @@ uint8_t host_slot(World& world) noexcept {
 
 void set_starting_resources(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const MissionResources* mission,
     const SkirmishSlot* skirmish
 ) {
@@ -64,7 +64,7 @@ void set_starting_resources(
         if (game.saved_game != 0)
             continue;
         Player& player = game.players[index];
-        if (session_kind == kSessionCampaign && mission != nullptr) {
+        if (session_kind == oa::data::campaign::SessionKind::campaign && mission != nullptr) {
             const auto energy = static_cast<int32_t>(mission->energy[index]);
             const auto metal = static_cast<int32_t>(mission->metal[index]);
             player.resource_flags |= kResourceSharesStorage;
@@ -72,10 +72,12 @@ void set_starting_resources(
             player.shared_metal_storage = static_cast<float>(clamp_storage(metal));
             player.energy = mission->energy[index];
             player.metal = mission->metal[index];
-        } else if (session_kind == kSessionSkirmish && skirmish != nullptr) {
+        } else if (
+            session_kind == oa::data::campaign::SessionKind::skirmish && skirmish != nullptr
+        ) {
             player.energy = static_cast<float>(skirmish[index].energy);
             player.metal = static_cast<float>(skirmish[index].metal);
-        } else if (session_kind == kSessionMultiplayer) {
+        } else if (session_kind == oa::data::campaign::SessionKind::multiplayer) {
             auto host = host_slot(world);
             if (host == OA_PLAYER_COUNT)
                 host = static_cast<uint8_t>(index);
@@ -89,7 +91,11 @@ void set_starting_resources(
 }
 
 void init_player_slot(
-    World& world, uint8_t index, uint8_t status, int32_t session_kind, int32_t physical_memory
+    World& world,
+    uint8_t index,
+    uint8_t status,
+    oa::data::campaign::SessionKind session_kind,
+    int32_t physical_memory
 ) {
     Player* record = world_player_record(&world, index);
     if (record == nullptr)
@@ -121,7 +127,8 @@ void init_player_slot(
         (status == OA_PLAYER_STATUS_LOCAL || status == OA_PLAYER_STATUS_COMPUTER))
         info->memory_mb =
             static_cast<uint16_t>(static_cast<int16_t>(physical_memory / kBytesPerMegabyte) + 1);
-    if (session_kind != kSessionCampaign && session_kind != kSessionSkirmish)
+    if (session_kind != oa::data::campaign::SessionKind::campaign &&
+        session_kind != oa::data::campaign::SessionKind::skirmish)
         return;
     const char* name = nullptr;
     if (status == OA_PLAYER_STATUS_LOCAL)
@@ -159,7 +166,7 @@ void init_player_slots_from_roster(
     World& world,
     const SkirmishSlot* roster,
     int32_t count,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     int32_t physical_memory
 ) {
     if (count > kRosterCapacity)

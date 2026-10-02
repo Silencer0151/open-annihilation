@@ -103,8 +103,8 @@ struct Runtime::DirectorState {
         const int32_t x = static_cast<int16_t>(record->position.x >> 16);
         const int32_t z = static_cast<int16_t>(record->position.z >> 16);
         return x >= camera_x && z >= camera_y &&
-               x <= camera_x + game.view_cells_width * wr::map_cell_pixels &&
-               z <= camera_y + game.view_cells_height * wr::map_cell_pixels;
+               x <= camera_x + game.view_cells_width * OA_MAP_CELL_PIXELS &&
+               z <= camera_y + game.view_cells_height * OA_MAP_CELL_PIXELS;
     }
 };
 

@@ -3,6 +3,7 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "engine_settings_state.hpp"
 #include "match_models.hpp"
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,7 +49,8 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
                 game.pinned_unit_a = game.cursor_unit_id;
             return true;
         }
-        (void)open_unit_info();
+        // Without a unit to show, F1 does nothing.
+        std::ignore = open_unit_info();
         return true;
     }
     if (key.key == SDLK_F2 || key.scancode == SDL_SCANCODE_F2) {
@@ -69,8 +72,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // Pause flips the pause bit and opens no menu; a finished match keeps it
     // as it is.
     if (key.key == SDLK_PAUSE || key.scancode == SDL_SCANCODE_PAUSE) {
+        // Pause is a console hotkey and a match is running, so it is always
+        // taken.
         if (!match_finished_)
-            (void)handle_console_hotkey(key);
+            std::ignore = handle_console_hotkey(key);
         return true;
     }
     if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 &&
@@ -442,7 +447,7 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
                 if (kind == "attack")
                     issued = match_->issue_attack_command(source, slot.unit_index, queue, nullptr);
                 else if (kind == "reclaim")
-                    (void)match_->issue_reclaim(source, slot.unit_index, queue);
+                    match_->issue_reclaim(source, slot.unit_index, queue);
                 else if (kind == "repair")
                     issue_resume_or_repair_from(source, slot.unit_index, queue);
                 else
@@ -474,8 +479,10 @@ void Runtime::adjust_game_speed(int delta) {
     match_timing_.requested_rate = world.game.requested_speed;
     match_timing_.actual_rate = world.game.current_speed;
     preferences_.current_game_speed = world.game.current_speed;
-    if (sets && extension_.speed_changed != nullptr)
-        extension_.speed_changed(extension_.context, *this, world.game.requested_speed);
+    if (sets)
+        call_hook_or_report<&Extension::speed_changed>(
+            extension_, hook_error_report(), *this, world.game.requested_speed
+        );
 }
 
 namespace {
@@ -681,8 +688,9 @@ void Runtime::close_unit_info() {
         if (self.unit_info_panel_)
             self.unit_info_panel_->picture_path.clear();
     };
+    // A panel closing asks for nothing more.
     if (match_)
-        (void)oa::ui::hud::unit_info_panel_click(match_->state().game, nullptr, host, {});
+        std::ignore = oa::ui::hud::unit_info_panel_click(match_->state().game, nullptr, host, {});
     unit_info_panel_.reset();
 }
 

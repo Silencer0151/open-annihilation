@@ -7,10 +7,11 @@
 // as a commander, the deaths dealt through the damage path, the corpse
 // smoke the kill handler asks for, and the instance generation of the unit
 // made next in the dead unit's slot.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 #include "combat_fixture.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/sim/weapon_execution/weapon_launch.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -183,7 +184,7 @@ void sweep_damages_local_units() {
     f.run(1);
     doomed.unit->flags |= OA_UNIT_FLAG_DEATH_PENDING;
 
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     host.destroy_player_units(0);
     CHECK(plain.unit->health == after_hit(30000, 0) && plain.unit->health == -29000);
     CHECK(veteran.unit->health == after_hit(30000, 30) && veteran.unit->health == -23000);
@@ -210,7 +211,7 @@ void sweep_of_empty_player_returns() {
     auto& player = f.match->state().game.players[0];
     CHECK(player.unit_count == 1);
     player.unit_count = 0;
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     host.destroy_player_units(0);
     CHECK(unit.unit->health == full_health && !dying(unit));
     player.unit_count = 1;
@@ -237,7 +238,7 @@ void sweep_kills_mirrored_units() {
     auto& owner = f.match->state().game.players[1];
     const auto losses = owner.losses;
 
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     host.destroy_player_units(1);
     CHECK(!live(whole) && !live(wrecked));
     CHECK(owner.unit_count == 0);
@@ -275,7 +276,7 @@ void watch_panel(Fixture& f, PanelCloses& closes) {
 void only_local_commander_sweeps() {
     Fixture f;
     f.match->state().game.session_rules = 1;
-    std::strcpy(f.match->state().game.sides[0].commander, "testunit");
+    oa::base::text::copy_terminated(f.match->state().game.sides[0].commander, "testunit");
     auto& mirrored_commander = idle(f, 1, 64, 64);
     auto& mirrored_unit = idle(f, 1, 64, 160);
     auto& local_commander = idle(f, 0, 160, 64);
@@ -285,7 +286,7 @@ void only_local_commander_sweeps() {
     PanelCloses closes{&local_unit};
     watch_panel(f, closes);
 
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     mirrored_commander.unit->flags |= OA_UNIT_FLAG_DEATH_PENDING;
     host.kill_unit(mirrored_commander.record, weapon_hit);
     CHECK(!live(mirrored_commander));
@@ -310,8 +311,8 @@ void commander_is_named_by_the_side() {
     Fixture f;
     auto& world = f.match->state();
     world.player_info[1].side = 1;
-    std::strcpy(world.game.sides[0].commander, "testunit");
-    std::strcpy(world.game.sides[1].commander, "CORCOM");
+    oa::base::text::copy_terminated(world.game.sides[0].commander, "testunit");
+    oa::base::text::copy_terminated(world.game.sides[1].commander, "CORCOM");
     auto& named = idle(f, 0, 64, 64);
     auto& flagged = idle(f, 1, 160, 64);
     auto& killer = idle(f, 1, 200, 200);
@@ -326,7 +327,7 @@ void commander_is_named_by_the_side() {
     owner.resource_flags |= 1;
     enemy.resource_flags |= 1;
 
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     flagged.record.last_attacker_id = named.unit_index;
     flagged.record.last_attacker_owner = 0;
     flagged.unit->flags |= OA_UNIT_FLAG_DEATH_PENDING;
@@ -618,7 +619,7 @@ void hotkey_self_destruct_is_scaled() {
     auto* order = f.match->orders(sudden.unit_index).secondary;
     CHECK(order && order->kind == sim::match_runtime::self_destruct_kind);
     // Stepped outside the tick, which would also run the kill handler.
-    sim::match_runtime::TickHost host(*f.match);
+    sim::match_runtime::MatchTickAccess host(*f.match);
     CHECK(host.dispatch_mission(f.match->state(), sudden.record, *order, 0) == 5);
     CHECK(
         dying(sudden) && sudden.unit->health == after_hit(30000, 20) &&

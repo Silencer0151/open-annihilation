@@ -4,6 +4,7 @@
 // End-of-game screen over the finished match's Game block. The extension
 // hears the match events it reports.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 
 #include "oa/ui/frontend_state/app_modes.hpp"
@@ -30,6 +31,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -155,7 +157,7 @@ void Runtime::bind_session_options() {
         return;
     const auto multiplier = [this](std::string_view key) {
         const auto value = text(key);
-        return value ? static_cast<float>(std::strtod(value->c_str(), nullptr)) : 0.0F;
+        return value ? static_cast<float>(oa::formats::tdf::parse_double(value->c_str())) : 0.0F;
     };
     auto& session = endgame_state().session;
     session.kill_multiplier = multiplier("killmul");
@@ -192,7 +194,9 @@ void Runtime::shade_battlefield(int32_t level) {
     Rect32 whole{0, 0, frame.width - 1, frame.height - 1};
     auto* previous = oa::present::display_context();
     oa::present::bind_display(&display_.context);
-    (void)oa::present::shade_rect_level(&frame, &whole, level);
+    // A display that cannot be locked leaves the battlefield unshaded for
+    // this frame alone; the next frame shades it again.
+    std::ignore = oa::present::shade_rect_level(&frame, &whole, level);
     oa::present::bind_display(previous);
 }
 
@@ -284,8 +288,9 @@ void Runtime::keep_finished_match() {
     state.glamour = {};
     state.glamour_view = {};
     state.ending.reset();
-    if (extension_.match_event != nullptr)
-        extension_.match_event(extension_.context, *this, MatchEvent::finished);
+    call_hook_or_report<&Extension::match_event>(
+        extension_, hook_error_report(), *this, MatchEvent::finished
+    );
     state.match = std::move(match_);
 }
 
@@ -310,15 +315,18 @@ void Runtime::start_endgame() {
     if (extension_.match_event != nullptr)
         state.host.report_end = [](void* context) {
             auto& runtime = runtime_of(context);
-            runtime.extension_.match_event(
-                runtime.extension_.context, runtime, MatchEvent::results_reported
+            call_hook_or_report<&Extension::match_event>(
+                runtime.extension_,
+                runtime.hook_error_report(),
+                runtime,
+                MatchEvent::results_reported
             );
         };
     if (extension_.disconnect_text != nullptr)
         state.host.disconnect_message = [](void* context, uint8_t reason) {
             auto& runtime = runtime_of(context);
-            const auto& extension = runtime.extension_;
-            const char* text = extension.disconnect_text(extension.context, reason);
+            const char* text =
+                call_hook_or_raise<&Extension::disconnect_text>(runtime.extension_, reason);
             if (text == nullptr)
                 return;
             runtime.show_frontend_message(
@@ -498,8 +506,9 @@ void Runtime::release_endgame() {
     campaign::publish_endgame({});
     if (!endgame_)
         return;
-    if (extension_.match_event != nullptr)
-        extension_.match_event(extension_.context, *this, MatchEvent::results_released);
+    call_hook_or_report<&Extension::match_event>(
+        extension_, hook_error_report(), *this, MatchEvent::results_released
+    );
     endgame_->match.reset();
     endgame_->reopen = false;
     endgame_->glamour = {};

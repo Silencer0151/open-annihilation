@@ -12,7 +12,6 @@
 #include "oa/sim/ground_orders/orders.hpp"
 #include "oa/sim/match_runtime/command.hpp"
 #include <cmath>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -28,9 +27,13 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
                          public sim::combat_state::AttackHost {
     Match& match;
 
+    // An identity outside the pool is noted and names the reserved slot 0,
+    // which holds no unit.
     sim::unit_spawn::Slot& slot(sim::combat_state::UnitIdentity id) {
-        if (id == 0 || id >= match.slots_.size())
-            throw std::out_of_range("target identity outside pool");
+        if (id == 0 || id >= match.slots_.size()) {
+            match.fault_.note("target identity outside pool");
+            return match.slots_[0];
+        }
         return match.slots_[id];
     }
 
@@ -39,13 +42,14 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
     explicit TargetHost(Match& world) : match(world) {}
 
     bool unit_active(sim::combat_state::UnitIdentity id) override {
-        const auto flags = slot(id).unit->flags;
-        return (flags & 0x10000000u) && !(flags & 0x4000u);
+        return unit_is_live_target(slot(id).unit->flags);
     }
 
     bool allied(uint8_t owner, uint8_t other) {
-        if (owner >= 10 || other >= 10 || !match.player_alliances_[owner])
-            throw std::logic_error("target search requires resolved player alliances");
+        if (owner >= 10 || other >= 10 || !match.player_alliances_[owner]) {
+            match.fault_.note("target search requires resolved player alliances");
+            return false;
+        }
         return (*match.player_alliances_[owner])[other] != 0;
     }
 
@@ -71,18 +75,22 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
     uint32_t random_bounded(uint32_t range) override { return match.random_.bounded(range); }
 
     void strategic_refresh(uint8_t player) {
-        if (!match.strategic_environment_)
-            throw std::logic_error(
+        if (!match.strategic_environment_) {
+            match.fault_.note(
                 "strategic refresh requires resolved map and current wind environment"
             );
+            return;
+        }
         const auto environment = *match.strategic_environment_;
         auto& state = match.strategic_states_.at(player);
         std::vector<sim::combat_state::StrategicType> types(match.input_.types.size());
         state.owned_counts.assign(types.size(), 0);
         for (std::size_t id = 1; id < types.size(); ++id) {
             const auto& fields = match.input_.fields[id];
-            if (!fields.definition || !fields.runtime_metadata)
-                throw std::logic_error("strategic type requires resolved definition metadata");
+            if (!fields.definition || !fields.runtime_metadata) {
+                match.fault_.note("strategic type requires resolved definition metadata");
+                return;
+            }
             const auto& definition = *fields.definition;
             auto& type = types[id];
             type.flags = match.input_.types[id].simulation.flags;
@@ -115,8 +123,15 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
         for (std::size_t id = 1; id < match.slots_.size(); ++id) {
             const auto& s = match.slots_[id];
             const auto& u = *s.unit;
-            if (!u.owner || u.owner->record.index != player || !allied(player, player) ||
-                !unit_active(id))
+            if (!u.owner || u.owner->record.index != player)
+                continue;
+            // Without the player's alliance row the refresh stops at its
+            // first unit, before the strategic draw.
+            if (player >= 10 || !match.player_alliances_[player]) {
+                match.fault_.note("target search requires resolved player alliances");
+                return;
+            }
+            if (!allied(player, player) || !unit_active(id))
                 continue;
             const auto unfinished = s.record.build_remaining;
             if (unfinished != 0 && !std::isnan(unfinished))
@@ -145,10 +160,10 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
             const auto* weapon = match.weapons_[slot(source.identity).unit_index].definitions.at(
                 request.weapon_slot
             );
-            if (!weapon)
-                throw std::logic_error(
-                    "explicit target range requires initialized weapon definition"
-                );
+            if (!weapon) {
+                match.fault_.note("explicit target range requires initialized weapon definition");
+                return 0;
+            }
             return weapon->range_world_units;
         }
         return match.fields(slot(source.identity)).definition->sight_distance;
@@ -156,8 +171,10 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
 
     std::span<const sim::combat_state::TargetUnit>
     gather_nearby(uint8_t owner, const std::array<uint32_t, 3>& center, int32_t radius) override {
-        if (owner >= match.sightings_.size())
-            throw std::out_of_range("target partition outside player sightings");
+        if (owner >= match.sightings_.size()) {
+            match.fault_.note("target partition outside player sightings");
+            return {};
+        }
         const auto& sightings = match.sightings_[owner];
         match.sighting_query_.clear();
         sim::combat_state::gather_sightings(
@@ -261,11 +278,9 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
         if (name.empty())
             return 0;
         const auto kind = combat_order_kind(name);
-        if (kind != 0)
-            return kind;
-        throw std::runtime_error(
-            std::string("resolved mission handler not integrated: ") + std::string(name)
-        );
+        if (kind == 0)
+            match.fault_.note("resolved mission handler not integrated", name);
+        return kind;
     }
 
     bool commit_orders(
@@ -283,8 +298,10 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
         auto& from = slot(source.identity);
         auto& to = slot(target.identity);
         const auto* weapon = match.weapons_[from.unit_index].definitions.at(weapon_slot);
-        if (!weapon)
-            throw std::logic_error("target range requires initialized weapon definition");
+        if (!weapon) {
+            match.fault_.note("target range requires initialized weapon definition");
+            return false;
+        }
         const sim::ballistics::WeaponReachParameters reach{
             weapon->flags,
             weapon->range_world_units,
@@ -330,14 +347,23 @@ sim::simulation_state::Unit* Match::search_automatic_target(
             slot = &candidate;
             break;
         }
-    if (!slot)
-        throw std::out_of_range("target source outside pool");
+    if (!slot) {
+        fault_.note("target source outside pool");
+        return nullptr;
+    }
     const auto* masks = fields(*slot).target_masks;
-    if (!masks)
-        throw std::logic_error("automatic targeting requires resolved category masks");
+    if (!masks) {
+        fault_.note("automatic targeting requires resolved category masks");
+        return nullptr;
+    }
     TargetHost host(*this);
+    const auto* resolved = host.resolve(slot->unit_index);
+    if (!resolved) {
+        fault_.note("target source has no type or owner");
+        return nullptr;
+    }
     sim::combat_state::TargetSource source;
-    static_cast<sim::combat_state::TargetUnit&>(source) = *host.resolve(slot->unit_index);
+    static_cast<sim::combat_state::TargetUnit&>(source) = *resolved;
     source.owner_spatial_index = slot->record.owner_index;
     source.owner_present = unit.owner && unit.owner->present;
     source.owner_status = unit.owner && unit.owner->present ? unit.owner->status : 0;
@@ -348,8 +374,10 @@ sim::simulation_state::Unit* Match::search_automatic_target(
     source.implicit_excluded_category_mask = masks->no_chase.words;
     for (std::size_t i = 0; i < source.weapon_flags.size(); ++i) {
         const auto* definition = weapons_[slot->unit_index].definitions[i];
-        if (!definition)
-            throw std::logic_error("target source weapon not initialized");
+        if (!definition) {
+            fault_.note("target source weapon not initialized");
+            return nullptr;
+        }
         source.weapon_flags[i] = static_cast<uint8_t>(definition->flags);
     }
     const auto result = sim::combat_state::select_automatic_target(source, request, host);
@@ -358,9 +386,13 @@ sim::simulation_state::Unit* Match::search_automatic_target(
 
 bool Match::weapon_can_reach(uint16_t source, uint16_t target, uint8_t weapon) {
     TargetHost host(*this);
+    const auto* resolved_source = host.resolve(source);
+    const auto* resolved_target = host.resolve(target);
+    if (!resolved_source || !resolved_target)
+        return false;
     sim::combat_state::TargetSource from;
-    static_cast<sim::combat_state::TargetUnit&>(from) = *host.resolve(source);
-    return host.weapon_can_reach(from, *host.resolve(target), weapon);
+    static_cast<sim::combat_state::TargetUnit&>(from) = *resolved_source;
+    return host.weapon_can_reach(from, *resolved_target, weapon);
 }
 
 bool Match::issue_automatic_attack(
@@ -374,8 +406,10 @@ bool Match::issue_automatic_attack(
         if (slot.unit == &target)
             to = &slot;
     }
-    if (!from || !to)
-        throw std::out_of_range("attack identities outside match pool");
+    if (!from || !to) {
+        fault_.note("attack identities outside match pool");
+        return false;
+    }
     return issue_attack(from->unit_index, to->unit_index, false);
 }
 
@@ -383,15 +417,16 @@ bool Match::issue_attack(uint16_t source_index, uint16_t target_index, bool forc
     auto& from = slots_.at(source_index);
     auto& source = *from.unit;
     TargetHost host(*this);
+    const auto* target = host.resolve(target_index);
+    if (!target)
+        return false;
     sim::combat_state::AttackSource request{
         source_index,
         source.flags,
         source.position,
         static_cast<uint16_t>(fields(from).definition->maneuver_leash_length)
     };
-    return sim::combat_state::issue_attack_order(
-        request, *host.resolve(target_index), forced, host
-    );
+    return sim::combat_state::issue_attack_order(request, *target, forced, host);
 }
 
 bool Match::issue_attack_command(
@@ -415,8 +450,7 @@ bool Match::issue_attack_command(
         return false;
     // The order keeps the target only when its kind takes one: a Suppress
     // order on an allied unit fires at the point alone.
-    (void)issue_order(source_index, kind, queue, target_index, point, 0, 0);
-    return true;
+    return !order_refused(issue_order(source_index, kind, queue, target_index, point, 0, 0));
 }
 
 sim::simulation_state::Order* Match::issue_attack_ground(
@@ -431,7 +465,8 @@ sim::simulation_state::Order* Match::issue_attack_ground(
         host.resolve_order(sim::combat_state::attack_order_kind, request, nullptr, nullptr);
     if (kind == 0)
         return nullptr;
-    return &issue_order(source_index, kind, queue, 0, &destination, 0, 0);
+    auto& order = issue_order(source_index, kind, queue, 0, &destination, 0, 0);
+    return order_refused(order) ? nullptr : &order;
 }
 
 void Match::retarget_weapon_slot(sim::unit_spawn::Slot& unit, uint8_t slot) {

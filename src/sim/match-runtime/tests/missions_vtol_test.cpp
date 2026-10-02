@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 using namespace oa;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -21,7 +22,7 @@ constexpr uint8_t vtol_follow = 49, vtol_move = 55, vtol_patrol = 56, vtol_picku
                   vtol_unload = 65;
 constexpr uint16_t aircraft_type = 1, ground_type = 2, pad_type = 3;
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<std::pair<uint16_t, uint32_t>> speech;
 
     void command_sound(sim::unit_spawn::Slot& slot, uint32_t category) override {
@@ -35,33 +36,9 @@ struct Services : sim::match_runtime::OfflineServices {
                 out.push_back(category);
         return out;
     }
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 std::array<uint32_t, 3> at(uint32_t x, uint32_t z) {
     return {x << 16, 0, z << 16};

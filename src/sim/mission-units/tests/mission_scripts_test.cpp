@@ -5,6 +5,7 @@
 // script parser, with order kinds from the game's mission table.
 #include "oa/data/mission_types.hpp"
 #include "oa/sim/mission_units.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -53,13 +54,13 @@ enum Type : uint16_t {
 };
 
 struct Order {
-    uint8_t kind;
-    const Unit* unit;
-    const Unit* target;
-    bool has_position;
+    uint8_t kind{};
+    const Unit* unit{};
+    const Unit* target{};
+    bool has_position{};
     FixedVec3 position;
-    int32_t a;
-    int32_t b;
+    int32_t a{};
+    int32_t b{};
 };
 
 struct Fake {
@@ -174,7 +175,7 @@ World* make_world() {
         false, true, true, true, false, true, false, false, true, false, true, false, false, true
     };
     for (uint16_t i = 1; i < TYPES; ++i) {
-        std::strcpy(w->unit_defs[i].name, names[i]);
+        oa::base::text::copy_terminated(w->unit_defs[i].name, names[i]);
         w->unit_defs[i].type_id = i;
         w->unit_defs[i].max_damage = 1000;
         w->unit_defs[i].bm_code = mobile[i] ? 1 : 0;

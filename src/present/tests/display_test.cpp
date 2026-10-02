@@ -204,8 +204,8 @@ void test_rle_round_trip() {
         encoded.data = stream.data();
         auto a = oa::present::create_surface(64, 24);
         auto b = oa::present::create_surface(64, 24);
-        std::fill(a.pixels.begin(), a.pixels.end(), 200);
-        std::fill(b.pixels.begin(), b.pixels.end(), 200);
+        std::fill(a.pixels.begin(), a.pixels.end(), uint8_t{200});
+        std::fill(b.pixels.begin(), b.pixels.end(), uint8_t{200});
         a.surface.clip = Rect32{3, 2, 50, 20};
         b.surface.clip = a.surface.clip;
         const auto x = static_cast<int32_t>(rng() % 60) - 10;
@@ -281,14 +281,14 @@ void test_draw_text() {
         "glyph rows follow the baseline"
     );
 
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{0});
     oa::present::draw_text(&surface.surface, "ABAB", 1, 2, 7);
     check(
         surface.pixels[1 * 16 + 6] == 9 && surface.pixels[1 * 16 + 8] == 0,
         "trimmed to the widest fitting prefix"
     );
 
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{0});
     display.text_transparent = 0xFE;
     oa::present::draw_text(&surface.surface, "CA", 1, 2, 2);
     check(
@@ -296,7 +296,7 @@ void test_draw_text() {
         "glyphless characters keep their place"
     );
 
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{0});
     surface.surface.clip = Rect32{1, 2, 5, 5};
     oa::present::draw_text(&surface.surface, "AB", 1, 2, oa::present::text_width_unbounded);
     check(surface.pixels[1 * 16 + 1] == 0, "the box reaches x + width and is not inside the clip");
@@ -305,7 +305,7 @@ void test_draw_text() {
     check(
         surface.pixels[1 * 16 + 1] == 9, "a box of x..x+width, y..y+height inside the clip draws"
     );
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 0);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{0});
     surface.surface.clip = Rect32{1, 2, 6, 4};
     oa::present::draw_text(&surface.surface, "AB", 1, 2, oa::present::text_width_unbounded);
     check(surface.pixels[1 * 16 + 1] == 0, "the box is one row taller than the font");
@@ -365,7 +365,7 @@ void test_sprite_gray() {
     raw.sprite.data = raw.pixels.data();
     raw.sprite.origin_x = 1;
     auto surface = oa::present::create_surface(4, 3);
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 10);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{10});
     oa::present::draw_sprite_gray(&surface.surface, &raw.sprite, 2, 1);
     check(surface.pixels[1 * 4 + 1] == 10, "nothing grays without the gray table flag");
     display.flags = oa::present::display_flag_gray_table;
@@ -378,7 +378,7 @@ void test_sprite_gray() {
 
     Sprite encoded = raw.sprite;
     encoded.encoding = OA_SPRITE_ROW_RLE;
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 10);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{10});
     oa::present::draw_sprite_gray(&surface.surface, &encoded, 2, 1);
     check(surface.pixels[1 * 4 + 1] == 10, "row-RLE sprites are skipped");
 
@@ -393,7 +393,7 @@ void test_sprite_gray() {
         "composite grays its raw children"
     );
     composite.encoding = OA_SPRITE_ROW_RLE;
-    std::fill(surface.pixels.begin(), surface.pixels.end(), 10);
+    std::fill(surface.pixels.begin(), surface.pixels.end(), uint8_t{10});
     oa::present::draw_sprite_gray(&surface.surface, &composite, 1, 0);
     check(surface.pixels[0 * 4 + 0] == 10, "a composite marked row-RLE is skipped whole");
     oa::present::bind_display(nullptr);

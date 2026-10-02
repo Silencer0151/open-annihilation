@@ -10,11 +10,11 @@ add_library(oa::ui::services ALIAS oa-ui-services)
 target_include_directories(oa-ui-services PUBLIC include)
 target_compile_features(oa-ui-services PUBLIC cxx_std_20)
 target_link_libraries(oa-ui-services PUBLIC oa-base-geometry oa-platform-preferences oa-platform-shims oa-present
-  oa-options PRIVATE oa-base-bytes oa-base-game-loop oa-formats-sqsh oa-formats-hpi ZLIB::ZLIB)
+  oa-options PRIVATE oa-base-text oa-base-bytes oa-base-game-loop oa-formats-sqsh oa-formats-hpi ZLIB::ZLIB)
 
 if(BUILD_TESTING)
   add_executable(oa-engine-services-test tests/services_test.cpp)
-  target_link_libraries(oa-engine-services-test PRIVATE oa-ui-services oa-formats-sqsh ZLIB::ZLIB)
+  target_link_libraries(oa-engine-services-test PRIVATE oa-ui-services oa-formats-sqsh oa-base-bytes ZLIB::ZLIB)
   add_test(NAME engine-services COMMAND oa-engine-services-test)
   set_tests_properties(engine-services PROPERTIES TIMEOUT 60)
 endif()

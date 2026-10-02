@@ -27,7 +27,6 @@ constexpr uint32_t path_failed_event = sim::ground_orders::path_failed_event;
 constexpr uint32_t goal_events = sim::ground_orders::arrived_event |
                                  sim::ground_orders::path_failed_event |
                                  sim::ground_orders::goal_replaced_event;
-constexpr uint32_t goal_event_mask = 0x3e0;
 constexpr uint32_t weapon_wake_event = 0x10000;
 constexpr uint32_t pickup_abort_events = weapon_wake_event | path_failed_event | target_lost_event;
 constexpr uint32_t pickup_wait = goal_events | target_lost_event | weapon_wake_event;
@@ -241,7 +240,7 @@ class TickHost::VtolMissions {
     ) {
         auto& appended = push_front(kind, order_target, &point);
         // The tail insert propagates no queue flag from a successor.
-        host.owned(appended).extra.command_flags &= 0xbf;
+        host.owned(appended).extra.command_flags &= static_cast<uint8_t>(~command_overlay);
         auto& head = (appended.flags & 4) ? s.unit->secondary : s.unit->primary;
         if (&appended != head || !appended.next)
             return;
@@ -933,11 +932,11 @@ class TickHost::VtolMissions {
     /// the first carried unit stands on the ground there, releases it and
     /// climbs away.
     ///
-    /// Losing the cargo target mid-order throws.
+    /// Losing the cargo target mid-order is noted and ends the order (8).
     ///
     /// @return 1 (next phase), 5 (done: nothing carried, or unloaded),
-    ///     9 (retry: the cargo does not fit there, or no path) or
-    ///     7 (invalid).
+    ///     9 (retry: the cargo does not fit there, or no path),
+    ///     7 (invalid) or 8 (the cargo target was lost).
     uint32_t unload() {
         const auto carried = link_first_child(s.record);
         if (!carried)
@@ -956,8 +955,10 @@ class TickHost::VtolMissions {
         }
         case 1: {
             auto* cargo = target();
-            if (!cargo)
-                unsupported("VTOL_Unload without a cargo target");
+            if (!cargo) {
+                match().fault_.note("VTOL_Unload without a cargo target");
+                return mission_fault_result;
+            }
             if (!cargo_fits_at_destination(*cargo)) {
                 speak(vtol::speech_failed, "Unable to unload unit");
                 return 9;
@@ -974,8 +975,10 @@ class TickHost::VtolMissions {
             if (events & vtol::path_failed_event)
                 return 9;
             auto* cargo = target();
-            if (!cargo)
-                unsupported("VTOL_Unload without a cargo target");
+            if (!cargo) {
+                match().fault_.note("VTOL_Unload without a cargo target");
+                return mission_fault_result;
+            }
             if (!cargo_fits_at_destination(*cargo)) {
                 speak(vtol::speech_failed, "Unable to unload unit");
                 return 9;
@@ -1140,7 +1143,7 @@ void TickHost::set_aircraft_goal(
         auto goal = std::make_unique<sim::ground_orders::Goal>(
             sim::ground_orders::make_goal(order, g->geometry, *point, arrival_radius)
         );
-        order.raised_events &= ~vtol::goal_event_mask;
+        order.raised_events &= ~sim::ground_orders::goal_event_mask;
         sim::ground_orders::install_goal(
             view(s, *g, flags), goal.get(), match.simulation_.tick, *this
         );
@@ -1160,7 +1163,7 @@ void TickHost::install_air_goal(
     }
     if (!goal)
         return;
-    order.raised_events &= ~vtol::goal_event_mask;
+    order.raised_events &= ~sim::ground_orders::goal_event_mask;
     stored = *goal;
     stored.order_events = &order.raised_events;
     sim::air::air_driver_set_goal(&driver, &stored);

@@ -171,7 +171,7 @@ int main() {
     OA_CHECK(unit_result.stats->textured_primitives_deferred == 1);
     OA_CHECK(red_at(unit_surface, 8, 8) == 55);
     OA_CHECK(red_at(unit_surface, 3, 8) == 0);
-    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), 200);
+    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), uint8_t{200});
     oa::present::world_renderer::UnitMaterialState shadow_state;
     shadow_state.cast_shadow = true;
     const auto shadowed = oa::present::world_renderer::render_colored_instance(
@@ -186,7 +186,7 @@ int main() {
         }
     }
     OA_CHECK(darkened);
-    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), 0);
+    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), uint8_t{0});
     auto clipped_projection = oa::present::world_renderer::UnitProjection{{}, 0, 0, 8, 8};
     clipped_projection.raster_clip = oa::present::world_renderer::RasterClip{9, 0, 7, 16};
     const auto clipped_unit = oa::present::world_renderer::render_colored_instance(
@@ -213,7 +213,7 @@ int main() {
     material.frames.emplace_back(std::move(textured_second));
     catalog.materials.emplace("bodytex", std::move(material));
     palette[7 * oa::palette_entry_bytes] = 77;
-    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), 0);
+    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), uint8_t{0});
     const auto textured_result = oa::present::world_renderer::render_colored_instance(
         unit_surface, instance, palette, {{}, 0, 0, 8, 8}, &catalog
     );
@@ -222,7 +222,7 @@ int main() {
     OA_CHECK(textured_result.stats->textured_primitives_deferred == 0);
     OA_CHECK(red_at(unit_surface, 8, 8) == 77);
     palette[8 * oa::palette_entry_bytes] = 88;
-    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), 0);
+    std::fill(unit_surface.rgb.begin(), unit_surface.rgb.end(), uint8_t{0});
     oa::present::world_renderer::UnitMaterialState render_material_state;
     render_material_state.primitive_cursors = {{0, 1, 1}};
     const auto animated_result = oa::present::world_renderer::render_colored_instance(

@@ -21,29 +21,34 @@ class SearchHeap {
     using Payload = std::array<uint32_t, 4>;
     using Handle = uint32_t;
 
+    /// The handle insert returns when every handle is taken.
+    static constexpr Handle no_handle = 0xffff'ffffU;
+    /// The position position() returns for a free or unallocated slot.
+    static constexpr std::size_t no_position = static_cast<std::size_t>(-1);
+
     /// Inserts a node, or reuses the root of a deferred pop for it.
     ///
-    /// Grows the storage by the capacity + capacity/2 + 16 rule when full.
+    /// Grows the storage by the capacity + capacity/2 + 16 rule when full. A
+    /// pending pop that emptied the heap is dropped, and the node starts a new
+    /// root.
     ///
     /// @param value node payload; word 2 is the signed search score
-    /// @return the node's handle
+    /// @return the node's handle; no_handle, with nothing inserted, when every handle is taken
     [[nodiscard]] Handle insert(const Payload& value);
     /// Moves a node up after its caller lowered its score.
     ///
     /// With a pop pending, the deferred root is removed once another node displaces
-    /// it.
+    /// it. A handle that is not live changes nothing.
     ///
     /// @param handle node whose score decreased
     void decrease_key(Handle handle);
     /// Returns the lowest-score payload, first completing a pending pop.
     ///
-    /// Throws std::out_of_range for an empty heap.
-    ///
-    /// @return the root payload
+    /// @return the root payload; a zero payload for an empty heap
     [[nodiscard]] const Payload& peek();
     /// Pops the root; the first pop is deferred until the next heap operation.
     ///
-    /// Throws std::out_of_range for an empty heap.
+    /// An empty heap is left as it is.
     void pop();
 
     /// Returns a node's payload for update before decrease_key.
@@ -51,13 +56,14 @@ class SearchHeap {
     /// Payload word 2 is compared as a signed 32-bit search score.
     ///
     /// @param handle node slot
-    /// @return the payload
-    [[nodiscard]] Payload& payload(Handle handle);
+    /// @return the payload; for an unallocated slot, a spare payload outside the
+    ///         heap, cleared at each such call
+    [[nodiscard]] Payload& payload(Handle handle) noexcept;
     /// Returns a node's payload.
     ///
     /// @param handle node slot
-    /// @return the payload
-    [[nodiscard]] const Payload& payload(Handle handle) const;
+    /// @return the payload; a zero payload for an unallocated slot
+    [[nodiscard]] const Payload& payload(Handle handle) const noexcept;
 
     /// Returns the number of nodes in the heap, a deferred root included.
     [[nodiscard]] std::size_t size() const noexcept { return heap_.size(); }
@@ -79,11 +85,9 @@ class SearchHeap {
 
     /// Returns a live node's position in the heap array.
     ///
-    /// Throws std::out_of_range for a free or unallocated slot.
-    ///
     /// @param handle node slot
-    /// @return the heap position
-    [[nodiscard]] std::size_t position(Handle handle) const;
+    /// @return the heap position; no_position for a free or unallocated slot
+    [[nodiscard]] std::size_t position(Handle handle) const noexcept;
 
     /// Returns the heap array of node slots.
     [[nodiscard]] const std::vector<Handle>& heap_order() const noexcept { return heap_; }
@@ -106,7 +110,9 @@ class SearchHeap {
     /// capacity + capacity/2 + 16 growth rule.
     ///
     /// @param requested_capacity nodes to reserve
-    void reserve(int32_t requested_capacity);
+    /// @return false, with the capacity unchanged, when the growth rule would
+    ///         overflow or the capacity would fall below the allocated slots
+    bool reserve(int32_t requested_capacity);
 
   private:
 
@@ -119,11 +125,11 @@ class SearchHeap {
 
     /// Takes a node slot from the free chain, or a new one.
     ///
-    /// @return the slot
+    /// @return the slot, or no_handle when every handle is taken
     [[nodiscard]] Handle allocate_slot();
     /// Removes a live node, pushes its slot on the free chain and refills its position from the last node.
     ///
-    /// @param handle node to remove
+    /// @param handle node to remove; one that is not live is left alone
     void remove_slot(Handle handle);
     /// Moves the node at a heap position up while its score is lower than its parent's.
     ///
@@ -142,15 +148,16 @@ class SearchHeap {
     /// Returns the node in a slot.
     ///
     /// @param handle node slot
-    /// @return the node
-    [[nodiscard]] Node& node(Handle handle);
+    /// @return the node; spare_, cleared, for an unallocated slot
+    [[nodiscard]] Node& node(Handle handle) noexcept;
     /// Returns the node in a slot.
     ///
     /// @param handle node slot
-    /// @return the node
-    [[nodiscard]] const Node& node(Handle handle) const;
+    /// @return the node; a free node for an unallocated slot
+    [[nodiscard]] const Node& node(Handle handle) const noexcept;
 
     std::vector<Node> nodes_;
+    Node spare_{}; // what node() gives for an unallocated slot
     std::vector<Handle> heap_;
     int32_t free_head_{-1};
     std::size_t capacity_{};

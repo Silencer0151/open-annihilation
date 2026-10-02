@@ -6,11 +6,10 @@
 
 #include "oa/ui/hud/game_fields.hpp"
 
-#include "oa/data/unit_definitions.hpp"
+#include "oa/formats/tdf.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,40 +21,31 @@ using base::game_math::truncate_low32;
 
 namespace {
 
-using oa::data::unit_definitions::TdfSection;
+using oa::formats::tdf::Block;
 
 // Energy readouts past this magnitude switch to thousands.
 constexpr float kReadoutThousandsBeyond = 99999.0F;
 
-int32_t tdf_int(const TdfSection& section, std::string_view key, int32_t fallback) {
-    const auto* value = section.find(key);
-    if (value == nullptr || value->empty())
-        return fallback;
-    int32_t parsed = fallback;
-    const auto result = std::from_chars(value->data(), value->data() + value->size(), parsed);
-    return result.ec == std::errc{} ? parsed : fallback;
-}
-
 // SIDEDATA x2/y2 are inclusive.
-Rect tdf_rect(const TdfSection& side, std::string_view name) {
-    const auto* child = side.child(name);
+Rect tdf_rect(const Block* side, const char* name) {
+    const auto* child = oa::formats::tdf::find_child(side, name);
     if (child == nullptr)
         return {};
-    const auto x1 = tdf_int(*child, "x1", 0);
-    const auto y1 = tdf_int(*child, "y1", 0);
-    const auto x2 = tdf_int(*child, "x2", 0);
-    const auto y2 = tdf_int(*child, "y2", 0);
+    const auto x1 = oa::formats::tdf::get_int(child, "x1", 0);
+    const auto y1 = oa::formats::tdf::get_int(child, "y1", 0);
+    const auto x2 = oa::formats::tdf::get_int(child, "x2", 0);
+    const auto y2 = oa::formats::tdf::get_int(child, "y2", 0);
     return {x1, y1, x2 - x1 + 1, y2 - y1 + 1};
 }
 
-void read_point(const TdfSection& side, std::string_view name, int32_t& x, int32_t& y) {
-    if (const auto* child = side.child(name)) {
-        x = tdf_int(*child, "x1", x);
-        y = tdf_int(*child, "y1", y);
+void read_point(const Block* side, const char* name, int32_t& x, int32_t& y) {
+    if (const auto* child = oa::formats::tdf::find_child(side, name)) {
+        x = oa::formats::tdf::get_int(child, "x1", x);
+        y = oa::formats::tdf::get_int(child, "y1", y);
     }
 }
 
-void read_point(const TdfSection& side, std::string_view name, Rect& rect) {
+void read_point(const Block* side, const char* name, Rect& rect) {
     read_point(side, name, rect.x, rect.y);
 }
 
@@ -71,20 +61,23 @@ bool is_side(std::string_view name, int32_t side) {
 } // namespace
 
 bool parse_side_layout(std::string_view sidedata, int32_t side, SideLayout& layout) {
-    const auto parsed = oa::data::unit_definitions::parse_tdf(sidedata);
-    if (!parsed)
+    oa::formats::tdf::OwnedDocument parsed;
+    if (!parsed.parse(sidedata))
         return false;
-    const TdfSection* found = nullptr;
-    for (const auto& section : parsed.value.sections)
-        if (is_side(section.name, side)) {
-            found = &section;
+    const Block* s = nullptr;
+    for (uint32_t index = 0; index < oa::formats::tdf::child_count(parsed.root()); ++index) {
+        const auto* section = oa::formats::tdf::child_at(parsed.root(), index);
+        if (is_side(section->name, side)) {
+            s = section;
             break;
         }
-    if (found == nullptr)
+    }
+    if (s == nullptr)
         return false;
-    const auto& s = *found;
-    layout.metal_color = static_cast<uint8_t>(tdf_int(s, "metalcolor", layout.metal_color));
-    layout.energy_color = static_cast<uint8_t>(tdf_int(s, "energycolor", layout.energy_color));
+    layout.metal_color =
+        static_cast<uint8_t>(oa::formats::tdf::get_int(s, "metalcolor", layout.metal_color));
+    layout.energy_color =
+        static_cast<uint8_t>(oa::formats::tdf::get_int(s, "energycolor", layout.energy_color));
     if (const auto bar = tdf_rect(s, "METALBAR"); bar.width > 0)
         layout.metal_bar = bar;
     if (const auto bar = tdf_rect(s, "ENERGYBAR"); bar.width > 0)

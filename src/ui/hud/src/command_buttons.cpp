@@ -10,9 +10,9 @@ namespace oa::ui::hud {
 namespace {
 
 struct CommandButton {
-    const char* word;
-    uint8_t order;
-    bool special;
+    const char* word{};
+    uint8_t order{};
+    bool special{};
 };
 
 // In the order the names are tried: UNLOAD before LOAD, which it holds.

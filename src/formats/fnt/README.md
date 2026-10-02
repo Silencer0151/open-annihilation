@@ -23,9 +23,13 @@ as fatal: `load_named_fnt` returns a `not_found` error and its callers stop.
 The FNT disk layout is a little-endian 16-bit height and a second 16-bit word,
 256 absolute 16-bit offsets, then a width byte and a continuous row-major
 MSB-first bitmap for each present glyph. The second word, 1, 2 or 3 in the
-shipped fonts, is kept as `word_after_height` and not interpreted. Parsing
-rejects out-of-range dimensions, offsets, truncated bitmaps, and files over
-the component's named input limit. The parsers and loaders return
+shipped fonts, is kept as `word_after_height`. Its low byte, read signed, is
+the rows the game draws every FNT glyph above the pen row it is given:
+`row_lift` returns it and `raster_text` applies it, so the messages, the
+clock, the panel labels and the briefings sit on the rows 3.1c puts them on.
+A GAF-backed font has no such word and draws from its glyph origins alone.
+Parsing rejects out-of-range dimensions, offsets, truncated bitmaps, and
+files over the component's named input limit. The parsers and loaders return
 `oa::base::bytes::Decoded` values: the font, or the error's code, file
 offset and message. Errors of the asset store itself, such as an unreadable
 archive, still reach the caller as the store reports them.

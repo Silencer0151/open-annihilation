@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/map_runtime.hpp"
+#include "oa/sim/map_runtime/feature_defs.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <limits>
-#include <cerrno>
-#include <cstdlib>
 #include <string_view>
 #include <utility>
 #include <cstdint>
@@ -33,23 +31,6 @@ FeatureResult feature_failure(ErrorCode code, std::string message) {
     return {std::nullopt, Error{code, std::move(message)}};
 }
 
-int32_t
-integer(const data::unit_definitions::TdfSection& section, std::string_view key, bool& valid) {
-    const auto* source = section.find(key);
-    if (!source || source->empty())
-        return 0;
-    const char* begin = source->c_str();
-    char* end = nullptr;
-    errno = 0;
-    const auto parsed = std::strtol(begin, &end, 10);
-    if (end == begin || errno == ERANGE || parsed < std::numeric_limits<int32_t>::min() ||
-        parsed > std::numeric_limits<int32_t>::max()) {
-        valid = false;
-        return 0;
-    }
-    return static_cast<int32_t>(parsed);
-}
-
 uint8_t metal_byte(float value) {
     // The game truncates to signed 64 bits; overflow and nonfinite values produce
     // INT64_MIN, whose low byte is zero.
@@ -69,41 +50,44 @@ bool forced_no_draw_under_gray(std::string_view name) {
     return false;
 }
 
-bool parse_feature_section(
-    const data::unit_definitions::TdfSection& found, std::string_view name, FeatureTerrain& out
-) {
-    bool valid = true;
-    const auto x = integer(found, "footprintx", valid), z = integer(found, "footprintz", valid);
-    const auto metal = integer(found, "metal", valid),
-               indestructible = integer(found, "indestructible", valid);
-    const auto blocking = integer(found, "blocking", valid);
-    const auto reclaimable = integer(found, "reclaimable", valid);
-    const auto* object = found.find("object");
-    const auto* filename = found.find("filename");
-    const auto* seqname = found.find("seqname");
-    const auto geothermal = integer(found, "geothermal", valid);
-    const auto animating = integer(found, "animating", valid);
-    const auto height = integer(found, "height", valid);
-    const auto no_draw_under_gray = integer(found, "nodrawundergray", valid);
-    if (!valid)
-        return false;
-    out = {
-        static_cast<int16_t>(x),
-        static_cast<int16_t>(z),
-        static_cast<float>(static_cast<uint32_t>(metal) & 0xffffU),
-        (static_cast<uint32_t>(indestructible) & 1U) != 0,
-        (static_cast<uint32_t>(blocking) & 1U) != 0,
-        (static_cast<uint32_t>(reclaimable) & 1U) != 0,
-        object != nullptr && !object->empty(),
-        object ? *object : std::string{},
-        filename ? *filename : std::string{},
-        seqname ? *seqname : std::string{},
-        (static_cast<uint32_t>(geothermal) & 1U) != 0,
-        (static_cast<uint32_t>(animating) & 1U) != 0,
-        static_cast<uint8_t>(height),
-        (static_cast<uint32_t>(no_draw_under_gray) & 1U) != 0 || forced_no_draw_under_gray(name)
+/// Returns a text field of a feature section.
+///
+/// @param section feature section
+/// @param key field name
+/// @return the text, or empty when the field is missing
+std::string text_field(const formats::tdf::Block* section, const char* key) {
+    const char* value = formats::tdf::find_value(section, key);
+    return value != nullptr ? std::string(value) : std::string{};
+}
+
+/// Reads the fields the metal overlay and plot projection take from a feature section.
+///
+/// @param section feature section
+/// @param name feature name, for the forced wall flags
+/// @return the terrain fields
+FeatureTerrain feature_terrain(const formats::tdf::Block* section, std::string_view name) {
+    const auto flag = [section](const char* key) {
+        return (static_cast<uint32_t>(formats::tdf::get_int(section, key, 0)) & 1U) != 0;
     };
-    return true;
+    const char* object = formats::tdf::find_value(section, "object");
+    return {
+        static_cast<int16_t>(formats::tdf::get_int(section, "footprintx", 0)),
+        static_cast<int16_t>(formats::tdf::get_int(section, "footprintz", 0)),
+        static_cast<float>(
+            static_cast<uint32_t>(formats::tdf::get_int(section, "metal", 0)) & 0xffffU
+        ),
+        flag("indestructible"),
+        flag("blocking"),
+        flag("reclaimable"),
+        object != nullptr && object[0] != '\0',
+        text_field(section, "object"),
+        text_field(section, "filename"),
+        text_field(section, "seqname"),
+        flag("geothermal"),
+        flag("animating"),
+        static_cast<uint8_t>(formats::tdf::get_int(section, "height", 0)),
+        flag("nodrawundergray") || forced_no_draw_under_gray(name)
+    };
 }
 
 /// Paints each metal-overlay feature's metal over the plot metal of its footprint.
@@ -146,21 +130,27 @@ void paint_feature_metal(
 
 } // namespace
 
-data::unit_definitions::Result<std::vector<data::unit_definitions::TdfDocument>>
+data::unit_definitions::Result<std::vector<formats::tdf::OwnedDocument>>
 load_feature_documents(const FeatureAssetReader& assets) {
     auto paths = assets.list_effective_recursive("features", ".tdf");
     if (!paths)
         return {{}, {data::unit_definitions::ErrorCode::io, 0, paths.error.message}};
-    std::vector<data::unit_definitions::TdfDocument> documents;
+    std::vector<formats::tdf::OwnedDocument> documents;
     documents.reserve(paths.value.size());
     for (const auto& path : paths.value) {
         auto source = assets.read(path);
         if (!source)
             return {{}, {data::unit_definitions::ErrorCode::io, 0, source.error.message}};
-        auto parsed = data::unit_definitions::parse_tdf(source.value);
-        if (!parsed)
-            return {{}, parsed.error};
-        documents.push_back(std::move(parsed.value));
+        formats::tdf::OwnedDocument document;
+        formats::tdf::ParseError error{};
+        if (!document.parse(source.value, &error))
+            return {
+                {},
+                {data::unit_definitions::ErrorCode::malformed,
+                 error.offset,
+                 path + ": " + formats::tdf::describe(error)}
+            };
+        documents.push_back(std::move(document));
     }
     return {std::move(documents), {}};
 }
@@ -174,33 +164,18 @@ resolve_feature_terrain(const formats::tnt::Map& map, const FeatureAssetReader& 
 }
 
 FeatureResult resolve_feature_terrain(
-    const formats::tnt::Map& map, std::span<const data::unit_definitions::TdfDocument> documents
+    const formats::tnt::Map& map, std::span<const formats::tdf::OwnedDocument> documents
 ) {
     std::vector<FeatureTerrain> result;
     result.reserve(map.features.size());
     for (const auto& feature : map.features) {
-        const data::unit_definitions::TdfSection* found = nullptr;
-        for (const auto& document : documents) {
-            for (const auto& section : document.sections)
-                if (equal(section.name, feature.name)) {
-                    found = &section;
-                    break;
-                }
-            if (found)
-                break;
-        }
+        const auto* found = find_feature_section(documents, feature.name);
         if (!found)
             return feature_failure(
                 ErrorCode::missing_feature_definition,
                 "feature definition is missing: " + feature.name
             );
-        FeatureTerrain terrain;
-        if (!parse_feature_section(*found, feature.name, terrain))
-            return feature_failure(
-                ErrorCode::invalid_feature_number,
-                "feature has an invalid numeric field: " + feature.name
-            );
-        result.push_back(std::move(terrain));
+        result.push_back(feature_terrain(found, feature.name));
     }
     return {std::move(result), std::nullopt};
 }
@@ -212,29 +187,21 @@ FeatureCatalogResult load_feature_catalog(const FeatureAssetReader& assets) {
     return load_feature_catalog(documents.value);
 }
 
-FeatureCatalogResult
-load_feature_catalog(std::span<const data::unit_definitions::TdfDocument> documents) {
+FeatureCatalogResult load_feature_catalog(std::span<const formats::tdf::OwnedDocument> documents) {
     std::vector<NamedFeature> catalog;
     for (const auto& document : documents) {
-        for (const auto& section : document.sections) {
+        for (uint32_t index = 0; index < formats::tdf::child_count(document.root()); ++index) {
+            const auto* section = formats::tdf::child_at(document.root(), index);
+            const std::string_view name(section->name);
             bool exists = false;
             for (const auto& prior : catalog)
-                if (equal(prior.name, section.name)) {
+                if (equal(prior.name, name)) {
                     exists = true;
                     break;
                 }
             if (exists)
                 continue;
-            FeatureTerrain terrain;
-            if (!parse_feature_section(section, section.name, terrain))
-                return {
-                    std::nullopt,
-                    Error{
-                        ErrorCode::invalid_feature_number,
-                        "feature has an invalid numeric field: " + section.name
-                    }
-                };
-            catalog.push_back({section.name, std::move(terrain)});
+            catalog.push_back({std::string(name), feature_terrain(section, name)});
         }
     }
     return {std::move(catalog), std::nullopt};

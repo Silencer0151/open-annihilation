@@ -16,15 +16,15 @@ using namespace oa::ui::hud;
 namespace {
 
 struct Line {
-    int32_t x0, y0, x1, y1;
-    uint8_t color;
+    int32_t x0{}, y0{}, x1{}, y1{};
+    uint8_t color{};
 };
 
 struct Sprite {
-    OverlaySprite kind;
-    uint8_t index;
-    uint16_t frame;
-    int32_t x, y;
+    OverlaySprite kind{};
+    uint8_t index{};
+    uint16_t frame{};
+    int32_t x{}, y{};
 };
 
 struct Recorder {

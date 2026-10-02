@@ -14,7 +14,7 @@ using us::test::require;
 namespace {
 
 struct Function {
-    const char* name;
+    const char* name{};
     std::vector<uint32_t> code;
 };
 
@@ -315,7 +315,8 @@ void set_flag(void* context, oa::World*, oa::Unit* unit, uint8_t mask, bool enab
 
 void set_yard(void* context, oa::World*, oa::Unit* unit, int32_t open) {
     ++*static_cast<int*>(context);
-    unit->build_flags = static_cast<uint8_t>((unit->build_flags & 0xfb) | ((open & 1) << 2));
+    unit->build_flags =
+        static_cast<uint8_t>((unit->build_flags & ~OA_UNIT_BUILD_YARD_OPEN) | ((open & 1) << 2));
 }
 
 void unit_values_map_to_canonical_fields() {

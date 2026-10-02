@@ -53,13 +53,7 @@ int main() {
     accelerate(u, m, 0, 1);
     CHECK(m.speed == 32768);
     CHECK(braking_distance(65536, 32768) == 65536);
-    bool threw = false;
-    try {
-        (void)braking_distance(1, 0);
-    } catch (const std::domain_error&) {
-        threw = true;
-    }
-    CHECK(threw);
+    CHECK(!braking_distance(1, 0));
     u = {};
     m = {};
     u.type.maximum_speed = 65536;

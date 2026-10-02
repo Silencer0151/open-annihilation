@@ -15,8 +15,8 @@ add_library(oa-audio
 )
 add_library(oa::audio ALIAS oa-audio)
 target_include_directories(oa-audio PUBLIC include)
-target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-data-unit-definitions oa-options oa-core-types
-  PRIVATE oa-base-bytes)
+target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-options oa-core-types
+  PRIVATE oa-base-bytes oa-formats-tdf)
 
 # The offline mix of the game's sound effects that director renders take
 # their sound from: integer decoding, resampling and mixing, with no sound
@@ -39,23 +39,30 @@ endif()
 # The music decoder: MP3, Ogg Vorbis, FLAC and WAVE files to 44.1 kHz
 # stereo float, with the sample-rate converter it shares with the sound
 # output. The decoders themselves are kept in third_party/ as their authors
-# wrote them and compiled in music_codecs.c without the engine's warnings.
+# wrote them and compiled from music_codecs.c, in oa-audio-music-codecs,
+# without the engine's warnings.
 set(oa_music_codec_dirs "${PROJECT_SOURCE_DIR}/third_party/dr_libs"
   "${PROJECT_SOURCE_DIR}/third_party/stb_vorbis")
-add_library(oa-audio-music-decoder src/music_decoder.cpp src/resampler.cpp src/music_codecs.c)
+add_library(oa-audio-music-codecs OBJECT src/music_codecs.c)
+add_library(oa::audio::music_codecs ALIAS oa-audio-music-codecs)
+target_include_directories(oa-audio-music-codecs SYSTEM PRIVATE ${oa_music_codec_dirs})
+if(MSVC)
+  # Without oa-options: the decoders build their tables from constant
+  # floating-point expressions, which /fp:strict does not take as static
+  # initializers, and an option given after /W4 or /fp:strict would only
+  # override it with a warning. Decoded music takes no part in a match.
+  target_compile_options(oa-audio-music-codecs PRIVATE /w)
+else()
+  target_link_libraries(oa-audio-music-codecs PRIVATE oa-options)
+  target_compile_options(oa-audio-music-codecs PRIVATE -w)
+endif()
+add_library(oa-audio-music-decoder src/music_decoder.cpp src/resampler.cpp)
 add_library(oa::audio::music_decoder ALIAS oa-audio-music-decoder)
 target_include_directories(oa-audio-music-decoder PUBLIC include)
 target_include_directories(oa-audio-music-decoder SYSTEM PRIVATE ${oa_music_codec_dirs})
-target_link_libraries(oa-audio-music-decoder PRIVATE oa-base-bytes oa-options)
+target_link_libraries(oa-audio-music-decoder PRIVATE oa-audio-music-codecs oa-base-bytes oa-platform-shims
+  oa-options)
 target_compile_features(oa-audio-music-decoder PUBLIC cxx_std_20)
-if(MSVC)
-  # The decoders build their tables from constant floating-point expressions,
-  # which /fp:strict does not take as static initializers. Decoded music
-  # takes no part in a match.
-  set_source_files_properties(src/music_codecs.c PROPERTIES COMPILE_OPTIONS "/w;/fp:precise")
-else()
-  set_source_files_properties(src/music_codecs.c PROPERTIES COMPILE_OPTIONS -w)
-endif()
 if(NOT WIN32)
   # The Ogg Vorbis decoder calls the C maths library.
   find_library(OA_MATH_LIBRARY m)
@@ -85,7 +92,7 @@ add_library(oa-audio-output src/sound_output.cpp src/sound_output_none.cpp
 add_library(oa::audio::output ALIAS oa-audio-output)
 target_include_directories(oa-audio-output PUBLIC include)
 target_link_libraries(oa-audio-output PUBLIC oa-audio-music-decoder oa-platform-sound-device
-  PRIVATE oa-options)
+  PRIVATE oa-platform-shims oa-options)
 target_compile_features(oa-audio-output PUBLIC cxx_std_20)
 if(OA_BUILD_PLATFORM)
   find_package(SDL3 3.2 CONFIG REQUIRED)

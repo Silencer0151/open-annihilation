@@ -283,8 +283,7 @@ uint32_t TickHost::GroundMissions::get_built() {
             queue_order(kind, &point);
             queued = true;
         });
-        if (sim::simulation_state::unit_active(s.record) &&
-            sim::simulation_state::unit_active(factory->record)) {
+        if (unit_is_live_target(s.record.flags) && unit_is_live_target(factory->record.flags)) {
             s.record.flags =
                 ((factory->record.flags ^ s.record.flags) & command::inherited_orders) ^
                 s.record.flags;

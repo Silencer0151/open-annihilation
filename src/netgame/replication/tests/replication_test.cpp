@@ -463,6 +463,54 @@ void pack_apply_converges() {
     CHECK(remote.world->game.players[0].last_sim_tick == static_cast<int32_t>(tick - 1));
 }
 
+// A unit a 0x2c entry names before its 0x09 has arrived, such as a
+// commander announced while this machine was still loading, is created from
+// the stream in the slot as it stands, at the slot's own position, as 3.1c
+// creates it; it stands there until its full record places it.
+void stream_created_unit_waits_for_its_full_record() {
+    TestWorld local(
+        small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+    );
+    TestWorld remote(
+        small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+    );
+    local.world->game.players[0].status = OA_PLAYER_STATUS_LOCAL;
+    Unit* commander = local.spawn(&local.units[1], 1, false);
+    commander->health = 3000;
+    commander->position = {200 << 16, 12 << 16, 300 << 16};
+    MovementRecord& route = local.movement[commander->id];
+    route.ground.flags = ground_driver_path_set | ground_driver_resend;
+    route.ground.path_count = 1;
+    route.ground.path[0][0] = 210;
+    route.ground.path[0][1] = 300;
+
+    const auto step = [&](uint32_t tick) {
+        local.world->game.tick = tick;
+        const auto bytes = pack(local, 0);
+        CHECK(
+            replication_apply_unit_state(
+                remote.world.get(), &remote.sim, 0, bytes.data(), bytes.size()
+            ) == WireError::ok
+        );
+    };
+    // Tick 1 carries the route and the full record of the empty slot after it.
+    step(1);
+    const Unit& copy = remote.units[commander->id];
+    CHECK(remote.creates == 1 && copy.type_index == 1);
+    CHECK(copy.position.x == 0 && copy.position.y == 0 && copy.position.z == 0);
+    CHECK(copy.health == 0);
+    // The commander's full record rides on the tick that is a multiple of the
+    // units per player, and puts the copy where the commander stands.
+    for (uint32_t tick = 2; tick <= small_units_per_player; ++tick)
+        step(tick);
+    CHECK(remote.creates == 1);
+    CHECK(
+        copy.position.x == commander->position.x && copy.position.y == commander->position.y &&
+        copy.position.z == commander->position.z
+    );
+    CHECK(copy.health == commander->health);
+}
+
 // The receiver's hook calls for one 0x2c, in order.
 enum class Call : uint8_t { ground_delta, air_goal, substate, tick, sight, place };
 std::vector<std::pair<Call, uint16_t>> calls;
@@ -613,6 +661,119 @@ void event_records_follow_pump_rules() {
     active = nullptr;
 }
 
+struct UnitSnapshot {
+    uint16_t type_index{};
+    int16_t health{};
+    float build_remaining{};
+    uint8_t state_flags{};
+    FixedVec3 position{};
+    uint16_t heading{};
+    uint32_t flags{};
+};
+
+UnitSnapshot snapshot(const Unit& unit) {
+    return {
+        unit.type_index,
+        unit.health,
+        unit.build_remaining,
+        unit.state_flags,
+        unit.position,
+        unit.heading,
+        unit.flags
+    };
+}
+
+bool same(const UnitSnapshot& a, const UnitSnapshot& b) {
+    return a.type_index == b.type_index && a.health == b.health &&
+           a.build_remaining == b.build_remaining && a.state_flags == b.state_flags &&
+           a.position.x == b.position.x && a.position.y == b.position.y &&
+           a.position.z == b.position.z && a.heading == b.heading && a.flags == b.flags;
+}
+
+// A unit state cut short anywhere in its full record leaves that unit as it
+// was; a listed unit outside the sender's range, or any damaged copy, is
+// refused without touching another player's units.
+void malformed_unit_states_change_nothing() {
+    TestWorld local(
+        small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+    );
+    TestWorld remote(
+        small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+    );
+    local.world->game.players[0].status = OA_PLAYER_STATUS_LOCAL;
+    Unit* sent = local.spawn(&local.units[1], 1, false);
+    sent->health = 250;
+    sent->state_flags = 0x15;
+    sent->position = {100 << 16, 3 << 16, 200 << 16};
+    sent->heading = 0x4000;
+    Unit* held = remote.spawn(&remote.units[1], 1, true);
+    held->health = 10;
+    held->position = {7 << 16, 0, 9 << 16};
+    local.world->game.tick = 0; // the full record is the first unit's
+    const auto bytes = pack(local, 0);
+    const auto before = snapshot(*held);
+    for (std::size_t n = unit_state_header_bytes; n < bytes.size(); ++n) {
+        Bytes cut(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(n));
+        cut[1] = static_cast<uint8_t>(n);
+        cut[2] = static_cast<uint8_t>(n >> 8);
+        const auto result = replication_apply_unit_state(
+            remote.world.get(), &remote.sim, 0, cut.data(), cut.size()
+        );
+        CHECK(result == WireError::truncated);
+        CHECK(same(snapshot(*held), before));
+    }
+    CHECK(
+        replication_apply_unit_state(
+            remote.world.get(), &remote.sim, 0, bytes.data(), bytes.size()
+        ) == WireError::ok
+    );
+    CHECK(held->health == 250 && held->state_flags == 0x15 && held->heading == 0x4000);
+
+    // A listed unit past the sender's range.
+    for (const uint16_t index : {small_units_per_player, uint16_t{0x7fff}, uint16_t{0x8000}}) {
+        const auto state = encode([&](BitWriter* w) {
+            unit_state_begin(w, 1);
+            unit_state_write_entry_header(w, index, 1, small_def_bits);
+            write_waypoint_delta(w, WaypointDelta{});
+            uint16_t length = 0;
+            CHECK(unit_state_finish(w, FullUnitRecord{}, small_def_bits, &length) == WireError::ok);
+        });
+        CHECK(
+            replication_apply_unit_state(
+                remote.world.get(), &remote.sim, 0, state.data(), state.size()
+            ) == WireError::bad_argument
+        );
+    }
+    CHECK(
+        replication_apply_unit_state(
+            remote.world.get(), &remote.sim, OA_PLAYER_COUNT, bytes.data(), bytes.size()
+        ) == WireError::bad_argument
+    );
+
+    // Damaged copies of the record: whatever they decode to, only the
+    // sender's units change.
+    const Unit other_before = remote.units[small_units_per_player + 1];
+    uint32_t state = 0x2c2c2c2c;
+    const auto next = [&state] {
+        state = state * 1664525u + 1013904223u;
+        return state >> 8;
+    };
+    for (int i = 0; i < 2000; ++i) {
+        Bytes damaged = bytes;
+        const auto changes = 1 + next() % 4;
+        for (uint32_t c = 0; c < changes; ++c)
+            damaged[next() % damaged.size()] ^= static_cast<uint8_t>(1u << (next() % 8));
+        if (next() % 4 == 0)
+            damaged.resize(1 + next() % damaged.size());
+        bool handled = false;
+        (void)replication_apply_record(
+            remote.world.get(), &remote.sim, 0, damaged.data(), damaged.size(), &handled
+        );
+    }
+    const Unit& other = remote.units[small_units_per_player + 1];
+    CHECK(other.type_index == other_before.type_index && other.health == other_before.health);
+}
+
 } // namespace
 
 int main() {
@@ -625,8 +786,11 @@ int main() {
         {"air_delta_layouts_round_trip", air_delta_layouts_round_trip},
         {"driver_delta_bookkeeping", driver_delta_bookkeeping},
         {"pack_apply_converges", pack_apply_converges},
+        {"stream_created_unit_waits_for_its_full_record",
+         stream_created_unit_waits_for_its_full_record},
         {"receiver_calls_follow_the_record", receiver_calls_follow_the_record},
         {"event_records_follow_pump_rules", event_records_follow_pump_rules},
+        {"malformed_unit_states_change_nothing", malformed_unit_states_change_nothing},
     };
     for (const auto& test : tests) {
         current_test = test.name;

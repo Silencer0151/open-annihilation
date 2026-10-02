@@ -121,7 +121,7 @@ bool bank_open_account(Bank* bank, const char* name) {
     accounts->items = items;
     accounts->open = accounts->count++;
     BankAccount& account = items[accounts->open];
-    std::memset(&account, 0, sizeof(account));
+    std::memset(static_cast<void*>(&account), 0, sizeof(account));
     account.name = copy;
     account.open_blob = -1;
     return false;
@@ -145,7 +145,7 @@ int32_t bank_find_field(Bank* bank, const char* name, bool create) {
     }
     account->fields = fields;
     const int32_t index = account->field_count++;
-    std::memset(&fields[index], 0, sizeof(BankField));
+    std::memset(static_cast<void*>(&fields[index]), 0, sizeof(BankField));
     fields[index].name = copy;
     return index;
 }
@@ -217,7 +217,7 @@ int32_t bank_find_blob_id(Bank* bank, int32_t id, bool create) {
         return -1;
     account->blobs = blobs;
     const int32_t index = account->blob_count++;
-    std::memset(&blobs[index], 0, sizeof(BankBlob));
+    std::memset(static_cast<void*>(&blobs[index]), 0, sizeof(BankBlob));
     blobs[index].id = id;
     return index;
 }
@@ -240,7 +240,7 @@ int32_t bank_find_blob_name(Bank* bank, const char* name, bool create) {
     }
     account->blobs = blobs;
     const int32_t index = account->blob_count++;
-    std::memset(&blobs[index], 0, sizeof(BankBlob));
+    std::memset(static_cast<void*>(&blobs[index]), 0, sizeof(BankBlob));
     blobs[index].name = copy;
     blobs[index].named = 1;
     return index;

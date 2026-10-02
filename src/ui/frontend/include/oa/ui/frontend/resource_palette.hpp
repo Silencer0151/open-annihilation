@@ -22,9 +22,9 @@ inline constexpr const char* kResourceBitmapExtension = "PCX";
 
 // One cache slot.
 struct ResourceSlot {
-    oa_ref32 surface;              // host bitmap handle, 0 for an empty slot
-    uint8_t* palette;              // kResourcePaletteBytes block the slot owns
-    char name[kResourceNameBytes]; // background name
+    oa_ref32 surface;                // host bitmap handle, 0 for an empty slot
+    uint8_t* palette{};              // kResourcePaletteBytes block the slot owns
+    char name[kResourceNameBytes]{}; // background name
 };
 
 // Slot 0 is the most recently asked for.
@@ -33,23 +33,23 @@ struct ResourceCache {
 };
 
 struct ResourceHost {
-    void* context;
+    void* context{};
     // Clears and presents the frame before the load; optional.
-    void (*draw_current_frame)(void* context);
+    void (*draw_current_frame)(void* context){};
     // Loads a PCX as a bitmap handle, writing its palette to `palette`; 0 when
     // it cannot be read.
-    oa_ref32 (*load_bitmap)(void* context, const char* path, uint8_t* palette);
-    void (*free_bitmap)(void* context, oa_ref32 bitmap);
+    oa_ref32 (*load_bitmap)(void* context, const char* path, uint8_t* palette){};
+    void (*free_bitmap)(void* context, oa_ref32 bitmap){};
     // The load of a named bitmap failed; does not return.
-    void (*fatal)(void* context, const char* path);
+    void (*fatal)(void* context, const char* path){};
     // Whether the GUI has a panel open on top.
-    bool (*panel_open)(void* context);
+    bool (*panel_open)(void* context){};
     // Hands the bitmap to the panel on top as its backdrop.
-    void (*set_backdrop)(void* context, oa_ref32 bitmap);
+    void (*set_backdrop)(void* context, oa_ref32 bitmap){};
     // Makes the palette block the display palette (entries 0..255).
-    void (*apply_palette)(void* context, const uint8_t* palette);
+    void (*apply_palette)(void* context, const uint8_t* palette){};
     // Language variant lookup of the bitmap path.
-    const data::campaign::CampaignFiles* files;
+    const data::campaign::CampaignFiles* files{};
 };
 
 /// Empties the cache without freeing anything.

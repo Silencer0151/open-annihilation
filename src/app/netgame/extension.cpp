@@ -4,9 +4,10 @@
 // Network play's extension, filled by oa_extension_init_netgame: the hooks
 // through which oa-game runs the multiplayer screens, networked matches, .tad
 // playback (a --play-demo run's, and a recording the engine hands over to
-// replay one tick at a time) and the network checks. RuntimeExtension, the
-// runtime's friend, turns each hook into the Runtime members network play
-// defines (oa/app/netgame_runtime_members.hpp). The screen host and services, which
+// replay one tick at a time) and the network checks. The extension owns
+// network play's state for each runtime its hooks are called for
+// (NetworkPlay, network_play.hpp), and RuntimeExtension turns each hook into
+// work on that state. The screen host and services, which
 // stay the same while the runtime lives, are kept from an overlay registered
 // for them: a request to close the window and the leaves it leads to end the
 // program through them. An extension built on network play reaches it
@@ -19,6 +20,7 @@
 #include "multiplayer_menu_check.hpp"
 #include "net_options.hpp"
 #include "net_state.hpp"
+#include "network_play.hpp"
 #include "traffic_overlay.hpp"
 
 #include "oa/app/check_host.hpp"
@@ -50,7 +52,7 @@
 // The version of the engine's extension table these hooks follow. A build
 // against a table of another version stops here until the engine's change
 // has been read and the hooks follow it.
-constexpr uint32_t kExtensionApiVersionFollowed = 9;
+constexpr uint32_t kExtensionApiVersionFollowed = 11;
 static_assert(
     oa::app::extension_api_version == kExtensionApiVersionFollowed,
     "the engine's extension table changed: follow its change, then raise "
@@ -243,6 +245,17 @@ void register_screens(void* /*context*/, ScreenRegistry* registry) {
 // What the replay's status reports once the replay has ended under the
 // engine: its match is no longer the running one.
 constexpr const char* kReplayEnded = "the replay ended: its match is no longer the running one";
+// What the replay's status reports when it could not be read.
+constexpr const char* kReplayStatusUnread = "the replay's status could not be read";
+
+/// Reports on standard error an error a hook that must not throw caught
+/// itself (extension.hpp's hooks that must not throw).
+///
+/// @param hook the hook's name
+/// @param message what was thrown
+void report_caught(const char* hook, const char* message) noexcept {
+    std::fprintf(stderr, "network play: %s: %s\n", hook, message);
+}
 
 // --check-recording-hook's inputs that the hook must decline or refuse: a
 // text that is no recording, and a recording's header chunk that claims
@@ -316,16 +329,79 @@ uint32_t host_not_found_clock_ms() noexcept {
     return g_host_check_clock_ms;
 }
 
+namespace {
+
+/// Returns network play's state of every runtime its hooks have been called for.
+///
+/// Never destroyed: a run that ends without destroying its runtime leaves
+/// that runtime's state as it is, sessions included.
+///
+/// @return The states, one for each such runtime not yet destroyed.
+std::vector<std::unique_ptr<NetworkPlay>>& network_plays() {
+    static auto* const plays = new std::vector<std::unique_ptr<NetworkPlay>>();
+    return *plays;
+}
+
+} // namespace
+
+NetworkPlay::NetworkPlay(Runtime& runtime) noexcept : runtime_(runtime) {
+}
+
+NetworkPlay::~NetworkPlay() = default;
+
+NetworkPlay& NetworkPlay::of(Runtime& runtime) {
+    if (auto* play = find(runtime))
+        return *play;
+    return *network_plays().emplace_back(std::make_unique<NetworkPlay>(runtime));
+}
+
+NetworkPlay* NetworkPlay::find(const Runtime& runtime) noexcept {
+    for (const auto& play : network_plays())
+        if (&play->runtime_ == &runtime)
+            return play.get();
+    return nullptr;
+}
+
+void NetworkPlay::free_for(const Runtime& runtime) noexcept {
+    auto& plays = network_plays();
+    const auto gone = std::find_if(plays.begin(), plays.end(), [&runtime](const auto& play) {
+        return &play->runtime_ == &runtime;
+    });
+    if (gone == plays.end())
+        return;
+    // Taken out of the list before it is freed, so that nothing freeing it
+    // finds it.
+    const std::unique_ptr<NetworkPlay> play = std::move(*gone);
+    plays.erase(gone);
+}
+
+std::optional<std::size_t> NetworkPlay::match_ticks() const {
+    return runtime_options(runtime_).match_ticks;
+}
+
+void NetworkPlay::post_departure(oa::World& world, uint32_t player_id) {
+    oa::netgame::messages::post_departure(world, player_id, runtime_.message_hooks());
+}
+
 struct RuntimeExtension {
+    /// Returns the network session of a runtime's network play.
+    ///
+    /// @param runtime The running app.
+    /// @return The session, or null when network play has none for it.
+    static NetState* net_of(const Runtime& runtime) noexcept {
+        const auto* play = NetworkPlay::find(runtime);
+        return play != nullptr ? play->net_.get() : nullptr;
+    }
+
     /// Posts a line to the running network match's message log (bind_battle_lines).
     ///
-    /// @param context The running app.
+    /// @param context Network play's state for the running app.
     /// @param line The line.
     /// @return False when no network match runs.
     static bool post_to_match(void* context, const char* line) {
-        auto& runtime = *static_cast<Runtime*>(context);
-        auto* state = runtime.net_.get();
-        oa::World* world = runtime.reporter_world();
+        auto& play = *static_cast<NetworkPlay*>(context);
+        auto* state = play.net_.get();
+        oa::World* world = play.reporter_world();
         if (state == nullptr || !state->active || state->console_host == nullptr ||
             state->console_host->post_message == nullptr || world == nullptr)
             return false;
@@ -351,19 +427,20 @@ struct RuntimeExtension {
     /// The session then follows a launch: a launched host admits joiners
     /// into a closed game, and the lines posted to the battle reach the
     /// running match's message log. The launch's leave is bound to the
-    /// runtime.
+    /// runtime's network play.
     ///
     /// @param context Extension context (unused).
     /// @param runtime The running app.
     static void ready(void* /*context*/, Runtime& runtime) {
-        runtime.net_bind_multiplayer();
-        if (auto* state = runtime.net_.get())
+        auto& play = NetworkPlay::of(runtime);
+        play.net_bind_multiplayer();
+        if (auto* state = play.net_.get())
             state->connection.launch_active = launch_active;
         LaunchBinding launch = netgame_launch_binding();
-        launch.leave_context = &runtime;
+        launch.leave_context = &play;
         launch.leave_game = leave_game;
         bind_launch(launch);
-        bind_battle_lines(&runtime, post_to_match);
+        bind_battle_lines(&play, post_to_match);
     }
 
     /// Leaves the game and ends the program with exit status 0, as the game does when a request to
@@ -379,15 +456,15 @@ struct RuntimeExtension {
     /// ends through ScreenServices::quit, with the reason shown first when
     /// there is one.
     ///
-    /// @param context The running app.
+    /// @param context Network play's state for the running app.
     /// @param with_reason Whether the disconnect reason shows first.
     static void leave_game(void* context, bool with_reason) {
-        auto& runtime = *static_cast<Runtime*>(context);
+        auto& play = *static_cast<NetworkPlay*>(context);
         const char* reason = with_reason ? leave_reason(mp::multiplayer_game()) : nullptr;
         if (!with_reason)
-            runtime.close_reporter();
-        runtime.net_leave();
-        if (auto* state = runtime.net_.get(); state != nullptr && state->connected) {
+            play.close_reporter();
+        play.net_leave();
+        if (auto* state = play.net_.get(); state != nullptr && state->connected) {
             const auto net = oa::netgame::match::session_lobby_net(&state->connection);
             net.close(net.context);
         }
@@ -417,7 +494,8 @@ struct RuntimeExtension {
     static CloseObservation close_observation(const Runtime& runtime) {
         CloseObservation now{};
         now.frontend_mode = mp::multiplayer_game().mode;
-        now.match_runs = runtime.net_match_active() || runtime.match_running();
+        const auto* play = NetworkPlay::find(runtime);
+        now.match_runs = (play != nullptr && play->net_match_active()) || runtime.match_running();
         return now;
     }
 
@@ -430,8 +508,12 @@ struct RuntimeExtension {
     /// @param context Extension context (unused).
     /// @param runtime The running app.
     /// @param mode The application mode set.
-    static void app_mode_set(void* /*context*/, Runtime& runtime, int32_t mode) {
-        close_handlers_mode_set(g_close, mode, close_observation(runtime));
+    static void app_mode_set(void* /*context*/, Runtime& runtime, int32_t mode) noexcept {
+        try {
+            close_handlers_mode_set(g_close, mode, close_observation(runtime));
+        } catch (const std::exception& error) {
+            report_caught("app_mode_set", error.what());
+        }
     }
 
     /// Answers a request to end the program with the installed close handler (Extension::close_requested).
@@ -459,11 +541,12 @@ struct RuntimeExtension {
         case CloseHandler::leave:
             break;
         }
-        const bool something_to_leave = runtime.net_session_open() || runtime.net_match_active() ||
+        auto& play = NetworkPlay::of(runtime);
+        const bool something_to_leave = play.net_session_open() || play.net_match_active() ||
                                         leave_reason(mp::multiplayer_game()) != nullptr;
         if (!something_to_leave || !can_quit())
             return false;
-        leave_game(&runtime, true);
+        leave_game(&play, true);
         return true;
     }
 
@@ -486,15 +569,18 @@ struct RuntimeExtension {
         case RunPhase::headless_first:
             if (!options.net_loopback_ticks)
                 return false;
-            exit_code = runtime.run_net_loopback_check(*options.net_loopback_ticks);
+            exit_code =
+                NetworkPlay::of(runtime).run_net_loopback_check(*options.net_loopback_ticks);
             return true;
         case RunPhase::headless: {
             if (!options.check_recording_hook && options.play_demo.empty())
                 return false;
-            const auto ticks = runtime.options_.match_ticks.value_or(kDefaultDemoTicks);
+            auto& play = NetworkPlay::of(runtime);
+            const auto ticks = play.match_ticks().value_or(kDefaultDemoTicks);
             exit_code = options.check_recording_hook ? check_recording_hook(runtime, ticks)
-                                                     : runtime.run_headless_demo(ticks);
-            runtime.flush_preferences();
+                                                     : play.run_headless_demo(ticks);
+            const auto host = check_host(runtime);
+            host.write_preferences(host.context);
             return true;
         }
         }
@@ -513,7 +599,7 @@ struct RuntimeExtension {
     /// @param context Extension context (unused).
     /// @param runtime The running app, with no match running.
     /// @param input The recording's name and bytes.
-    /// @param[out] replay Receives the replay's hooks, whose context is the runtime.
+    /// @param[out] replay Receives the replay's hooks, whose context is the runtime's network play.
     /// @param[out] info Receives what the recording holds.
     /// @return False when the bytes are not a TA Demo recording; throws
     ///         std::runtime_error, naming the recording, for one that cannot be
@@ -528,17 +614,18 @@ struct RuntimeExtension {
         if (input.bytes == nullptr || !demo::demo_recognised({input.bytes, input.byte_count}))
             return false;
         const std::string name = input.name != nullptr ? input.name : "";
-        if (runtime.demo_)
+        auto& play = NetworkPlay::of(runtime);
+        if (play.demo_)
             throw std::runtime_error(name + ": a recording is already being replayed");
         netgame_context().staged_recording = StagedRecording{
             name, std::vector<uint8_t>(input.bytes, input.bytes + input.byte_count), input.strict
         };
         try {
-            runtime.start_demo_playback();
+            play.start_demo_playback();
         } catch (const std::runtime_error& error) {
             throw std::runtime_error(name + ": " + error.what());
         }
-        const auto& session = *runtime.demo_;
+        const auto& session = *play.demo_;
         // The end stays unknown (0): the packet layer spreads the last
         // frame's records over up to 30 ticks after it is due, behind those
         // still queued, so a recording finishes some tens of ticks after its
@@ -547,21 +634,36 @@ struct RuntimeExtension {
         info.duration_ms = demo::demo_duration_ms(session.playback);
         info.viewer_player = session.watcher_slot;
         info.player_count = static_cast<uint8_t>(session.playback.demo.players.size());
-        info.content_differs = runtime.demo_unit_table_differs_;
+        info.content_differs = play.demo_unit_table_differs_;
         // Filled by position: ReplayHooks::step shares its name with a
         // private member of Runtime, whose uses here may not grow.
-        replay = ReplayHooks{&runtime, replay_tick, replay_status, replay_close};
+        replay = ReplayHooks{&play, replay_tick, replay_status, replay_close};
         return true;
     }
 
     /// Runs the replay's next tick (ReplayHooks::step).
     ///
-    /// @param context The running app.
+    /// A tick that throws counts as a failed tick: in the replay's errors,
+    /// with its message as the last error, and the replay goes on.
+    ///
+    /// @param context Network play's state for the running app.
     /// @return False once the replay has ended: its match is no longer the running one.
-    static bool replay_tick(void* context) {
-        auto& runtime = *static_cast<Runtime*>(context);
-        runtime.step_demo_frame();
-        return runtime.demo_ != nullptr;
+    static bool replay_tick(void* context) noexcept {
+        auto& play = *static_cast<NetworkPlay*>(context);
+        try {
+            play.step_demo_frame();
+        } catch (const std::exception& error) {
+            if (play.demo_) {
+                ++play.demo_->tick_errors;
+                try {
+                    play.demo_->last_error = error.what();
+                } catch (...) {
+                    play.demo_->last_error.clear();
+                }
+            }
+            report_caught("replay step", error.what());
+        }
+        return play.demo_ != nullptr;
     }
 
     /// Tells where the replay stands (ReplayHooks::status).
@@ -570,17 +672,31 @@ struct RuntimeExtension {
     /// creates refused and, while the unit table is the recording's, the
     /// creates past the table; the last error is the last failed tick's.
     ///
-    /// @param context The running app.
+    /// @param context Network play's state for the running app.
     /// @param[out] status Receives the replay's state; once the replay has
-    ///             ended, only a last error that says so.
-    static void replay_status(void* context, RecordingStatus& status) {
-        const auto& runtime = *static_cast<const Runtime*>(context);
-        const auto* session = runtime.demo_.get();
+    ///             ended, only a last error that says so, and when the state
+    ///             cannot be read, only a last error that says that.
+    static void replay_status(void* context, RecordingStatus& status) noexcept {
+        try {
+            read_replay_status(*static_cast<const NetworkPlay*>(context), status);
+        } catch (const std::exception& error) {
+            status = {};
+            status.last_error = kReplayStatusUnread;
+            report_caught("replay status", error.what());
+        }
+    }
+
+    /// Reads where the replay stands (replay_status).
+    ///
+    /// @param play Network play's state for the running app.
+    /// @param[out] status Receives the replay's state.
+    static void read_replay_status(const NetworkPlay& play, RecordingStatus& status) {
+        const auto* session = play.demo_.get();
         if (session == nullptr || session->match == nullptr) {
             status.last_error = kReplayEnded;
             return;
         }
-        const bool differs = runtime.demo_unit_table_differs_;
+        const bool differs = play.demo_unit_table_differs_;
         const auto verdict = demo::demo_session_verdict(*session, differs);
         status.tick = session->match->state().game.tick;
         status.finished = demo::demo_session_finished(*session);
@@ -594,8 +710,10 @@ struct RuntimeExtension {
 
     /// Ends the replay and frees its playback; the match stays the engine's (ReplayHooks::close).
     ///
-    /// @param context The running app.
-    static void replay_close(void* context) { static_cast<Runtime*>(context)->demo_.reset(); }
+    /// @param context Network play's state for the running app.
+    static void replay_close(void* context) noexcept {
+        static_cast<NetworkPlay*>(context)->demo_.reset();
+    }
 
     /// Runs --check-recording-hook: hands open_recording bytes that are no
     /// recording, which it must decline, and a recording's truncated header,
@@ -622,12 +740,13 @@ struct RuntimeExtension {
             const RecordingInput input{name, bytes.data(), bytes.size(), strict};
             return open_recording(&netgame_context(), runtime, input, replay, info);
         };
+        const auto& play = NetworkPlay::of(runtime);
         ReplayHooks replay{};
         RecordingInfo info{};
         const std::span<const uint8_t> other{
             reinterpret_cast<const uint8_t*>(kCheckOtherBytes.data()), kCheckOtherBytes.size()
         };
-        if (open(kCheckOtherName, other, true, replay, info) || runtime.demo_ ||
+        if (open(kCheckOtherName, other, true, replay, info) || play.demo_ ||
             replay.context != nullptr)
             throw std::runtime_error(
                 "recording hook check: bytes that are no recording were taken"
@@ -641,7 +760,7 @@ struct RuntimeExtension {
         } catch (const std::runtime_error& error) {
             refusal = error.what();
         }
-        if (refusal.empty() || runtime.demo_ || replay.context != nullptr)
+        if (refusal.empty() || play.demo_ || replay.context != nullptr)
             throw std::runtime_error(
                 "recording hook check: a truncated recording header was not refused"
             );
@@ -672,7 +791,7 @@ struct RuntimeExtension {
             status = {};
             report(replay_context, status);
         }
-        const auto* world = runtime.demo_ ? &runtime.demo_->match->state() : nullptr;
+        const auto* world = play.demo_ ? &play.demo_->match->state() : nullptr;
         std::printf(
             "recording hook tick %u: digest %016llx, %s, %s, %s, %u errors%s%s\n",
             status.tick,
@@ -686,7 +805,7 @@ struct RuntimeExtension {
         );
         std::fflush(stdout);
         finish(replay_context);
-        if (runtime.demo_)
+        if (play.demo_)
             throw std::runtime_error("recording hook check: the replay's close left its playback");
         return status.clean && status.paced ? 0 : 1;
     }
@@ -699,7 +818,7 @@ struct RuntimeExtension {
     static bool start_scene(void* /*context*/, Runtime& runtime) {
         if (net_options().play_demo.empty())
             return false;
-        runtime.start_demo_playback();
+        NetworkPlay::of(runtime).start_demo_playback();
         return true;
     }
 
@@ -707,7 +826,9 @@ struct RuntimeExtension {
     ///
     /// @param context Extension context (unused).
     /// @param runtime The running app.
-    static void shutdown(void* /*context*/, Runtime& runtime) { runtime.net_leave(); }
+    static void shutdown(void* /*context*/, Runtime& runtime) {
+        NetworkPlay::of(runtime).net_leave();
+    }
 
     /// Runs network play's part of --check-multiplayer-menu (Extension::check_multiplayer_menu).
     ///
@@ -728,13 +849,16 @@ struct RuntimeExtension {
     ///         player of the network match only watches.
     static uint32_t state(void* /*context*/, const Runtime& runtime) {
         uint32_t bits = 0;
-        if (runtime.net_session_open())
+        const auto* play = NetworkPlay::find(runtime);
+        if (play == nullptr)
+            return bits;
+        if (play->net_session_open())
             bits |= extension_state::multiplayer;
-        if (runtime.net_match_active())
+        if (play->net_match_active())
             bits |= extension_state::shared_match;
-        if (runtime.demo_)
+        if (play->demo_)
             bits |= extension_state::replay;
-        if (runtime.net_local_watcher())
+        if (play->net_local_watcher())
             bits |= extension_state::local_watcher;
         return bits;
     }
@@ -752,9 +876,9 @@ struct RuntimeExtension {
             observe_close_handlers(runtime);
             if (net_options().check_host_not_found)
                 host_not_found_frame();
-            runtime.net_frame();
+            NetworkPlay::of(runtime).net_frame();
         } else {
-            runtime.demo_frame();
+            NetworkPlay::of(runtime).demo_frame();
         }
     }
 
@@ -764,11 +888,12 @@ struct RuntimeExtension {
     /// @param runtime The running app.
     /// @return False when neither runs, leaving the step to the engine.
     static bool simulation_step(void* /*context*/, Runtime& runtime) {
-        if (runtime.net_simulation_step())
+        auto& play = NetworkPlay::of(runtime);
+        if (play.net_simulation_step())
             return true;
-        if (!runtime.demo_)
+        if (!play.demo_)
             return false;
-        runtime.step_demo_frame();
+        play.step_demo_frame();
         return true;
     }
 
@@ -779,9 +904,9 @@ struct RuntimeExtension {
     ///
     /// @param context Extension context (unused).
     /// @param runtime The running app.
-    /// @return Runtime::net_final_economy_settled().
+    /// @return NetworkPlay::net_final_economy_settled().
     static bool outcome_ready(void* /*context*/, Runtime& runtime) {
-        return runtime.net_final_economy_settled();
+        return NetworkPlay::of(runtime).net_final_economy_settled();
     }
 
     /// Follows the match's life cycle (Extension::match_event).
@@ -800,30 +925,31 @@ struct RuntimeExtension {
     /// @param runtime The running app.
     /// @param event What happened to the match.
     static void match_event(void* /*context*/, Runtime& runtime, MatchEvent event) {
+        auto& play = NetworkPlay::of(runtime);
         switch (event) {
         case MatchEvent::finished:
             // The transport closes now; the match report stays up for the
             // end-of-game event the screen sends.
-            runtime.net_leave();
+            play.net_leave();
             close_handlers_match_ended(g_close);
             break;
         case MatchEvent::torn_down:
-            runtime.net_leave();
-            runtime.demo_.reset();
+            play.net_leave();
+            play.demo_.reset();
             close_handlers_match_ended(g_close);
             break;
         case MatchEvent::left:
-            runtime.close_reporter();
+            play.close_reporter();
             close_handlers_match_ended(g_close);
             break;
         case MatchEvent::results_released:
-            runtime.close_reporter();
+            play.close_reporter();
             break;
         case MatchEvent::results_reported:
-            runtime.report_game_event(report_event::game_ended);
+            play.report_game_event(report_event::game_ended);
             break;
         case MatchEvent::watching_kept:
-            runtime.report_game_event(report_event::player_changed);
+            play.report_game_event(report_event::player_changed);
             break;
         }
     }
@@ -843,7 +969,8 @@ struct RuntimeExtension {
     static bool give_resources(
         void* /*context*/, Runtime& runtime, uint8_t from, uint8_t to, float amount, bool metal
     ) {
-        return runtime.demo_ || runtime.net_give(from, to, metal, amount);
+        auto& play = NetworkPlay::of(runtime);
+        return play.demo_ || play.net_give(from, to, metal, amount);
     }
 
     /// Adds network play's message-log hooks (Extension::message_hooks).
@@ -857,13 +984,14 @@ struct RuntimeExtension {
     static void
     message_hooks(void* /*context*/, Runtime& /*runtime*/, oa::sim::messages::Hooks& hooks) {
         hooks.share_chat = [](void* context, const char* chat) {
-            static_cast<Runtime*>(context)->net_send_chat(chat);
+            NetworkPlay::of(*static_cast<Runtime*>(context)).net_send_chat(chat);
         };
         hooks.record_chat = [](void* context, const char* chat) {
-            static_cast<Runtime*>(context)->report_chat_line(chat);
+            NetworkPlay::of(*static_cast<Runtime*>(context)).report_chat_line(chat);
         };
         hooks.game_kind = [](void* context) -> int32_t {
-            return static_cast<Runtime*>(context)->net_session_open()
+            const auto* play = NetworkPlay::find(*static_cast<const Runtime*>(context));
+            return play != nullptr && play->net_session_open()
                        ? oa::sim::messages::game_kind_multiplayer
                        : 0;
         };
@@ -878,9 +1006,10 @@ struct RuntimeExtension {
     /// @return False without an open session, leaving the announcement to the engine.
     static bool
     player_gone(void* /*context*/, Runtime& runtime, oa::World& world, const oa::Player& player) {
-        if (!runtime.net_session_open())
+        auto& play = NetworkPlay::of(runtime);
+        if (!play.net_session_open())
             return false;
-        oa::netgame::messages::post_departure(world, player.player_id, runtime.message_hooks());
+        play.post_departure(world, player.player_id);
         return true;
     }
 
@@ -891,7 +1020,7 @@ struct RuntimeExtension {
     /// @param[in,out] host Console host that gains the network commands.
     static void
     console_host(void* /*context*/, Runtime& runtime, oa::ui::console::ConsoleHost& host) {
-        runtime.bind_console_network_hooks(host);
+        NetworkPlay::of(runtime).bind_console_network_hooks(host);
     }
 
     /// Runs the console network command check in --check-navigation's console check (Extension::check_console).
@@ -906,9 +1035,9 @@ struct RuntimeExtension {
         void (*enter_line)(void* user, const char* line),
         void* user
     ) {
-        runtime.check_console_network_commands([enter_line, user](const char* line) {
-            enter_line(user, line);
-        });
+        NetworkPlay::of(runtime).check_console_network_commands(
+            [enter_line, user](const char* line) { enter_line(user, line); }
+        );
     }
 
     /// Draws a network load's player bars over the loading screen (Extension::draw_loading).
@@ -923,7 +1052,7 @@ struct RuntimeExtension {
         oa::Surface& target,
         const oa::present::GafSprites* font
     ) {
-        runtime.draw_loading_players(target, font);
+        NetworkPlay::of(runtime).draw_loading_players(target, font);
     }
 
     /// Shares the Pause key's pause with the other players (Extension::pause_changed).
@@ -938,7 +1067,7 @@ struct RuntimeExtension {
     /// @param runtime The running app.
     /// @param paused The pause bit after the flip.
     static void pause_changed(void* /*context*/, Runtime& runtime, bool paused) {
-        auto* state = runtime.net_.get();
+        auto* state = net_of(runtime);
         if (state == nullptr || !state->active || state->loading)
             return;
         oa::netgame::match::net_match_set_pause(state->net.get(), paused);
@@ -951,7 +1080,7 @@ struct RuntimeExtension {
     /// slider have just set goes to every player as 0x19 {kind 1, speed}
     /// from the first player on this machine, never from a watcher's
     /// machine; a speed another machine sets arrives the same way, and the
-    /// frame takes it in (Runtime::net_frame). The preferences' Cancel, UNDO
+    /// frame takes it in (NetworkPlay::net_frame). The preferences' Cancel, UNDO
     /// and RESTORE put a speed back without the engine reporting it, so it
     /// stays on this machine. Before the match has loaded, or with no
     /// network match, the speed stays on this machine too.
@@ -959,9 +1088,10 @@ struct RuntimeExtension {
     /// @param context Extension context (unused).
     /// @param runtime The running app.
     /// @param speed The match's game speed now, 1 to 20.
-    static void speed_changed(void* /*context*/, Runtime& runtime, uint16_t speed) {
-        auto* state = runtime.net_.get();
-        if (state == nullptr || !state->active || state->loading || runtime.net_local_watcher())
+    static void speed_changed(void* /*context*/, Runtime& runtime, uint16_t speed) noexcept {
+        const auto* play = NetworkPlay::find(runtime);
+        auto* state = play != nullptr ? play->net_.get() : nullptr;
+        if (state == nullptr || !state->active || state->loading || play->net_local_watcher())
             return;
         oa::netgame::match::net_match_set_speed(state->net.get(), speed, true);
         state->speed_seen = speed;
@@ -983,7 +1113,7 @@ struct RuntimeExtension {
     /// @param row_count How many rows `rows` holds.
     static void
     load_progress(void* /*context*/, Runtime& runtime, const uint8_t* rows, size_t row_count) {
-        auto* state = runtime.net_.get();
+        auto* state = net_of(runtime);
         if (state == nullptr || state->building_game == nullptr || rows == nullptr)
             return;
         std::copy_n(rows, std::min(row_count, state->load_rows.size()), state->load_rows.begin());
@@ -1001,7 +1131,7 @@ struct RuntimeExtension {
     /// @param context The panels' host context: the running app.
     /// @return The match, or null before it has loaded or without one.
     static oa::netgame::match::NetMatch* panel_match(void* context) {
-        auto* state = static_cast<Runtime*>(context)->net_.get();
+        auto* state = net_of(*static_cast<const Runtime*>(context));
         return state != nullptr && state->active && !state->loading ? state->net.get() : nullptr;
     }
 
@@ -1053,6 +1183,14 @@ struct RuntimeExtension {
         host.tournament_game = [](void* /*context*/) { return launch_tournament(); };
     }
 
+    /// Frees network play's state for a runtime that is being destroyed (Extension::release_runtime).
+    ///
+    /// @param context Extension context (unused).
+    /// @param runtime The runtime being destroyed.
+    static void release_runtime(void* /*context*/, Runtime& runtime) noexcept {
+        NetworkPlay::free_for(runtime);
+    }
+
     /// Draws the traffic readouts over the battlefield (Extension::draw_match_overlay).
     ///
     /// The rates come from the connection's counters while a network match
@@ -1063,7 +1201,7 @@ struct RuntimeExtension {
     /// @param overlay the battlefield and its painter
     static void
     draw_match_overlay(void* /*context*/, Runtime& runtime, const MatchOverlay& overlay) {
-        auto* state = runtime.net_.get();
+        auto* state = net_of(runtime);
         if (state == nullptr || !state->active || state->connection.packets == nullptr) {
             draw_traffic_overlay(overlay, nullptr, 0);
             return;
@@ -1116,4 +1254,5 @@ void oa_extension_init_netgame(oa::app::Extension* table) {
     table->speed_changed = RuntimeExtension::speed_changed;
     table->app_mode_set = RuntimeExtension::app_mode_set;
     table->open_recording = RuntimeExtension::open_recording;
+    table->release_runtime = RuntimeExtension::release_runtime;
 }

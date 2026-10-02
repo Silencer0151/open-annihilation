@@ -254,15 +254,18 @@ int main() {
     MovementMap map(8, 17, 1, 2, map_host);
     SearchController controller;
     Goal search_goal;
-    controller.begin({&state, &searched, &search_goal, &map});
+    CHECK(controller.begin({&state, &searched, &search_goal, &map}));
     CHECK(!controller.idle());
+    // A second job, or one with a missing field, is refused.
+    CHECK(!controller.begin({&state, &searched, &search_goal, &map}));
+    CHECK(!SearchController{}.begin({&state, &searched, nullptr, &map}));
     Navigation other;
     controller.cancel(other);
     CHECK(!controller.idle());
     controller.cancel(searched);
     CHECK(controller.idle());
     // release_navigation drops only the job whose navigator is the one going away.
-    controller.begin({&state, &searched, &search_goal, &map});
+    CHECK(controller.begin({&state, &searched, &search_goal, &map}));
     release_navigation(controller, other);
     CHECK(!controller.idle());
     release_navigation(controller, searched);
@@ -270,7 +273,7 @@ int main() {
         controller.idle() && controller.active().navigation == nullptr &&
         controller.active().goal == nullptr && controller.active().movement_map == nullptr
     );
-    controller.begin({&state, &searched, &search_goal, &map});
+    CHECK(controller.begin({&state, &searched, &search_goal, &map}));
     controller.complete({}, 0);
     CHECK(
         controller.idle() && controller.active().navigation == &searched &&

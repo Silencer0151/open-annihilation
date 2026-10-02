@@ -5,6 +5,7 @@
 
 #include "oa/present/display.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -874,7 +875,7 @@ void draw_text(
     int32_t width = measure_text_width(font, text);
     char trimmed[text_trim_capacity + 1];
     if (max_width != text_width_unbounded && max_width < width) {
-        std::strncpy(trimmed, text, text_trim_capacity);
+        oa::base::text::copy_padded(trimmed, text, text_trim_capacity);
         trimmed[text_trim_capacity] = 0;
         text = trimmed;
         const size_t length = std::strlen(trimmed);

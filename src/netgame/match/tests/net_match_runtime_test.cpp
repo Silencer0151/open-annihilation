@@ -31,6 +31,7 @@
 #include <initializer_list>
 #include <memory>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 using namespace oa::netgame;
@@ -194,39 +195,15 @@ struct PieceExplosion {
     bool operator==(const PieceExplosion&) const = default;
 };
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<PieceExplosion> explosions;
-
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
 
     void explode_piece(sim::unit_spawn::Slot& slot, uint32_t piece, int32_t flags) override {
         explosions.push_back({slot.unit_index, piece, flags});
     }
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 /// Appends Killed(severity, corpsetype) with a solar collector's thresholds:
 /// corpsetype 1 up to severity 25, 2 up to 50 and 3 above. It explodes the

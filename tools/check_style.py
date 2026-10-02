@@ -2,15 +2,13 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Count breaches of the engine's style rules per directory, against a baseline that may only shrink.
+"""Count breaches of the engine's style rules per file, against a baseline that may only shrink.
 
 The check reads every tracked C, C++ and Objective-C source (SOURCE_SUFFIXES)
 under --root, leaving out the nested projects that build on the engine (a
 directory whose CMakeLists.txt calls project() and takes OA_ENGINE_DIR) and
-code kept as its authors wrote it (THIRD_PARTY_DIRECTORIES), and
-counts each finding against the
-directory that owns its file: the nearest directory holding a CMakeLists.txt,
-else the file's first two path components (src/app). Rules:
+code kept as its authors wrote it (THIRD_PARTY_DIRECTORIES), and counts each
+file's findings rule by rule. Rules:
 
   qualified-fixed-width  a fixed-width integer type written with std::
                          (write int32_t);
@@ -77,18 +75,27 @@ and a doc block that a preprocessor line separates from its declaration is
 not directly above it. Enumerations and aliases are matched by their
 unqualified name, so one declared in any namespace counts.
 
-Baseline. The run compares its counts with a baseline of counts per directory
-and rule (--baseline FILE, by default tools/style-baseline.json under --root):
-it fails when a count grows or a directory gains a rule the baseline does not
-hold, and says when a count can be lowered. --write-baseline records the
-current counts; it refuses to raise any count unless --accept-growth is given
-too (for a change that moves files between directories), so that growth is
-a reviewed edit. --report prints the counts per directory; --list prints
-every finding, or those of --rule.
+Baseline. The run compares its counts with a baseline of counts per file and
+rule (--baseline FILE, by default tools/style-baseline.json under --root),
+and fails unless every count equals the baseline's:
+
+  - a count above the baseline, or a file or rule the baseline does not hold,
+    is a new finding;
+  - a count below the baseline, or a baseline entry for a file that is gone,
+    is slack, which would let a new finding in where an old one was fixed.
+
+Counting per file keeps a finding fixed in one file from making room for a
+new one in another. --update records the counts that fell, removes the
+entries of files that are gone and fails, writing nothing, while any count
+grows; --accept-growth lets it record growth too, for a change that moves or
+renames files, so that growth is a reviewed edit. --report prints the counts
+per directory (the nearest directory holding a CMakeLists.txt, else the
+file's first two path components); --list prints every finding, or those of
+--rule.
 
 Each finding prints as '<path>:<line>: <rule>: <text>'. Exit status is 1 when
-anything is found beyond the baseline and 2 when the tree or the baseline
-cannot be read.
+a count differs from the baseline (or --update meets growth) and 2 when the
+tree or the baseline cannot be read.
 """
 import argparse
 import bisect
@@ -103,7 +110,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The baseline a run reads by default, relative to --root.
 DEFAULT_BASELINE = Path("tools") / "style-baseline.json"
-BASELINE_VERSION = 1
+BASELINE_VERSION = 2
 # Bound on the baseline file and on a source file.
 MAX_BASELINE_BYTES = 4 << 20
 MAX_SOURCE_BYTES = 16 << 20
@@ -910,21 +917,21 @@ def tree_findings(root):
     return sources, findings
 
 
-def counts_of(findings, directories):
-    """Counts findings per directory and rule.
+def counts_of(findings, owners=None):
+    """Counts findings per file and rule, or per owning directory and rule.
 
     @param findings the findings to count
-    @param directories each finding's file path mapped to the directory that owns it
+    @param owners each finding's file path mapped to the directory that owns it, or None to count per file
     """
     counts = {}
     for finding in findings:
-        rules = counts.setdefault(directories[finding.path], {})
+        rules = counts.setdefault(finding.path if owners is None else owners[finding.path], {})
         rules[finding.rule] = rules.get(finding.rule, 0) + 1
-    return {directory: dict(sorted(rules.items())) for directory, rules in sorted(counts.items())}
+    return {name: dict(sorted(rules.items())) for name, rules in sorted(counts.items())}
 
 
 def read_baseline(path):
-    """Reads the counts per directory and rule a baseline file allows."""
+    """Reads the counts per file and rule a baseline file allows."""
     try:
         if path.stat().st_size > MAX_BASELINE_BYTES:
             raise BaselineError(f"{path}: larger than {MAX_BASELINE_BYTES} bytes")
@@ -933,32 +940,51 @@ def read_baseline(path):
         raise BaselineError(f"{path}: {error}") from error
     counts = baseline.get("counts") if isinstance(baseline, dict) else None
     if not isinstance(counts, dict) or baseline.get("version") != BASELINE_VERSION or not all(
-            isinstance(rules, dict) and all(rule in RULES and isinstance(count, int) and count >= 0
-                                            for rule, count in rules.items())
+            isinstance(rules, dict) and rules and all(rule in RULES and isinstance(count, int) and count > 0
+                                                      for rule, count in rules.items())
             for rules in counts.values()):
-        raise BaselineError(f"{path}: not a version {BASELINE_VERSION} baseline of counts per directory and rule")
+        raise BaselineError(f"{path}: not a version {BASELINE_VERSION} baseline of counts per file and rule")
     return counts
 
 
 def compare(counts, baseline):
     """Compares counts with a baseline.
 
-    @return the (directory, rule, count, allowed) pairs over the baseline, and those under it
+    @return the (file, rule, count, allowed) entries over the baseline, and those under it (slack)
     """
-    over = [(directory, rule, count, baseline.get(directory, {}).get(rule, 0))
-            for directory, rules in counts.items() for rule, count in rules.items()
-            if count > baseline.get(directory, {}).get(rule, 0)]
-    under = [(directory, rule, counts.get(directory, {}).get(rule, 0), allowed)
-             for directory, rules in sorted(baseline.items()) for rule, allowed in sorted(rules.items())
-             if counts.get(directory, {}).get(rule, 0) < allowed]
+    over = [(name, rule, count, baseline.get(name, {}).get(rule, 0))
+            for name, rules in counts.items() for rule, count in rules.items()
+            if count > baseline.get(name, {}).get(rule, 0)]
+    under = [(name, rule, counts.get(name, {}).get(rule, 0), allowed)
+             for name, rules in sorted(baseline.items()) for rule, allowed in sorted(rules.items())
+             if counts.get(name, {}).get(rule, 0) < allowed]
     return over, under
 
 
-def write_baseline(path, counts, old, accept_growth):
+def print_entries(entries, findings, show):
+    """Prints baseline entries, and with show, the findings of each.
+
+    @param entries (file, rule, count, allowed) entries
+    @param findings every finding of the tree
+    @param show true to print each entry's findings under it
+    """
+    for name, rule, count, allowed in entries:
+        print(f"check_style: {name}: {rule}: {count} finding(s) against a baseline of {allowed}")
+        if not show:
+            continue
+        shown = [finding for finding in findings if finding.rule == rule and finding.path == name]
+        for finding in shown[:SHOWN_FINDINGS]:
+            print(f"  {finding.printed()}")
+        if len(shown) > SHOWN_FINDINGS:
+            print(f"  ... {len(shown) - SHOWN_FINDINGS} more; --list --rule {rule} prints them all")
+
+
+def update_baseline(path, counts, findings, old, accept_growth):
     """Records counts as the baseline, refusing growth over the old baseline unless accepted.
 
     @param path baseline file to write
-    @param counts counts per directory and rule
+    @param counts counts per file and rule
+    @param findings every finding of the tree, to show the growth
     @param old the baseline the file holds, or None
     @param accept_growth true to record counts above the old baseline
     @return exit status
@@ -966,55 +992,51 @@ def write_baseline(path, counts, old, accept_growth):
     if old is not None and not accept_growth:
         over, _ = compare(counts, old)
         if over:
-            for directory, rule, count, allowed in over:
-                print(f"check_style: {directory}: {rule}: {count} finding(s) against a baseline of {allowed}")
-            print("check_style: --write-baseline does not raise counts; fix the findings, or add "
-                  "--accept-growth when files moved between directories")
+            print_entries(over, findings, True)
+            print("check_style: --update does not raise counts; follow the rule for the new findings, or add "
+                  "--accept-growth when files moved or were renamed")
             return 1
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": BASELINE_VERSION, "counts": counts}, indent=1, sort_keys=True) + "\n",
                     encoding="utf-8")
     total = sum(sum(rules.values()) for rules in counts.values())
-    print(f"check_style: wrote {path}: {total} finding(s) in {len(counts)} director(ies)")
+    print(f"check_style: wrote {path}: {total} finding(s) in {len(counts)} file(s)")
     return 0
 
 
 def print_totals(counts):
-    """Prints each rule's total and the number of directories that hold it."""
+    """Prints each rule's total and the number of files that hold it."""
     for rule in RULES:
         holders = [rules[rule] for rules in counts.values() if rule in rules]
-        print(f"check_style: {rule}: {sum(holders)} in {len(holders)} director(ies)")
+        print(f"check_style: {rule}: {sum(holders)} in {len(holders)} file(s)")
 
 
 def print_report(counts):
-    """Prints the counts of every directory, rule by rule."""
+    """Prints the counts of every directory, rule by rule, then each rule's total."""
     for directory, rules in counts.items():
         print(f"{directory}: {sum(rules.values())}")
         for rule in RULES:
             if rule in rules:
                 print(f"  {rule}: {rules[rule]}")
-    print_totals(counts)
+    for rule in RULES:
+        holders = [rules[rule] for rules in counts.values() if rule in rules]
+        print(f"check_style: {rule}: {sum(holders)} in {len(holders)} director(ies)")
 
 
-def check(findings, counts, directories, baseline):
-    """Prints what exceeds the baseline and what can be lowered; returns the exit status."""
+def check(findings, counts, baseline):
+    """Prints the counts that differ from the baseline, growth with its findings; returns the exit status."""
     over, under = compare(counts, baseline)
-    for directory, rule, count, allowed in over:
-        print(f"check_style: {directory}: {rule}: {count} finding(s) against a baseline of {allowed}")
-        shown = [finding for finding in findings if finding.rule == rule and directories[finding.path] == directory]
-        for finding in shown[:SHOWN_FINDINGS]:
-            print(f"  {finding.printed()}")
-        if len(shown) > SHOWN_FINDINGS:
-            print(f"  ... {len(shown) - SHOWN_FINDINGS} more; --list --rule {rule} prints them all")
-    for directory, rule, count, allowed in under:
-        print(f"check_style: {directory}: {rule}: {count} finding(s) against a baseline of {allowed}; lower it")
-    if under:
-        print("check_style: --write-baseline records the lower counts")
+    print_entries(over, findings, True)
     if over:
         print("check_style: follow the rule for the new findings (tools/check_style.py describes each)")
+    if under:
+        print_entries(under, findings, False)
+        print("check_style: the baseline holds slack, which would let new findings in where these were fixed; "
+              "lower it with python3 tools/check_style.py --update")
+    if over or under:
         return 1
     print_totals(counts)
-    print("check_style: clean within the baseline")
+    print("check_style: clean, every count equal to the baseline")
     return 0
 
 
@@ -1023,20 +1045,21 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, default=ROOT, help="the tree to check (default: %(default)s)")
     parser.add_argument("--baseline", type=Path,
-                        help=f"counts per directory and rule (default: --root/{DEFAULT_BASELINE})")
-    parser.add_argument("--write-baseline", action="store_true", help="record the current counts as the baseline")
-    parser.add_argument("--accept-growth", action="store_true", help="let --write-baseline raise counts")
+                        help=f"counts per file and rule (default: --root/{DEFAULT_BASELINE})")
+    parser.add_argument("--update", action="store_true",
+                        help="lower the baseline to the current counts, or write it when there is none")
+    parser.add_argument("--accept-growth", action="store_true", help="let --update raise counts")
     parser.add_argument("--report", action="store_true", help="print the counts per directory")
     parser.add_argument("--list", action="store_true", help="print every finding")
     parser.add_argument("--rule", choices=RULES, help="with --list, print this rule's findings only")
     args = parser.parse_args(argv)
+    if args.accept_growth and not args.update:
+        parser.error("--accept-growth goes with --update")
     root = args.root.resolve()
     if not root.is_dir():
         print(f"check_style: no such tree: {root}", file=sys.stderr)
         return 2
     sources, findings = tree_findings(root)
-    directories = {source.name: source.directory for source in sources}
-    counts = counts_of(findings, directories)
     baseline_path = args.baseline or root / DEFAULT_BASELINE
     if args.list:
         for finding in findings:
@@ -1044,19 +1067,19 @@ def main(argv=None):
                 print(finding.printed())
         return 0
     if args.report:
-        print_report(counts)
+        print_report(counts_of(findings, {source.name: source.directory for source in sources}))
         return 0
+    counts = counts_of(findings)
     old = None
-    if baseline_path.is_file() or not args.write_baseline:
+    if baseline_path.is_file() or not args.update:
         try:
             old = read_baseline(baseline_path)
         except BaselineError as error:
             print(f"check_style: {error}", file=sys.stderr)
             return 2
-    if args.write_baseline:
-        return write_baseline(baseline_path, counts, old, args.accept_growth)
-    return check(findings, counts, directories, old)
-
+    if args.update:
+        return update_baseline(baseline_path, counts, findings, old, args.accept_growth)
+    return check(findings, counts, old)
 
 if __name__ == "__main__":
     sys.exit(main())

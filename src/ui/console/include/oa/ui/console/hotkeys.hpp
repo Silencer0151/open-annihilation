@@ -6,6 +6,7 @@
 #pragma once
 
 #include "oa/ui/console/console.hpp"
+#include "oa/data/campaign/campaign_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -31,44 +32,44 @@ inline constexpr uint32_t pause = 0xf8;
 
 // Systems the key dispatcher drives. Null pointers are skipped.
 struct HotkeyHost {
-    void* context;
-    bool (*shift_down)(void* context);
-    bool (*alt_down)(void* context);
-    int32_t (*session_kind)(void* context); // game options state; 3 = multiplayer
-    void (*play_sound)(void* context, const char* name);
-    void (*step_build_page)(void* context, int32_t direction);
-    void (*open_team_menu)(void* context);
-    void (*open_chat)(void* context);
-    void (*clear_selection_and_rearm)(void* context);
-    void (*clear_command_button)(void* context);
-    void (*close_options_panel)(void* context);
-    void (*change_game_speed)(void* context, int32_t direction);
-    void (*select_squad)(void* context, int32_t squad, bool add);
-    void (*select_build_item)(void* context, int32_t index);
-    void (*set_debug_index)(void* context, int32_t index);
-    void (*open_share_panel)(void* context);
-    void (*debug_select_next)(void* context);
-    void (*select_all)(void* context);
-    void (*select_by_category)(void* context, const char* category, bool add);
-    void (*select_commander)(void* context, bool add);
-    void (*toggle_self_destruct)(void* context);
-    void (*select_on_screen)(void* context);
-    void (*select_matching_type)(void* context);
-    void (*create_squad)(void* context, int32_t squad);
-    void (*store_camera)(void* context, int32_t slot);
-    void (*recall_camera)(void* context, int32_t slot);
-    void (*begin_movie_capture)(void* context, const char* path);
-    void (*open_unit_info_panel)(void* context);
-    void (*open_options_panel)(void* context);
-    void (*cycle_tracked_camera)(void* context);
-    void (*clear_messages)(void* context);
-    void (*send_pause)(void* context, bool paused);
-    void (*set_command_panel_debug)(void* context, bool enabled);
-    void (*set_video_debug)(void* context, int32_t mode);
+    void* context{};
+    bool (*shift_down)(void* context){};
+    bool (*alt_down)(void* context){};
+    oa::data::campaign::SessionKind (*session_kind)(void* context){}; // game options state
+    void (*play_sound)(void* context, const char* name){};
+    void (*step_build_page)(void* context, int32_t direction){};
+    void (*open_team_menu)(void* context){};
+    void (*open_chat)(void* context){};
+    void (*clear_selection_and_rearm)(void* context){};
+    void (*clear_command_button)(void* context){};
+    void (*close_options_panel)(void* context){};
+    void (*change_game_speed)(void* context, int32_t direction){};
+    void (*select_squad)(void* context, int32_t squad, bool add){};
+    void (*select_build_item)(void* context, int32_t index){};
+    void (*set_debug_index)(void* context, int32_t index){};
+    void (*open_share_panel)(void* context){};
+    void (*debug_select_next)(void* context){};
+    void (*select_all)(void* context){};
+    void (*select_by_category)(void* context, const char* category, bool add){};
+    void (*select_commander)(void* context, bool add){};
+    void (*toggle_self_destruct)(void* context){};
+    void (*select_on_screen)(void* context){};
+    void (*select_matching_type)(void* context){};
+    void (*create_squad)(void* context, int32_t squad){};
+    void (*store_camera)(void* context, int32_t slot){};
+    void (*recall_camera)(void* context, int32_t slot){};
+    void (*begin_movie_capture)(void* context, const char* path){};
+    void (*open_unit_info_panel)(void* context){};
+    void (*open_options_panel)(void* context){};
+    void (*cycle_tracked_camera)(void* context){};
+    void (*clear_messages)(void* context){};
+    void (*send_pause)(void* context, bool paused){};
+    void (*set_command_panel_debug)(void* context, bool enabled){};
+    void (*set_video_debug)(void* context, int32_t mode){};
     // Lists the names matching a wildcard path; each name is passed to visit.
     void (*list_files)(
         void* context, const char* pattern, void (*visit)(void* user, const char* name), void* user
-    );
+    ){};
 };
 
 /// Dispatches one in-match key code, then passes it to hotkey_debug while the debug keys are on.

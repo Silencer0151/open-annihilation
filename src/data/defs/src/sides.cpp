@@ -14,8 +14,8 @@ constexpr std::size_t font_name_capacity = 0x100;
 constexpr uint32_t reload_rect_count = 3;
 
 struct RectKey {
-    const char* section;
-    Rect32 Side::* rect;
+    const char* section{};
+    Rect32 Side::* rect{};
 };
 
 // The game's read order; it decides which missing section is reported.
@@ -95,7 +95,7 @@ bool side_load_rect(
 bool side_table_load(
     formats::tdf::Document* sidedata, SideTable* table, const SideFontResolver* fonts
 ) noexcept {
-    std::memset(table, 0, sizeof *table);
+    std::memset(static_cast<void*>(table), 0, sizeof *table);
     uint32_t index = 0;
     for (; index < OA_SIDE_COUNT; ++index) {
         Side* side = &table->sides[index];

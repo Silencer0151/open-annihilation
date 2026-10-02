@@ -35,8 +35,8 @@ class GroundRuntime {
     /// handle, sets occupancy flag 1 and the navigator's changed flag, and chooses
     /// the mirrored navigator when the owner has mirrored_player_status (another
     /// player's machine simulates it). Speed, turn rate, acceleration and brake come
-    /// from the definition. Throws std::invalid_argument when the slot has no bound
-    /// unit or type.
+    /// from the definition. A slot with no bound unit, or one without a type,
+    /// gives a runtime left at its defaults, which projects and writes nothing.
     ///
     /// @param slot spawn slot holding the bound unit and its record; must outlive the runtime
     /// @param definition the unit's type definition
@@ -48,11 +48,22 @@ class GroundRuntime {
         sim::unit_spawn::AssetHandle movement_class = 0,
         ConstructorStorage storage = {}
     );
+
+    /// Constructs a movement object bound to no slot, every field at its default.
+    ///
+    /// It projects, writes and fits nothing; a match holds one to stand in
+    /// for a unit's missing movement object.
+    GroundRuntime() noexcept : movement_class(0), acceleration(0), deceleration(0) {}
+
     GroundRuntime(const GroundRuntime&) = delete;
     GroundRuntime& operator=(const GroundRuntime&) = delete;
     /// Copies the slot's unit position, cell, footprint, angles, flags and type flags into `geometry`.
+    ///
+    /// A slot with no bound unit, or one without a type, copies nothing.
     void project_slot();
     /// Writes `geometry`'s position, flags, angles and cell back to the slot.
+    ///
+    /// A slot with no bound unit takes nothing.
     void write_slot();
     /// Fits the unit to the ground under its model's selection quad and writes the pose back.
     ///
@@ -60,6 +71,7 @@ class GroundRuntime {
     /// @param model the unit's model
     /// @param clock simulation tick and bob readings
     /// @return false, leaving the slot unchanged, when the pose cannot be fitted
+    ///         or the runtime is bound to no typed unit
     bool fit_height(
         const sim::unit_movement::Terrain& terrain,
         const formats::objects3d::Model& model,
@@ -99,6 +111,6 @@ class GroundRuntime {
 
   private:
 
-    sim::unit_spawn::Slot& slot_;
+    sim::unit_spawn::Slot* slot_{}; // null for a runtime bound to no slot
 };
 } // namespace oa::sim::ground_orders

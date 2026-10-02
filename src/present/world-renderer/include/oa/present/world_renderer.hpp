@@ -200,11 +200,14 @@ screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noe
 /// @return the run times the scale, rounded to the nearest pixel and at least 1
 [[nodiscard]] int32_t screen_span(const BattlefieldViewport& viewport, int32_t map_pixels) noexcept;
 
+/// RadarShare::share_flags bit set while the owner shares radar (ShareRadar).
+inline constexpr uint8_t share_flag_share_radar = 0x40;
+
 // Radar sharing between the viewing player and a unit's owner (Unit.owner).
 // alliance_byte is the owner's Player.alliance entry for the viewer's
 // Player.index (written when an alliance changes). share_flags is the owner's
-// PlayerSetupInfo.role, reached through Player.info. Bit 0x40 is ShareRadar,
-// toggled by the share-radar setting; the other bits are not this test's.
+// PlayerSetupInfo.role, reached through Player.info. share_flag_share_radar
+// is toggled by the share-radar setting; the other bits are not this test's.
 // Zero alliance or a clear ShareRadar bit hides the contact.
 struct RadarShare {
     uint8_t alliance_byte = 0;
@@ -214,7 +217,7 @@ struct RadarShare {
 /// Tests whether an allied player's radar contact is shared with the viewer.
 ///
 /// @param share the owner's alliance byte for the viewer and share flags
-/// @return true when the alliance byte is nonzero and ShareRadar (0x40) is set
+/// @return true when the alliance byte is nonzero and share_flag_share_radar is set
 [[nodiscard]] bool shared_radar_contact(const RadarShare& share) noexcept;
 
 } // namespace oa::present::world_renderer

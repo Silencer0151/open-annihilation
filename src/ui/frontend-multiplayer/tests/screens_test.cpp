@@ -23,6 +23,8 @@
 #include "oa/ui/frontend_multiplayer/screens.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/test/game_assets.hpp"
+#include "oa/platform/system.hpp"
+#include "oa/platform/files.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -226,11 +228,11 @@ struct Driver {
 
     // Frames go to $OA_MULTIPLAYER_SNAPSHOTS/<name>.ppm when that is set.
     void snapshot(const char* name) const {
-        const char* directory = std::getenv("OA_MULTIPLAYER_SNAPSHOTS");
-        if (directory == nullptr || surface.width == 0)
+        const auto directory = oa::platform::environment_value("OA_MULTIPLAYER_SNAPSHOTS");
+        if (!directory || surface.width == 0)
             return;
-        const auto path = std::filesystem::path(directory) / (std::string(name) + ".ppm");
-        if (FILE* file = std::fopen(path.string().c_str(), "wb")) {
+        const auto path = std::filesystem::path(*directory) / (std::string(name) + ".ppm");
+        if (FILE* file = oa::platform::open_file(path, "wb")) {
             std::fprintf(file, "P6\n%u %u\n255\n", surface.width, surface.height);
             std::fwrite(surface.rgb.data(), 1, surface.rgb.size(), file);
             std::fclose(file);
@@ -1866,7 +1868,7 @@ int main() {
             );
         }
 
-        const auto real_clock = lobby.services.tick;
+        const auto kept_clock = lobby.services.tick;
         const auto stats_tick = lobby.next_stats_tick;
         lobby.services.tick = stepped_clock;
         stepped_tick = 20000;
@@ -1943,7 +1945,7 @@ int main() {
             "MAPPIC without a picture is filled with the GUI's colour 7"
         );
         mp::map_summary_update(lobby, *modal);
-        lobby.services.tick = real_clock;
+        lobby.services.tick = kept_clock;
         lobby.next_stats_tick = stats_tick;
     }
     // More maps than fit: the bar lies between its arrows beside MAPNAMES,
@@ -2012,7 +2014,7 @@ int main() {
             "SELMAP's knob at the bar's top"
         );
 
-        const auto real_clock = lobby.services.tick;
+        const auto kept_clock = lobby.services.tick;
         lobby.services.tick = stepped_clock;
         stepped_tick = 9000;
         const auto selected = names->list_selection;
@@ -2091,7 +2093,7 @@ int main() {
             "the list draws the rows the knob shows"
         );
         // The wheel scrolls a row within the pages and the knob follows.
-        const auto sent_before = mp::multiplayer_loopback().sent_count;
+        const auto sent_before_step = mp::multiplayer_loopback().sent_count;
         d.wheel(ox + 150, oy + 150, -1.0F);
         expect(
             names->list_first == first + 1 && bar->scroll.knob == first_row_knob(*names, *bar),
@@ -2107,11 +2109,11 @@ int main() {
             d.wheel(ox + 313, oy + 150, 1.0F);
         expect(names->list_first == 0 && bar->scroll.knob == 0, "and over the bar at the first");
         expect(
-            mp::multiplayer_loopback().sent_count == sent_before &&
+            mp::multiplayer_loopback().sent_count == sent_before_step &&
                 names->list_selection == selected,
             "the wheel sends nothing and keeps the selection"
         );
-        lobby.services.tick = real_clock;
+        lobby.services.tick = kept_clock;
 
         // Opened on a map past the first page, the list scrolls to it.
         names->list_selection = 40;
@@ -2535,21 +2537,22 @@ int main() {
     expect(d.click("UPDATE"), "UPDATE clicked");
     {
         auto& game_panel = mp::multiplayer_panel();
-        const auto* games = control("GAMENAME");
+        const auto* game_names = control("GAMENAME");
         const auto* statuses = control("STATUS");
         const auto* pings = control("PING");
         const auto* bar = control("SLIDER");
         expect(
-            games != nullptr && statuses != nullptr && pings != nullptr && bar != nullptr &&
-                games->items.size() == 12,
+            game_names != nullptr && statuses != nullptr && pings != nullptr && bar != nullptr &&
+                game_names->items.size() == 12,
             "twelve games listed"
         );
-        if (games == nullptr || statuses == nullptr || pings == nullptr || bar == nullptr)
+        if (game_names == nullptr || statuses == nullptr || pings == nullptr || bar == nullptr)
             return 1;
         expect(
-            games->height == 160 && statuses->height == 160 && games->list_last_first == 2 &&
-                bar->x == 618 && bar->y == 123 && bar->height == 170 && bar->active != 0 &&
-                bar->scroll.knob_size == 139 && bar->scroll.range == 28,
+            game_names->height == 160 && statuses->height == 160 &&
+                game_names->list_last_first == 2 && bar->x == 618 && bar->y == 123 &&
+                bar->height == 170 && bar->active != 0 && bar->scroll.knob_size == 139 &&
+                bar->scroll.range == 28,
             "SELGAME's bar shows at 618,123 16x170 with a knob of 10/12 of 167 pixels"
         );
         const Art game_art =
@@ -2563,27 +2566,27 @@ int main() {
         );
         expect(shows_at(d, game_art, game_sliders, kVerticalKnobFrame, 621, 126), "SELGAME's knob");
         d.host.requested.reset();
-        const auto sent_before = listed_sessions.sent_count;
+        const auto sent_before_refresh = listed_sessions.sent_count;
         d.key(kKeyDown);
         expect(
-            games->list_selection == 1 && statuses->list_selection == 1 &&
-                !d.host.requested.has_value() && listed_sessions.sent_count == sent_before,
+            game_names->list_selection == 1 && statuses->list_selection == 1 &&
+                !d.host.requested.has_value() && listed_sessions.sent_count == sent_before_refresh,
             "Down selects the next game in every column without joining it"
         );
         for (int step = 0; step < 14; ++step)
             d.pointer_click(626, 298);
         expect(
-            bar->scroll.knob == 14 && games->list_first == 1 && pings->list_first == 1 &&
-                games->list_selection == 1,
+            bar->scroll.knob == 14 && game_names->list_first == 1 && pings->list_first == 1 &&
+                game_names->list_selection == 1,
             "the down arrow scrolls every column"
         );
         d.wheel(330, 200, -1.0F);
         expect(
-            games->list_first == 2 && statuses->list_first == 2 && bar->scroll.knob == 28,
+            game_names->list_first == 2 && statuses->list_first == 2 && bar->scroll.knob == 28,
             "a wheel notch over a column scrolls them all to the last page"
         );
         d.wheel(330, 200, -1.0F);
-        expect(games->list_first == 2, "and no further");
+        expect(game_names->list_first == 2, "and no further");
         d.frame();
         d.snapshot("selgame-games-scrolled");
         // A click on any column selects its game in every column without
@@ -2592,14 +2595,14 @@ int main() {
         const auto message_before = mp::multiplayer_message();
         d.pointer_click(200, 122 + 2 + 15 * 3 + 5);
         expect(
-            games->list_selection == 5 && pings->list_selection == 5 &&
+            game_names->list_selection == 5 && pings->list_selection == 5 &&
                 statuses->list_selection == 5,
             "a click on MAPNAME's fourth row selects game 5 in every column"
         );
         expect(
             mp::multiplayer_message() == message_before &&
                 game_panel.focus == mp::panel_find(game_panel, "MAPNAME") &&
-                !d.host.requested.has_value() && listed_sessions.sent_count == sent_before,
+                !d.host.requested.has_value() && listed_sessions.sent_count == sent_before_refresh,
             "one click does not join game 5"
         );
         d.pointer_click(200, 122 + 2 + 15 * 3 + 5);

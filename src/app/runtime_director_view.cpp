@@ -8,6 +8,7 @@
 // the director's sound hooks. --check-director-view checks it against the
 // same match replayed in director mode undrawn.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "director_state.hpp"
 
 #include "oa/audio/game_audio.hpp"
@@ -31,6 +32,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -214,7 +216,7 @@ void Runtime::enter_director_mode(
                  // The record a full queue evicts is presented without sound,
                  // and its caption is not shown.
                  if (was_full)
-                     (void)queue.present_evicted(
+                     std::ignore = queue.present_evicted(
                          self.unit_sound_catalog_,
                          kDirectorAnnouncementGates,
                          director.next_random(),
@@ -284,8 +286,8 @@ void Runtime::bind_director_view() {
     auto& game = match_->state().game;
     game.camera_x = static_cast<uint32_t>(view.left);
     game.camera_y = static_cast<uint32_t>(view.top);
-    game.view_cells_width = view.visible_width / wr::map_cell_pixels;
-    game.view_cells_height = view.visible_height / wr::map_cell_pixels;
+    game.view_cells_width = view.visible_width / OA_MAP_CELL_PIXELS;
+    game.view_cells_height = view.visible_height / OA_MAP_CELL_PIXELS;
     // As bind_match_view: the screen is the view with the side column and
     // bars around it, and the game view lies at (128, 32) on it.
     game.offscreen_width = static_cast<uint32_t>(layout::kSourceLeft + view.visible_width);
@@ -348,13 +350,13 @@ void Runtime::present_director_announcements() {
             const auto camera_x = static_cast<int32_t>(game.camera_x);
             const auto camera_y = static_cast<int32_t>(game.camera_y);
             sound.placed = true;
-            sound.x = x - camera_x - game.view_cells_width / 2 * wr::map_cell_pixels;
-            sound.z = (y >> 1) - z + game.view_cells_height / 2 * wr::map_cell_pixels + camera_y;
+            sound.x = x - camera_x - game.view_cells_width / 2 * OA_MAP_CELL_PIXELS;
+            sound.z = (y >> 1) - z + game.view_cells_height / 2 * OA_MAP_CELL_PIXELS + camera_y;
             sound.min_distance = static_cast<float>(
-                (game.view_cells_width + game.view_cells_height) / 2 * wr::map_cell_pixels
+                (game.view_cells_width + game.view_cells_height) / 2 * OA_MAP_CELL_PIXELS
             );
             sound.max_distance =
-                static_cast<float>((game.map_width + game.map_height) * wr::map_cell_pixels);
+                static_cast<float>((game.map_width + game.map_height) * OA_MAP_CELL_PIXELS);
         }
         ++director.tally.announcements_played;
         director.send(sound);
@@ -714,7 +716,8 @@ void Runtime::check_director_view() {
     // reaches another: the match reads the transforms its draws leave.)
     leave_match();
     load(Screen::main_menu);
-    (void)start_fight();
+    // The views come from view_at, so the fight's centre is not needed.
+    start_fight();
     enter_director_mode({kCheckWidth, kCheckHeight, false, true}, {});
     for (size_t tick = 1; tick <= kCheckTicks; ++tick) {
         set_director_view(view_at(tick));

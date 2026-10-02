@@ -151,10 +151,12 @@ before using it, bound every allocation by a named limit, and report what
 was wrong and where.
 
 - **Why:** explicit decoding gives the same result on every compiler and
-  platform and makes each read's bounds visible. The input is players' files
-  and third-party add-ons, which can be damaged or hostile.
-- **Applies to:** `src/formats`, `src/data/defs`, `src/data/persist` and any code that
-  reads a file.
+  platform and makes each read's bounds visible. The input is players' files,
+  third-party add-ons and what other players' machines send, which can be
+  damaged or hostile.
+- **Applies to:** `src/formats`, `src/data/defs`, `src/data/persist`, any code that
+  reads a file, and every decoder of network messages and recordings
+  (`src/netgame`, `src/session/demo`, `src/ui/frontend-multiplayer`).
 - **Checked by:** review; a malformed-input test for every decoder (see
   [testing.md](testing.md#malformed-input)); the sanitizer build in CI.
 
@@ -277,7 +279,7 @@ engine, or to a project that builds on the engine, by name or by path.
 | Main public header | `include/oa/<group>/<module>.hpp`, hyphens as underscores | `oa/sim/mission_units.hpp` |
 | Further headers | `include/oa/<group>/<module>/<file>.hpp` | `oa/data/persist/save_units.hpp` |
 | Namespace | `oa::<group>::<module>`, hyphens as underscores | `oa::sim::detection` |
-| CMake target | `oa-<group>-<module>`, with an ALIAS `oa::<group>::<module>` | `oa-sim-detection` |
+| CMake target | `oa-<group>-<module>`, or `oa-<group>-<module>-<part>` for a module's further library; a library outside a module (a test helper, a build option) `oa-<group>-<part>`. Each with the ALIAS that turns the first hyphen into `::` and the others into `_` | `oa-sim-detection` (`oa::sim::detection`), `oa-test-game-data` (`oa::test::game_data`) |
 | Header suffix | `.h` only for headers a test compiles as C11; `.hpp` otherwise | `oa/core/unit.h` |
 | Types and enumerations | PascalCase; `enum class` | `MissionKind` |
 | Functions, variables, members, enumerators, constants | snake_case | `ticks_per_second` |
@@ -287,19 +289,23 @@ engine, or to a project that builds on the engine, by name or by path.
 | Flag bits | one named constant per bit, named by what the bit does | `OA_UNIT_FLAG_SELECTED` |
 | Module seam | `<Name>Hooks` struct (see [Seams](#seams-between-modules)) | `ParalysisHooks` |
 | Test file | `<module>/tests/<name>_test.cpp` | `src/sim/detection/tests/detection_test.cpp` |
-| ctest name | `<group>-<module>`, and `-<case>` when a module has several | `sim-detection` |
+| ctest name | lowercase words joined by hyphens: what it tests (the module, its group and module, or the area of a family of tests), then a case when there are several. `native-` begins exactly the native checks, whose command is the game or a `tools/check_native_*.py` script; `-data` ends a case that reads the installed game; `-selftest` ends a check's test of itself; never the word `test` | `sim-detection`, `unit-health`, `match-trace`, `hpi-data`, `native-saveload`, `style-ratchet-selftest` |
 | Format modules | named after the format; three take fixed names | `objects3d` (3DO), `fnt` (fonts), `smacker` (SMK) |
 
 - **Why:** people navigate by names. When a module's directory, header,
   namespace and target agree, any one of them leads to the others, and one
-  style of name means nobody has to guess.
-- **Applies to:** all engine code. `src/sim/*` already follows the module
-  rows for the directory, the main header, the namespace and the target's
-  name; the ALIAS comes with the layout pass, which moves the older modules
-  to the whole pattern in one scripted step. Follow the pattern for new
-  modules, ALIAS included, and leave existing ones as they are until
-  then.
-- **Checked by:** review; the layout check once the layout pass lands.
+  style of name means nobody has to guess. A test is found by what it
+  tests, and the name says whether it is a native check or needs the
+  installed game; the many test names that leave out their group (`unit-health`) or
+  name a family's area (`match-`, `net-`, `frontend-`) are kept, since the
+  scripts and command lines that name them would change for nothing a
+  reader gains.
+- **Applies to:** all engine code and its build files.
+- **Checked by:** review; `engine-layout` (module directories, public
+  headers, the names of every library of the tree and their ALIAS, every
+  platform's included); `ctest-names` (the form of every test name, the word
+  `test`, `native-`, `-data` and `-selftest`). What a test name begins with
+  is left to review.
 
 Names say what a thing holds or does. Never build a name from a record
 offset (a placeholder word such as field, flags or word followed by a
@@ -392,7 +398,7 @@ uses depends on its layer (default; maintainer to confirm):
 | core | `src/core` | C11 records: plain C structs, no standard library containers, exceptions or virtual functions; layouts pinned |
 | base, sim | `src/base/game-math` and the geometry, timers and sine table in `src/ui/services`; `src/sim/*`, `src/sim/*`, `src/sim/*`, `src/sim/ai`, `src/sim/*`, `src/sim/ballistics`, `src/sim/scenario`, `src/sim/session`, and `src/sim/*` except the renderer and sprite animation | In code a simulation tick runs, and in the state it keeps: no exceptions, no virtual dispatch and no heap-allocating containers. `std::array`, `std::span`, `std::optional`, `<bit>` and `<algorithm>` are allowed. |
 | formats, data | `src/formats/*`, `src/data/defs`, `src/data/persist`, and the SQSH writer in `src/ui/services` | C++20; decoders take a byte span; errors are returned as values and no exception crosses the public interface; format libraries do not open files themselves |
-| platform, present, audio, media, ui, netgame, session, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/netgame`, `src/netgame/*`, `src/session/demo`, `src/app`, `src/app/netgame`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer. At the extension table a hook, or a check-host entry, reports an error by throwing `std::runtime_error`, which takes the engine's own error path from that call; a hook documented as one that must not throw does not throw |
+| platform, present, audio, media, ui, netgame, session, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/netgame`, `src/netgame/*`, `src/session/demo`, `src/app`, `src/app/netgame`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer. At the extension table a hook, or a check-host entry, reports an error by throwing `std::runtime_error`; the engine catches a hook's at the call and handles it as the hook's documentation says (`extension.hpp`); a hook documented as one that must not throw does not throw |
 | tests and tools | every `tests/` directory, `tests`, `tools`, `tools/oa-tool/main.cpp` | C++20 and the standard library; see [Tests](#tests) |
 
 `src/ui/services` holds code of three layers until the layout pass
@@ -419,15 +425,20 @@ With the table go these rules:
   bans that serve those aims apply where they matter, and the rest of the
   engine uses ordinary C++. One spelling of the fixed-width types keeps the
   code uniform and matches the C11 headers.
-- **Checked by:** `style-ratchet` counts, per directory, `std::`-qualified
+- **Checked by:** `style-ratchet` counts, per file, `std::`-qualified
   fixed-width types and members without an initialiser everywhere, and
   exceptions, virtual functions and heap containers in the core, base and
   simulation directories of the table, outside their tests. It leaves out
   `src/ui/services`, whose layers it cannot tell apart until the layout
   pass. The counts may only go down.
 
-What a tick does when it finds its state broken (the match-fault policy) is
-an open decision; until it is made, do not add new exceptions to tick code.
+When a simulation operation finds its state broken, or is given input it
+cannot use, it returns an error value, or, inside a match, notes the fault
+in the match's fault record and stops, leaving what it had done
+(`Match::fault`, `fault.hpp` in `src/sim/match-runtime`; default;
+maintainer to confirm). The application reads the record after each tick
+and reports it as a simulation error, and a load or a check stops with it.
+Add no exceptions to tick code.
 
 ```cpp
 // Good: tick code in a simulation module.
@@ -661,13 +672,18 @@ recorded games. A project that builds the game may register further
 extensions, and engine code never refers to one. An extension reaches the
 engine only through that table and declared headers: meet a new need with a
 hook or a declared header, never with a new `Runtime` member or friend or
-another use of a private `Runtime` name. Network play's `Runtime` members
-and those an extension still adds are frozen and may only shrink. Raise
+another use of a private `Runtime` name. Network play keeps its state for
+each runtime in its own object, freed through a hook as the runtime goes;
+its use of `Runtime`'s private names, and the `Runtime` members an
+extension still adds, are frozen and may only shrink. Raise
 `OA_EXTENSION_API_VERSION` with any change to the table's contract.
 A hook reports an error by throwing `std::runtime_error`, as the engine
-code around it does: the paragraph on errors in `extension.hpp` says which
-paths catch it and what the player sees, and each hook says when it is
-reached on one of them or must not throw. [src/app/README.md](../../src/app/README.md) describes the table and the
+code around it does. The engine calls every hook through one guarded call,
+`call_hook` (`src/app/include/oa/app/hook_call.hpp`), which catches what
+the hook throws before it reaches engine code and handles it as the hook's
+documentation says: the paragraph on errors in `extension.hpp` says which
+errors are raised as the engine's own, which are reported while the
+engine carries on, and which hooks must not throw. [src/app/README.md](../../src/app/README.md) describes the table and the
 frozen members.
 
 - **Why:** an extension that is not part of the engine must be able to
@@ -677,7 +693,11 @@ frozen members.
   `run.sh`.
 - **Checked by:** `runtime-surface-names` and `runtime-surface-selftest`
   (`tools/check_runtime_surface.py`, within
-  `tools/runtime-surface-baseline.json`); `app-extension-list` and the
+  `tools/runtime-surface-baseline.json`); `hook-calls` and
+  `hook-calls-selftest` (`tools/check_hook_calls.py`), which fail when
+  engine code calls a hook pointer other than through `call_hook`, and
+  `app-hook-call`, which throws from a hook of each handling;
+  `app-extension-list` and the
   extension tests in `tests/extension`; `netgame-runtime-surface`; CI builds
   and starts `open-annihilation`, and builds and tests it with the recorder
   test extensions beside network play in the extension-recorder job.
@@ -716,6 +736,7 @@ ctest --test-dir build --output-on-failure \
 |---|---|---|
 | `style-ratchet` | qualified fixed-width types; names built from offsets, addresses or generated placeholders; names that number what they do not know (`unknown_3`); raw masks on flag fields; missing `{}` initialisers; offset comments outside file-format code; functions declared in headers without a `///` block; exceptions, virtual functions and heap containers in the core, base and simulation directories; `assert()` and `#undef NDEBUG` in tests | `check_style.py` and `style-baseline.json` in `tools/` |
 | `doc-links` | relative links, anchors and repository paths in Markdown resolve | `tools/check_links.py` |
+| `ctest-names` | every ctest name keeps to the [naming rule](#naming) | `tools/check_ctest_names.py` |
 | `runtime-surface-names` | the `Runtime` names an extension uses only shrink | `tools/check_runtime_surface.py`, `tools/runtime-surface-baseline.json` |
 | `format-check` | every C, C++ and Objective-C source is laid out as `.clang-format` says; skips where the pinned clang-format is not installed | `tools/format_sources.py`, `tools/format/requirements.txt` |
 | `licensing-check` | every file states its copyright and licence | `tools/spdx_headers.py`, `REUSE.toml` |
@@ -729,11 +750,54 @@ block. Build it when you change a public header; CI builds it on macOS. It
 is defined in `OaDocumentationCheck.cmake` in `cmake/`.
 
 Each script also runs on its own, for example `python3 tools/check_style.py`.
-A baseline holds the findings that predate a check, counted per directory
-or path and rule. A run fails when a count grows, and says when one can be
-lowered. When your change removes findings, lower the baseline in the same
-change, for the style rules with
-`python3 tools/check_style.py --write-baseline`. A count never goes up.
+A baseline holds the findings that predate a check, counted per path and
+rule. A run fails when a count grows. The style check fails too when a
+count falls below its baseline, since that slack would let a new finding in
+where an old one was fixed: when your change removes findings, lower the
+baseline in the same change, for the style rules with
+`python3 tools/check_style.py --update`. A count never goes up.
+
+### What the style baseline still holds
+
+Every style rule but two is down to zero findings. What remains are the
+virtual functions (`tier-virtual`, 220) and heap containers
+(`tier-heap-container`, 185) of the core, base and simulation tiers, all of
+them in code that predates the rule:
+
+| Area | `tier-virtual` | `tier-heap-container` | What they are |
+|---|---|---|---|
+| `src/sim/match-runtime` | 42 | 60 | the match's service, spawn, script and attack-order interfaces; the match's own unit, order, trace and ground-mission tables |
+| `src/sim/unit-spawn` | 30 | 14 | the spawn and runtime-type hosts; the loaded types and legacy views |
+| `src/sim/combat-state` | 16 | 17 | the spawn-geometry, target-search, intelligence and attack hosts; the weapon registry and projectile tables |
+| `src/sim/script-vm`, `src/sim/script-state` | 22 | 16 | the script machine's host; script stacks and threads |
+| `src/sim/ground-orders` | 10 | 17 | the order and movement-map hosts; the path search's heap, trace and worker |
+| `src/sim/map-runtime` | 3 | 32 | the feature asset reader; feature, plot and height tables |
+| `src/sim/simulation-state` | 19 | 0 | the order and unit update hosts |
+| `src/base/game-loop` | 15 | 0 | the loop's subsystem host |
+| other `src/sim` modules (unit-effects, unit-health, weapon-execution, visibility-state, unit-activation, model-runtime, scenario, spatial-state, unit-movement, world-environment, gameplay-input, unit-script, state-hash) | 63 | 27 | per-module hosts; sight patterns, model pieces, condition lists and small work lists |
+| `src/data/campaign` | 0 | 2 | the campaign's asset lists |
+
+They go down module by module, each in a change of its own that keeps the
+recorded games and the saved-game digest unchanged:
+
+- **Virtual functions:** a host interface becomes a table of function
+  pointers with a context pointer, as `sim::messages::Hooks` and the
+  console's host tables are. The match fills the table where it now
+  derives from the interface. Start with the modules whose host has few
+  entries (unit-activation, unit-movement, world-environment, scenario),
+  then the shared ones (simulation-state, unit-spawn, combat-state,
+  match-runtime), whose tests move to the tables in the same change.
+- **Heap containers:** a table whose size 3.1c bounds (units, players,
+  projectiles, features, script threads) becomes a fixed array of that
+  bound, or a block the match allocates once at its start and owns for
+  its life; a list built and dropped within a tick becomes a bounded array
+  on the stack or in the match's state. The path search's heap and the
+  traces, which hold more than 3.1c bounds, are allocated once at the
+  match's start with their largest size.
+
+Each such change lowers the baseline with
+`python3 tools/check_style.py --update` in the same commit, so the
+remaining counts can only fall.
 
 ### Formatting
 
@@ -793,6 +857,7 @@ changes them:
    rule in [Tests](#tests).
 2. **Fixed-width type spelling:** unqualified (`int32_t`), counted by
    `style-ratchet`.
-One related question has no default yet: what a tick does when it finds its
-state broken (the match-fault policy). Until it is settled, add no new
-exceptions to tick code.
+3. **The match-fault policy:** a simulation operation that finds its state
+   broken returns an error value or notes the fault in the match's fault
+   record and stops, as [Language rules by
+   layer](#language-rules-by-layer) describes.

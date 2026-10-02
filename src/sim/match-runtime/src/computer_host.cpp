@@ -116,40 +116,24 @@ bool host_metal_feature(void* context, int32_t x, int32_t z) {
 }
 
 bool host_order_move(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue) {
-    try {
-        (void)match_of(context).issue_ground_move(unit, point_of(to), queue);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+    auto& match = match_of(context);
+    return !match.order_refused(match.issue_ground_move(unit, point_of(to), queue));
 }
 
 bool host_order_patrol(void* context, uint16_t unit, const oa::FixedVec3* to, bool queue) {
-    try {
-        (void)match_of(context).issue_patrol(unit, point_of(to), queue);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+    auto& match = match_of(context);
+    return !match.order_refused(match.issue_patrol(unit, point_of(to), queue));
 }
 
 /// Gives a squad member the attack command on a target, not queued: in place of
 /// its orders, as a player's attack command.
 bool host_order_attack(void* context, uint16_t unit, uint16_t target) {
-    try {
-        return match_of(context).issue_attack_command(unit, target, false, nullptr);
-    } catch (const std::exception&) {
-        return false;
-    }
+    return match_of(context).issue_attack_command(unit, target, false, nullptr);
 }
 
 bool host_order_build(void* context, uint16_t unit, uint16_t type, const oa::FixedVec3* at) {
-    try {
-        (void)match_of(context).issue_mobile_build(unit, type, point_of(at), false);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+    auto& match = match_of(context);
+    return !match.order_refused(match.issue_mobile_build(unit, type, point_of(at), false));
 }
 
 bool host_order_factory(void* context, uint16_t factory, uint16_t type, int32_t count) {
@@ -172,8 +156,7 @@ void host_set_active(void* context, uint16_t unit, bool on) {
     }
 }
 
-/// Tells whether a player sees a point, as Match::point_visible does; false when the query
-/// throws.
+/// Tells whether a player sees a point, as Match::point_visible does.
 bool host_point_visible(void* context, uint8_t player, const oa::FixedVec3* at) {
     try {
         return match_of(context).point_visible(
@@ -219,12 +202,7 @@ bool host_order_attack_point(void* context, uint16_t unit, const oa::FixedVec3* 
     if (kind == data::mission_types::unknown_mission)
         return false;
     const auto point = point_of(at);
-    try {
-        (void)match.issue_order(unit, kind, false, 0, &point, 0, 0);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+    return !match.order_refused(match.issue_order(unit, kind, false, 0, &point, 0, 0));
 }
 
 /// SurfaceMetal seeds every plot's metal before feature overlays replace it;

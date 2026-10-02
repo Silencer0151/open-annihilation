@@ -73,6 +73,8 @@ frame_encoder_arguments(const CaptureFiles& files, int width, int height);
 /// of the wall clock for the capture to hold back. Call it before SDL starts
 /// its audio.
 ///
+/// Throws std::runtime_error when SDL refuses one of the settings.
+///
 /// @param video the MP4 the capture makes
 void prepare_capture_audio(const std::filesystem::path& video);
 

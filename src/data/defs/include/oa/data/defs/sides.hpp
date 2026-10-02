@@ -17,14 +17,14 @@ inline constexpr std::size_t side_error_capacity = 256;
 
 struct SideTable {
     Side sides[OA_SIDE_COUNT];
-    uint32_t count;
-    char error[side_error_capacity]; // set when a required rectangle is missing
+    uint32_t count{};
+    char error[side_error_capacity]{}; // set when a required rectangle is missing
 };
 
 // Resolves a font name to a handle stored in Side.font; may be null.
 struct SideFontResolver {
-    void* context;
-    oa_ref32 (*font)(void* context, const char* name);
+    void* context{};
+    oa_ref32 (*font)(void* context, const char* name) = nullptr;
 };
 
 /// Returns the slot index a side record carries in Side.side_index.

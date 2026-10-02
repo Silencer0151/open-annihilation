@@ -146,8 +146,9 @@ tick: the unit sweep with the match's own host, projectiles and explosions,
 the path search, each player's controller, knowledge, sight and economy, the
 features, the wind, the meteor storm, particles and the viewer's remembered
 sight, in the game loop's order. `tick(Host&)` runs the unit sweep with an
-external host instead. A gameplay branch the engine does not support throws;
-moving collision and occupancy removal need the resolved type metadata and
+external host instead. A gameplay branch the engine does not support, or a
+broken invariant, is noted in the match's fault record (`Match::fault`) and
+stops the operation that met it, leaving what it had done; moving collision and occupancy removal need the resolved type metadata and
 collision plots and refuse movement without them. The match copies the
 inputs' collision plots while it is constructed and keeps no reference to
 them. Each tick starts by copying the units' ground and air words into the
@@ -352,3 +353,13 @@ links, completions, StartBuilding starts, resurrections, unit transfers and
 game endings shared with and applied from them (`match-shared-events`),
 projectiles, economy, features, transports, outcomes, saved orders, saved
 features and the trace stream.
+
+The tests reach the match through its public header alone. A test that
+runs one piece of a tick by itself (an order's mission step, a unit's
+death, a player's self-destruct, the end of a build, the air goals' world
+queries, the move-rate bits) does so through `MatchTickAccess`
+(`tests/support/match_tick_access.hpp`, target
+`oa-sim-match-runtime-tick-access`), which hands the call to the match's
+tick host as the tick does; no test includes the match's private headers.
+The attachment links of a unit as slot indices are public
+(`oa/sim/match_runtime/attachment_links.hpp`).

@@ -153,6 +153,23 @@ class Host {
     virtual void capture_frame(State& state, std::string_view path, std::string_view prefix) = 0;
 };
 
+/// What stopped a step of the loop; none when it ran to the end.
+enum class LoopError : uint8_t {
+    none,                      ///< the step ran to the end
+    nonfinite_remainder,       ///< Timing::remainder is an infinity or a NaN
+    unsupported_precision,     ///< Timing::precision is neither 53 nor 64 significand bits
+    accumulation_out_of_range, ///< the accumulated steps leave the signed 64-bit range
+    negative_pending_steps,    ///< Timing::pending_steps is below zero
+    unterminated_capture_path, ///< State::capture_path holds no terminating NUL
+    zero_capture_rate,         ///< State::capture_rate is zero while capturing
+};
+
+/// Says what a loop error means, for messages.
+///
+/// @param error the error
+/// @return static text; "none" for LoopError::none
+[[nodiscard]] const char* loop_error_text(LoopError error) noexcept;
+
 /// Converts elapsed clock units into pending simulation steps and adapts the actual rate.
 ///
 /// Scales the clock delta by a tenth of the actual rate, slowed when another
@@ -161,14 +178,18 @@ class Host {
 /// overloaded frames lower the actual rate by one; enough spare frames raise it back
 /// towards the requested rate.
 ///
-/// Throws std::invalid_argument for a non-finite remainder, and std::out_of_range when
-/// the accumulated steps leave the signed 64-bit range.
+/// A non-finite remainder stops it before it changes anything. An unsupported
+/// precision stops it once it has read the clock and set the rate flag, and
+/// accumulated steps outside the signed 64-bit range once it has also measured
+/// the lag; both leave the pending steps, the remainder and the rate as they were.
 ///
 /// @param[in,out] timing clock, rate, lag and pending-step state
 /// @param now current clock, in current_tick units rather than milliseconds
+/// @return none; nonfinite_remainder, unsupported_precision or
+///         accumulation_out_of_range when stopped
 /// @quirk The expression runs with the significand Timing::precision sets; the whole part is
 ///        truncated through 64 bits and only its low 32 bits kept.
-void update_timing(Timing& timing, uint32_t now);
+[[nodiscard]] LoopError update_timing(Timing& timing, uint32_t now) noexcept;
 /// Runs the pending simulation steps through the fixed per-tick subsystem order.
 ///
 /// Each step advances the tick counter and runs, in order: player commands (live
@@ -177,21 +198,25 @@ void update_timing(Timing& timing, uint32_t now);
 /// counter, then shares resources and sends queued messages when live with a
 /// multiplayer link. A fixed trailer follows every batch, even an empty one.
 ///
-/// Throws std::invalid_argument for a negative pending count instead of running
+/// A negative pending count stops it before any call, instead of running
 /// billions of wrapped iterations.
 ///
 /// @param[in,out] state loop state; the pending count is read once and not consumed
 /// @param host subsystem calls
 /// @param live true when multiplayer commands are processed each tick
-void run_ticks(State& state, Host& host, bool live);
+/// @return none; negative_pending_steps when stopped
+[[nodiscard]] LoopError run_ticks(State& state, Host& host, bool live);
 /// Runs one frame of the running-game mode: timing, ticks, debug hotkeys and presentation.
 ///
-/// Throws std::invalid_argument for an unterminated capture path and std::domain_error
-/// for a zero capture rate while capturing.
+/// An error from the timing or the ticks stops the frame where it arises.
+/// While capturing, an unterminated capture path stops it before the frame is
+/// saved, and a zero capture rate once it has been saved.
 ///
 /// @param[in,out] state loop state
 /// @param host subsystem calls
-void run_frame(State& state, Host& host);
+/// @return none; the error of update_timing or run_ticks,
+///         unterminated_capture_path or zero_capture_rate when stopped
+[[nodiscard]] LoopError run_frame(State& state, Host& host);
 /// Normal game speed, the value a multiplayer session restarts at.
 inline constexpr uint16_t normal_game_speed = 10;
 

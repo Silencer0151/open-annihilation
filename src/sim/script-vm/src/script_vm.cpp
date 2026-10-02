@@ -6,7 +6,6 @@
 #include <bit>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace oa::sim::script_vm {
@@ -30,14 +29,17 @@ Error make_error(
 
 Vm::Vm(Program program, int32_t time_scale)
     : program_(std::move(program)), time_scale_(time_scale) {
+    const char* refusal = nullptr;
     if (program_.code.empty() || program_.code.size() > limit::code_words ||
         program_.entry_points.size() > limit::scripts || program_.static_count > limit::statics ||
-        program_.piece_count > limit::pieces) {
-        throw std::invalid_argument("script VM program exceeds its bounded representation");
-    }
-    for (const auto entry : program_.entry_points) {
-        if (entry >= program_.code.size())
-            throw std::invalid_argument("script VM entry point is outside code");
+        program_.piece_count > limit::pieces)
+        refusal = "script VM program exceeds its bounded representation";
+    for (const auto entry : program_.entry_points)
+        if (refusal == nullptr && entry >= program_.code.size())
+            refusal = "script VM entry point is outside code";
+    if (refusal != nullptr) {
+        program_error_ = make_error(ErrorCode::invalid_program, context_count, 0, 0, refusal);
+        program_ = {};
     }
     statics_.resize(program_.static_count);
     motions_.resize(program_.piece_count * piece_axis_count);
@@ -1028,7 +1030,7 @@ std::optional<Error> Vm::import_state(const sim::script_state::State& state) {
 
 ContextSnapshot Vm::context(std::size_t index) const {
     if (index >= contexts_.size())
-        throw std::out_of_range("script VM context index");
+        return {};
     const auto& source = contexts_[index];
     ContextSnapshot result;
     result.state = source.state;

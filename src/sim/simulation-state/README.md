@@ -6,7 +6,7 @@ changes and height correction. It is not a complete movement or combat engine.
 
 Call `oa::sim::simulation_state::update_units(world, orders, host)` from the game
 loop's unit-movement step (`Step::tick_unit_movement`) with the game tick
-already incremented. Units, players, types and game fields are the canonical
+already incremented. It returns the `StepFault` that stopped it, or none. Units, players, types and game fields are the canonical
 `oa::World` records (`src/core`): populate `Unit.owner`, `Unit.def` and the
 players' inclusive `first_unit`/`last_unit` ranges with `oa_ref32` references.
 Order list heads are native, in the `OrderQueue` side table indexed by unit

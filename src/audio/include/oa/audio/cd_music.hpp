@@ -243,9 +243,9 @@ struct DiscCacheRecord {
     // own: zeroed when the setting cannot be read, shifted with its record,
     // and inherited by a new disc's front record from the record that was at
     // the front before.
-    uint8_t block_before_disc_id[0x20];
-    uint8_t disc_id[4]; // little-endian
-    uint8_t track_types[disc_cache_track_types];
+    uint8_t block_before_disc_id[0x20]{};
+    uint8_t disc_id[4]{}; // little-endian
+    uint8_t track_types[disc_cache_track_types]{};
 };
 
 struct DiscCache {

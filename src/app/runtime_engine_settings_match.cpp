@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -78,14 +79,16 @@ void Runtime::register_engine_settings_match_overlay() {
     match.z = kMatchOverlayZ;
     match.event = EngineSettingsMatchHost::overlay_event;
     match.state = this;
-    (void)overlay_register(&screens_, &match);
+    // A refused overlay is recorded in the registry, and register_screens
+    // reports it once every screen and overlay is in.
+    overlay_register(&screens_, &match);
     OverlayDesc cleanup{};
     cleanup.name = "engine settings left with the in-game menu";
     cleanup.screen = kScreenAny;
     cleanup.z = kMatchOverlayZ;
     cleanup.tick = EngineSettingsMatchHost::overlay_tick;
     cleanup.state = this;
-    (void)overlay_register(&screens_, &cleanup);
+    overlay_register(&screens_, &cleanup);
 }
 
 void Runtime::open_engine_settings_in_match() {
@@ -101,7 +104,8 @@ void Runtime::open_engine_settings_in_match() {
         if (!ingame_menu_column_shown())
             return;
     }
-    (void)open_engine_settings_dialog();
+    // The dialog is drawn and fed from engine_settings_dialog().
+    open_engine_settings_dialog();
     play_ui_sound(kOpenSound, 0);
     auto& host = engine_settings_match_host();
     host.dialog_open = true;
@@ -202,16 +206,18 @@ void Runtime::EngineSettingsMatchHost::take_dialog_input(
             runtime.engine_settings_match_host().latched_key = input.key;
         return;
     }
+    // Only a key latches when it closes the dialog; the pointer needs
+    // nothing more once the dialog has taken its action.
     case ScreenInputKind::pointer_move:
-        (void)take_sounded(settings::dialog_pointer_move(dialog, point.x, point.y));
+        std::ignore = take_sounded(settings::dialog_pointer_move(dialog, point.x, point.y));
         return;
     case ScreenInputKind::pointer_down:
         if (input.button == SDL_BUTTON_LEFT)
-            (void)take_sounded(settings::dialog_pointer_down(dialog, point.x, point.y));
+            std::ignore = take_sounded(settings::dialog_pointer_down(dialog, point.x, point.y));
         return;
     case ScreenInputKind::pointer_up:
         if (input.button == SDL_BUTTON_LEFT)
-            (void)take_sounded(settings::dialog_pointer_up(dialog, point.x, point.y));
+            std::ignore = take_sounded(settings::dialog_pointer_up(dialog, point.x, point.y));
         return;
     case ScreenInputKind::key_up:
     case ScreenInputKind::text:
@@ -285,7 +291,9 @@ void Runtime::EngineSettingsMatchHost::close_when_column_hidden(Runtime& runtime
     }
     if (runtime.screen_ == Screen::match && runtime.ingame_menu_column_shown())
         return;
-    (void)take_action(runtime, settings::DialogAction::accepted);
+    // OK always closes the dialog; a failed save is reported where it
+    // happens.
+    std::ignore = take_action(runtime, settings::DialogAction::accepted);
 }
 
 int Runtime::EngineSettingsMatchHost::overlay_event(ScreenContext* context, void* state) {

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "oa/formats/gaf.hpp"
+#include "oa/formats/tdf.hpp"
 #include "oa/formats/tnt.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/sim/visibility_state.hpp"
@@ -83,8 +84,7 @@ enum class ErrorCode {
     unsupported_sight_frame,
     asset_error,
     malformed_feature_document,
-    missing_feature_definition,
-    invalid_feature_number
+    missing_feature_definition
 };
 
 struct Error {
@@ -134,7 +134,7 @@ class FeatureAssetReader {
 ///
 /// @param assets asset reader to list and read through
 /// @return the parsed documents, or the first listing, read or parse error
-[[nodiscard]] data::unit_definitions::Result<std::vector<data::unit_definitions::TdfDocument>>
+[[nodiscard]] data::unit_definitions::Result<std::vector<formats::tdf::OwnedDocument>>
 load_feature_documents(const FeatureAssetReader& assets);
 
 /// Resolves a map's TNT feature names to their terrain fields.
@@ -150,13 +150,14 @@ resolve_feature_terrain(const formats::tnt::Map& map, const FeatureAssetReader& 
 ///
 /// Each name is matched case-insensitively against the documents' top-level
 /// sections in document order, first match wins, and the fields the metal
-/// overlay and plot projection read are parsed from it.
+/// overlay and plot projection read are read from it as the game reads them:
+/// a number field without digits reads 0.
 ///
 /// @param map parsed TNT whose feature names are resolved
 /// @param documents feature documents in listing order
-/// @return one FeatureTerrain per TNT feature, ErrorCode::missing_feature_definition for an unknown name or ErrorCode::invalid_feature_number for a bad numeric field
+/// @return one FeatureTerrain per TNT feature, or ErrorCode::missing_feature_definition for an unknown name
 [[nodiscard]] FeatureResult resolve_feature_terrain(
-    const formats::tnt::Map& map, std::span<const data::unit_definitions::TdfDocument> documents
+    const formats::tnt::Map& map, std::span<const formats::tdf::OwnedDocument> documents
 );
 
 struct NamedFeature {
@@ -177,14 +178,14 @@ struct FeatureCatalogResult {
 /// Used by the corpse lookup.
 ///
 /// @param assets asset reader for features/**/*.tdf
-/// @return the catalog, or an asset or numeric-field error
+/// @return the catalog, or an asset error
 [[nodiscard]] FeatureCatalogResult load_feature_catalog(const FeatureAssetReader& assets);
 /// Builds the named-feature catalog from parsed feature documents, first name wins.
 ///
 /// @param documents feature documents in listing order
-/// @return the catalog, or ErrorCode::invalid_feature_number for a bad numeric field
+/// @return the catalog
 [[nodiscard]] FeatureCatalogResult
-load_feature_catalog(std::span<const data::unit_definitions::TdfDocument> documents);
+load_feature_catalog(std::span<const formats::tdf::OwnedDocument> documents);
 /// Prepares a parsed map's runtime plots, metal and line-of-sight masks.
 ///
 /// Each plot's high and low height (MapPlot.high_height, MapPlot.low_height)

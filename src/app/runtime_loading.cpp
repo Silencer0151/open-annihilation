@@ -3,6 +3,7 @@
 
 // Loading screen and entering/leaving a match.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <tuple>
 
 namespace oa::app {
 namespace {
@@ -126,10 +128,9 @@ void Runtime::set_load_progress(std::size_t row, uint8_t percent) {
     }
     // The world is built without frames; the extension keeps its own work
     // going here.
-    if (extension_.load_progress != nullptr)
-        extension_.load_progress(
-            extension_.context, *this, load_progress_.data(), load_progress_.size()
-        );
+    call_hook_or_report<&Extension::load_progress>(
+        extension_, hook_error_report(), *this, load_progress_.data(), load_progress_.size()
+    );
     pump_loading_screen();
 }
 
@@ -147,8 +148,10 @@ void Runtime::pump_loading_screen() {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             throw std::runtime_error("loading cancelled");
-        // Alt+Enter switches full screen while a match loads too.
-        (void)take_full_screen_event(event);
+        // Alt+Enter switches full screen while a match loads too. The
+        // loading screen takes no other input, so whether it was Alt+Enter
+        // does not matter.
+        std::ignore = take_full_screen_event(event);
     }
 }
 
@@ -216,8 +219,9 @@ void Runtime::draw_loading_screen() {
             present::draw_sprite(&target, loading_lightbar_, kLoadChipLeft, bar_y[i]);
         }
     }
-    if (extension_.draw_loading != nullptr)
-        extension_.draw_loading(extension_.context, *this, target, font);
+    call_hook_or_report<&Extension::draw_loading>(
+        extension_, hook_error_report(), *this, target, font
+    );
     present::unlock_display_surface();
     show_display_frame();
 }
@@ -226,8 +230,9 @@ void Runtime::teardown_match() {
     // Director mode holds the match's sound hooks and camera paths; it
     // gives them back before the match goes.
     leave_director_mode();
-    if (extension_.match_event != nullptr)
-        extension_.match_event(extension_.context, *this, MatchEvent::torn_down);
+    call_hook_or_report<&Extension::match_event>(
+        extension_, hook_error_report(), *this, MatchEvent::torn_down
+    );
     // A team panel open as the match ended goes with it, and so do the
     // preferences its in-game menu opened.
     forget_team_panel();
@@ -256,8 +261,10 @@ void Runtime::teardown_match() {
 }
 
 void Runtime::leave_match() {
-    if (match_ && extension_.match_event != nullptr)
-        extension_.match_event(extension_.context, *this, MatchEvent::left);
+    if (match_)
+        call_hook_or_report<&Extension::match_event>(
+            extension_, hook_error_report(), *this, MatchEvent::left
+        );
     match_paused_ = false;
     match_panels_keyboard_ = false;
     match_finished_ = false;

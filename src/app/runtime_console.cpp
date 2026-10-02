@@ -7,6 +7,7 @@
 // ConsoleHost and HotkeyHost callbacks bound here.
 #include "oa/app/runtime.hpp"
 #include "engine_settings_state.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/formats/cob.hpp"
@@ -26,6 +27,8 @@
 #include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/ui/hud/share_panel.hpp"
+#include "oa/platform/files.hpp"
+#include "match_fault.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -36,9 +39,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -185,8 +190,10 @@ console::Console* Runtime::match_console() {
                     static_cast<uint32_t>(position->y),
                     static_cast<uint32_t>(position->z)
                 };
+                // A unit the spawn refuses, for a full pool or a blocked
+                // place, is not created and nothing more happens.
                 try {
-                    (void)runtime->match_->create(request);
+                    std::ignore = runtime->match_->create(request);
                 } catch (const std::exception& error) {
                     runtime->console_post_message(std::string("spawn: ") + error.what());
                 }
@@ -206,9 +213,10 @@ console::Console* Runtime::match_console() {
         host.clear_all_features = [](void* context) {
             runtime_of(context)->console_burn_all_features();
         };
-        // Clears the cursor's feature with force.
+        // Clears the cursor's feature with force; a cell off the map or
+        // without a feature is left as it is.
         host.clear_feature_at = [](void* context, int16_t cell_x, int16_t cell_z) {
-            (void)runtime_of(context)->console_burn_feature(cell_x, cell_z, true);
+            std::ignore = runtime_of(context)->console_burn_feature(cell_x, cell_z, true);
         };
         host.place_feature_at =
             [](void* context, const char* feature, int16_t cell_x, int16_t cell_z) {
@@ -232,7 +240,7 @@ console::Console* Runtime::match_console() {
             auto* runtime = runtime_of(context);
             if (!runtime->match_)
                 return;
-            std::FILE* file = std::fopen(path, "w+b");
+            std::FILE* file = oa::platform::open_file(path, "w+b");
             if (file == nullptr)
                 return;
             const auto* map = runtime->match_map_context();
@@ -264,13 +272,23 @@ console::Console* Runtime::match_console() {
             const auto target = runtime_of(context)->save_game_root() / save_relative_path(path);
             std::ofstream(target, std::ios::binary | std::ios::trunc).flush();
         };
-        host.save_game =
-            [](void* context, const char* path, const char* description, int32_t game_id) {
-                auto* runtime = runtime_of(context);
-                (void)runtime->save_match_game(
-                    runtime->save_game_root() / save_relative_path(path), description, game_id
-                );
-            };
+        host.save_game = [](void* context,
+                            const char* path,
+                            const char* description,
+                            int32_t game_id) {
+            auto* runtime = runtime_of(context);
+            // The status line holds why a save failed; it goes to the log,
+            // as the save dialog's failures do.
+            try {
+                if (!runtime->save_match_game(
+                        runtime->save_game_root() / save_relative_path(path), description, game_id
+                    ))
+                    std::cerr << "open-annihilation: " << runtime->status_ << '\n';
+            } catch (const std::exception& failure) {
+                runtime->status_ = std::string("Save: ") + failure.what();
+                std::cerr << "open-annihilation: " << runtime->status_ << '\n';
+            }
+        };
         host.now_ms = [](void* context) -> uint32_t {
             return runtime_of(context)->clock_milliseconds();
         };
@@ -287,14 +305,12 @@ console::Console* Runtime::match_console() {
         host.toggle_novelty_voice = [](void* context) {
             runtime_of(context)->toggle_novelty_voice();
         };
-        if (extension_.console_host != nullptr)
-            extension_.console_host(extension_.context, *this, host);
+        call_hook_or_raise<&Extension::console_host>(extension_, *this, host);
         // The team panels' host starts empty for each match; the extension
         // fills what reaches the other players' machines.
         team_panel_host_ = {};
         team_panel_host_.context = this;
-        if (extension_.team_panel_host != nullptr)
-            extension_.team_panel_host(extension_.context, *this, team_panel_host_);
+        call_hook_or_raise<&Extension::team_panel_host>(extension_, *this, team_panel_host_);
         // The match's menus and end-of-game screen take the return label.
         take_return_label();
         host.issue_group_mission =
@@ -326,7 +342,8 @@ console::Console* Runtime::match_console() {
             std::end(console_->state.contour_values),
             contour
         );
-        console::console_init(&console_->state, world, &console_->host);
+        if (!console::console_init(&console_->state, world, &console_->host))
+            throw std::runtime_error("the console's command table refused its own commands");
         std::copy(std::begin(contour), std::end(contour), console_->state.contour_values);
         // "+stats" shows or hides the frame statistics over the battlefield
         // (draw_frame_stats) and saves the choice, as the Show performance
@@ -335,22 +352,25 @@ console::Console* Runtime::match_console() {
         // 3.1c has no command that shows these times; its frame rate shows
         // on the debug keys' line (draw_debug_status_line). It is an option:
         // it needs no passphrase and echoes to this machine alone.
-        (void)oa::ui::services::command_table_set(
-            &console_->state.commands,
-            "Stats",
-            [](oa::ui::services::TokenLine* line) {
-                const console::Console* active = console::console_active();
-                if (active == nullptr || active->host == nullptr)
-                    return;
-                auto* runtime = runtime_of(active->host->context);
-                const int32_t asked = oa::ui::services::token_line_get_int(line, 1, -1);
-                if (asked < 0)
-                    EngineSettingsState::save_frame_stats(*runtime, !runtime->frame_stats_shown_);
-                else
-                    runtime->show_frame_stats(asked != 0);
-            },
-            console::command_class::option | console::command_class::private_echo
-        );
+        if (!oa::ui::services::command_table_set(
+                &console_->state.commands,
+                "Stats",
+                [](oa::ui::services::TokenLine* line) {
+                    const console::Console* active = console::console_active();
+                    if (active == nullptr || active->host == nullptr)
+                        return;
+                    auto* runtime = runtime_of(active->host->context);
+                    const int32_t asked = oa::ui::services::token_line_get_int(line, 1, -1);
+                    if (asked < 0)
+                        EngineSettingsState::save_frame_stats(
+                            *runtime, !runtime->frame_stats_shown_
+                        );
+                    else
+                        runtime->show_frame_stats(asked != 0);
+                },
+                console::command_class::option | console::command_class::private_echo
+            ))
+            throw std::runtime_error("the console's command table refused Stats");
         console_->bound_world = world;
         restore_console_carry();
     }
@@ -361,8 +381,7 @@ console::Console* Runtime::match_console() {
 
 void Runtime::take_return_label() {
     return_label_.fill('\0');
-    const char* label =
-        extension_.return_label != nullptr ? extension_.return_label(extension_.context) : nullptr;
+    const char* label = call_hook_or_raise<&Extension::return_label>(extension_);
     if (label != nullptr)
         std::copy_n(label, ::strnlen(label, return_label_.size() - 1U), return_label_.begin());
 }
@@ -385,8 +404,8 @@ bool Runtime::local_player_watches() const {
 }
 
 void Runtime::console_give(uint8_t from, uint8_t to, float amount, bool metal) {
-    if (!match_ || (extension_.give_resources != nullptr &&
-                    extension_.give_resources(extension_.context, *this, from, to, amount, metal)))
+    if (!match_ ||
+        call_hook_or_raise<&Extension::give_resources>(extension_, *this, from, to, amount, metal))
         return;
     oa::World& world = match_->state();
     std::array<oa::UnitEconomy*, OA_PLAYER_COUNT> economies{};
@@ -455,12 +474,12 @@ void Runtime::console_reload_unit_type(uint16_t type) {
             loaded.script.reset();
             if (const auto bytes = runtime.read(path)) {
                 auto parsed = oa::formats::cob::parse_cob(*bytes);
-                if (parsed)
+                if (parsed.ok())
                     loaded.script = std::make_shared<const oa::formats::cob::CobProgram>(
-                        std::move(*parsed.program)
+                        std::move(*parsed.value)
                     );
                 else
-                    runtime.console_post_message(std::string(path) + ": " + parsed.error);
+                    runtime.console_post_message(std::string(path) + ": " + parsed.error.message);
             }
             loaded.type.cob =
                 reinterpret_cast<oa::sim::unit_spawn::AssetHandle>(loaded.script.get());
@@ -498,7 +517,8 @@ bool Runtime::console_place_feature(const char* name, int32_t cell_x, int32_t ce
     if (index == oa::sim::map_runtime::no_feature_index || plot == nullptr)
         return false;
     const auto at = static_cast<std::size_t>(plot - world.plots);
-    (void)oa::sim::feature_runtime::place_feature(
+    // Whether the feature was placed is read back from the plot below.
+    std::ignore = oa::sim::feature_runtime::place_feature(
         world, match_->feature_host(), at, index, nullptr, nullptr, kConsolePlacer
     );
     if (world.plots[at].feature != index)
@@ -673,16 +693,19 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
         oa::sim::messages::clear_messages(runtime_of(context)->match_->state().game);
     };
     host.open_options_panel = [](void* context) { runtime_of(context)->show_match_pause_menu(); };
-    host.session_kind = [](void* context) -> int32_t {
-        return runtime_of(context)->multiplayer_session() ? oa::ui::hud::kSessionMultiplayer : 0;
+    host.session_kind = [](void* context) -> oa::data::campaign::SessionKind {
+        return runtime_of(context)->multiplayer_session()
+                   ? oa::data::campaign::SessionKind::multiplayer
+                   : oa::data::campaign::SessionKind::none;
     };
     host.open_team_menu = [](void* context) { runtime_of(context)->toggle_team_menu(); };
     host.open_share_panel = [](void* context) { runtime_of(context)->open_team_share_panel(); };
     host.send_pause = [](void* context, bool paused) {
         auto& runtime = *runtime_of(context);
         runtime.status_ = paused ? "Game paused" : "Resumed";
-        if (runtime.extension_.pause_changed != nullptr)
-            runtime.extension_.pause_changed(runtime.extension_.context, runtime, paused);
+        call_hook_or_report<&Extension::pause_changed>(
+            runtime.extension_, runtime.hook_error_report(), runtime, paused
+        );
     };
     host.list_files = [](void* context,
                          const char* pattern,
@@ -742,12 +765,13 @@ void Runtime::draw_console_clock() {
     ensure_ui_colors();
     const auto scale = hud_text_scale();
     const auto height = static_cast<uint8_t>(font->nominal_height);
-    // The pen's rows above the bottom bar, then the glyphs' lift above the pen.
+    // The pen's rows above the bottom bar; the glyphs start the font's lift
+    // above the pen.
     const int pen_rise =
         layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height);
     const auto at = canvas_paint(
         match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale,
-        match_layout_.bottom_bar_y() - (pen_rise + oa::formats::fnt::row_lift(*font)) * scale
+        match_layout_.bottom_bar_y() - pen_rise * scale
     );
     draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
 }
@@ -852,7 +876,7 @@ void Runtime::check_console_commands() {
     enter_line("+reload ARMSOLAR");
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
     if (solars() != 0)
         throw std::runtime_error("console check: +reload left the placed unit alive");
     check_console_option_commands(enter_line);
@@ -863,8 +887,8 @@ void Runtime::check_console_commands() {
     check_console_stats(enter_line);
     if (extension_.check_console != nullptr) {
         std::function<void(const char*)> line_entry = enter_line;
-        extension_.check_console(
-            extension_.context,
+        call_hook_or_raise<&Extension::check_console>(
+            extension_,
             *this,
             [](void* user, const char* line) {
                 (*static_cast<std::function<void(const char*)>*>(user))(line);
@@ -977,7 +1001,7 @@ void Runtime::check_console_cursor_commands(const std::function<void(const char*
     enter_line(line);
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
-    match_->tick();
+    tick_or_raise(*match_);
     const auto survivors = spare_units();
     stand_in.in_use = free_in_use;
     stand_in.status = OA_PLAYER_STATUS_FREE;

@@ -11,7 +11,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdlib>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -64,6 +63,7 @@ struct Activation final : sim::unit_activation::Host {
     std::function<void(uint32_t)> wake_observers; // wakes the orders observing the unit
     sim::simulation_state::World& world;
     const MultiplayerHooks& multiplayer;
+    MatchFault& fault;
 
     Activation(
         sim::unit_spawn::Slot& s,
@@ -71,10 +71,11 @@ struct Activation final : sim::unit_activation::Host {
         OfflineServices& h,
         std::function<void(uint32_t)> wake,
         sim::simulation_state::World& w,
-        const MultiplayerHooks& m
+        const MultiplayerHooks& m,
+        MatchFault& f
     )
         : slot(s), instance(i), services(h), wake_observers(std::move(wake)), world(w),
-          multiplayer(m) {}
+          multiplayer(m), fault(f) {}
 
     void script(std::string_view name) override {
         if (instance && instance->script())
@@ -99,8 +100,10 @@ struct Activation final : sim::unit_activation::Host {
     void flags_changed(uint16_t unit, uint8_t flags) override {
         if (!world.run_flag)
             return;
-        if (!multiplayer.unit_flags_changed)
-            throw std::logic_error("unit flag change shared without a multiplayer handler");
+        if (!multiplayer.unit_flags_changed) {
+            fault.note("unit flag change shared without a multiplayer handler");
+            return;
+        }
         multiplayer.unit_flags_changed(multiplayer.context, unit, flags);
     }
 };
@@ -123,14 +126,17 @@ struct SpeedScript final : sim::visibility_state::SpeedHost {
     ScriptInstance* script;
     float& storage;
     const float& computed;
+    MatchFault& fault;
 
-    SpeedScript(ScriptInstance* value, float& output, const float& input)
-        : script(value), storage(output), computed(input) {}
+    SpeedScript(ScriptInstance* value, float& output, const float& input, MatchFault& f)
+        : script(value), storage(output), computed(input), fault(f) {}
 
     void set_speed(int32_t value) override {
         storage = computed;
-        if (!script)
-            throw std::logic_error("SetSpeed has no script");
+        if (!script) {
+            fault.note("SetSpeed has no script");
+            return;
+        }
         script->call("SetSpeed", std::span(&value, 1), false);
     }
 };
@@ -189,18 +195,37 @@ void assemble_unit_def(const OfflineInputs& input, std::size_t i, oa::UnitDef& d
 }
 } // namespace
 
-Match::State::State(const OfflineInputs& input)
-    : world(std::make_unique<oa::World>()),
-      units(sim::unit_spawn::offline_pool_size(input.per_player_limit)),
-      unit_defs(input.types.size()), projectiles(OA_PROJECTILE_CAPACITY), assets(units.size()),
-      orders(units.size()) {
+const char* Match::input_error(const OfflineInputs& input) noexcept {
     if (input.types.empty() || input.loaded.size() != input.types.size() ||
         input.fields.size() != input.types.size() ||
         (!input.unit_defs.empty() && input.unit_defs.size() != input.types.size()))
-        throw std::invalid_argument("offline runtime type tables differ");
+        return "offline runtime type tables differ";
+    if (sim::unit_spawn::unit_pool_size(input.per_player_limit) == 0)
+        return "unit pool limit would wrap the 16-bit unit count";
     if (input.viewpoint_player >= 10)
-        throw std::out_of_range("offline viewpoint outside ten players");
-    load_types(input);
+        return "offline viewpoint outside ten players";
+    const auto cells =
+        static_cast<std::size_t>(input.map.attribute_width) * input.map.attribute_height;
+    if (input.terrain_values.size() != cells)
+        return "runtime terrain values do not match map";
+    if (input.sight_width < 0 || input.sight_height < 0 ||
+        static_cast<uint64_t>(input.sight_width) * static_cast<uint32_t>(input.sight_height) >
+            16 * 1024 * 1024)
+        return "sight grid dimensions exceed bounds";
+    if (!input.scenario_definitions)
+        return "offline match requires actual scenario definitions";
+    if (!input.collision_plots.empty() && input.collision_plots.size() != cells)
+        return "collision terrain does not match map";
+    return nullptr;
+}
+
+Match::State::State(const OfflineInputs& input)
+    : world(std::make_unique<oa::World>()),
+      units(sim::unit_spawn::unit_pool_size(input.per_player_limit)), unit_defs(input.types.size()),
+      projectiles(OA_PROJECTILE_CAPACITY), assets(units.size()), orders(units.size()) {
+    // Refused inputs build the side tables only; the match stops at once.
+    if (Match::input_error(input) == nullptr)
+        load_types(input);
     world->units = units.data();
     world->unit_slot_count = static_cast<uint32_t>(units.size());
     world->unit_defs = unit_defs.data();
@@ -236,7 +261,7 @@ Match::State::State(const OfflineInputs& input)
         player.energy_storage = 1000.0F;
         player.metal_storage = 1000.0F;
     }
-    sim::unit_spawn::init_unit_pool(*world, input.per_player_limit);
+    (void)sim::unit_spawn::init_unit_pool(*world, input.per_player_limit);
     tables = {input.types, assets, setups};
     views =
         std::make_unique<sim::unit_spawn::LegacyViews>(*world, input.types, assets, setups, orders);
@@ -264,8 +289,10 @@ void Match::State::load_types(const OfflineInputs& input) {
 }
 
 void Match::replace_unit_def(std::size_t type, const oa::UnitDef& record) {
-    if (type >= state_.unit_defs.size())
-        throw std::out_of_range("unit type outside the runtime table");
+    if (type >= state_.unit_defs.size()) {
+        fault_.note("unit type outside the runtime table");
+        return;
+    }
     auto& def = state_.unit_defs[type];
     const auto primary = def.primary_bad_target_category;
     const auto secondary = def.secondary_bad_target_category;
@@ -284,6 +311,10 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
       spatial_units_(slots_.size()), weapons_(slots_.size()), movement_(slots_.size()),
       air_drivers_(slots_.size()), mirrored_air_goals_(slots_.size()), terrain_(input.map),
       random_(input.random_seed), lcg_seed_(input.random_seed) {
+    if (const auto* refusal = input_error(input)) {
+        fault_.note(refusal);
+        return;
+    }
     target_projection_.resize(slots_.size());
     const auto sighting_capacity = static_cast<uint32_t>(slots_.size());
     sighting_slots_.assign(std::size_t{2} * sightings_.size() * sighting_capacity, 0);
@@ -323,16 +354,11 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     }
     const auto cells =
         static_cast<std::size_t>(input.map.attribute_width) * input.map.attribute_height;
-    if (input.terrain_values.size() != cells)
-        throw std::invalid_argument("runtime terrain values do not match map");
-    if (input.sight_width < 0 || input.sight_height < 0 ||
-        static_cast<uint64_t>(input.sight_width) * static_cast<uint32_t>(input.sight_height) >
-            16 * 1024 * 1024)
-        throw std::invalid_argument("sight grid dimensions exceed bounds");
-    if (!input.scenario_definitions)
-        throw std::invalid_argument("offline match requires actual scenario definitions");
     sim::scenario::construct(scenario_);
-    sim::scenario::register_conditions(scenario_, *input.scenario_definitions);
+    if (const auto refused =
+            sim::scenario::register_conditions(scenario_, *input.scenario_definitions);
+        refused != sim::scenario::DefinitionError::none)
+        fault_.note(sim::scenario::definition_error_text(refused));
     scenario_gravity_ = input.scenario_definitions->integer("gravity", 0);
     lava_world_ = input.scenario_definitions->integer("lavaworld", 0);
     // The schema's waterdoesdamage and waterdamage, which the unit tick
@@ -365,8 +391,6 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     // The plots are copied here; input_ keeps no reference to them.
     input_.collision_plots = {};
     if (collision_terrain_) {
-        if (input.collision_plots.size() != cells)
-            throw std::invalid_argument("collision terrain does not match map");
         for (std::size_t i = 0; i < cells; ++i) {
             spatial_.plots[i].high_height = input.collision_plots[i].high_height;
             spatial_.plots[i].low_height = input.collision_plots[i].low_height;
@@ -401,8 +425,10 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
         player.sight_width = static_cast<uint32_t>(sight_.width);
         player.sight_height = static_cast<uint32_t>(sight_.height);
     }
-    if (const auto* error = sim::visibility_state::sight_context_error(sight_context()))
-        throw std::invalid_argument(error);
+    if (const auto* error = sim::visibility_state::sight_context_error(sight_context())) {
+        fault_.note(error);
+        return;
+    }
     bridge_ = std::make_unique<SpawnBridge>(
         *state_.world,
         state_.tables,
@@ -412,7 +438,8 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
         services_,
         static_cast<SpawnSubsystems&>(*this),
         random_,
-        input.clock_scale
+        input.clock_scale,
+        fault_
     );
     environment_wind_.minimum_strength = input.minimum_wind;
     environment_wind_.maximum_strength = input.maximum_wind;
@@ -424,7 +451,7 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     // count when the wind is scheduled; a match here always starts at tick 0
     // and draws nothing.
     MatchWindRandom wind_random{random_, lcg_seed_};
-    sim::world_environment::initialize_wind(environment_wind_, wind_random);
+    note_wind(sim::world_environment::initialize_wind(environment_wind_, wind_random));
     effects_ = std::make_unique<sim::effect_particles::EffectWorld>();
     effects_->lava_world = lava_world_ != 0;
     effects_->no_sea_level_trigger =
@@ -444,14 +471,39 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     build_movement_maps();
 }
 
+void Match::note_wind(sim::world_environment::WindRefresh result) noexcept {
+    switch (result) {
+    case sim::world_environment::WindRefresh::random_out_of_range:
+        fault_.note("wind rand() value above 32767");
+        break;
+    case sim::world_environment::WindRefresh::zero_strength_divisor:
+        fault_.note("wind-strength divisor is zero");
+        break;
+    case sim::world_environment::WindRefresh::waiting:
+    case sim::world_environment::WindRefresh::changed:
+        break;
+    }
+}
+
 const RuntimeTypeFields& Match::fields(sim::unit_spawn::Slot& slot) const {
-    for (std::size_t i = 0; i < input_.types.size(); ++i)
-        if (slot.unit->type == &input_.types[i].simulation) {
-            if (!input_.fields[i].definition)
-                throw std::logic_error("runtime type has no FBI definition");
-            return input_.fields[i];
-        }
-    throw std::out_of_range("unit type outside runtime table");
+    if (slot.unit)
+        for (std::size_t i = 0; i < input_.types.size(); ++i)
+            if (slot.unit->type == &input_.types[i].simulation) {
+                if (input_.fields[i].definition)
+                    return input_.fields[i];
+                fault_.note("runtime type has no FBI definition");
+                return unresolved_fields();
+            }
+    fault_.note("unit type outside runtime table");
+    return unresolved_fields();
+}
+
+const RuntimeTypeFields& Match::unresolved_fields() noexcept {
+    static const data::unit_definitions::UnitDefinition definition{};
+    static const data::unit_definitions::RuntimeDefinitionMetadata metadata{};
+    static const data::unit_definitions::UnitTargetCategoryMasks masks{};
+    static const RuntimeTypeFields fields{&definition, {}, std::nullopt, &metadata, &masks};
+    return fields;
 }
 
 sim::unit_spawn::Slot* Match::create(const sim::unit_spawn::Request& request) {
@@ -531,7 +583,7 @@ void Match::tick_scripts(uint32_t elapsed) {
 void Match::refresh_wind() {
     environment_wind_.current_tick = simulation_.tick;
     MatchWindRandom wind_random{random_, lcg_seed_};
-    sim::world_environment::refresh_wind(environment_wind_, wind_random);
+    note_wind(sim::world_environment::refresh_wind(environment_wind_, wind_random));
     sim::world_environment::store_wind_state(state().game, environment_wind_);
     wind_.changed = environment_wind_.changed != 0;
     wind_.direction = environment_wind_.direction;
@@ -539,13 +591,15 @@ void Match::refresh_wind() {
 }
 
 void Match::tick(sim::simulation_state::Host& host) {
-    if (!outcome_view_)
-        throw std::logic_error("offline tick requires configured outcome identity and alliances");
+    if (!outcome_view_) {
+        fault_.note("offline tick requires configured outcome identity and alliances");
+        return;
+    }
     resolve_effect_sequences();
     // The game loop's order: units and their scripts, projectiles, then
     // explosions, so records a script or an impact logs are stepped in the
     // tick that logs them.
-    sim::simulation_state::update_units(state(), state_.orders, host);
+    note_step(sim::simulation_state::update_units(state(), state_.orders, host));
     mark_profile(OA_PROFILE_UNITS);
     update_projectiles();
     mark_profile(OA_PROFILE_WEAPON);
@@ -571,9 +625,34 @@ sim::unit_health::ParalysisHooks Match::weapon_target_hooks() {
     return hooks;
 }
 
+void Match::note_step(sim::simulation_state::StepFault fault) noexcept {
+    using sim::simulation_state::StepFault;
+    switch (fault) {
+    case StepFault::none:
+        break;
+    case StepFault::order_budget_spent:
+        fault_.note("order execution budget exhausted; unresolved handler failed to yield");
+        break;
+    case StepFault::order_not_queued:
+        fault_.note("rotated order is not in primary queue");
+        break;
+    case StepFault::untyped_unit:
+        fault_.note("unit has no type");
+        break;
+    case StepFault::zero_maximum_health:
+        fault_.note("health percentage divisor is zero");
+        break;
+    case StepFault::orders_short:
+        fault_.note("order queues do not cover the unit pool");
+        break;
+    }
+}
+
 void Match::stop_weapon(sim::unit_spawn::Slot& slot, uint32_t index) {
-    if (index >= OA_UNIT_WEAPON_COUNT)
-        throw std::out_of_range("weapon slot outside the unit");
+    if (index >= OA_UNIT_WEAPON_COUNT) {
+        fault_.note("weapon slot outside the unit");
+        return;
+    }
     (void)sim::unit_health::clear_weapon_target(
         slot.record, static_cast<uint8_t>(index), weapon_target_hooks()
     );
@@ -584,9 +663,15 @@ void Match::release_tracked_weapons(sim::unit_spawn::Slot& slot, uint8_t index) 
 }
 
 void Match::assign_squad(sim::unit_spawn::Slot& slot, uint32_t group) {
+    if (!slot.unit || !slot.unit->owner) {
+        fault_.note("unit group owner");
+        return;
+    }
     const auto owner = slot.unit->owner->record.index;
-    if (owner >= groups_.size())
-        throw std::out_of_range("unit group owner");
+    if (owner >= groups_.size()) {
+        fault_.note("unit group owner");
+        return;
+    }
     auto& groups = groups_[owner];
     if (slot.record.squad != -1) {
         auto& old = groups[static_cast<uint32_t>(slot.record.squad)];
@@ -602,16 +687,22 @@ void Match::assign_squad(sim::unit_spawn::Slot& slot, uint32_t group) {
 }
 
 void Match::initialize_weapons(sim::unit_spawn::Slot& slot, SlotRuntime& runtime) {
-    if (!runtime.instance)
-        throw std::logic_error("combat initialization precedes model");
+    if (!runtime.instance) {
+        fault_.note("combat initialization precedes model");
+        return;
+    }
     const auto& def = *fields(slot).definition;
     Geometry geometry(*runtime.instance);
     auto& weapons = weapons_.at(slot.unit_index);
     for (std::size_t i = 0; i < weapons.slots.size(); ++i)
         weapons.slots[i].flags = slot.record.weapons[i].flags;
-    (void)sim::combat_state::initialize_spawn_combat(
-        weapons, input_.weapons, {def.weapon1, def.weapon2, def.weapon3}, geometry
-    );
+    if (sim::combat_state::initialize_spawn_combat(
+            weapons, input_.weapons, {def.weapon1, def.weapon2, def.weapon3}, geometry
+        )
+            .definition_cleared) {
+        fault_.note("geometry callback cleared weapon definition");
+        return;
+    }
     for (std::size_t i = 0; i < weapons.slots.size(); ++i)
         sim::weapon_execution::arm_weapon_slot(
             slot.record.weapons[i], weapons.slots[i], weapons.definitions[i]
@@ -632,7 +723,8 @@ void Match::initialize_extraction_rate(sim::unit_spawn::Slot& slot, SlotRuntime&
     SpeedScript script(
         runtime.instance ? runtime.instance->script() : nullptr,
         slot.record.extracted_metal,
-        unit.speed
+        unit.speed,
+        fault_
     );
     (void)sim::visibility_state::initialize_terrain_speed(
         unit,
@@ -646,8 +738,14 @@ void Match::initialize_extraction_rate(sim::unit_spawn::Slot& slot, SlotRuntime&
 
 sim::unit_spawn::AssetHandle Match::create_movement(sim::unit_spawn::Slot& slot) {
     const auto& type = fields(slot);
-    if (!type.movement_class)
-        throw std::logic_error("movement class pointer has not been resolved");
+    if (!type.movement_class) {
+        fault_.note("movement class pointer has not been resolved");
+        return 0;
+    }
+    if (!slot.unit || !slot.unit->type) {
+        fault_.note("Ground movement requires a bound unit and type");
+        return 0;
+    }
     auto& runtime = movement_.at(slot.unit_index);
     runtime = std::make_unique<sim::ground_orders::GroundRuntime>(
         slot, *type.definition, *type.movement_class
@@ -693,16 +791,22 @@ void Match::fit_spawn_height(sim::unit_spawn::Slot& slot) {
         // model's ground plate; nothing lifts a hovercraft the fit leaves
         // under the surface back to it.
         auto& runtime = movement_.at(slot.unit_index);
-        if (!runtime)
-            throw std::logic_error("ground fit has no movement object");
+        if (!runtime) {
+            fault_.note("ground fit has no movement object");
+            return;
+        }
         auto* object = instance(slot.unit_index);
-        if (!object)
-            throw std::logic_error("ground fit has no model object");
+        if (!object) {
+            fault_.note("ground fit has no model object");
+            return;
+        }
         sim::unit_movement::GroundClock clock;
         clock.simulation_tick = simulation_.tick;
         if (type.flags & OA_UNIT_DEF_FLAG_CAN_HOVER) {
-            if (!input_.uptime_milliseconds)
-                throw std::logic_error("floating ground fit requires platform clock");
+            if (!input_.uptime_milliseconds) {
+                fault_.note("floating ground fit requires platform clock");
+                return;
+            }
             for (auto& tick : clock.bob_ticks)
                 tick = sim::unit_movement::scaled_bob_tick(
                     input_.uptime_milliseconds(), static_cast<uint32_t>(input_.clock_scale)
@@ -802,8 +906,10 @@ void Match::place_unit(
     spatial_.tick = simulation_.tick;
     const auto removed = sim::spatial_state::remove_occupancy(projected, spatial_, map_listeners_);
     synchronize_spatial_state();
-    if (removed != sim::spatial_state::Error::none)
-        throw std::runtime_error("occupancy removal rejected spatial state");
+    if (removed != sim::spatial_state::Error::none) {
+        fault_.note("occupancy removal rejected spatial state");
+        return;
+    }
     slot.unit->position = position;
     slot.unit->flags = (slot.unit->flags & ~3u) | (layer & 3u);
     slot.record.cell_x = cell_x;
@@ -824,7 +930,7 @@ void Match::refresh_restored_footprint(uint16_t index) {
         sim::spatial_state::refresh_footprint_occupancy(projected, spatial_, map_listeners_);
     synchronize_spatial_state();
     if (result != sim::spatial_state::Error::none)
-        throw std::runtime_error("restored footprint refresh rejected spatial state");
+        fault_.note("restored footprint refresh rejected spatial state");
 }
 
 void Match::register_occupancy(sim::unit_spawn::Slot& slot) {
@@ -835,11 +941,13 @@ void Match::register_occupancy(sim::unit_spawn::Slot& slot) {
     const auto result = sim::spatial_state::register_unit(s, spatial_, map_listeners_);
     if (slot.unit->object_present && movement_[slot.unit_index])
         movement_[slot.unit_index]->occupancy_changed_tick = s.object_tick;
-    if (result != sim::spatial_state::Error::none)
-        throw std::runtime_error(
-            "unit spatial registration rejected branch/state: " +
+    if (result != sim::spatial_state::Error::none) {
+        fault_.note(
+            "unit spatial registration rejected branch/state",
             std::to_string(static_cast<int>(result))
         );
+        return;
+    }
     synchronize_spatial_state();
 }
 
@@ -852,7 +960,7 @@ void Match::notify_created(sim::unit_spawn::Slot& slot) {
         multiplayer.unit_created(multiplayer.context, slot.unit_index);
         return;
     }
-    throw std::logic_error("unit creation shared without a multiplayer handler");
+    fault_.note("unit creation shared without a multiplayer handler");
 }
 
 void Match::notify_finished(sim::unit_spawn::Slot& slot) {
@@ -878,21 +986,27 @@ void Match::end_local_game() noexcept {
 
 void Match::set_activation(sim::unit_spawn::Slot& slot, uint8_t mask, bool enabled) {
     auto wake = [this, &slot](uint32_t event) { wake_target_observers(*slot.unit, event); };
-    Activation host(slot, instance(slot.unit_index), services_, wake, simulation_, multiplayer);
+    Activation host(
+        slot, instance(slot.unit_index), services_, wake, simulation_, multiplayer, fault_
+    );
     sim::unit_activation::change(slot.record.state_flags, slot.unit_index, mask, enabled, host);
 }
 
 std::span<const uint8_t> Match::player_coverage(uint8_t owner) const {
-    if (owner >= other_player_coverage_.size())
-        throw std::out_of_range("coverage owner outside player table");
+    if (owner >= other_player_coverage_.size()) {
+        fault_.note("coverage owner outside player table");
+        return {};
+    }
     return owner == input_.viewpoint_player
                ? std::span<const uint8_t>(sight_.coverage)
                : std::span<const uint8_t>(other_player_coverage_[owner]);
 }
 
 bool Match::unit_visible(uint8_t player, uint16_t index) const {
-    if (player >= simulation_.players.size())
-        throw std::out_of_range("visibility owner outside player table");
+    if (player >= simulation_.players.size()) {
+        fault_.note("visibility owner outside player table");
+        return false;
+    }
     const auto& slot = slots_.at(index);
     const auto& unit = *slot.unit;
     if (unit.owner == &simulation_.players[player])
@@ -905,13 +1019,15 @@ bool Match::unit_visible(uint8_t player, uint16_t index) const {
             bounds = &*type_bounds_[i];
             break;
         }
-    if (!bounds)
-        throw std::logic_error("visibility query requires resolved unit bounds");
+    if (!bounds) {
+        fault_.note("visibility query requires resolved unit bounds");
+        return false;
+    }
     std::array<uint32_t, 3> point = unit.position;
     point[0] += static_cast<uint32_t>(bounds->bounds_min_x);
     point[1] += static_cast<uint32_t>(bounds->model_height);
     point[2] += static_cast<uint32_t>(bounds->bounds_min_z);
-    if (!(unit.flags & 0x200u) &&
+    if (!(unit.flags & OA_UNIT_FLAG_VIEWPOINT_OWNED) &&
         std::bit_cast<int32_t>(point[1]) < static_cast<int32_t>(simulation_.sea_level) * 65536)
         return false;
     if (point_visible(player, point))
@@ -950,7 +1066,7 @@ bool Match::point_visible(uint8_t player, const std::array<uint32_t, 3>& positio
     if ((state().game.visibility_flags & sim::visibility_state::update_sight_grid) == 0)
         return point_mapped(position);
     const auto index = sight_cell(sight_, position);
-    return index && coverage[*index] != 0;
+    return index && *index < coverage.size() && coverage[*index] != 0;
 }
 
 bool Match::cell_or_footprint_corner_visible(
@@ -1004,8 +1120,10 @@ void Match::update_sight(sim::unit_spawn::Slot& slot) {
     auto& world = state();
     const auto* def = oa::world_unit_def_of(&world, &slot.record);
     const auto* owner = oa::world_unit_owner(&world, &slot.record);
-    if (def == nullptr || owner == nullptr)
-        throw std::logic_error("sight stamp requires the unit's type and owner");
+    if (def == nullptr || owner == nullptr) {
+        fault_.note("sight stamp requires the unit's type and owner");
+        return;
+    }
     auto context = sight_context();
     sim::visibility_state::stamp_unit_sight(slot.record, *def, *owner, context);
 }
@@ -1014,8 +1132,10 @@ void Match::update_moving_sight(sim::unit_spawn::Slot& slot) {
     auto& world = state();
     const auto* def = oa::world_unit_def_of(&world, &slot.record);
     const auto* owner = oa::world_unit_owner(&world, &slot.record);
-    if (def == nullptr || owner == nullptr)
-        throw std::logic_error("sight stamp requires the unit's type and owner");
+    if (def == nullptr || owner == nullptr) {
+        fault_.note("sight stamp requires the unit's type and owner");
+        return;
+    }
     auto context = sight_context();
     sim::visibility_state::move_unit_sight(slot.record, *def, *owner, context);
 }
@@ -1064,8 +1184,10 @@ void Match::notify_scenario_created(sim::unit_spawn::Slot& slot) {
 
 std::array<uint32_t, 3> Match::piece_world_position(sim::unit_spawn::Slot& slot, uint32_t piece) {
     auto* unit = instance(slot.unit_index);
-    if (!unit)
-        throw std::logic_error("piece query before instance");
+    if (!unit) {
+        fault_.note("piece query before instance");
+        return slot.unit ? slot.unit->position : std::array<uint32_t, 3>{};
+    }
     return unit->piece_world(piece);
 }
 
@@ -1118,12 +1240,9 @@ std::vector<Match::NanoLaser> Match::nano_lasers() const {
         beams.push_back(beam);
     };
     auto nano_from = [&](const sim::unit_spawn::Slot& builder) -> std::array<uint32_t, 3> {
-        try {
-            auto* inst = const_cast<Match*>(this)->instance(builder.unit_index);
-            if (inst)
-                return inst->query_nano_world();
-        } catch (const std::exception&) {
-        }
+        auto* inst = const_cast<Match*>(this)->instance(builder.unit_index);
+        if (inst)
+            return inst->query_nano_world();
         return builder.unit->position;
     };
     for (const auto& entry : orders_) {

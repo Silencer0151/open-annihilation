@@ -8,10 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cerrno>
-#include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <string>
 
 namespace oa::sim::map_runtime {
@@ -39,54 +36,6 @@ bool equal_nocase(std::string_view a, std::string_view b) {
     return true;
 }
 
-std::string_view trim(std::string_view text) {
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
-        text.remove_prefix(1);
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
-        text.remove_suffix(1);
-    return text;
-}
-
-/// Decodes a key's value like atoi.
-///
-/// @param section TDF section to read
-/// @param key key name
-/// @param fallback value when the key is absent
-/// @return the value clamped to int32, 0 when it does not start with a number, or `fallback`
-int32_t
-tdf_int(const data::unit_definitions::TdfSection& section, std::string_view key, int32_t fallback) {
-    const auto* value = section.find(key);
-    if (value == nullptr)
-        return fallback;
-    const std::string text(trim(*value));
-    char* end = nullptr;
-    errno = 0;
-    const long parsed = std::strtol(text.c_str(), &end, 10);
-    if (end == text.c_str() || errno == ERANGE)
-        return 0;
-    if (parsed > std::numeric_limits<int32_t>::max())
-        return std::numeric_limits<int32_t>::max();
-    if (parsed < std::numeric_limits<int32_t>::min())
-        return std::numeric_limits<int32_t>::min();
-    return static_cast<int32_t>(parsed);
-}
-
-/// Decodes a key's value as the game reads a TDF number (formats::tdf::parse_double).
-///
-/// @param section TDF section to read
-/// @param key key name
-/// @param fallback value when the key is absent
-/// @return the value, 0 when it does not start with a number, or `fallback`
-double tdf_double(
-    const data::unit_definitions::TdfSection& section, std::string_view key, double fallback
-) {
-    const auto* value = section.find(key);
-    if (value == nullptr)
-        return fallback;
-    const std::string text(*value);
-    return formats::tdf::parse_double(text.c_str());
-}
-
 /// Copies a key's value into a bounded buffer.
 ///
 /// The buffer is zero padded and left unterminated when full, as strncpy leaves it.
@@ -97,16 +46,13 @@ double tdf_double(
 /// @param capacity buffer size in bytes
 /// @return false when the key is absent
 bool tdf_string(
-    const data::unit_definitions::TdfSection& section,
-    std::string_view key,
-    char* out,
-    std::size_t capacity
+    const formats::tdf::Block* section, const char* key, char* out, std::size_t capacity
 ) {
     std::memset(out, 0, capacity);
-    const auto* value = section.find(key);
+    const char* value = formats::tdf::find_value(section, key);
     if (value == nullptr)
         return false;
-    std::memcpy(out, value->data(), std::min(value->size(), capacity));
+    std::memcpy(out, value, std::min(std::strlen(value), capacity));
     return true;
 }
 
@@ -152,8 +98,8 @@ oa_ref32 find_weapon(const FeatureDefHost* host, const char* weapon_name) {
 // A sequence key's ref within the feature's archive; 0 when the key is absent
 // or empty.
 oa_ref32 sequence_ref(
-    const data::unit_definitions::TdfSection& section,
-    std::string_view key,
+    const formats::tdf::Block* section,
+    const char* key,
     oa_ref32 animation,
     bool one_shot,
     const FeatureDefHost* host
@@ -206,13 +152,15 @@ uint16_t reclamate_feature(const FeatureDef& def) noexcept {
     return def.reclamate_feature;
 }
 
-const data::unit_definitions::TdfSection* find_feature_section(
-    std::span<const data::unit_definitions::TdfDocument> documents, std::string_view name
+const formats::tdf::Block* find_feature_section(
+    std::span<const formats::tdf::OwnedDocument> documents, std::string_view name
 ) {
     for (const auto& document : documents)
-        for (const auto& section : document.sections)
-            if (equal_nocase(section.name, name))
-                return &section;
+        for (uint32_t index = 0; index < formats::tdf::child_count(document.root()); ++index) {
+            const auto* section = formats::tdf::child_at(document.root(), index);
+            if (equal_nocase(section->name, name))
+                return section;
+        }
     return nullptr;
 }
 
@@ -225,7 +173,7 @@ uint16_t find_feature_index(std::span<const FeatureDef> defs, std::string_view n
 
 FeatureIndexResult load_feature_def(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     std::string_view name,
     const FeatureDefHost* host
 ) {
@@ -241,16 +189,15 @@ FeatureIndexResult load_feature_def(
     oa_ref32 sequence_archive = 0;
     FeatureDef def{};
     std::memcpy(def.name, name.data(), std::min(name.size(), name_capacity - 1));
-    tdf_string(*section, "description", def.description, description_capacity);
-    def.footprint_x = static_cast<int16_t>(tdf_int(*section, "footprintx", 0));
-    def.footprint_z = static_cast<int16_t>(tdf_int(*section, "footprintz", 0));
-    def.height = static_cast<int8_t>(tdf_int(*section, "height", 0));
+    tdf_string(section, "description", def.description, description_capacity);
+    def.footprint_x = static_cast<int16_t>(formats::tdf::get_int(section, "footprintx", 0));
+    def.footprint_z = static_cast<int16_t>(formats::tdf::get_int(section, "footprintz", 0));
+    def.height = static_cast<int8_t>(formats::tdf::get_int(section, "height", 0));
     char object_name[0x100];
-    if (!tdf_string(*section, "object", object_name, sizeof object_name) ||
-        object_name[0] == '\0') {
+    if (!tdf_string(section, "object", object_name, sizeof object_name) || object_name[0] == '\0') {
         def.flags |= OA_FEATURE_FLAG_SPRITE;
         char gaf_name[0x100];
-        tdf_string(*section, "filename", gaf_name, sizeof gaf_name);
+        tdf_string(section, "filename", gaf_name, sizeof gaf_name);
         bool reused = false;
         for (const auto& earlier : table.defs) {
             if (std::strncmp(earlier.animation_file, gaf_name, animation_file_capacity) != 0)
@@ -273,47 +220,50 @@ FeatureIndexResult load_feature_def(
             );
             sequence_archive = def.animation;
         }
-        def.seq_name = sequence_ref(*section, "seqname", sequence_archive, false, host);
-        def.seq_name_shadow = sequence_ref(*section, "seqnameshad", sequence_archive, false, host);
-        def.seq_name_burn = sequence_ref(*section, "seqnameburn", sequence_archive, true, host);
+        def.seq_name = sequence_ref(section, "seqname", sequence_archive, false, host);
+        def.seq_name_shadow = sequence_ref(section, "seqnameshad", sequence_archive, false, host);
+        def.seq_name_burn = sequence_ref(section, "seqnameburn", sequence_archive, true, host);
         def.seq_name_burn_shadow =
-            sequence_ref(*section, "seqnameburnshad", sequence_archive, true, host);
-        def.seq_name_die = sequence_ref(*section, "seqnamedie", sequence_archive, true, host);
+            sequence_ref(section, "seqnameburnshad", sequence_archive, true, host);
+        def.seq_name_die = sequence_ref(section, "seqnamedie", sequence_archive, true, host);
         def.seq_name_die_shadow =
-            sequence_ref(*section, "seqnamedieshad", sequence_archive, true, host);
+            sequence_ref(section, "seqnamedieshad", sequence_archive, true, host);
         def.seq_name_reclamate =
-            sequence_ref(*section, "seqnamereclamate", sequence_archive, true, host);
+            sequence_ref(section, "seqnamereclamate", sequence_archive, true, host);
         def.seq_name_reclamate_shadow =
-            sequence_ref(*section, "seqnamereclamateshad", sequence_archive, true, host);
+            sequence_ref(section, "seqnamereclamateshad", sequence_archive, true, host);
     } else {
         def.flags &= static_cast<uint16_t>(~OA_FEATURE_FLAG_SPRITE);
         object_name[sizeof object_name - 1] = '\0';
         store_u32(reinterpret_cast<uint8_t*>(def.animation_file), load_object(host, object_name));
     }
-    def.spread_chance = static_cast<int8_t>(tdf_int(*section, "spreadchance", 0));
-    def.reproduce = static_cast<int8_t>(tdf_int(*section, "reproduce", 0));
-    def.reproduce_area = static_cast<int8_t>(tdf_int(*section, "reproducearea", 0));
-    def.metal = static_cast<float>(static_cast<uint32_t>(tdf_int(*section, "metal", 0)) & 0xffffu);
-    def.energy =
-        static_cast<float>(static_cast<uint32_t>(tdf_int(*section, "energy", 0)) & 0xffffu);
-    def.damage = static_cast<int16_t>(tdf_int(*section, "damage", 0));
-    def.flags |= flag_bit(tdf_int(*section, "animating", 0), 1);
-    def.flags |= flag_bit(tdf_int(*section, "animtrans", 0), 2);
-    def.flags |= flag_bit(tdf_int(*section, "shadtrans", 0), 3);
-    def.flags |= flag_bit(tdf_int(*section, "flamable", 0), 4);
-    def.flags |= flag_bit(tdf_int(*section, "geothermal", 0), 5);
-    def.flags |= flag_bit(tdf_int(*section, "blocking", 0), 6);
-    def.flags |= flag_bit(tdf_int(*section, "reclaimable", 0), 7);
-    def.flags |= flag_bit(tdf_int(*section, "autoreclaimable", 1), 8);
-    def.flags |= flag_bit(tdf_int(*section, "indestructible", 0), 9);
-    def.flags |= flag_bit(tdf_int(*section, "nodisplayinfo", 0), 10);
-    def.flags |= flag_bit(tdf_int(*section, "nodrawundergray", 0), 11);
+    def.spread_chance = static_cast<int8_t>(formats::tdf::get_int(section, "spreadchance", 0));
+    def.reproduce = static_cast<int8_t>(formats::tdf::get_int(section, "reproduce", 0));
+    def.reproduce_area = static_cast<int8_t>(formats::tdf::get_int(section, "reproducearea", 0));
+    def.metal = static_cast<float>(
+        static_cast<uint32_t>(formats::tdf::get_int(section, "metal", 0)) & 0xffffu
+    );
+    def.energy = static_cast<float>(
+        static_cast<uint32_t>(formats::tdf::get_int(section, "energy", 0)) & 0xffffu
+    );
+    def.damage = static_cast<int16_t>(formats::tdf::get_int(section, "damage", 0));
+    def.flags |= flag_bit(formats::tdf::get_int(section, "animating", 0), 1);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "animtrans", 0), 2);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "shadtrans", 0), 3);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "flamable", 0), 4);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "geothermal", 0), 5);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "blocking", 0), 6);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "reclaimable", 0), 7);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "autoreclaimable", 1), 8);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "indestructible", 0), 9);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "nodisplayinfo", 0), 10);
+    def.flags |= flag_bit(formats::tdf::get_int(section, "nodrawundergray", 0), 11);
     for (const auto forced : forced_gray_names)
         if (equal_nocase(name, forced))
             def.flags |= flag_forced_no_draw_under_gray;
-    def.spark_time = spark_time_from(tdf_double(*section, "sparktime", 0.0));
+    def.spark_time = spark_time_from(formats::tdf::get_double(section, "sparktime", 0.0));
     char weapon_name[0x100];
-    tdf_string(*section, "burnweapon", weapon_name, sizeof weapon_name);
+    tdf_string(section, "burnweapon", weapon_name, sizeof weapon_name);
     weapon_name[sizeof weapon_name - 1] = '\0';
     def.burn_weapon = weapon_name[0] != '\0' ? find_weapon(host, weapon_name) : 0;
     if (def.flags & OA_FEATURE_FLAG_ANIMATING) {
@@ -332,7 +282,7 @@ FeatureIndexResult load_feature_def(
 
 FeatureIndexResult find_or_load_feature(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     std::string_view name,
     const FeatureDefHost* host
 ) {
@@ -345,7 +295,7 @@ FeatureIndexResult find_or_load_feature(
 std::optional<Error> init_feature_table(
     FeatureDefTable& table,
     const formats::tnt::Map& map,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     const FeatureDefHost* host
 ) {
     table.defs.clear();
@@ -360,7 +310,7 @@ std::optional<Error> init_feature_table(
 
 std::optional<Error> load_feature_links(
     FeatureDefTable& table,
-    std::span<const data::unit_definitions::TdfDocument> documents,
+    std::span<const formats::tdf::OwnedDocument> documents,
     const FeatureDefHost* host
 ) {
     // Definitions appended while linking are linked in turn.
@@ -371,7 +321,7 @@ std::optional<Error> load_feature_links(
             return missing_feature(name);
 
         struct Link {
-            std::string_view key;
+            const char* key{};
             uint16_t FeatureDef::* field{};
         };
 
@@ -383,7 +333,7 @@ std::optional<Error> load_feature_links(
         for (const auto& link : links) {
             char target[0x100];
             uint16_t linked = no_feature_index;
-            if (tdf_string(*section, link.key, target, sizeof target)) {
+            if (tdf_string(section, link.key, target, sizeof target)) {
                 target[sizeof target - 1] = '\0';
                 const auto resolved = find_or_load_feature(table, documents, target, host);
                 if (!resolved.ok())

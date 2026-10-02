@@ -38,11 +38,13 @@ struct RuntimeBindings {
     std::optional<std::array<int16_t, 2>> movement_footprint;
 };
 
+// A loaded unit type. One that did not load holds a load_error, its names and
+// the paths it reached, and no type fields, model or script.
 struct LoadedType {
-    Type type;
+    Type type{};
     std::shared_ptr<const formats::objects3d::Model> model;
     std::shared_ptr<const formats::cob::CobProgram> script;
-    std::string unit_name, model_path, script_path;
+    std::string unit_name, model_path, script_path, load_error; // load_error: empty once loaded
 };
 
 /// Loads a unit type's runtime fields, model and script from the game data.
@@ -51,15 +53,14 @@ struct LoadedType {
 /// roots are the reader's business. GUI pages are counted from the nonempty
 /// guis/<unit>N.GUI files, page 0 first.
 ///
-/// Throws std::invalid_argument without resolved weapon presence, without a footprint for a
-/// movement class, or for an unbounded asset name; std::runtime_error for a missing model
-/// or an invalid script.
-///
 /// @param definition the unit type's fields, from its loaded UnitDef
 /// @param bindings availability, limit, default mission and resolved footprint
 /// @param assets game file reader
 /// @return the type and shared ownership of its parsed assets; keep it alive while the
-///         type is in use
+///         type is in use. Without resolved weapon presence, without a footprint for
+///         a movement class, for an unbounded asset name, a missing or invalid model,
+///         an invalid script or more than 4096 GUI pages, the type did not load and
+///         its load_error says why
 LoadedType load_runtime_type(
     const data::unit_definitions::UnitDefinition& definition,
     const RuntimeBindings& bindings,
@@ -67,10 +68,11 @@ LoadedType load_runtime_type(
 );
 /// Finds a unit type by name, case-insensitively.
 ///
-/// Throws std::length_error for more than 65536 names.
+/// Only the first 65536 names, which have a 16-bit index, are searched.
 ///
 /// @param names type names in world type order, including reserved zero
 /// @param name name to find
 /// @return the index, or 0 when absent
-uint16_t find_type_index(std::span<const std::string> names, std::string_view name);
+[[nodiscard]] uint16_t
+find_type_index(std::span<const std::string> names, std::string_view name) noexcept;
 } // namespace oa::sim::unit_spawn

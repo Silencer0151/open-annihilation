@@ -12,10 +12,10 @@ namespace oa::ui::services {
 
 // Input boundary: modifier state and the pointer position in window pixels.
 struct Input {
-    void* context;
+    void* context{};
     // Whether the engine control key (see key_code) is held.
-    bool (*key_down)(void* context, uint8_t key_code);
-    void (*cursor_position)(void* context, int32_t* x, int32_t* y);
+    bool (*key_down)(void* context, uint8_t key_code){};
+    void (*cursor_position)(void* context, int32_t* x, int32_t* y){};
 };
 
 // Engine key codes above the ASCII range (the internal control codes).
@@ -42,10 +42,10 @@ inline constexpr int32_t key_queue_max_capacity = 30;
 
 // Ring of key codes kept in the display context.
 struct KeyQueue {
-    int32_t capacity; // at most 30
-    uint32_t codes[key_queue_max_capacity];
-    int32_t head; // next write
-    int32_t tail; // next read
+    int32_t capacity{}; // at most 30
+    uint32_t codes[key_queue_max_capacity]{};
+    int32_t head{}; // next write
+    int32_t tail{}; // next read
 };
 
 /// Empties the key queue.
@@ -93,21 +93,21 @@ bool key_queue_push_virtual_key(
 
 // One 0x18-byte pointer event.
 struct PointerEvent {
-    int32_t x;          // client x
-    int32_t y;          // client y
-    uint32_t buttons;   // button and modifier state reported with the message
-    uint32_t tick;      // engine tick when received
-    uint32_t message;   // host message identifier (0x200 = move)
-    uint32_t is_button; // 0 for a move, 1 for a button transition
+    int32_t x{};          // client x
+    int32_t y{};          // client y
+    uint32_t buttons{};   // button and modifier state reported with the message
+    uint32_t tick{};      // engine tick when received
+    uint32_t message{};   // host message identifier (0x200 = move)
+    uint32_t is_button{}; // 0 for a move, 1 for a button transition
 };
 
 // Ring of pointer events kept in the display context.
 struct PointerQueue {
-    int32_t capacity;
-    PointerEvent* events; // capacity entries
-    int32_t head;         // next write
-    int32_t tail;         // next read
-    PointerEvent current; // latest move
+    int32_t capacity{};
+    PointerEvent* events{}; // capacity entries
+    int32_t head{};         // next write
+    int32_t tail{};         // next read
+    PointerEvent current;   // latest move
 };
 
 /// Records the latest pointer move without queuing it.

@@ -18,6 +18,10 @@
 
 namespace oa::data::defs::test {
 
+/// Folds a path to the form the doubles compare: '\\' separators, lower case.
+///
+/// @param path the path, with either separator
+/// @return the folded path
 inline std::string fold_path(std::string path) {
     for (char& c : path) {
         if (c == '/')
@@ -37,6 +41,10 @@ struct MemoryFile {
 struct MemoryFiles {
     std::vector<MemoryFile> files;
 
+    /// Finds a file by path, ignoring case and the separator.
+    ///
+    /// @param path the path to look up
+    /// @return the file; null when the set holds none at that path
     const MemoryFile* find(const char* path) const {
         const std::string key = fold_path(path);
         for (const auto& file : files)
@@ -45,6 +53,9 @@ struct MemoryFiles {
         return nullptr;
     }
 
+    /// Returns the Files services that read this set.
+    ///
+    /// @return services whose context is this set, valid while it lives
     Files view() {
         return Files{
             this,
@@ -85,6 +96,10 @@ struct MemoryFiles {
 struct DirectoryFiles {
     std::filesystem::path root;
 
+    /// Finds the host path of a game path, matching each part case-insensitively.
+    ///
+    /// @param path the game path, with either separator
+    /// @return the host path; empty when a part is missing
     std::filesystem::path resolve(const char* path) const {
         std::filesystem::path at = root;
         std::string rest = fold_path(path);
@@ -105,6 +120,9 @@ struct DirectoryFiles {
         return at;
     }
 
+    /// Returns the Files services that read this directory.
+    ///
+    /// @return services whose context is this object, valid while it lives
     Files view() {
         return Files{
             this,

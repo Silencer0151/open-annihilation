@@ -11,6 +11,7 @@
 #include "oa/ui/gui_layout.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/ui/screen_registry.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -127,7 +128,7 @@ void build_players(oa::World& world) {
     world.game.tick = 5432; // 90 steps of 60 ticks
     set_active(world, 0, OA_PLAYER_STATUS_LOCAL, 0);
     oa::Player& p0 = world.game.players[0];
-    std::strcpy(p0.name, "Commander");
+    oa::base::text::copy_terminated(p0.name, "Commander");
     p0.kills = 3;
     p0.losses = 1;
     p0.energy_produced_total = 1234.9;
@@ -135,13 +136,13 @@ void build_players(oa::World& world) {
     p0.energy_wasted_total = -5.7;
     p0.metal_wasted_total = 150.2;
     set_active(world, 1, OA_PLAYER_STATUS_MIRRORED, OA_SETUP_OPTION_WATCHER);
-    std::strcpy(world.game.players[1].name, "Watcher");
+    oa::base::text::copy_terminated(world.game.players[1].name, "Watcher");
     oa::Player& p2 = world.game.players[2];
-    std::strcpy(p2.name, "Gone");
+    oa::base::text::copy_terminated(p2.name, "Gone");
     p2.units_created = 4;
     set_active(world, 3, OA_PLAYER_STATUS_COMPUTER, 0);
     oa::Player& p3 = world.game.players[3];
-    std::strcpy(p3.name, "Computer");
+    oa::base::text::copy_terminated(p3.name, "Computer");
     p3.kills = 12;
     p3.units_created = 20;
 }
@@ -960,7 +961,7 @@ void overlay_tests() {
     screen.fade.current[9 * 4 + 1] = 34;
     screen.fade.current[9 * 4 + 2] = 56;
     world.game.endgame_state = OA_ENDGAME_GLAMOUR;
-    std::fill(surface.rgb.begin(), surface.rgb.end(), 7);
+    std::fill(surface.rgb.begin(), surface.rgb.end(), uint8_t{7});
     overlay.draw(&ctx, overlay.state);
     expect(
         rgb_is(pixel(surface, 1, 1), 12, 34, 56) && rgb_is(pixel(surface, 2, 2), 7, 7, 7) &&
@@ -970,7 +971,7 @@ void overlay_tests() {
     world.game.endgame_state = OA_ENDGAME_PANEL;
 
     publish_endgame(EndgameView{});
-    std::fill(surface.rgb.begin(), surface.rgb.end(), 0);
+    std::fill(surface.rgb.begin(), surface.rgb.end(), uint8_t{0});
     overlay.draw(&ctx, overlay.state);
     expect(rgb_is(pixel(surface, 0x22c + 3, row_y + 3), 0, 0, 0), "nothing drawn once cleared");
 }

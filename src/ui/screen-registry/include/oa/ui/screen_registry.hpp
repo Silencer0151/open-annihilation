@@ -56,52 +56,52 @@ enum class ScreenInputKind : uint8_t {
 // One platform input event. Pointer coordinates are in render space (the
 // 640x480 canvas on frontend screens).
 struct ScreenInput {
-    ScreenInputKind kind;
-    uint8_t button;     // pointer button, 1 = left
-    uint8_t clicks;     // pointer_down: presses in a row (SDL's click count)
-    uint16_t modifiers; // SDL_Keymod bits
-    uint32_t key;       // SDL_Keycode for key events
-    float x;
-    float y;
-    float wheel_y;
-    const char* text; // UTF-8 for text events, otherwise null
+    ScreenInputKind kind{};
+    uint8_t button{};     // pointer button, 1 = left
+    uint8_t clicks{};     // pointer_down: presses in a row (SDL's click count)
+    uint16_t modifiers{}; // SDL_Keymod bits
+    uint32_t key{};       // SDL_Keycode for key events
+    float x{};
+    float y{};
+    float wheel_y{};
+    const char* text{}; // UTF-8 for text events, otherwise null
 };
 
 // Application services available to packages. `host` is opaque.
 struct ScreenServices {
-    void (*request_screen)(void* host, ScreenId id);
+    void (*request_screen)(void* host, ScreenId id){};
     // Plays the sound registered under `name` (allsound.tdf or
     // register_sound), else the WAV sounds/<name>.wav.
-    void (*play_sound)(void* host, const char* name);
-    int (*read_number)(void* host, const char* section, const char* key, uint32_t* value);
-    void (*write_number)(void* host, const char* section, const char* key, uint32_t value);
+    void (*play_sound)(void* host, const char* name){};
+    int (*read_number)(void* host, const char* section, const char* key, uint32_t* value){};
+    void (*write_number)(void* host, const char* section, const char* key, uint32_t value){};
     int (*read_string)(
         void* host, const char* section, const char* key, char* out, std::size_t capacity
-    );
-    void (*write_string)(void* host, const char* section, const char* key, const char* value);
-    void (*set_status)(void* host, const char* text);
+    ){};
+    void (*write_string)(void* host, const char* section, const char* key, const char* value){};
+    void (*set_status)(void* host, const char* text){};
     // Writes both frontend signal bytes (the current and the pending signal).
-    void (*set_frontend_signal)(void* host, uint8_t signal);
+    void (*set_frontend_signal)(void* host, uint8_t signal){};
     // Writes the frontend dispatcher's state byte.
-    void (*set_frontend_state)(void* host, uint8_t state);
+    void (*set_frontend_state)(void* host, uint8_t state){};
     // Takes the main-menu panel (MAINMENU.GUI) off the screen.
-    void (*close_main_menu_panel)(void* host);
+    void (*close_main_menu_panel)(void* host){};
     // Loads MAINMENU.GUI again and runs its setup, sparks included.
-    void (*reload_main_menu_panel)(void* host);
+    void (*reload_main_menu_panel)(void* host){};
     // Starts (nonzero) or stops platform text input; typed characters then
     // arrive as text events.
-    void (*set_text_input)(void* host, int enabled);
+    void (*set_text_input)(void* host, int enabled){};
     // The frontend clock in game ticks, 30 per second.
-    uint32_t (*current_tick)(void* host);
+    uint32_t (*current_tick)(void* host){};
     // Registers the sounds/ WAV `file` under the sound name `category`
     // unless the name is taken; play_sound then plays it by that name.
-    void (*register_sound)(void* host, const char* category, const char* file);
+    void (*register_sound)(void* host, const char* category, const char* file){};
     // The pointer in frame pixels, where the software cursor is drawn.
-    void (*pointer_position)(void* host, int32_t* x, int32_t* y);
+    void (*pointer_position)(void* host, int32_t* x, int32_t* y){};
     // Reports (nonzero) that an overlay with buttons of its own over
     // MAINMENU.GUI's stands on the main menu; the main menu then takes the
     // layout made for that overlay instead of TA's own.
-    void (*set_main_menu_overlay)(void* host, int present);
+    void (*set_main_menu_overlay)(void* host, int present){};
     // Ends the run after the current event or frame, as the exit
     // confirmation's first choice does: a running match is left first, the
     // main loop stops, the extension's shutdown runs, the preferences are
@@ -129,13 +129,13 @@ struct ScreenServices {
 // and use the services outside its callbacks, on the thread that runs
 // main().
 struct ScreenContext {
-    void* host;
-    const ScreenServices* services;
-    oa::AssetStore* assets;
-    oa::ui::frontend_renderer::Surface* surface; // current frame
-    oa::sim::match_runtime::Match* world;        // null outside a match
-    const ScreenInput* input;                    // set only during event callbacks
-    ScreenId screen;                             // screen currently shown
+    void* host{};
+    const ScreenServices* services{};
+    oa::AssetStore* assets{};
+    oa::ui::frontend_renderer::Surface* surface{}; // current frame
+    oa::sim::match_runtime::Match* world{};        // null outside a match
+    const ScreenInput* input{};                    // set only during event callbacks
+    ScreenId screen{};                             // screen currently shown
 };
 
 using ScreenFn = void (*)(ScreenContext* ctx, void* state);
@@ -145,16 +145,16 @@ using ScreenBackgroundFn = const char* (*)(ScreenContext* ctx, void* state);
 // GUI resources loaded before `enter`. A null layout means `enter` supplies
 // its own resources.
 struct ScreenAssets {
-    const char* layout;
-    const char* background; // named background (bitmaps\<name>.pcx); null for none
-    const char* palette;
-    const char* sprites;
-    const char* shared_sprites;
+    const char* layout{};
+    const char* background{}; // named background (bitmaps\<name>.pcx); null for none
+    const char* palette{};
+    const char* sprites{};
+    const char* shared_sprites{};
 };
 
 struct ScreenDesc {
-    ScreenId id;
-    const char* name;
+    ScreenId id{};
+    const char* name{};
     ScreenAssets assets;
     ScreenBackgroundFn background; // optional; overrides assets.background
     ScreenFn enter;                // after resources load
@@ -162,26 +162,26 @@ struct ScreenDesc {
     ScreenEventFn event;           // after overlays, before built-in handling
     ScreenFn tick;                 // once per frame
     ScreenFn draw;                 // after the GUI is composed, before the cursor
-    void* state;
+    void* state{};
 };
 
 // Drawn over every screen matching `screen` (or kScreenAny) in ascending z;
 // input reaches overlays in descending z, before the screen itself.
 struct OverlayDesc {
-    const char* name;
-    ScreenId screen;
-    int16_t z;
+    const char* name{};
+    ScreenId screen{};
+    int16_t z{};
     ScreenFn create; // once, after all registrations
     ScreenEventFn event;
     ScreenFn tick;
     ScreenFn draw;
-    void* state;
+    void* state{};
 };
 
 struct StepDesc {
-    oa::ui::frontend_state::Step step;
+    oa::ui::frontend_state::Step step{};
     ScreenFn run;
-    void* state;
+    void* state{};
 };
 
 // Answers a dispatcher query; its result is the query's.
@@ -195,14 +195,14 @@ struct QueryDesc {
 
 struct ScreenRegistry {
     ScreenDesc screens[kMaxScreens];
-    uint32_t screen_count;
+    uint32_t screen_count{};
     OverlayDesc overlays[kMaxOverlays]; // kept sorted by z
-    uint32_t overlay_count;
+    uint32_t overlay_count{};
     StepDesc steps[kMaxSteps];
-    uint32_t step_count;
+    uint32_t step_count{};
     QueryDesc queries[kMaxQueries]{};
     uint32_t query_count{};
-    const char* rejected; // name of the first rejected registration
+    const char* rejected{}; // name of the first rejected registration
 };
 
 /// Adds a screen to the registry.

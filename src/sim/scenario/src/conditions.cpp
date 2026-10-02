@@ -10,7 +10,6 @@
 
 #include <array>
 #include <cmath>
-#include <stdexcept>
 
 namespace oa::sim::scenario {
 namespace {
@@ -239,15 +238,14 @@ static_assert(unit_event_handlers_in_kind_order());
 
 /// Returns a kind's handler for a unit event.
 ///
-/// Throws std::invalid_argument for a value outside Kind or Event.
-///
 /// @param kind condition kind
 /// @param event unit event
-/// @return the handler, or null when the kind ignores the event
-UnitEventHandler handler(Kind kind, Event event) {
+/// @return the handler, or null when the kind ignores the event or either value
+///         lies outside its enumeration
+UnitEventHandler handler(Kind kind, Event event) noexcept {
     const auto index = static_cast<std::size_t>(kind);
     if (index >= unit_event_handlers.size())
-        throw std::invalid_argument("unknown scenario condition kind");
+        return nullptr;
     const UnitEventHandlers& handlers = unit_event_handlers[index];
     switch (event) {
     case Event::unit_destroyed:
@@ -257,16 +255,16 @@ UnitEventHandler handler(Kind kind, Event event) {
     case Event::unit_created:
         return nullptr;
     }
-    throw std::invalid_argument("unknown scenario event");
+    return nullptr;
 }
 
 } // namespace
 
-bool reacts_to(Kind kind, Event event) {
+bool reacts_to(Kind kind, Event event) noexcept {
     return handler(kind, event) != nullptr;
 }
 
-void dispatch(
+bool dispatch(
     Controller& controller,
     Event event,
     oa::World& world,
@@ -275,8 +273,8 @@ void dispatch(
 ) {
     if (event != Event::unit_destroyed && event != Event::unit_captured &&
         event != Event::unit_created)
-        throw std::invalid_argument("unknown scenario event");
-    visit_conditions(controller, [&](Condition& condition) {
+        return false;
+    return visit_conditions(controller, [&](Condition& condition) {
         if (const UnitEventHandler run = handler(condition.kind, event))
             run(condition, world, unit, host);
     });

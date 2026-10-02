@@ -26,7 +26,6 @@ inline constexpr int32_t camera_glide_max_step = 0x140;
 inline constexpr int32_t camera_slot_count = 4;
 // Mouse-look moves the camera one map cell per this many pointer pixels.
 inline constexpr int32_t mouse_look_pixels_per_cell = 4;
-inline constexpr int32_t map_cell_pixels = 0x10;
 // Denominator applied to the 15-bit rand() value.
 inline constexpr int32_t random_range = 0x8000;
 
@@ -195,10 +194,10 @@ void mouse_look_update(Game& game, const CursorSink& cursor) noexcept;
 // One 12-byte entry of a mission's start table, which the campaign file's
 // rules give.
 struct StartEntry {
-    int32_t kind; // 1 together with index == 0 marks the view start
-    int32_t index;
-    int16_t x;
-    int16_t y;
+    int32_t kind{}; // 1 together with index == 0 marks the view start
+    int32_t index{};
+    int16_t x{};
+    int16_t y{};
 };
 
 static_assert(sizeof(StartEntry) == 12);

@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -160,7 +161,9 @@ void Runtime::handle_match_right_press(float x, float y) {
     // The frame's pointer pass: the unit under the pointer, the armed
     // command, the pointer area and the ground under it.
     update_pointer(x, y);
-    (void)pick_match_cursor();
+    // The pick is wanted for what it writes into the Game block, which the
+    // press reads; the cursor it returns is not needed.
+    std::ignore = pick_match_cursor();
     switch (input::right_press(world.game)) {
     case input::RightPress::none:
         return;
@@ -275,41 +278,41 @@ std::string_view Runtime::issue_selection_orders(
             case input::UnitOrder::vtol_help_build:
                 if (bound == 0)
                     break;
-                (void)match_->issue_help_build(source, bound, queue);
+                match_->issue_help_build(source, bound, queue);
                 issued = "Assist";
                 break;
             case input::UnitOrder::repair_unit:
             case input::UnitOrder::vtol_repair_unit:
                 if (bound == 0)
                     break;
-                (void)match_->issue_repair(source, bound, queue);
+                match_->issue_repair(source, bound, queue);
                 issued = "Repair";
                 break;
             case input::UnitOrder::follow_ground:
             case input::UnitOrder::vtol_follow:
                 if (bound == 0)
                     break;
-                (void)match_->issue_guard(source, bound, queue);
+                match_->issue_guard(source, bound, queue);
                 issued = "Guard";
                 break;
             case input::UnitOrder::reclaim_unit:
             case input::UnitOrder::vtol_reclaim_unit:
                 if (bound == 0)
                     break;
-                (void)match_->issue_reclaim(source, bound, queue);
+                match_->issue_reclaim(source, bound, queue);
                 issued = "Reclaim";
                 break;
             case input::UnitOrder::capture:
                 if (bound == 0)
                     break;
-                (void)match_->issue_capture(source, bound, queue);
+                match_->issue_capture(source, bound, queue);
                 issued = "Capture";
                 break;
             case input::UnitOrder::ground_pickup:
             case input::UnitOrder::vtol_pickup:
                 if (bound == 0)
                     break;
-                (void)match_->issue_load(source, bound, queue);
+                match_->issue_load(source, bound, queue);
                 issued = "Load";
                 break;
             case input::UnitOrder::attack_chase:
@@ -319,39 +322,40 @@ std::string_view Runtime::issue_selection_orders(
             case input::UnitOrder::air_to_air:
             case input::UnitOrder::air_to_ground:
             case input::UnitOrder::air_to_ground_hover:
+                // A unit no attack resolves for is given no order.
                 if (bound != 0) {
-                    (void)match_->issue_attack_command(
+                    std::ignore = match_->issue_attack_command(
                         source, bound, queue, ground ? &*ground : nullptr
                     );
                     issued = "Attack";
                 } else if (ground) {
-                    (void)match_->issue_attack_ground(source, *ground, queue);
+                    std::ignore = match_->issue_attack_ground(source, *ground, queue);
                     issued = "Attack ground";
                 }
                 break;
             case input::UnitOrder::suppress:
                 if (const auto& at = target_point ? target_point : ground) {
-                    (void)match_->issue_attack_ground(source, *at, queue);
+                    std::ignore = match_->issue_attack_ground(source, *at, queue);
                     issued = "Attack ground";
                 }
                 break;
             case input::UnitOrder::attack_special:
                 if (const auto& at = ground ? ground : target_point) {
-                    (void)match_->issue_attack_special(source, *at, queue, bound);
+                    match_->issue_attack_special(source, *at, queue, bound);
                     issued = "D-Gun";
                 }
                 break;
             case input::UnitOrder::reclaim:
             case input::UnitOrder::vtol_reclaim:
                 if (const auto at = ground ? feature_reclaim_point(*ground) : std::nullopt) {
-                    (void)match_->issue_feature_reclaim(source, *at, queue);
+                    match_->issue_feature_reclaim(source, *at, queue);
                     issued = "Reclaim";
                 }
                 break;
             case input::UnitOrder::ground_unload:
             case input::UnitOrder::vtol_unload:
                 if (ground) {
-                    (void)match_->issue_unload(source, *ground, queue);
+                    match_->issue_unload(source, *ground, queue);
                     issued = "Unload";
                 }
                 break;
@@ -360,7 +364,7 @@ std::string_view Runtime::issue_selection_orders(
                 // transport hands its cargo to the pad.
                 if (bound == 0)
                     break;
-                (void)match_->issue_order(
+                match_->issue_order(
                     source, oa::sim::ground_orders::vtol_landing_kind, queue, bound, nullptr, 0, 0
                 );
                 issued = "Land";

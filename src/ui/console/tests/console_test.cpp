@@ -809,8 +809,8 @@ bool key_alt(void*) {
     return g_keys.alt;
 }
 
-int32_t key_session(void*) {
-    return 2;
+oa::data::campaign::SessionKind key_session(void*) {
+    return oa::data::campaign::SessionKind::skirmish;
 }
 
 void key_sound(void*, const char* name) {

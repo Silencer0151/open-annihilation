@@ -255,7 +255,7 @@ void Match::toggle_self_destruct(std::span<const uint16_t> units) {
     for (const auto index : units) {
         auto& unit = units_.at(index);
         if (auto* countdown = sim::simulation_state::find_order(unit.orders, self_destruct_kind)) {
-            sim::simulation_state::remove_order(unit, *countdown, host);
+            note_step(sim::simulation_state::remove_order(unit, *countdown, host));
             cancelled = true;
         }
     }
@@ -285,7 +285,7 @@ void Match::install_be_carried(uint16_t child) {
     if (!carried.record.attach_parent)
         return;
     TickHost host(*this);
-    sim::simulation_state::clear_orders(carried, false, host);
+    note_step(sim::simulation_state::clear_orders(carried, false, host));
     insert_ground_order(child, be_carried_kind);
 }
 
@@ -314,10 +314,10 @@ void Match::script_drop_unit(uint16_t carrier, int32_t target) {
 
 void Match::finalize_attachment(uint16_t index) {
     auto& u = units_.at(index);
-    if ((u.flags & 0x10) && !selectable(index)) {
-        u.flags &= ~0x10u;
+    if ((u.flags & OA_UNIT_FLAG_SELECTED) && !selectable(index)) {
+        u.flags &= ~OA_UNIT_FLAG_SELECTED;
         selection_.panel_unit_id = 0;
-        selection_.frame_flags |= 0x10;
+        selection_.frame_flags |= OA_FRAME_FLAG_REFRESH_ORDER_PANEL;
     }
 }
 
@@ -355,13 +355,16 @@ void Match::apply_carry_link(uint16_t child, uint16_t parent, int8_t piece, uint
 void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uint8_t mode) {
     auto& child_slot = slots_[child];
     auto& child_unit = *child_slot.unit;
-    auto bucket_for = [this](sim::spatial_state::Unit& unit) -> sim::spatial_state::Bucket& {
+    // A bucket outside the world is noted, and its link is left as it is.
+    auto bucket_for = [this](sim::spatial_state::Unit& unit) -> sim::spatial_state::Bucket* {
         if (unit.bucket) {
-            if (*unit.bucket >= spatial_.buckets.size())
-                throw std::out_of_range("attachment bucket outside world");
-            return spatial_.buckets[*unit.bucket];
+            if (*unit.bucket >= spatial_.buckets.size()) {
+                fault_.note("attachment bucket outside world");
+                return nullptr;
+            }
+            return &spatial_.buckets[*unit.bucket];
         }
-        return spatial_.outside_bucket;
+        return &spatial_.outside_bucket;
     };
     auto& units = state().units;
     const auto slot_count = state().unit_slot_count;
@@ -369,9 +372,9 @@ void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uin
     if (old == 0) {
         prepare_spatial_state();
         auto& projected = project_spatial(child_slot);
-        if (projected.bucket_linked &&
-            sim::spatial_state::bucket_unlink(bucket_for(projected), projected, spatial_) ==
-                sim::spatial_state::Error::none)
+        auto* bucket = projected.bucket_linked ? bucket_for(projected) : nullptr;
+        if (bucket && sim::spatial_state::bucket_unlink(*bucket, projected, spatial_) ==
+                          sim::spatial_state::Error::none)
             projected.bucket_linked = false;
         synchronize_spatial_state();
     } else if (old < slot_count) {
@@ -380,11 +383,15 @@ void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uin
         uint32_t current = link_first_child(units[old]);
         std::size_t remaining = slot_count;
         while (current && current != child) {
-            if (remaining == 0)
-                throw std::runtime_error("attachment sibling cycle");
+            if (remaining == 0) {
+                fault_.note("attachment sibling cycle");
+                return;
+            }
             --remaining;
-            if (current >= slot_count)
-                throw std::runtime_error("attachment sibling index outside pool");
+            if (current >= slot_count) {
+                fault_.note("attachment sibling index outside pool");
+                return;
+            }
             previous = current;
             current = link_next(units[current]);
         }
@@ -409,8 +416,10 @@ void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uin
         child_unit.flags &= ~attached_without_piece;
         prepare_spatial_state();
         auto& projected = project_spatial(child_slot);
-        sim::spatial_state::bucket_push_front(bucket_for(projected), projected);
-        projected.bucket_linked = true;
+        if (auto* bucket = bucket_for(projected)) {
+            sim::spatial_state::bucket_push_front(*bucket, projected);
+            projected.bucket_linked = true;
+        }
         synchronize_spatial_state();
     }
     if (auto* movement = ground_runtime(child))

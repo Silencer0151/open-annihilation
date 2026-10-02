@@ -57,13 +57,10 @@ int main() {
     {
         L lifecycle;
         OfflineEffects offline(lifecycle, t);
-        bool threw = false;
-        try {
-            offline.emit_sfx(s[1], 0, 0);
-        } catch (const std::logic_error&) {
-            threw = true;
-        }
-        req(threw && !offline.bound(), "two-phase adapter rejects effects before bind");
+        const auto before = t.events.size();
+        offline.emit_sfx(s[1], 0, 0);
+        req(t.events.size() == before && !offline.bound(),
+            "two-phase adapter emits nothing before bind");
     }
     r.emit_sfx(s[1], 2, 4);
     req(t.events.size() == 1 && t.events[0].kind == EventKind::wake &&

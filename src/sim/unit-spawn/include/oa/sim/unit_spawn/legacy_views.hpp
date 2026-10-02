@@ -23,7 +23,6 @@
 #include <cstring>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -303,14 +302,13 @@ class Span : public std::span<T> {
 
     /// Returns the view at an index, bounds-checked like the replaced vectors.
     ///
-    /// Throws std::out_of_range outside the span.
+    /// An index past the span gives the view at index 0, the reserved slot 0
+    /// of a unit pool, which holds no unit; the span holds at least that view.
     ///
     /// @param index position in the span
     /// @return the view
-    T& at(std::size_t index) const {
-        if (index >= this->size())
-            throw std::out_of_range("unit view index outside the pool");
-        return (*this)[index];
+    T& at(std::size_t index) const noexcept {
+        return index < this->size() ? (*this)[index] : this->front();
     }
 };
 
@@ -331,17 +329,15 @@ class RefField {
 
     /// Points the reference at a view of its table, or clears it.
     ///
-    /// Throws std::invalid_argument for a view outside the table.
+    /// A view outside the table, which the reference cannot hold, clears it too.
     ///
     /// @param target view in the table, or null
     /// @return this field
-    RefField& operator=(T* target) {
-        if (!target)
-            ref_ = 0;
-        else if (target >= table_.data() && target < table_.data() + table_.size())
+    RefField& operator=(T* target) noexcept {
+        if (target && target >= table_.data() && target < table_.data() + table_.size())
             ref_ = static_cast<oa_ref32>(target - table_.data()) + 1u;
         else
-            throw std::invalid_argument("reference target is outside its canonical table");
+            ref_ = 0;
         return *this;
     }
 
@@ -373,7 +369,7 @@ class TypeField {
 
     /// Points Unit.def at the runtime type owning `target`, or clears it.
     ///
-    /// Throws std::invalid_argument for a type outside the table.
+    /// A type outside the table, which Unit.def cannot hold, clears it too.
     ///
     /// @param target simulation fields of a runtime type, or null
     /// @return this field
@@ -536,8 +532,9 @@ struct World {
 /// @param unit unit view
 /// @param order order to remove
 /// @param host destroys the order
-inline void remove_order(Unit& unit, Order& order, Host& host) {
-    remove_order(unit.orders, unit.record, order, host);
+/// @return as sim::simulation_state::remove_order
+inline StepFault remove_order(Unit& unit, Order& order, Host& host) {
+    return remove_order(unit.orders, unit.record, order, host);
 }
 
 /// Destroys a unit's orders (see sim::simulation_state::clear_orders).
@@ -545,8 +542,9 @@ inline void remove_order(Unit& unit, Order& order, Host& host) {
 /// @param unit unit view
 /// @param all true for every order, false for the primary orders without preserve bit 2
 /// @param host destroys the orders
-inline void clear_orders(Unit& unit, bool all, Host& host) {
-    clear_orders(unit.orders, unit.record, all, host);
+/// @return as sim::simulation_state::clear_orders
+inline StepFault clear_orders(Unit& unit, bool all, Host& host) {
+    return clear_orders(unit.orders, unit.record, all, host);
 }
 
 /// Finds a unit's first order of a kind.
@@ -670,8 +668,8 @@ class LegacyViews {
 
     /// Builds the views of every unit slot and player of a world.
     ///
-    /// Throws std::invalid_argument when the side tables do not match the unit pool or
-    /// fewer than ten setups are given.
+    /// Only the slots every side table covers are viewed; with fewer than ten
+    /// setups, the player views read spare setup records the views own.
     ///
     /// @param world canonical world; must stay at a stable address
     /// @param types runtime types
@@ -708,11 +706,10 @@ class LegacyViews {
 
     /// Returns the slot view of a unit record.
     ///
-    /// Throws std::out_of_range for a unit outside the viewed pool.
-    ///
     /// @param record unit in the viewed world
-    /// @return its slot view
-    Slot& slot(const oa::Unit& record);
+    /// @return its slot view; for a unit outside the viewed pool, the view of
+    ///         reserved slot 0, which the pool always holds
+    Slot& slot(const oa::Unit& record) noexcept;
 
     /// Returns the unit view of a unit record.
     sim::simulation_state::Unit& unit(const oa::Unit& record) { return *slot(record).unit; }
@@ -723,6 +720,8 @@ class LegacyViews {
     sim::simulation_state::World simulation_;
     std::vector<sim::simulation_state::Unit> units_;
     std::vector<Slot> slots_;
+    // What the player views read when the views are given fewer than ten setups.
+    std::array<PlayerSetupState, OA_PLAYER_COUNT> spare_setups_{};
     World world_;
 };
 
@@ -778,7 +777,7 @@ class LegacyWorld {
     void load_types();
     /// Gives a player an inclusive slot range and rebinds the views.
     ///
-    /// Throws std::out_of_range for an index past the ten players.
+    /// An index past the ten players changes nothing.
     ///
     /// @param index player index
     /// @param first first slot

@@ -41,7 +41,7 @@ changes nothing and fails when a file would change; --list prints every
 rewritten name. A second run over its own output changes nothing. Once the
 tree holds no qualified name, lower the style baseline to the new counts:
 
-  python3 tools/check_style.py --write-baseline
+  python3 tools/check_style.py --update
 
 Exit status: 0 when the tree is (or, with --check, already was) rewritten,
 1 when --check finds work or a using-declaration or fragment needs a hand
@@ -411,7 +411,7 @@ def run(root, check, listing):
     print(f"rewrite_fixed_width: {verb} {names_changed} name(s) in {files_changed} file(s); "
           f"{includes_added} file(s) {'would gain' if check else 'gained'} an #include")
     if files_changed and not check:
-        print("rewrite_fixed_width: lower the style baseline: python3 tools/check_style.py --write-baseline")
+        print("rewrite_fixed_width: lower the style baseline: python3 tools/check_style.py --update")
     if check and files_changed:
         return 1
     return 1 if needs_hand_edit else 0

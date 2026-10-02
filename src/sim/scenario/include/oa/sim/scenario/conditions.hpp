@@ -28,32 +28,30 @@ struct ConditionHost {
     // types of bmcode 1 get.
     bool (*has_movement)(void* context, const oa::Unit&){};
     // The MoveUnitToRadius query, which needs the match's terrain and the
-    // positions of its units; the query throws without it.
+    // positions of its units; without it the condition is never met.
     bool (*move_unit_to_radius_met)(void* context, Condition& condition){};
 };
 
 /// Tells whether a condition kind has a handler for a unit event.
 ///
-/// Throws std::invalid_argument for a value outside Kind or Event.
-///
 /// @param kind condition kind
 /// @param event unit event
-/// @return true when the kind reacts to the event
-bool reacts_to(Kind kind, Event event);
+/// @return true when the kind reacts to the event; false for a value outside
+///         Kind or Event
+[[nodiscard]] bool reacts_to(Kind kind, Event event) noexcept;
 
 /// Calls a unit event's handler of every victory condition, then of every defeat condition.
 ///
 /// Kinds that ignore the event are skipped; each group's count is re-read as it goes.
-///
-/// Throws std::logic_error for a controller whose conditions were never registered,
-/// and std::invalid_argument for a value outside Event.
 ///
 /// @param[in,out] controller registered conditions
 /// @param event unit event to dispatch
 /// @param world units, players and types
 /// @param unit unit the event is about
 /// @param host victory cue and movement query
-void dispatch(
+/// @return false, having called nothing, for a value outside Event; false when
+///         visit_conditions stops early or the conditions were never registered
+bool dispatch(
     Controller& controller,
     Event event,
     oa::World& world,

@@ -1796,8 +1796,8 @@ void test_random_timelines() {
             }};
             used.width = 16 + 2 * pick(3832);
             used.height = 16 + 2 * pick(2152);
-            used.framerate = framerates[pick(framerates.size() - 1)];
-            used.tickrate = tickrates[pick(tickrates.size() - 1)];
+            used.framerate = framerates[pick(static_cast<uint32_t>(framerates.size() - 1))];
+            used.tickrate = tickrates[pick(static_cast<uint32_t>(tickrates.size() - 1))];
         }
         const int before{failures};
         planned(timeline, "random timeline", used);

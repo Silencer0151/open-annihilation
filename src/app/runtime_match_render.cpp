@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "director_state.hpp"
 #include "match_models.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/app/match_model_draws.hpp"
 #include "presentation_interpolation.hpp"
 #include "world_draws.hpp"
@@ -34,6 +35,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -750,10 +752,10 @@ void Runtime::render_match_surface() {
         hud.height = 0;
         hud.rgb.clear();
     } else if (match_hud_) {
-        std::vector<renderer::ButtonPresentation> presentation;
+        std::vector<renderer::ButtonPresentation> buttons;
         for (std::size_t index = 0; index < match_hud_->layout.gadgets.size(); ++index) {
             if (const auto frame = greyed_picture_frame(match_hud_->layout.gadgets[index])) {
-                presentation.push_back(
+                buttons.push_back(
                     {match_hud_->layout.gadgets[index].common.name,
                      renderer::ButtonCondition::disabled,
                      frame,
@@ -800,7 +802,7 @@ void Runtime::render_match_surface() {
                     found != widget_text_stages_.end())
                     stage = found->second;
             }
-            presentation.push_back(
+            buttons.push_back(
                 {gadget.common.name,
                  condition,
                  status_frame ? status_frame : stage,
@@ -811,15 +813,15 @@ void Runtime::render_match_surface() {
             // record holding the keyboard focus is ringed while the match's
             // panels take the keyboard.
             if (const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
-                presentation.back().quick_key = static_cast<char>(button->quick_key);
-            presentation.back().focused =
+                buttons.back().quick_key = static_cast<char>(button->quick_key);
+            buttons.back().focused =
                 match_panels_keyboard_ && static_cast<int32_t>(index) == match_hud_focus_;
         }
         // A team panel's logos, row icons and recipient list.
         std::vector<renderer::ListPresentation> lists;
-        present_team_panel(presentation, lists);
+        present_team_panel(buttons, lists);
         const auto hud_start = std::chrono::steady_clock::now();
-        renderer::render_screen_into(hud, *match_hud_, presentation, lists);
+        renderer::render_screen_into(hud, *match_hud_, buttons, lists);
         if (auto* scrolls = hud_scrolls()) {
             renderer::refresh_layout_scrolls(*scrolls, match_hud_->layout);
             renderer::draw_layout_scrolls(
@@ -1661,7 +1663,8 @@ void Runtime::render_match_surface() {
     // of both.
     if (!bare) {
         if (control_key_down(oa::ui::gui_input::ControlKey::shift))
-            (void)draw_order_overlays(world_surface, viewport);
+            // What the pass drew is for the checks alone.
+            std::ignore = draw_order_overlays(world_surface, viewport);
         draw_build_ghost(world_surface, viewport);
         draw_selection_band(world_surface, viewport);
     }
@@ -1739,8 +1742,7 @@ void Runtime::render_match_surface() {
     draw_unit_panel();
     draw_resource_readout();
     draw_build_captions();
-    if (extension_.draw_match_hud != nullptr)
-        extension_.draw_match_hud(extension_.context, *this);
+    call_hook_or_report<&Extension::draw_match_hud>(extension_, hook_error_report(), *this);
     draw_chat_entry();
     paint_on(PaintLayer::battlefield);
     draw_match_kill_board();

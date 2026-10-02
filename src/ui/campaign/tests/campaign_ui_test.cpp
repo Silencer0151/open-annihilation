@@ -9,6 +9,7 @@
 #include "oa/core/unit_def.h"
 #include "oa/core/world.h"
 #include "oa/test/game_assets.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -295,8 +296,8 @@ void installed_data_tests(const oa::AssetStore& assets) {
     oa::data::campaign::campaign_file_init(campaign);
     setup->campaign = campaign;
     setup->env = {&files, nullptr, 0, 0};
-    std::strcpy(setup->side_names[0], "ARM");
-    std::strcpy(setup->side_names[1], "CORE");
+    oa::base::text::copy_terminated(setup->side_names[0], "ARM");
+    oa::base::text::copy_terminated(setup->side_names[1], "CORE");
     setup->side_count = 2;
 
     // main -> single player -> new campaign -> briefing -> mission start
@@ -322,7 +323,7 @@ void installed_data_tests(const oa::AssetStore& assets) {
     auto* table = new oa::UnitDef[6]{};
     const char* names[] = {"", "ARMCOM", "armpw", "ARMCK", "CORCOM", "CORAK"};
     for (int i = 0; i < 6; ++i) {
-        std::strcpy(table[i].unit_name, names[i]);
+        oa::base::text::copy_terminated(table[i].unit_name, names[i]);
         table[i].flags = OA_UNIT_DEF_FLAG_AVAILABLE | OA_UNIT_DEF_FLAG_HAS_WEAPONS;
     }
     expect(

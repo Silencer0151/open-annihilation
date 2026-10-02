@@ -6,15 +6,16 @@
 #include <bit>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 using oa::base::game_loop::detail::Extended;
 using oa::base::game_loop::detail::Wide;
 
 struct Fixture {
-    uint64_t a, b, c, result64;
-    uint32_t result32;
-    uint64_t result53_64;
-    uint32_t result53_32;
+    uint64_t a{}, b{}, c{}, result64{};
+    uint32_t result32{};
+    uint64_t result53_64{};
+    uint32_t result53_32{};
 };
 
 // Expected values computed independently with Python Fraction exact rationals,
@@ -304,18 +305,32 @@ void require(bool ok, const char* error) {
 int main() {
     try {
         require(
-            std::bit_cast<uint64_t>((Extended(0.0) + Extended(-0.0)).to_double()) == 0,
+            std::bit_cast<uint64_t>((Extended(0.0) + Extended(-0.0)).to_double().value()) == 0,
             "opposite signed zeros"
         );
         require(
-            std::bit_cast<uint64_t>((Extended(-0.0) + Extended(-0.0)).to_double()) ==
+            std::bit_cast<uint64_t>((Extended(-0.0) + Extended(-0.0)).to_double().value()) ==
                 0x8000000000000000ULL,
             "both negative zeros"
         );
         require(
-            std::bit_cast<uint64_t>((Extended(-0.0) - Extended(-0.0)).to_double()) == 0,
+            std::bit_cast<uint64_t>((Extended(-0.0) - Extended(-0.0)).to_double().value()) == 0,
             "zero cancellation"
         );
+        require(
+            !Extended(std::numeric_limits<double>::infinity()).to_double() &&
+                !Extended(std::numeric_limits<double>::quiet_NaN()).to_float(),
+            "nonfinite input refused by the conversions"
+        );
+        require(!Extended(1.0, 32).to_double(), "unsupported precision refused");
+        require(
+            !(Extended(1.0) + Extended(std::numeric_limits<double>::infinity()) * Extended(2.0))
+                 .to_double(),
+            "arithmetic carries a value that is not finite"
+        );
+        const Extended largest(std::numeric_limits<double>::max());
+        require(!(largest * Extended(2.0)).to_double(), "binary64 overflow refused");
+        require(!largest.to_float(), "binary32 overflow refused");
         auto product = Wide::multiply(0xffffffffffffffffULL, 0xffffffffffffffffULL);
         require(product.hi == 0xfffffffffffffffeULL && product.lo == 1, "wide full carry product");
         product = Wide::multiply(0x00000000ffffffffULL, 0x00000000ffffffffULL);
@@ -344,17 +359,21 @@ int main() {
             const auto got =
                 Extended(std::bit_cast<double>(v.a)) * Extended(std::bit_cast<double>(v.b)) +
                 Extended(std::bit_cast<double>(v.c));
-            require(std::bit_cast<uint64_t>(got.to_double()) == v.result64, "extended64 golden");
-            require(std::bit_cast<uint32_t>(got.to_float()) == v.result32, "extended32 golden");
+            require(
+                std::bit_cast<uint64_t>(got.to_double().value()) == v.result64, "extended64 golden"
+            );
+            require(
+                std::bit_cast<uint32_t>(got.to_float().value()) == v.result32, "extended32 golden"
+            );
             const auto got53 = Extended(std::bit_cast<double>(v.a), 53) *
                                    Extended(std::bit_cast<double>(v.b), 53) +
                                Extended(std::bit_cast<double>(v.c), 53);
             require(
-                std::bit_cast<uint64_t>(got53.to_double()) == v.result53_64,
+                std::bit_cast<uint64_t>(got53.to_double().value()) == v.result53_64,
                 "precision53 binary64 golden"
             );
             require(
-                std::bit_cast<uint32_t>(got53.to_float()) == v.result53_32,
+                std::bit_cast<uint32_t>(got53.to_float().value()) == v.result53_32,
                 "precision53 binary32 golden"
             );
         }

@@ -201,7 +201,11 @@ void reads_back(
         );
         check(out.good(), what + " written to " + path.string());
     }
-    const oa::HpiArchive reader(path);
+    const auto opened = oa::open_hpi_file(path);
+    check(opened.ok(), what + " opens");
+    if (!opened.ok())
+        return;
+    const oa::HpiArchive& reader = *opened.value;
     check(reader.entries().size() == files.size(), what + " lists every entry");
     for (const auto& file : files)
         check(reader.read(file.path).value == file.bytes, what + " reads back " + file.path);

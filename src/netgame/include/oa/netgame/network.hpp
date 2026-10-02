@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "oa/base/bytes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <array>
@@ -93,12 +95,31 @@ inline constexpr std::size_t compression_minimum_payload_bytes = 13;
 
 // TA condenser frames only: DirectPlay envelopes are NOT accepted here.
 
+/// What unwrap_frame reports in DecodeError::detail.
+enum class FrameProblem : uint16_t {
+    none,
+    bad_length,        ///< the frame is outside 4..65536 bytes
+    unsupported_type,  ///< the type byte is neither stored nor compressed
+    checksum_mismatch, ///< the checksum does not match the obfuscated body
+    bad_body,          ///< the compressed body is malformed or decodes past 65536 bytes
+};
+
 /// Verifies a condenser frame, clears its obfuscation and returns the payload, decompressed when needed.
+///
+/// Throws nothing but an allocation failure; the output never exceeds 65536 bytes.
+///
+/// @param packet Whole frame, 4..65536 bytes.
+/// @return The payload; or truncated (a frame of 3 bytes or fewer) or limit_exceeded (over 65536
+///         bytes), malformed for an unsupported type or a checksum mismatch, or the LZ77 decoder's
+///         error for a bad compressed body; detail holds the FrameProblem.
+[[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>>
+unwrap_frame(std::span<const uint8_t> packet);
+
+/// Verifies a condenser frame and returns its payload, as unwrap_frame does, for tools and tests.
 ///
 /// @param packet Whole frame, 4..65536 bytes.
 /// @return The payload.
-/// @throws std::runtime_error for a bad length, an unsupported type, a checksum mismatch or a malformed
-///         compressed body.
+/// @throws std::runtime_error with unwrap_frame's message when it refuses the frame.
 std::vector<uint8_t> decode_frame(std::span<const uint8_t> packet);
 
 /// Wraps a payload as a stored (type 3) condenser frame.
@@ -176,9 +197,11 @@ class CondenserReceiver {
     /// @param[in,out] size Capacity on entry (at most buffer.size()); message length, or the length
     ///        needed, on return.
     /// @return success; buffer_too_small with the needed size, keeping the message pending; no_message for
-    ///         an empty datagram, a short frame or a checksum mismatch; the transport's status otherwise.
+    ///         an empty datagram, a short frame, a checksum mismatch, a stored body over 28000 bytes
+    ///         or a compressed body that is malformed or decodes past 28000 bytes; the transport's
+    ///         status otherwise.
     /// @throws std::invalid_argument when size exceeds buffer; std::runtime_error when the transport
-    ///         overfills the buffer, a stored body exceeds 28000 bytes or a compressed body is malformed.
+    ///         overfills the buffer.
     uint32_t receive(ReceiveTransport& transport, std::span<uint8_t> buffer, uint32_t& size);
 
     /// Tells whether a decoded message is waiting for a larger buffer.

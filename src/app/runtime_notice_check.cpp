@@ -5,6 +5,7 @@
 // the Total Annihilation demo (1997): the notices, the entries the data cannot
 // open, and the campaign's way in and out.
 #include "oa/app/runtime.hpp"
+#include "web_link_state.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 
 #include <SDL3/SDL.h>
@@ -121,11 +122,11 @@ void Runtime::check_navigation_without_maps(const fs::path& report_directory) {
             caption != nullptr && caption->text == web_link_caption(project_website_address),
             "the website button does not name " + std::string(project_website_address)
         );
-        const auto asked = web_link_requests_.size();
+        const auto& requests = web_links_->requests;
+        const auto asked = requests.size();
         close_with("GotoWebsite");
         expect(
-            web_link_requests_.size() == asked + 1 &&
-                web_link_requests_.back() == project_website_address,
+            requests.size() == asked + 1 && requests.back() == project_website_address,
             "the website button did not ask for " + std::string(project_website_address)
         );
         expect(dialogs::dialog_count() == 0, "the website button left the notice open");

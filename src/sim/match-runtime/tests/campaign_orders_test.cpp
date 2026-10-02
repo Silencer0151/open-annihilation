@@ -5,12 +5,13 @@
 // them in the shipped missions: the dispatcher runs the kinds the script
 // parser queues by name and the kinds the command resolver gives each class,
 // and an attack resolves by the unit's movement object (Unit.movement).
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 #include "oa/data/mission_types.hpp"
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -47,35 +48,9 @@ constexpr uint32_t last_result = 9;
 // 'd' queues SelfDestructFG with a countdown (first parameter) of 1.
 constexpr uint32_t self_destruct_now = 1;
 
-struct Services : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+using Services = oa::test::QuietServices;
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Dispatches the order once and applies the sweep's phase rule for results 0 and 1.
 uint32_t step(
@@ -84,7 +59,7 @@ uint32_t step(
     sim::simulation_state::Order& order,
     uint32_t events = 0
 ) {
-    sim::match_runtime::TickHost host(match);
+    sim::match_runtime::MatchTickAccess host(match);
     order.wait_events = 0;
     const auto result = host.dispatch_mission(match.state(), unit.record, order, events);
     if (result == 0)

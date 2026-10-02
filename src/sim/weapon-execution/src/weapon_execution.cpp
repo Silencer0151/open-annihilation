@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
-#include <stdexcept>
 
 namespace oa::sim::weapon_execution {
 
@@ -59,9 +58,9 @@ uint16_t reload_ticks_after_shot(
     const uint16_t veteran_level,
     const int16_t health,
     const uint32_t maximum_health
-) {
+) noexcept {
     if (!maximum_health)
-        throw std::invalid_argument("weapon reload experience divisor is zero");
+        return 0;
     const auto capped_level = std::min<uint32_t>(veteran_level / 5u, 5u);
     const auto veteran_percent = 100 - 6 * static_cast<int32_t>(capped_level);
     const auto experience_product = static_cast<uint32_t>(static_cast<int32_t>(health)) * 20u;
@@ -194,6 +193,10 @@ TickResult tick_weapons(UnitState& unit, Host& host) {
             --slot.stockpile_count;
             host.stockpile_consumed(index);
         } else {
+            if (!unit.maximum_health) {
+                result.slots[index] = SlotResult::no_maximum_health;
+                return result;
+            }
             record.reload = reload_ticks_after_shot(
                 definition->base_reload_ticks, unit.veteran_level, unit.health, unit.maximum_health
             );

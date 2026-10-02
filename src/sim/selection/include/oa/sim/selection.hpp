@@ -14,7 +14,7 @@
 namespace oa::sim::selection {
 
 // Game.frame_flags bit requesting an order-panel/selection refresh.
-inline constexpr uint16_t frame_flag_selection_changed = 0x10u;
+inline constexpr uint16_t frame_flag_selection_changed = OA_FRAME_FLAG_REFRESH_ORDER_PANEL;
 
 // Unit.flags byte 0 bits the "clear selection" path drops: selected (0x10),
 // select-next visited (0x40) and 0x80.
@@ -80,7 +80,7 @@ struct VisibleLists {
     uint32_t unit_capacity{};
     const RadarHotUnit* radar{}; // radar_count entries
     uint32_t radar_capacity{};
-    int32_t radar_count{};  // blips the radar listed (Game.hot_radar_unit_count)
+    int32_t radar_count{};  // blips the radar listed: the entries of `radar` in use
     Rect32 radar_picture{}; // the radar's map picture on screen (Game.radar_picture_rect)
 };
 

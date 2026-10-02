@@ -239,7 +239,7 @@ struct Fixture {
 
     void synced(uint32_t id) {
         const auto slot = static_cast<uint8_t>(mp::slot_for_player_id(lobby, id));
-        for (const uint8_t subtype : {1, 2}) {
+        for (const uint8_t subtype : {uint8_t{1}, uint8_t{2}}) {
             uint8_t record[14] = {0x1a, subtype};
             record[10] = 1;
             mp::unit_sync_receive(lobby, record, slot);
@@ -1546,6 +1546,76 @@ void join_remote(mp::Lobby& lobby, uint32_t id) {
 
 int alliance_notices = 0;
 
+// Damaged lobby records from a seated player: each one is applied or
+// refused whole, and a record cut short never reads past its size. The
+// seeds are one record of each type the battle room reads.
+void test_damaged_records() {
+    constexpr uint32_t kHost = 0x100, kGuest = 0x200;
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    game->session_flags |= 1;
+    game->players[0].player_id = kHost;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    join_remote(lobby, kGuest);
+    mp::unit_sync_create(lobby, true);
+    std::vector<mp::LobbyEvent> seeds;
+    oa::netgame::ChatRecord chat{};
+    std::memcpy(chat.text, "<Guest> hi", 10);
+    seeds.push_back(record_event(kGuest, chat));
+    oa::netgame::PlayerInfoRecord info{};
+    info.player_id = kGuest;
+    seeds.push_back(record_event(kGuest, info));
+    seeds.push_back(record_event(kGuest, group_request(1, kGuest, kHost)));
+    oa::netgame::SlotTableRecord slots{};
+    seeds.push_back(record_event(kGuest, slots));
+    oa::netgame::MachineGroupReplyRecord group{};
+    group.player_id = kGuest;
+    seeds.push_back(record_event(kGuest, group));
+    oa::netgame::PlayerTeamRecord team{};
+    team.player_id = kGuest;
+    seeds.push_back(record_event(kGuest, team));
+    oa::netgame::AllianceRecord alliance{};
+    alliance.player_id_a = kGuest;
+    alliance.player_id_b = kHost;
+    seeds.push_back(record_event(kGuest, alliance));
+    oa::netgame::PingRecord ping{};
+    ping.origin_player_id = kHost;
+    ping.echo_tick_count = 5;
+    seeds.push_back(record_event(kGuest, ping));
+    oa::netgame::PlayerValueRequestRecord colour{};
+    colour.value = 3;
+    seeds.push_back(record_event(kGuest, colour));
+    oa::netgame::PlayerValueReplyRecord reply{};
+    seeds.push_back(record_event(kGuest, reply));
+    oa::netgame::UnitDefHandshakeRecord handshake{};
+    handshake.subtype = 2;
+    seeds.push_back(record_event(kGuest, handshake));
+    uint32_t state = 0x10bb1e5;
+    const auto next = [&state] {
+        state = state * 1664525u + 1013904223u;
+        return state >> 8;
+    };
+    for (const auto& seed : seeds) {
+        for (int i = 0; i < 200; ++i) {
+            auto event = seed;
+            const auto changes = 1 + next() % 3;
+            for (uint32_t c = 0; c < changes && event.size != 0; ++c)
+                event.data[next() % event.size] = static_cast<uint8_t>(next());
+            if (next() % 3 == 0)
+                event.size = static_cast<uint16_t>(next() % (event.size + 1u));
+            // Bytes past the record's size must never be read.
+            std::memset(event.data + event.size, 0xcd, sizeof(event.data) - event.size);
+            (void)mp::lobby_apply_event(lobby, event);
+            mp::loopback_reset(loopback);
+        }
+    }
+    expect(mp::slot_for_player_id(lobby, kHost) == 0, "the host keeps its seat");
+}
+
 // Alliances over a computer, a remote and a received 0x23: a
 // computer target mirrors both tables; a remote target is told, with the
 // both-sides word set; a received record with that word set fills the
@@ -2057,6 +2127,19 @@ void test_unit_sync_marks_units() {
     verdict(33, 1, 0, 5);
     verdict(44, 1, 1, 7);
     verdict(55, 1, 1, -1);
+    // A record cut short, one of another type and one past its length are dropped.
+    {
+        const auto handled = lobby.sync.records_handled;
+        uint8_t record[15] = {0x1a, 3};
+        record[6] = 77;
+        mp::unit_sync_receive(lobby, std::span<const uint8_t>(record, 13), 0);
+        mp::unit_sync_receive(lobby, std::span<const uint8_t>(record, 2), 0);
+        mp::unit_sync_receive(lobby, std::span<const uint8_t>(record, 15), 0);
+        mp::unit_sync_receive(lobby, std::span<const uint8_t>{}, 0);
+        record[0] = 0x1b;
+        mp::unit_sync_receive(lobby, std::span<const uint8_t>(record, 14), 0);
+        expect(lobby.sync.records_handled == handled, "malformed unit-check records are dropped");
+    }
     const uint32_t keys[] = {0, 11, 22, 33, 44, 66};
     std::vector<oa::UnitDef> records(std::size(keys));
     const auto count = static_cast<uint32_t>(records.size());
@@ -4645,6 +4728,7 @@ int main(int argc, char** argv) {
         test_unit_sync_reevaluation();
         test_machine_groups();
         test_alliance_relation();
+        test_damaged_records();
         test_records_leave_from_their_players();
         test_periodic_block();
         test_host_leaving();

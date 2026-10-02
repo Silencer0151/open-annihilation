@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/mission_units.hpp"
+#include "oa/base/text.hpp"
 
 #include <cctype>
 #include <cmath>
@@ -36,6 +37,75 @@ int32_t truncate_to_i32(double value) noexcept {
         return INT32_MIN;
     return static_cast<int32_t>(static_cast<uint32_t>(static_cast<int64_t>(value)));
 }
+
+// Reads the fields of a script order's arguments in turn, as sscanf reads
+// " %f", " %d" and " %255[a-zA-Z0-9_.]": white space before a field is
+// skipped, a field that does not read leaves its value as it was, and no
+// field after it is read. `read` counts the fields read.
+struct ArgumentReader {
+    const char* at{};
+    int32_t read{};
+    bool stopped{};
+
+    // A number, as strtof reads one.
+    ArgumentReader& number(float& value) noexcept {
+        if (stopped)
+            return *this;
+        char* end = nullptr;
+        const float parsed = std::strtof(at, &end);
+        if (end == at) {
+            stopped = true;
+            return *this;
+        }
+        value = parsed;
+        at = end;
+        ++read;
+        return *this;
+    }
+
+    // A decimal integer, its low 32 bits kept.
+    ArgumentReader& integer(int32_t& value) noexcept {
+        if (stopped)
+            return *this;
+        char* end = nullptr;
+        const long long parsed = std::strtoll(at, &end, 10);
+        if (end == at) {
+            stopped = true;
+            return *this;
+        }
+        value =
+            static_cast<int32_t>(static_cast<uint32_t>(static_cast<unsigned long long>(parsed)));
+        at = end;
+        ++read;
+        return *this;
+    }
+
+    // A name of up to token_bytes - 1 letters, digits, dots and, when
+    // `underscores`, underscores.
+    ArgumentReader& name(char (&out)[token_bytes], bool underscores = true) noexcept {
+        if (stopped)
+            return *this;
+        while (std::isspace(static_cast<unsigned char>(*at)))
+            ++at;
+        const auto in_name = [underscores](char letter) {
+            return (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z') ||
+                   (letter >= '0' && letter <= '9') || letter == '.' ||
+                   (underscores && letter == '_');
+        };
+        std::size_t length = 0;
+        while (length < token_bytes - 1 && in_name(at[length]))
+            ++length;
+        if (length == 0) {
+            stopped = true;
+            return *this;
+        }
+        std::memcpy(out, at, length);
+        out[length] = '\0';
+        at += length;
+        ++read;
+        return *this;
+    }
+};
 
 FixedVec3 map_point(float x, float z) noexcept {
     return FixedVec3{
@@ -145,11 +215,11 @@ void run_unit_script(
         cursor += length;
         if (*cursor == ',')
             ++cursor;
-        std::strcpy(args, copied > 0 ? token + 1 : token);
+        oa::base::text::copy_terminated(args, copied > 0 ? token + 1 : token);
         switch (token[0]) {
         case 'a':
         case 'A': {
-            if (std::sscanf(args, " %f %f", &x, &z) == 2) {
+            if (ArgumentReader{args}.number(x).number(z).read == 2) {
                 const FixedVec3 target = map_point(x, z);
                 queue(
                     hooks,
@@ -165,7 +235,7 @@ void run_unit_script(
                 break;
             }
             name[0] = '\0';
-            (void)std::sscanf(args, " %255[a-zA-Z0-9_.]", name);
+            ArgumentReader{args}.name(name);
             const uint16_t type = type_id(hooks, name);
             if (type == 0)
                 break;
@@ -175,7 +245,7 @@ void run_unit_script(
         }
         case 'm':
         case 'M': {
-            (void)std::sscanf(args, " %f %f", &x, &z);
+            ArgumentReader{args}.number(x).number(z);
             const FixedVec3 target = map_point(x, z);
             queue(
                 hooks,
@@ -192,7 +262,7 @@ void run_unit_script(
         case 'i':
         case 'I': {
             name[0] = '\0';
-            (void)std::sscanf(args, " %255[a-zA-Z0-9_.]", name);
+            ArgumentReader{args}.name(name);
             Unit* carrier = find_script_unit(created, name, nullptr);
             if (carrier != nullptr && hooks.carry != nullptr)
                 hooks.carry(hooks.context, unit, *carrier, carry_piece_none, 0);
@@ -201,7 +271,7 @@ void run_unit_script(
         case 'g':
         case 'G': {
             name[0] = '\0';
-            (void)std::sscanf(args, " %255[a-zA-Z0-9_.]", name);
+            ArgumentReader{args}.name(name);
             Unit* guarded = find_script_unit(created, name, nullptr);
             if (guarded == nullptr)
                 break;
@@ -227,12 +297,12 @@ void run_unit_script(
         case 'B': {
             int32_t count = 1;
             if (args[0] == 'w' || args[0] == 'W') {
-                (void)std::sscanf(args + 1, " %d", &count);
+                ArgumentReader{args + 1}.integer(count);
                 queue_named(hooks, order_build_weapon, unit, nullptr, nullptr, 0, count);
                 break;
             }
             name[0] = '\0';
-            (void)std::sscanf(args, " %255[a-zA-Z0-9_.] %d %f %f", name, &count, &x, &z);
+            ArgumentReader{args}.name(name).integer(count).number(x).number(z);
             const FixedVec3 site = map_point(x, z);
             const uint16_t type = type_id(hooks, name);
             if (type == 0)
@@ -252,7 +322,7 @@ void run_unit_script(
             int32_t fire = static_cast<int32_t>(
                 (unit.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK) >> OA_UNIT_FLAG_FIRE_ORDER_SHIFT
             );
-            (void)std::sscanf(args, " %d %d", &move, &fire);
+            ArgumentReader{args}.integer(move).integer(fire);
             const uint32_t standing =
                 ((static_cast<uint32_t>(fire) & 3u) << 2 | (static_cast<uint32_t>(move) & 3u))
                 << OA_UNIT_FLAG_MOVE_ORDER_SHIFT;
@@ -264,7 +334,7 @@ void run_unit_script(
         case 'p':
         case 'P': {
             float dwell = 0.0f;
-            (void)std::sscanf(args, " %f %f %f", &x, &z, &dwell);
+            ArgumentReader{args}.number(x).number(z).number(dwell);
             const FixedVec3 target = map_point(x, z);
             const uint8_t kind = order_for(hooks, OrderCategory::patrol, unit, nullptr, &target);
             queue(hooks, kind, unit, nullptr, &target, seconds_to_ticks(dwell), 0);
@@ -280,7 +350,7 @@ void run_unit_script(
             break;
         case 'u':
         case 'U': {
-            (void)std::sscanf(args, " %f %f", &x, &z);
+            ArgumentReader{args}.number(x).number(z);
             const FixedVec3 target = map_point(x, z);
             queue(
                 hooks,
@@ -299,7 +369,7 @@ void run_unit_script(
             if (args[0] == 'a' || args[0] == 'A') {
                 name[0] = '\0';
                 Unit* watched = nullptr;
-                if (std::sscanf(args + 1, " %255[a-zA-Z0-9.]", name) == 1)
+                if (ArgumentReader{args + 1}.name(name, false).read == 1)
                     watched = find_script_unit(created, name, nullptr);
                 if (watched == nullptr)
                     watched = &unit;
@@ -307,7 +377,7 @@ void run_unit_script(
             } else {
                 float seconds = 0.0f;
                 int32_t value = 0;
-                (void)std::sscanf(args, " %f %d", &seconds, &value);
+                ArgumentReader{args}.number(seconds).integer(value);
                 queue_named(
                     hooks, order_wait, unit, nullptr, nullptr, seconds_to_ticks(seconds), value
                 );

@@ -33,9 +33,9 @@ HudEvents events_for(Heard& heard) {
 }
 
 struct Case {
-    const char* name;
-    uint8_t lit_order; // Game.pointer_command once the button is lit
-    const char* sound;
+    const char* name{};
+    uint8_t lit_order{}; // Game.pointer_command once the button is lit
+    const char* sound{};
 };
 
 // The ARMGEN.GUI and CORGEN.GUI command buttons, the order each
@@ -75,7 +75,7 @@ void lit_and_unlit() {
 // STOP arms the default order whatever its status and gives the group STOP.
 void stop_gives_stop() {
     auto game = std::make_unique<Game>();
-    for (const int16_t status : {0, 1}) {
+    for (const int16_t status : {int16_t{0}, int16_t{1}}) {
         Heard heard;
         game->pointer_command = armed_order::attack;
         CHECK(order_panel_command(*game, "ARMSTOP", status, events_for(heard)));

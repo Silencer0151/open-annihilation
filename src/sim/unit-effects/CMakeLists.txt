@@ -14,11 +14,11 @@ if(BUILD_TESTING)
  target_link_libraries(oa-unit-effects-test PRIVATE oa-sim-unit-effects)
  add_test(NAME unit-effects COMMAND oa-unit-effects-test)
  add_executable(oa-unit-effects-offline-test tests/offline_test.cpp)
- target_link_libraries(oa-unit-effects-offline-test PRIVATE oa-sim-unit-effects)
+ target_link_libraries(oa-unit-effects-offline-test PRIVATE oa-sim-unit-effects oa-test-match)
  add_test(NAME unit-effects-offline COMMAND oa-unit-effects-offline-test)
  add_executable(oa-unit-effects-shatter-test tests/shatter_test.cpp)
  target_link_libraries(oa-unit-effects-shatter-test PRIVATE oa-sim-unit-effects oa-present-model oa-formats-hpi
-   oa-test-game-data)
+   oa-test-game-data oa-test-match)
  # Shatters of the installed game's ARMPW and CORUWMEX models.
  oa_add_game_data_test(unit-effects-shatter oa-unit-effects-shatter-test)
  set_tests_properties(unit-effects-shatter PROPERTIES TIMEOUT 120)

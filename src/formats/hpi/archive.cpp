@@ -12,10 +12,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <fstream>
 #include <limits>
 #include <memory>
-#include <stdexcept>
 #include <unordered_set>
 
 namespace oa {
@@ -44,10 +42,6 @@ constexpr const char* kSquashNames[] = {
     "SQUASHERR_BADPACKTYPE",
     "SQUASHERR_BADPARAMS",
 };
-
-[[noreturn]] void fail(const std::string& message) {
-    throw std::runtime_error(message);
-}
 
 using base::bytes::DecodeCode;
 using base::bytes::DecodeError;
@@ -80,31 +74,12 @@ void decrypt_at(std::span<uint8_t> bytes, uint8_t key, uint64_t position) noexce
         );
 }
 
-uint64_t file_size_of(const std::filesystem::path& path) {
-    std::error_code error;
-    const auto size = std::filesystem::file_size(path, error);
-    if (error)
-        fail("cannot stat HPI archive '" + path.string() + "': " + error.message());
-    return size;
-}
-
-// Reads up to `length` bytes at `offset`; a read past the end is short.
-std::size_t read_at(std::ifstream& stream, uint64_t offset, std::span<uint8_t> output) {
-    stream.clear();
-    stream.seekg(static_cast<std::streamoff>(offset));
-    if (!stream)
-        return 0;
-    stream.read(
-        reinterpret_cast<char*>(output.data()), static_cast<std::streamsize>(output.size())
-    );
-    return static_cast<std::size_t>(stream.gcount());
-}
-
-std::ifstream open_stream(const std::filesystem::path& path) {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        fail("cannot open HPI archive '" + path.string() + "'");
-    return stream;
+/// Returns whether a step of opening an archive failed.
+///
+/// @param error the step's error; code none when it succeeded
+/// @return true when it holds an error
+bool failed(const DecodeError& error) noexcept {
+    return error.code != DecodeCode::none;
 }
 
 } // namespace
@@ -225,37 +200,53 @@ bool match_wildcard(std::string_view name, std::string_view pattern) noexcept {
 }
 
 struct HpiArchive::Impl {
-    std::filesystem::path path;
+    std::unique_ptr<ArchiveSource> source;
     uint64_t archive_size{};
     uint8_t key{};
     std::vector<ArchiveNode> nodes;
-    // Kept open while the archive is mounted. The lock is held only while a
-    // read seeks and copies stored bytes; decrypting and decompressing run
-    // outside it, so reads on several threads decode at the same time.
-    mutable std::ifstream stream;
-    mutable base::threads::Mutex stream_lock;
+    // The lock is held only while a read copies stored bytes from the
+    // source; decrypting and decompressing run outside it, so reads on
+    // several threads decode at the same time.
+    mutable base::threads::Mutex source_lock;
 
-    explicit Impl(const std::filesystem::path& archive_path) : path(archive_path) {
-        archive_size = file_size_of(path);
-        stream = open_stream(path);
+    explicit Impl(std::unique_ptr<ArchiveSource> archive_source) noexcept
+        : source(std::move(archive_source)), archive_size(source->size()) {}
+
+    /// Validates the header and trailer and resolves the directory into nodes.
+    ///
+    /// @return code none, or what is wrong with the archive and where
+    [[nodiscard]] DecodeError load() {
         std::array<uint8_t, formats::hpi::HeaderSize> header{};
-        if (read_at(stream, 0, header) != header.size() ||
+        if (source->read_at(0, header) != header.size() ||
             load_le32(header.data()) != formats::hpi::HeaderMarker)
-            fail("invalid HPI marker");
+            return DecodeError{DecodeCode::bad_signature, 0, "invalid HPI marker"};
         if (load_le32(header.data() + offsetof(formats::hpi::Header, version)) !=
             formats::hpi::VersionV1)
-            fail("unsupported HPI version");
-        check_trailer(stream);
+            return DecodeError{
+                DecodeCode::unsupported_version,
+                offsetof(formats::hpi::Header, version),
+                "unsupported HPI version"
+            };
+        if (const auto trailer = check_trailer(); failed(trailer))
+            return trailer;
 
         const uint32_t block_size =
             load_le32(header.data() + offsetof(formats::hpi::Header, directory_size));
         if (block_size < formats::hpi::HeaderSize || block_size > archive_size)
-            fail("invalid HPI directory bounds");
+            return DecodeError{
+                DecodeCode::out_of_range,
+                offsetof(formats::hpi::Header, directory_size),
+                "invalid HPI directory bounds"
+            };
         if (block_size > kMaxDirectorySize)
-            fail("HPI directory exceeds the 256 MiB safety limit");
+            return DecodeError{
+                DecodeCode::limit_exceeded,
+                offsetof(formats::hpi::Header, directory_size),
+                "HPI directory exceeds the 256 MiB safety limit"
+            };
         std::vector<uint8_t> block(block_size);
-        if (read_at(stream, 0, block) != block.size())
-            fail("truncated HPI directory");
+        if (const std::size_t got = source->read_at(0, block); got != block.size())
+            return DecodeError{DecodeCode::truncated, got, "truncated HPI directory"};
         key = hpi_archive_key(header[offsetof(formats::hpi::Header, decrypt_key)]);
         decrypt_at(
             std::span(block).subspan(formats::hpi::HeaderSize), key, formats::hpi::HeaderSize
@@ -263,52 +254,79 @@ struct HpiArchive::Impl {
 
         const uint32_t root = load_le32(header.data() + offsetof(formats::hpi::Header, offset));
         if (root < formats::hpi::HeaderSize)
-            fail("HPI root directory overlaps the header");
+            return DecodeError{
+                DecodeCode::out_of_range,
+                offsetof(formats::hpi::Header, offset),
+                "HPI root directory overlaps the header"
+            };
         nodes.push_back(ArchiveNode{"", formats::hpi::EntryFlagDirectory});
         std::unordered_set<uint32_t> visited;
-        parse_directory(block, root, 0, visited, 0);
+        return parse_directory(block, root, 0, visited, 0);
     }
 
-    // The last 36 bytes must equal Trailer, apart from its four year characters.
-    void check_trailer(std::ifstream& stream) const {
+    /// Checks that the last 36 bytes equal Trailer, apart from its four year characters.
+    ///
+    /// @return code none, or bad_signature at the trailer's offset
+    [[nodiscard]] DecodeError check_trailer() const {
+        const DecodeError missing{
+            DecodeCode::bad_signature,
+            archive_size < formats::hpi::Trailer.size()
+                ? 0
+                : archive_size - formats::hpi::Trailer.size(),
+            "HPI archive has no copyright trailer"
+        };
         if (archive_size < formats::hpi::Trailer.size())
-            fail("HPI archive has no copyright trailer");
+            return missing;
         std::array<uint8_t, formats::hpi::Trailer.size()> tail{};
-        if (read_at(stream, archive_size - tail.size(), tail) != tail.size())
-            fail("HPI archive has no copyright trailer");
+        if (source->read_at(archive_size - tail.size(), tail) != tail.size())
+            return missing;
         std::copy_n(
             formats::hpi::Trailer.begin() + formats::hpi::TrailerYearOffset,
             formats::hpi::TrailerYearBytes,
             tail.begin() + formats::hpi::TrailerYearOffset
         );
         if (!std::equal(tail.begin(), tail.end(), formats::hpi::Trailer.begin()))
-            fail("HPI archive has no copyright trailer");
+            return missing;
+        return {};
     }
 
-    static std::string name_at(std::span<const uint8_t> block, uint32_t offset) {
+    /// Reads the NUL-terminated name at a directory-block offset.
+    ///
+    /// @param block decrypted directory block, header included
+    /// @param offset block offset of the name
+    /// @param[out] name receives the name
+    /// @return code none, or out_of_range for a name outside the block or
+    ///         malformed for one with no terminator
+    static DecodeError name_at(std::span<const uint8_t> block, uint32_t offset, std::string& name) {
         if (offset >= block.size())
-            fail("HPI entry name lies outside the directory");
+            return DecodeError{
+                DecodeCode::out_of_range, offset, "HPI entry name lies outside the directory"
+            };
         const auto begin = block.begin() + offset;
         const auto end = std::find(begin, block.end(), uint8_t{0});
         if (end == block.end())
-            fail("unterminated HPI entry name");
-        return std::string(begin, end);
+            return DecodeError{DecodeCode::malformed, offset, "unterminated HPI entry name"};
+        name.assign(begin, end);
+        return {};
     }
 
     /// Resolves one directory node and its subtree into nodes.
     ///
     /// Children are appended as one contiguous run, then subdirectories are
-    /// resolved depth-first. Throws std::runtime_error for a node or name
-    /// outside the directory block, a cycle or reused node, too many entries
-    /// or nesting past the depth limit.
+    /// resolved depth-first.
     ///
     /// @param block decrypted directory block, header included
     /// @param offset block offset of the directory node (count, list offset)
     /// @param owner index of the node that receives the children
     /// @param[in,out] visited directory offsets already resolved
     /// @param depth nesting depth of this directory
+    /// @return code none; or, at its block offset, out_of_range for a node,
+    ///         list, name or file record outside the directory block, cycle
+    ///         for a node reached twice, limit_exceeded for too many entries
+    ///         or nesting past the depth limit, or malformed for an
+    ///         unterminated name
     /// @quirk A negative count is an empty directory, as in 3.1c.
-    void parse_directory(
+    [[nodiscard]] DecodeError parse_directory(
         std::span<const uint8_t> block,
         uint32_t offset,
         uint32_t owner,
@@ -316,30 +334,44 @@ struct HpiArchive::Impl {
         std::size_t depth
     ) {
         if (depth > kMaxDirectoryDepth)
-            fail("HPI directory nesting exceeds the safety limit");
+            return DecodeError{
+                DecodeCode::limit_exceeded, offset, "HPI directory nesting exceeds the safety limit"
+            };
         // A node reached twice is a cycle or a shared node; both are rejected.
         if (!visited.insert(offset).second)
-            fail("HPI directory contains a cycle or reused node");
+            return DecodeError{
+                DecodeCode::cycle, offset, "HPI directory contains a cycle or reused node"
+            };
         if (offset > block.size() || block.size() - offset < sizeof(formats::hpi::DirectoryNode))
-            fail("HPI directory node lies outside the directory");
+            return DecodeError{
+                DecodeCode::out_of_range, offset, "HPI directory node lies outside the directory"
+            };
         const auto raw_count = static_cast<int32_t>(load_le32(block.data() + offset));
         const uint32_t list = load_le32(block.data() + offset + 4);
         // A negative count is an empty directory.
         const uint32_t count = raw_count > 0 ? static_cast<uint32_t>(raw_count) : 0;
         if (count > kMaxEntries - nodes.size())
-            fail("HPI archive contains too many entries");
+            return DecodeError{
+                DecodeCode::limit_exceeded, offset, "HPI archive contains too many entries"
+            };
         if (list > block.size() ||
             (block.size() - list) / formats::hpi::DirectoryEntrySize < static_cast<uint64_t>(count))
-            fail("HPI directory entry list lies outside the directory");
+            return DecodeError{
+                DecodeCode::out_of_range,
+                offset + offsetof(formats::hpi::DirectoryNode, list_offset),
+                "HPI directory entry list lies outside the directory"
+            };
 
         const auto first = static_cast<uint32_t>(nodes.size());
         nodes[owner].first_child = first;
         nodes[owner].child_count = count;
         nodes.resize(nodes.size() + count);
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = block.data() + list + i * formats::hpi::DirectoryEntrySize;
+            const uint32_t entry_offset = list + i * formats::hpi::DirectoryEntrySize;
+            const uint8_t* entry = block.data() + entry_offset;
             ArchiveNode& node = nodes[first + i];
-            node.name = name_at(block, load_le32(entry));
+            if (const auto named = name_at(block, load_le32(entry), node.name); failed(named))
+                return named;
             node.flags = entry[offsetof(formats::hpi::DirectoryEntry, type)];
             const uint32_t data =
                 load_le32(entry + offsetof(formats::hpi::DirectoryEntry, data_offset));
@@ -348,28 +380,38 @@ struct HpiArchive::Impl {
                 continue;
             }
             if (data > block.size() || block.size() - data < formats::hpi::FileEntrySize)
-                fail("HPI file record lies outside the directory");
+                return DecodeError{
+                    DecodeCode::out_of_range,
+                    entry_offset + offsetof(formats::hpi::DirectoryEntry, data_offset),
+                    "HPI file record lies outside the directory"
+                };
             node.data_offset = load_le32(block.data() + data);
             node.size = load_le32(block.data() + data + offsetof(formats::hpi::FileEntry, size));
             node.compression = block[data + offsetof(formats::hpi::FileEntry, compression)];
         }
-        for (uint32_t i = 0; i < count; ++i)
-            if (nodes[first + i].directory())
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!nodes[first + i].directory())
+                continue;
+            const auto child =
                 parse_directory(block, nodes[first + i].data_offset, first + i, visited, depth + 1);
+            if (failed(child))
+                return child;
+        }
+        return {};
     }
 
     [[nodiscard]] std::optional<uint32_t>
-    walk(std::string_view path, bool stop_before_last) const noexcept {
+    walk(std::string_view entry_path, bool stop_before_last) const noexcept {
         uint32_t directory = 0;
         std::size_t begin = 0;
         for (;;) {
             std::size_t end = begin;
-            while (end < path.size() && path[end] != '\\' && path[end] != '/')
+            while (end < entry_path.size() && entry_path[end] != '\\' && entry_path[end] != '/')
                 ++end;
-            const bool last = end == path.size();
+            const bool last = end == entry_path.size();
             if (last && stop_before_last)
                 return directory;
-            const std::string_view segment = path.substr(begin, end - begin);
+            const std::string_view segment = entry_path.substr(begin, end - begin);
             const ArchiveNode& parent = nodes[directory];
             std::optional<uint32_t> match;
             for (uint32_t i = parent.child_count; i-- > 0;) {
@@ -389,14 +431,14 @@ struct HpiArchive::Impl {
         }
     }
 
-    /// Reads stored bytes at `offset` through the shared stream.
+    /// Reads stored bytes at `offset` from the source.
     ///
     /// @param offset archive offset of the first byte
     /// @param[out] output receives the bytes
     /// @return the count read; a read past the end of the archive is short
     std::size_t read_stored(uint64_t offset, std::span<uint8_t> output) const {
-        const base::threads::LockGuard guard(stream_lock);
-        return read_at(stream, offset, output);
+        const base::threads::LockGuard guard(source_lock);
+        return source->read_at(offset, output);
     }
 
     /// Copies file node `index`'s decoded bytes from `position` into `output`.
@@ -486,16 +528,33 @@ struct HpiArchive::Impl {
     }
 };
 
-HpiArchive::HpiArchive(const std::filesystem::path& path) : impl_(std::make_unique<Impl>(path)) {
+std::size_t ArchiveBuffer::read_at(uint64_t offset, std::span<uint8_t> output) {
+    if (offset >= bytes_.size())
+        return 0;
+    const std::size_t count = std::min<std::size_t>(output.size(), bytes_.size() - offset);
+    std::memcpy(output.data(), bytes_.data() + offset, count);
+    return count;
+}
+
+Decoded<HpiArchive> HpiArchive::open(std::unique_ptr<ArchiveSource> source) {
+    if (!source)
+        return DecodeError{DecodeCode::not_found, 0, "no HPI archive source"};
+    auto impl = std::make_unique<Impl>(std::move(source));
+    if (const auto error = impl->load(); failed(error))
+        return error;
+    return HpiArchive(std::move(impl));
+}
+
+Decoded<HpiArchive> HpiArchive::open(std::vector<uint8_t> bytes) {
+    return open(std::make_unique<ArchiveBuffer>(std::move(bytes)));
+}
+
+HpiArchive::HpiArchive(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {
 }
 
 HpiArchive::~HpiArchive() = default;
 HpiArchive::HpiArchive(HpiArchive&&) noexcept = default;
 HpiArchive& HpiArchive::operator=(HpiArchive&&) noexcept = default;
-
-const std::filesystem::path& HpiArchive::path() const noexcept {
-    return impl_->path;
-}
 
 std::span<const ArchiveNode> HpiArchive::nodes() const noexcept {
     return impl_->nodes;

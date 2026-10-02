@@ -11,7 +11,7 @@ constexpr Fixed one_world_unit = 0x10000;
 
 void set_mirrored_goal(MirroredNavigation& n, Goal* goal) noexcept {
     if (n.goal && n.goal->order)
-        n.goal->order->raised_events |= 0x80u; // goal replaced
+        n.goal->order->raised_events |= goal_replaced_event;
     n.goal = goal;
 }
 

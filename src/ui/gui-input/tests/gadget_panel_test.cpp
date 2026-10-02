@@ -606,7 +606,8 @@ void truncation_edges() {
         "truncation"
     );
     require(
-        oa::base::game_math::truncate_to_int64(1.0 / 0.0) == std::numeric_limits<int64_t>::min(),
+        oa::base::game_math::truncate_to_int64(std::numeric_limits<double>::infinity()) ==
+            std::numeric_limits<int64_t>::min(),
         "infinity gives INT64_MIN"
     );
 }

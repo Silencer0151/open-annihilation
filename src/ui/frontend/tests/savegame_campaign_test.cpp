@@ -23,6 +23,7 @@ namespace {
 namespace missions = oa::data::campaign;
 
 constexpr const char* kCampaign = "Arm Campaign";
+constexpr int32_t kAc01 = 0; // MISSION0
 constexpr int32_t kAc02 = 1; // MISSION1: missionfile=AC02.ota
 constexpr const char* kAc02Name = "2: CORE KBot Base, Destroy It!";
 constexpr const char* kAc03Name = "3: Spider Technology";
@@ -94,14 +95,14 @@ data::persist::FileSink memory_sink(SavedImage* image) {
             }};
 }
 
-// A save of AC02 from a Game block in the given mode; the campaign object is
-// on AC02 and the local player plays ARM.
-SavedImage save_ac02(CampaignObject& campaign, int32_t mode, Session& session) {
+// A save of a mission from a Game block in the given mode; the campaign
+// object is on that mission and the local player plays ARM.
+SavedImage save_mission(CampaignObject& campaign, int32_t mode, Session& session, int32_t mission) {
     auto world = std::make_unique<World>();
     world->game.mode = mode;
     world->game.difficulty = 2;
     world->game.player_count = 2;
-    world->game.mission_index = kAc02;
+    world->game.mission_index = mission;
     world->game.players[0].info = oa_ref_from_index(0);
     world->player_info[0].side = 0;
     std::memcpy(world->game.mission_results, kResults, std::strlen(kResults) + 1);
@@ -124,6 +125,10 @@ SavedImage save_ac02(CampaignObject& campaign, int32_t mode, Session& session) {
     const auto sink = memory_sink(&image);
     OA_CHECK(data::persist::save_write_game(&save, &hooks, "SAVEGAME/ac02.sav", "AC02", 7, &sink));
     return image;
+}
+
+SavedImage save_ac02(CampaignObject& campaign, int32_t mode, Session& session) {
+    return save_mission(campaign, mode, session, kAc02);
 }
 
 struct ReadBank {
@@ -153,8 +158,11 @@ struct ReadBank {
 
 // Binds a campaign save as loading one does: a fresh campaign object of the
 // saved name, bound by the saved mission-list name.
-int32_t bind_saved_mission(const LoadSummary& summary) {
+int32_t bind_saved_mission(
+    const LoadSummary& summary, const missions::CampaignFiles* files = game_campaign_files()
+) {
     CampaignObject loaded;
+    loaded.env.files = files;
     if (!summary.has_campaign ||
         !missions::campaign_load_file(&loaded.file, &loaded.env, summary.campaign.data()) ||
         !missions::campaign_select_mission(&loaded.file, &loaded.env, summary.mission.data()))
@@ -234,6 +242,51 @@ OA_GAME_DATA_TEST(campaign_save_between_missions_names_the_next_mission) {
     OA_CHECK(savegame_read_load_summary(savegame_persist_reader(nullptr), bank, summary));
     OA_CHECK(summary.between_missions);
     OA_CHECK(bind_saved_mission(summary) == kAc02 + 1);
+}
+
+// A campaign whose next mission's files are missing: saved between missions
+// after AC01, the save loads AC02's information to name it, which shows the
+// mission loader's message, and binds AC01 again; the save is written as
+// ever. Starting AC02 from the end-of-mission panel or from the save shows
+// the same message and does not bind it.
+OA_GAME_DATA_TEST(campaign_save_between_missions_with_the_next_mission_missing) {
+    if (!arm_campaign_present())
+        return;
+    MissingMissionFiles missing("ac02");
+    CampaignObject campaign;
+    campaign.env.files = &missing.files;
+    OA_CHECK(missions::campaign_load_file(&campaign.file, &campaign.env, kCampaign));
+    OA_CHECK(missions::campaign_bind_mission(&campaign.file, &campaign.env, kAc01));
+    const std::string ac01_name = campaign.file.mission_name;
+    OA_CHECK(missing.messages.empty());
+
+    Session session;
+    const auto image = save_mission(campaign, 0, session, kAc01);
+    OA_CHECK(session.advanced == 1 && session.rebound == 1);
+    const std::string message =
+        "Hey, joker!  There is no mission defintion for this mission: AC02.ota";
+    OA_CHECK(missing.messages.size() == 1 && missing.messages[0] == message);
+    OA_CHECK(campaign.file.mission_index == kAc01);
+    OA_CHECK(campaign.file.mission_name == ac01_name);
+    ReadBank read(image);
+    data::persist::Bank* bank = &read.bank;
+    OA_CHECK(
+        std::string(data::persist::bank_get_text(bank, data::persist::save_key::mission, "")) ==
+        kAc02Name
+    );
+    OA_CHECK(data::persist::bank_get_int(bank, data::persist::save_key::between_missions, 0) == 1);
+
+    // Start on the end-of-mission panel binds the Missions row.
+    OA_CHECK(!missions::campaign_bind_mission(&campaign.file, &campaign.env, kAc02));
+    OA_CHECK(missing.messages.size() == 2 && missing.messages[1] == message);
+
+    // Loading the save binds the mission it names.
+    LoadSummary summary;
+    OA_CHECK(savegame_read_load_summary(savegame_persist_reader(nullptr), bank, summary));
+    OA_CHECK(summary.between_missions);
+    OA_CHECK(bind_saved_mission(summary, &missing.files) == -1);
+    OA_CHECK(missing.messages.size() == 3 && missing.messages[2] == message);
+    OA_CHECK(bind_saved_mission(summary) == kAc02);
 }
 
 // The loader copies "Thumbs" with a 25-byte bound and replaces a record that

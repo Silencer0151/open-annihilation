@@ -61,8 +61,8 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 9;
-constexpr std::size_t kHookCount = 39;
+constexpr uint32_t kExtensionApiVersionRecorded = 11;
+constexpr std::size_t kHookCount = 40;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
     "the extension table's contract changed: record every hook here, "
@@ -632,6 +632,14 @@ struct RecorderExtension {
     /// @param[in,out] runtime the running app; left as it is
     static void shutdown(void* /*context*/, Runtime& /*runtime*/) { record("shutdown"); }
 
+    /// Counts a runtime being destroyed (Extension::release_runtime).
+    ///
+    /// @param context Extension::context (unused)
+    /// @param runtime the runtime being destroyed; left as it is
+    static void release_runtime(void* /*context*/, Runtime& /*runtime*/) {
+        record("release_runtime");
+    }
+
     /// Says that --check-multiplayer-menu ran, after network play's check of
     /// the multiplayer screens, then runs a round of the main menu through the
     /// check host, whose clicks on MULTI reach select_multiplayer
@@ -923,6 +931,7 @@ void oa_extension_init_recorder(oa::app::Extension* table) {
     table->speed_changed = RecorderExtension::speed_changed;
     table->app_mode_set = RecorderExtension::app_mode_set;
     table->open_recording = RecorderExtension::open_recording;
+    table->release_runtime = RecorderExtension::release_runtime;
     // A hook left unset here would fall back to the engine's behaviour
     // unrecorded: stop before anything runs. Network play's own two are
     // left unset.

@@ -26,6 +26,12 @@
 #define OA_CHAT_MODE_ENEMIES 2
 #define OA_CHAT_MODE_CHOSEN 3
 
+/* Game.visibility_flags bits: the session's mapping, line-of-sight and
+ * altitude-sight rules. */
+#define OA_VISIBILITY_MAPPING 0x01u
+#define OA_VISIBILITY_LINE_OF_SIGHT 0x02u
+#define OA_VISIBILITY_ALTITUDE_SIGHT 0x04u
+
 /* Game.visibility_flags bit above the session's mapping, line-of-sight and
  * altitude-sight rules (bits 0..2): set once the fog edge mask is rebuilt for
  * the view, cleared by camera moves and by stamps of the viewer's sight. */
@@ -34,6 +40,14 @@
 /* Game.radar_blink_flags bit: the mapped radar image is rebuilt from the
  * sight grids when the radar is next drawn. */
 #define OA_RADAR_MAPPED_DIRTY 0x0004u
+
+/* Game.frame_flags bit: the selection changed, and the order panel and its
+ * build menu redraw. */
+#define OA_FRAME_FLAG_REFRESH_ORDER_PANEL 0x0010u
+
+/* Game.load_flags bit: a multiplayer game holds at the loading barrier until
+ * every player has loaded. */
+#define OA_LOAD_FLAG_BARRIER 0x0004u
 
 /* Game.console_flags bits: the options the console's commands switch. */
 #define OA_CONSOLE_FLAG_NO_DROP 0x0001u         /* "Drop 0": stalled players are not dropped */
@@ -298,6 +312,8 @@ typedef struct Game {
     oa_ref32 hot_units;
     oa_ref32 hot_radar_units;
     int32_t hot_unit_count;
+    /* The count of hot_radar_units. The engine keeps the count with the
+       radar's own list and leaves this zero; saves do not carry it. */
     int32_t hot_radar_unit_count;
     uint16_t cycle_unit_id; /* ? last unit reached by select-next */
     int16_t periodic_countdown;

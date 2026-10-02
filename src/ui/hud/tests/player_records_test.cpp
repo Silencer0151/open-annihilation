@@ -43,7 +43,13 @@ void slot_reset() {
     info->options = OA_SETUP_OPTION_READY | OA_SETUP_OPTION_WATCHER;
     info->side = 1;
 
-    init_player_slot(*w.world, 3, OA_PLAYER_STATUS_COMPUTER, kSessionSkirmish, kMemory64Mb);
+    init_player_slot(
+        *w.world,
+        3,
+        OA_PLAYER_STATUS_COMPUTER,
+        oa::data::campaign::SessionKind::skirmish,
+        kMemory64Mb
+    );
     CHECK(only_self(p.alliance, 3) && only_self(p.allied_by, 3));
     for (uint8_t i = 0; i < 11; ++i)
         CHECK(
@@ -59,16 +65,30 @@ void slot_reset() {
 
     // Side 0 names a computer "Arm"; a human is "Player".
     info->side = 0;
-    init_player_slot(*w.world, 3, OA_PLAYER_STATUS_COMPUTER, kSessionCampaign, kMemory64Mb);
+    init_player_slot(
+        *w.world,
+        3,
+        OA_PLAYER_STATUS_COMPUTER,
+        oa::data::campaign::SessionKind::campaign,
+        kMemory64Mb
+    );
     CHECK(std::strcmp(p.name, "Arm") == 0);
-    init_player_slot(*w.world, 3, OA_PLAYER_STATUS_LOCAL, kSessionSkirmish, kMemory64Mb);
+    init_player_slot(
+        *w.world, 3, OA_PLAYER_STATUS_LOCAL, oa::data::campaign::SessionKind::skirmish, kMemory64Mb
+    );
     CHECK(std::strcmp(p.name, "Player") == 0 && info->state == OA_PLAYER_STATUS_LOCAL);
 
     // A status for another player's machine leaves the info state and
     // memory alone; its name is only copied.
     std::snprintf(p.name, sizeof p.name, "%s", "joiner");
     info->memory_mb = 9;
-    init_player_slot(*w.world, 3, OA_PLAYER_STATUS_MIRRORED, kSessionSkirmish, kMemory64Mb);
+    init_player_slot(
+        *w.world,
+        3,
+        OA_PLAYER_STATUS_MIRRORED,
+        oa::data::campaign::SessionKind::skirmish,
+        kMemory64Mb
+    );
     CHECK(p.status == OA_PLAYER_STATUS_MIRRORED && info->state == OA_PLAYER_STATUS_LOCAL);
     CHECK(info->memory_mb == 9);
     CHECK(std::strcmp(p.name, "joiner") == 0 && std::strcmp(p.second_name, "joiner") == 0);
@@ -76,7 +96,9 @@ void slot_reset() {
     // Outside a campaign or skirmish neither name changes; the memory is a
     // signed quotient.
     std::snprintf(p.second_name, sizeof p.second_name, "%s", "kept");
-    init_player_slot(*w.world, 3, OA_PLAYER_STATUS_LOCAL, kSessionMultiplayer, -0x200000);
+    init_player_slot(
+        *w.world, 3, OA_PLAYER_STATUS_LOCAL, oa::data::campaign::SessionKind::multiplayer, -0x200000
+    );
     CHECK(std::strcmp(p.name, "joiner") == 0 && std::strcmp(p.second_name, "kept") == 0);
     CHECK(info->memory_mb == 0xffff);
 }
@@ -110,7 +132,9 @@ void roster_seating() {
     hud_test::TestWorld w;
     for (uint8_t i = 0; i < OA_PLAYER_COUNT; ++i)
         world_player_info(w.world, &w.player(i))->color = 0xff;
-    init_player_slots_from_roster(*w.world, kRoster, kRosterCount, kSessionSkirmish, kMemory64Mb);
+    init_player_slots_from_roster(
+        *w.world, kRoster, kRosterCount, oa::data::campaign::SessionKind::skirmish, kMemory64Mb
+    );
     const auto info = [&](uint8_t i) { return world_player_info(w.world, &w.player(i)); };
     CHECK(
         w.player(0).status == OA_PLAYER_STATUS_LOCAL && info(0)->color == 4 && info(0)->side == 0

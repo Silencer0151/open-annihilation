@@ -83,7 +83,7 @@ bool fnt_fails_with(const std::vector<uint8_t>& bytes, DecodeCode code, uint64_t
 void test_parse_fnt() {
     std::vector<uint8_t> b(522);
     put16(b, 0, 2);
-    put16(b, 2, 0x1234);
+    put16(b, 2, 0x1201);
     put16(b, 4 + static_cast<std::size_t>(' ') * 2, 516);
     put16(b, 4 + static_cast<std::size_t>('A') * 2, 519);
     b[516] = 3;
@@ -94,20 +94,42 @@ void test_parse_fnt() {
     if (!parsed.ok())
         return;
     const auto& f = *parsed.value;
-    CHECK(f.word_after_height == 0x1234);
-    // The label lift is the second word's low byte, signed.
-    CHECK(oa::formats::fnt::row_lift(f) == 0x34);
+    CHECK(f.word_after_height == 0x1201);
+    // The lift is the second word's low byte, signed.
+    CHECK(oa::formats::fnt::row_lift(f) == 1);
     oa::formats::fnt::Font lowered;
     lowered.word_after_height = 0x01ff;
     CHECK(oa::formats::fnt::row_lift(lowered) == -1);
     CHECK(oa::formats::fnt::measure_text(f, " A\nA") == 9);
     CHECK(oa::formats::fnt::line_height(f) == 4);
+    // The glyph rows start the lift above the pen row: 'A' with its pen on
+    // row 2 has its top row on row 1 and its bottom row on row 2.
     std::vector<uint8_t> pixels(12, 7);
     std::vector<uint8_t> coverage(12);
-    CHECK(oa::formats::fnt::raster_text({4, 3, 4, pixels, coverage}, f, " A", 0, 1) == 6);
+    CHECK(oa::formats::fnt::raster_text({4, 3, 4, pixels, coverage}, f, " A", 0, 2) == 6);
     CHECK(pixels[7] == 255);
     CHECK(coverage[7] == 1);
+    CHECK(coverage[11] == 0);
     CHECK(oa::formats::fnt::raster_text({4, 3, 4, pixels, coverage}, f, "A", -2, 0) == 1);
+    // A font with no lift draws from the pen row itself, and a negative
+    // lift draws below it.
+    auto level = f;
+    level.word_after_height = 0x1200;
+    std::vector<uint8_t> level_pixels(12, 7);
+    std::vector<uint8_t> level_coverage(12);
+    CHECK(
+        oa::formats::fnt::raster_text({4, 3, 4, level_pixels, level_coverage}, level, "A", 0, 1) ==
+        3
+    );
+    CHECK(level_coverage[4] == 1 && level_coverage[0] == 0);
+    auto sunk = f;
+    sunk.word_after_height = 0x00ff;
+    std::vector<uint8_t> sunk_pixels(12, 7);
+    std::vector<uint8_t> sunk_coverage(12);
+    CHECK(
+        oa::formats::fnt::raster_text({4, 3, 4, sunk_pixels, sunk_coverage}, sunk, "A", 0, 0) == 3
+    );
+    CHECK(sunk_coverage[4] == 1 && sunk_coverage[0] == 0);
 
     // The 'A' bitmap needs the byte at 520, which is cut off.
     auto cut = b;

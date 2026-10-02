@@ -71,7 +71,7 @@ void test_grayed_art_frame() {
     resources.layout.gadgets.push_back(button("ART", 1, 1, 1, 1));
     oa::formats::gaf::Sequence sequence;
     sequence.name = "ART";
-    for (uint8_t value : {10, 11, 12, 13}) {
+    for (uint8_t value : {uint8_t{10}, uint8_t{11}, uint8_t{12}, uint8_t{13}}) {
         oa::formats::gaf::Frame frame;
         frame.width = 1;
         frame.height = 1;

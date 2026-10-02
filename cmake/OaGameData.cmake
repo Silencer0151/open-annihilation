@@ -47,12 +47,15 @@ if(OA_REQUIRE_GAME_DATA AND NOT IS_DIRECTORY "${OA_GAME_DIR}")
 endif()
 
 # The locator the game-data tests include: oa/test/game_data.hpp finds the
-# installation, oa/test/game_assets.hpp opens its archives (link oa-formats-hpi
-# too for that one).
+# installation, reading the environment through oa-platform-shims, and
+# oa/test/game_assets.hpp opens its archives (link oa-formats-hpi too for that
+# one).
 add_library(oa-test-game-data INTERFACE)
+add_library(oa::test::game_data ALIAS oa-test-game-data)
 target_include_directories(oa-test-game-data INTERFACE "${CMAKE_CURRENT_LIST_DIR}/../tests/support/include")
 target_compile_features(oa-test-game-data INTERFACE cxx_std_20)
 target_compile_definitions(oa-test-game-data INTERFACE OA_GAME_DATA_SKIP_CODE=${OA_GAME_DATA_SKIP_CODE})
+target_link_libraries(oa-test-game-data INTERFACE oa-platform-shims)
 
 # Marks registered tests as reading the installed game: each sees
 # OA_GAME_DIR in its environment, and OA_REQUIRE_GAME_DATA=1 when that option

@@ -9,6 +9,8 @@
 
 #include "oa/base/sha256.hpp"
 #include "oa/media/director.hpp"
+#include "oa/platform/system.hpp"
+#include "oa/platform/files.hpp"
 
 #include <array>
 #include <bit>
@@ -578,8 +580,8 @@ void test_pinned_cameras() {
     const std::string hex{digits.data(), digits.size()};
     if (hex != pinned_cameras_digest) {
         std::cerr << "cameras digest " << hex << '\n';
-        if (const char* path{std::getenv("OA_DIRECTOR_CAMERAS_TEXT")}) {
-            if (std::FILE * file{std::fopen(path, "wb")}) {
+        if (const auto path{oa::platform::environment_value("OA_DIRECTOR_CAMERAS_TEXT")}) {
+            if (std::FILE * file{oa::platform::open_file(path->c_str(), "wb")}) {
                 std::fwrite(text.data(), 1, text.size(), file);
                 std::fclose(file);
             }

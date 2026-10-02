@@ -16,16 +16,16 @@ namespace oa::data::defs {
 inline constexpr std::size_t locale_text_capacity = 0x100;
 
 struct LocaleEntry {
-    char* source;
-    char* translation;
+    char* source{};
+    char* translation{};
 };
 
 // Sorted by case-sensitive source text.
 struct LocaleTable {
-    char language[locale_text_capacity];
-    LocaleEntry* entries;
-    uint32_t count;
-    uint32_t capacity;
+    char language[locale_text_capacity]{};
+    LocaleEntry* entries{};
+    uint32_t count{};
+    uint32_t capacity{};
 };
 
 /// Empties a table and clears its language without freeing anything.

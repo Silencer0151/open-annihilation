@@ -5,6 +5,8 @@
 // which every recorded player is remote and the local slot only watches; the
 // recorded packets arrive through the network receive path.
 #include "oa/app/runtime.hpp"
+#include "network_play.hpp"
+#include "oa/app/check_host.hpp"
 #include "demo_state.hpp"
 #include "net_options.hpp"
 
@@ -55,12 +57,12 @@ void mark_recorded_units(void* context, oa::UnitDef* headers, uint32_t count) {
 
 } // namespace
 
-void Runtime::destroy_demo_session(DemoState* session) noexcept {
+void NetworkPlay::destroy_demo_session(DemoState* session) noexcept {
     demo::demo_session_end(session);
     delete session;
 }
 
-void Runtime::start_demo_playback() {
+void NetworkPlay::start_demo_playback() {
     std::unique_ptr<DemoState, void (*)(DemoState*) noexcept> session{
         new DemoState(), destroy_demo_session
     };
@@ -81,12 +83,12 @@ void Runtime::start_demo_playback() {
     if (!select_map_named(recording.map_name))
         throw std::runtime_error("demo map '" + recording.map_name + "' is not installed");
     const auto watcher = players.size();
-    state_.player_count = static_cast<uint16_t>(watcher + 1);
+    runtime_.state_.player_count = static_cast<uint16_t>(watcher + 1);
     // The match is built for the view of the first recorded player, the
     // others as computer slots; demo_session_begin then makes every recorded
     // player remote and the watcher after them local.
-    for (std::size_t slot = 0; slot < skirmish_settings_.slots.size(); ++slot) {
-        auto& target = skirmish_settings_.slots[slot];
+    for (std::size_t slot = 0; slot < runtime_.skirmish_settings_.slots.size(); ++slot) {
+        auto& target = runtime_.skirmish_settings_.slots[slot];
         target = {};
         target.alliance = entry::unassigned_alliance;
         target.controller = slot == 0        ? entry::controller::human
@@ -99,7 +101,7 @@ void Runtime::start_demo_playback() {
     }
     // The watcher leaves the battleroom with the recorded verdicts.
     const auto* verdicts = demo::demo_unit_sync(session->playback);
-    bootstrap_match(
+    runtime_.bootstrap_match(
         {.units_per_player = recording.max_units,
          .place_commanders = false,
          .defeat_allowed = false,
@@ -108,10 +110,10 @@ void Runtime::start_demo_playback() {
              verdicts != nullptr ? mark_recorded_units : nullptr
          }}
     );
-    if (!match_ || altitude_sight_blocked_)
-        throw std::runtime_error("demo playback: " + status_);
+    if (!runtime_.match_ || runtime_.altitude_sight_blocked_)
+        throw std::runtime_error("demo playback: " + runtime_.status_);
 
-    const auto keys = unit_table_keys(unit_table_.tables);
+    const auto keys = unit_table_keys(runtime_.unit_table_.tables);
     std::vector<std::size_t> extra;
     const auto check = demo::demo_check_unit_table(session->playback, keys, &extra);
     std::string table_line = "demo unit table: " + std::to_string(check.recorded) + " recorded, " +
@@ -119,7 +121,7 @@ void Runtime::start_demo_playback() {
                              std::to_string(check.missing) + " missing, " +
                              std::to_string(check.extra) + " extra here";
     for (std::size_t i = 0; i < extra.size() && i < kReportedExtraDefinitions; ++i)
-        table_line += (i == 0 ? " (" : ", ") + spawn_type_names_[extra[i] + 1];
+        table_line += (i == 0 ? " (" : ", ") + runtime_.spawn_type_names_[extra[i] + 1];
     if (!extra.empty())
         table_line += extra.size() > kReportedExtraDefinitions ? ", ...)" : ")";
     std::cerr << table_line << '\n';
@@ -128,86 +130,88 @@ void Runtime::start_demo_playback() {
             "demo playback needs the recording's unit definitions: " + table_line
         );
     demo_unit_table_differs_ = !check.identical;
-    if (!demo::demo_session_begin(session.get(), match_.get(), &error))
+    if (!demo::demo_session_begin(session.get(), runtime_.match_.get(), &error))
         throw std::runtime_error("demo playback: " + error);
     // Mission start rebuilds the sight grids once the players are seated.
-    reset_match_sight(true);
+    runtime_.reset_match_sight(true);
     // The view is the watcher's: it owns no units, so nothing can be
     // ordered and no unit is announced as its own, and with mapping and
     // line of sight off the whole map shows.
-    match_local_player_ = session->watcher_slot;
-    offline_services_.set_viewpoint(session->watcher_slot);
+    runtime_.match_local_player_ = session->watcher_slot;
+    runtime_.offline_services_.set_viewpoint(session->watcher_slot);
     demo_speed_ = 0;
     demo_ = std::move(session);
-    enter_match_view();
-    status_ = "Demo playback: " + recording.map_name + ", " + std::to_string(players.size()) +
-              " players, " + std::to_string(demo_->playback.frames.size()) + " frames over " +
-              std::to_string(demo::demo_duration_ms(demo_->playback) / kMillisecondsPerSecond) +
-              " s";
-    std::cerr << status_ << '\n';
+    runtime_.enter_match_view();
+    runtime_.status_ =
+        "Demo playback: " + recording.map_name + ", " + std::to_string(players.size()) +
+        " players, " + std::to_string(demo_->playback.frames.size()) + " frames over " +
+        std::to_string(demo::demo_duration_ms(demo_->playback) / kMillisecondsPerSecond) + " s";
+    std::cerr << runtime_.status_ << '\n';
 }
 
 // Headless snapshots look at --camera, else at the followed unit.
-void Runtime::place_demo_camera() {
-    if (options_.camera) {
-        match_camera_x_ = options_.camera->first;
-        match_camera_z_ = options_.camera->second;
+void NetworkPlay::place_demo_camera() {
+    if (const auto& camera = runtime_options(runtime_).camera) {
+        runtime_.match_camera_x_ = camera->first;
+        runtime_.match_camera_z_ = camera->second;
     } else if (
-        const auto* unit = world_unit_at(&match_->state(), demo_->tracked_unit);
+        const auto* unit = world_unit_at(&runtime_.match_->state(), demo_->tracked_unit);
         unit != nullptr && unit->type_index != 0
     ) {
-        center_camera_on_unit(demo_->tracked_unit);
+        runtime_.center_camera_on_unit(demo_->tracked_unit);
     }
 }
 
 // Recorded 0x19 speed changes pace playback as they paced the recorded game.
-void Runtime::demo_frame() {
-    if (!demo_ || !match_)
+void NetworkPlay::demo_frame() {
+    if (!demo_ || !runtime_.match_)
         return;
-    const auto speed = match_->state().game.requested_speed;
+    const auto speed = runtime_.match_->state().game.requested_speed;
     if (speed == demo_speed_ || speed < oa::netgame::match::min_game_speed ||
         speed > oa::netgame::match::max_game_speed)
         return;
     demo_speed_ = speed;
-    match_timing_.requested_rate = speed;
-    match_timing_.actual_rate = speed;
+    runtime_.match_timing_.requested_rate = speed;
+    runtime_.match_timing_.actual_rate = speed;
 }
 
-void Runtime::step_demo_frame() {
-    if (!demo_ || !match_ || demo_->match != match_.get()) {
+void NetworkPlay::step_demo_frame() {
+    if (!demo_ || !runtime_.match_ || demo_->match != runtime_.match_.get()) {
         demo_.reset();
         return;
     }
     const auto errors_before = demo_->tick_errors;
     demo::demo_session_frame(demo_.get());
-    match_timing_.tick = match_->state().game.tick;
+    runtime_.match_timing_.tick = runtime_.match_->state().game.tick;
     if (demo_->tick_errors != errors_before)
-        report_match_tick_error(demo_->last_error);
+        runtime_.report_match_tick_error(demo_->last_error);
     for (const auto& line : demo_->lines)
-        console_post_message(line);
+        runtime_.console_post_message(line);
     demo_->lines.clear();
 }
 
 // Replays up to ticks networked ticks and reports the full unit records the
 // recording carried for the first recorded player's first unit, and how far
 // every unit had drifted from each of its full records.
-int Runtime::run_headless_demo(std::size_t ticks) {
+int NetworkPlay::run_headless_demo(std::size_t ticks) {
     start_demo_playback();
+    const Options& options = runtime_options(runtime_);
+    const CheckHost host = check_host(runtime_);
     // The viewer watches, so Enter opens no chat line and no
     // console command runs during playback.
-    if (options_.headless_check) {
+    if (options.headless_check) {
         bool running = true;
         SDL_Event enter{};
         enter.type = SDL_EVENT_KEY_DOWN;
         enter.key.key = SDLK_RETURN;
         enter.key.scancode = SDL_SCANCODE_RETURN;
-        handle_sdl_event(enter, running);
-        if (!local_player_watches() || chat_composing_)
+        runtime_.handle_sdl_event(enter, running);
+        if (!runtime_.local_player_watches() || runtime_.chat_composing_)
             throw std::runtime_error("demo playback opened the viewer's chat line");
     }
-    match_layout_ =
-        oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
-    const auto& world = match_->state();
+    runtime_.match_layout_ =
+        oa::ui::display_layout::make_match_layout(options.match_width, options.match_height);
+    const auto& world = runtime_.match_->state();
     const auto& playback = demo_->playback;
     std::printf(
         "demo %s: %zu players, %zu frames, %llu ms, unit limit %u\n",
@@ -218,10 +222,11 @@ int Runtime::run_headless_demo(std::size_t ticks) {
         playback.demo.max_units
     );
     // A snapshot needs every frame drawn: mapped terrain accumulates as drawn.
-    const bool drawing = !options_.snapshot.empty();
+    const bool drawing = !options.snapshot.empty();
     if (drawing) {
-        match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
-        match_zoom_target_ = match_zoom_;
+        runtime_.match_zoom_ =
+            std::clamp(options.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
+        runtime_.match_zoom_target_ = runtime_.match_zoom_;
     }
     bool finished = false;
     for (std::size_t tick = 1; tick <= ticks && !finished && demo_; ++tick) {
@@ -230,7 +235,7 @@ int Runtime::run_headless_demo(std::size_t ticks) {
             break;
         if (drawing) {
             place_demo_camera();
-            rebuild_surface();
+            host.compose(host.context);
         }
         finished = demo::demo_session_finished(*demo_);
     }
@@ -289,13 +294,15 @@ int Runtime::run_headless_demo(std::size_t ticks) {
         demo_->last_error.empty() ? "" : "; last error: ",
         demo_->last_error.c_str()
     );
+    if (stats.unknown_senders != 0)
+        std::printf("demo packets from unknown senders dropped: %u\n", stats.unknown_senders);
     std::fflush(stdout);
     if (drawing)
-        write_ppm(options_.snapshot, surface_);
+        write_ppm(options.snapshot, *host.surface(host.context));
     // The followed unit's full records ride on every units_per_player-th
     // sender tick. Over a different unit table, record errors and creates
     // past the table are only reported (demo_session_verdict).
-    const auto period = static_cast<int64_t>(match_->state().game.units_per_player);
+    const auto period = static_cast<int64_t>(runtime_.match_->state().game.units_per_player);
     const auto verdict = demo::demo_session_verdict(*demo_, demo_unit_table_differs_);
     const bool clean = verdict.clean;
     const bool paced = verdict.paced;

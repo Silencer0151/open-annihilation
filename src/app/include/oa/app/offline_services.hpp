@@ -340,8 +340,7 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
             *category,
             match_->simulation().tick,
             slot.owner_index == viewpoint_,
-            (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0 &&
-                (slot.unit->flags & OA_UNIT_FLAG_DEATH_PENDING) == 0,
+            unit_is_live_target(slot.unit->flags),
             // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
             caption
@@ -393,7 +392,7 @@ class NativeEffectBoundary final : public oa::sim::unit_effects::OfflineLifecycl
     }
 
     struct LiveEffect {
-        oa::sim::unit_effects::Event event;
+        oa::sim::unit_effects::Event event{};
         uint32_t spawn_tick{};
     };
 

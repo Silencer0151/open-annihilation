@@ -52,10 +52,12 @@ randomization, mission unit placement and interface setup; only the individual
 player creation is here. Map marker parsing and side commander-name resolution
 remain integration inputs.
 
-`offline_pool_size(limit)` and `init_unit_pool(world, limit)` lay out the
+`unit_pool_size(limit)` and `init_unit_pool(world, limit)` lay out the
 single-player unit pool before `spawn_player_commander`: reserve slot 0, allocate
 ten equal owner ranges, initialize indices and type-zero linkage, and set each
-player's first/last unit references. Tables must have exactly the returned size.
+player's first/last unit references. Tables must have exactly the returned size;
+a limit whose pool would pass 65535 slots sizes none, and `init_unit_pool`
+returns false for it.
 Multiplayer ordering and the auxiliary hot-unit and radar caches stay outside
 this helper.
 
@@ -65,7 +67,8 @@ Target `oa-sim-unit-spawn-runtime`, header `oa/sim/unit_spawn/spawn_runtime.hpp`
 fields to the spawn type. `load_runtime_type` loads the actual 3DO and optional
 COB, stores shared ownership of both parsed assets, and puts their stable native
 addresses in the model/COB handles. Preserve the returned `LoadedType` while
-using its copied `Type` in the world. These handles are parsed assets, not
+using its copied `Type` in the world. A type that does not load holds a
+`load_error` saying why, and no model, script or type fields. These handles are parsed assets, not
 fabricated model instances or running VMs; constructor Hosts still perform that
 work.
 

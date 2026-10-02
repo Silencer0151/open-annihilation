@@ -18,6 +18,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 namespace oa::app {
 
@@ -55,11 +56,13 @@ void Runtime::take_match_options(oa::Game& game) {
 int64_t Runtime::saved_general_number(const char* key) const {
     const auto values = oa::platform::preferences::load(preference_path_);
     const auto found = values.find(preference_key(init::general_section, key));
+    if (found == values.end())
+        return -1;
+    // A value that is not a number reads as no value.
     int64_t value = -1;
-    if (found != values.end())
-        (void)std::from_chars(
-            found->second.data(), found->second.data() + found->second.size(), value
-        );
+    const char* first = found->second.data();
+    if (std::from_chars(first, first + found->second.size(), value).ec != std::errc{})
+        return -1;
     return value;
 }
 

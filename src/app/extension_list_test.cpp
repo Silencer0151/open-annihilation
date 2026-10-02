@@ -203,6 +203,7 @@ void fill(Extension* table, Probe& probe) {
         return probe_of(context).takes;
     };
     table->shutdown = [](void* context, Runtime&) { record(context, "shutdown"); };
+    table->release_runtime = [](void* context, Runtime&) { record(context, "release_runtime"); };
     table->select_multiplayer = [](void* context, Runtime&) {
         record(context, "select_multiplayer");
         return probe_of(context).selection;
@@ -438,6 +439,11 @@ void test_every_in_order() {
     expect(called(expected), "every extension is called, in list order");
     table.shutdown(context, runtime);
     expect(called({"derived shutdown", "base shutdown"}), "shutdown runs in reverse list order");
+    table.release_runtime(context, runtime);
+    expect(
+        called({"derived release_runtime", "base release_runtime"}),
+        "release_runtime runs in reverse list order"
+    );
 }
 
 void test_first_to_take() {

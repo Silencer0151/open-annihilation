@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include "oa/base/bytes.hpp"
 #include "oa/formats/hpi.hpp"
 #include "oa/formats/sqsh.hpp"
 #include "oa/test/game_assets.hpp"
@@ -57,19 +58,38 @@ bool read_fails(const oa::HpiArchive& archive, std::string_view path, std::strin
            std::string_view(read.error.message).find(containing) != std::string_view::npos;
 }
 
+/// Opens an archive file the test wrote, throwing when it is refused.
+///
+/// @param path the archive
+/// @return the archive
+oa::HpiArchive opened(const fs::path& path) {
+    auto archive = oa::open_hpi_file(path);
+    if (!archive.ok())
+        throw std::runtime_error(archive.error.message);
+    return std::move(*archive.value);
+}
+
+/// Reports whether opening an archive fails with a message holding `containing`.
+///
+/// @param path the archive
+/// @param containing text the error's message holds
+/// @return true when the archive is refused so
+bool opening_fails(const fs::path& path, std::string_view containing = {}) {
+    const auto archive = oa::open_hpi_file(path);
+    return !archive.ok() && archive.error.message != nullptr &&
+           std::string_view(archive.error.message).find(containing) != std::string_view::npos;
+}
+
 Bytes text(std::string_view value) {
     return Bytes(value.begin(), value.end());
 }
 
 uint32_t get32(const Bytes& bytes, std::size_t at) {
-    return static_cast<uint32_t>(bytes[at]) | (static_cast<uint32_t>(bytes[at + 1]) << 8U) |
-           (static_cast<uint32_t>(bytes[at + 2]) << 16U) |
-           (static_cast<uint32_t>(bytes[at + 3]) << 24U);
+    return oa::base::bytes::load_le32(bytes.data() + at);
 }
 
 void put32(Bytes& bytes, std::size_t at, uint32_t value) {
-    for (unsigned i = 0; i < 4; ++i)
-        bytes[at + i] = static_cast<uint8_t>(value >> (8U * i));
+    oa::base::bytes::store_le32(bytes.data() + at, value);
 }
 
 class TempDir {
@@ -137,7 +157,7 @@ void hpi_writer_round_trip() {
     for (const uint8_t key : {uint8_t{0}, uint8_t{0x7D}, uint8_t{0xBF}}) {
         for (const bool scramble : {false, true}) {
             const auto path = dir.write("round.hpi", archive_of(files, {key, scramble, "1998"}));
-            oa::HpiArchive archive(path);
+            oa::HpiArchive archive = opened(path);
             const auto entries = archive.entries();
             check(entries.size() == files.size(), "round trip entry count");
             check(entries[1].path == "units/armcom.fbi", "directory merge keeps first spelling");
@@ -152,34 +172,23 @@ void hpi_writer_round_trip() {
 void hpi_requires_copyright_trailer_any_year() {
     TempDir dir;
     const auto good = archive_of({{"a", text("x"), 0}}, {0, true, "2001"});
-    check(
-        !throws([&] { oa::HpiArchive a(dir.write("year.hpi", good)); }), "any trailer year accepted"
-    );
+    check(!opening_fails(dir.write("year.hpi", good)), "any trailer year accepted");
     auto year = good;
     std::copy_n("ab\0d", 4, year.end() - 26);
-    check(
-        !throws([&] { oa::HpiArchive a(dir.write("odd-year.hpi", year)); }),
-        "year bytes are never compared"
-    );
+    check(!opening_fails(dir.write("odd-year.hpi", year)), "year bytes are never compared");
     auto brand = good;
     brand.back() = 'T';
-    check(
-        throws([&] { oa::HpiArchive a(dir.write("brand.hpi", brand)); }, "trailer"),
-        "altered trailer rejected"
-    );
+    check(opening_fails(dir.write("brand.hpi", brand), "trailer"), "altered trailer rejected");
     auto missing = good;
     missing.resize(missing.size() - 36);
-    check(
-        throws([&] { oa::HpiArchive a(dir.write("bare.hpi", missing)); }, "trailer"),
-        "missing trailer rejected"
-    );
+    check(opening_fails(dir.write("bare.hpi", missing), "trailer"), "missing trailer rejected");
 }
 
 void hpi_version_must_be_one() {
     TempDir dir;
     auto bytes = archive_of({{"a", text("x"), 0}});
     put32(bytes, 4, 0x00020000U);
-    check(throws([&] { oa::HpiArchive a(dir.write("v2.hpi", bytes)); }), "version 2 rejected");
+    check(opening_fails(dir.write("v2.hpi", bytes)), "version 2 rejected");
 }
 
 void hpi_header_key_ff_disables_decryption() {
@@ -188,13 +197,13 @@ void hpi_header_key_ff_disables_decryption() {
     TempDir dir;
     auto bytes = archive_of({{"a", text("Q"), 0}});
     put32(bytes, 12, 0xFF);
-    oa::HpiArchive archive(dir.write("ff.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("ff.hpi", bytes));
     check(archive.read("a").value == text("Q"), "header key 0xFF leaves data plain");
 }
 
 void hpi_lookup_last_duplicate_wins() {
     TempDir dir;
-    oa::HpiArchive archive(
+    oa::HpiArchive archive = opened(
         dir.write("dup.hpi", archive_of({{"a.txt", text("one"), 0}, {"A.TXT", text("two"), 0}}))
     );
     check(archive.entries().size() == 2, "duplicates are retained");
@@ -207,7 +216,7 @@ void hpi_intermediate_file_ends_lookup() {
         "first.hpi", archive_of({{"units/x.fbi", text("hidden"), 0}, {"UNITS", text("file"), 0}})
     );
     const auto second = dir.write("second.hpi", archive_of({{"units/x.fbi", text("second"), 0}}));
-    oa::HpiArchive archive(first);
+    oa::HpiArchive archive = opened(first);
     check(!archive.lookup("units\\x.fbi"), "last 'units' is a file: lookup fails");
     fs::create_directory(dir.path() / "loose");
     oa::AssetStore store(dir.path() / "loose");
@@ -233,7 +242,7 @@ void hpi_entry_flag_bit0_is_directory() {
     // Root list at 28: entry 0 "d" (directory), entry 1 "g" (file).
     bytes[28 + 8] = 0x03;
     bytes[28 + 9 + 8] = 0x02;
-    oa::HpiArchive archive(dir.write("flags.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("flags.hpi", bytes));
     check(archive.read("d/f").value == text("inner"), "flag 0x03 is a directory");
     check(archive.read("g").value == text("file"), "flag 0x02 is a file");
 }
@@ -242,7 +251,7 @@ void hpi_any_nonzero_compression_is_chunked() {
     TempDir dir;
     auto bytes = archive_of({{"a", text("chunked"), oa::formats::hpi::CompressionLZ77}});
     bytes[kSingleRecord + 8] = 0x07;
-    oa::HpiArchive archive(dir.write("method.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("method.hpi", bytes));
     check(archive.read("a").value == text("chunked"), "compression byte 7 reads as chunked");
 }
 
@@ -255,10 +264,10 @@ void sqsh_stored_type_is_fatal() {
     auto bytes =
         archive_of({{"a", text("stored"), oa::formats::hpi::CompressionLZ77}}, {0, false, "1997"});
     bytes[first_chunk(bytes) + 5] = 0;
-    oa::HpiArchive archive(dir.write("stored.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("stored.hpi", bytes));
     check(read_fails(archive, "a", "SQUASHERR_BADUNPACKSIZE"), "stored chunk is fatal");
     bytes[first_chunk(bytes) + 5] = 4;
-    oa::HpiArchive typed(dir.write("type4.hpi", bytes));
+    oa::HpiArchive typed = opened(dir.write("type4.hpi", bytes));
     check(read_fails(typed, "a", "SQUASHERR_BADUNPACKTYPE"), "type 4 chunk is fatal");
 }
 
@@ -266,7 +275,7 @@ void sqsh_version_byte_ignored() {
     TempDir dir;
     auto bytes = archive_of({{"a", text("versioned"), oa::formats::hpi::CompressionZLib}});
     bytes[first_chunk(bytes) + 4] = 0x99;
-    oa::HpiArchive archive(dir.write("version.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("version.hpi", bytes));
     check(archive.read("a").value == text("versioned"), "SQSH version byte is not checked");
 }
 
@@ -283,7 +292,7 @@ void sqsh_zlib_error_keeps_expected_length() {
         chunk + 15,
         oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
     );
-    oa::HpiArchive archive(dir.write("adler.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("adler.hpi", bytes));
     check(
         archive.read("a").value == text("adler tail"),
         "bad adler32 still yields the expected length"
@@ -294,10 +303,10 @@ void sqsh_zlib_error_keeps_expected_length() {
         chunk + 15,
         oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
     );
-    oa::HpiArchive broken(dir.write("broken.hpi", bytes));
+    oa::HpiArchive broken = opened(dir.write("broken.hpi", bytes));
     check(broken.read("a").value == Bytes(10, 0), "undecodable zlib is accepted as a zero block");
     bytes[chunk + 15] ^= 1;
-    oa::HpiArchive sum(dir.write("sum.hpi", bytes));
+    oa::HpiArchive sum = opened(dir.write("sum.hpi", bytes));
     check(read_fails(sum, "a", "SQUASHERR_BADCHECKSUM"), "checksum is enforced");
 }
 
@@ -314,7 +323,7 @@ void sqsh_chunk_table_locates_blocks() {
         padding.end()
     );
     put32(bytes, table, first + static_cast<uint32_t>(padding.size()));
-    oa::HpiArchive archive(dir.write("gap.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("gap.hpi", bytes));
     check(archive.read("a").value == big, "blocks are located by summing the size table");
 }
 
@@ -322,7 +331,7 @@ void hpi_negative_directory_count_is_empty() {
     TempDir dir;
     auto bytes = archive_of({{"a", text("x"), 0}});
     put32(bytes, 20, 0x80000001U);
-    oa::HpiArchive archive(dir.write("neg.hpi", bytes));
+    oa::HpiArchive archive = opened(dir.write("neg.hpi", bytes));
     check(archive.entries().empty(), "negative count reads as an empty root");
 }
 
@@ -331,9 +340,7 @@ void hpi_rejects_cycles() {
     auto bytes = archive_of({{"d/f", text("x"), 0}});
     // Entry "d" points its directory node back at the root node.
     put32(bytes, 28 + 4, 20);
-    check(
-        throws([&] { oa::HpiArchive a(dir.write("cycle.hpi", bytes)); }, "cycle"), "cycle rejected"
-    );
+    check(opening_fails(dir.write("cycle.hpi", bytes), "cycle"), "cycle rejected");
 }
 
 void match_wildcard_rules() {

@@ -187,7 +187,7 @@ static_assert(offsetof(FeatureCursor, sequence) == offsetof(FeatureDefCursor, se
 /// @param[in,out] def_cursor FeatureDef.animation_cursor or FeatureDef.shadow_cursor
 void step_def_cursor(const FeatureHost& host, FeatureDefCursor& def_cursor) noexcept {
     FeatureCursor cursor;
-    std::memcpy(&cursor, &def_cursor, sizeof(cursor));
+    std::memcpy(static_cast<void*>(&cursor), &def_cursor, sizeof(cursor));
     step_cursor(host, cursor);
     std::memcpy(&def_cursor, &cursor, sizeof(cursor));
 }

@@ -26,7 +26,7 @@ target_link_libraries(oa-netgame-match-runtime PUBLIC oa-netgame-match oa-sim-ma
 
 if(BUILD_TESTING)
   add_executable(oa-netgame-match-test tests/net_match_test.cpp)
-  target_link_libraries(oa-netgame-match-test PRIVATE oa-netgame-match)
+  target_link_libraries(oa-netgame-match-test PRIVATE oa-base-text oa-netgame-match)
   add_test(NAME net-match COMMAND oa-netgame-match-test)
   set_tests_properties(net-match PROPERTIES TIMEOUT 120)
 
@@ -45,7 +45,8 @@ endif()
 
 if(BUILD_TESTING)
   add_executable(oa-netgame-match-runtime-test tests/net_match_runtime_test.cpp)
-  target_link_libraries(oa-netgame-match-runtime-test PRIVATE oa-netgame-match-runtime oa-sim-world-environment)
+  target_link_libraries(oa-netgame-match-runtime-test PRIVATE oa-netgame-match-runtime oa-sim-world-environment
+    oa-test-match)
   add_test(NAME net-match-runtime COMMAND oa-netgame-match-runtime-test)
   set_tests_properties(net-match-runtime PROPERTIES TIMEOUT 120)
 endif()
@@ -55,7 +56,7 @@ if(BUILD_TESTING)
   # names: no wreck on either machine, and a received 0x0c applied as sent.
   add_executable(oa-netgame-match-dgun-test tests/dgun_kill_test.cpp)
   target_link_libraries(oa-netgame-match-dgun-test PRIVATE oa-netgame-match-runtime oa-netgame-test-installs
-    oa-data-unit-definitions oa-data-defs-assets oa-data-mission-types oa-sim-map-runtime)
+    oa-data-unit-definitions oa-data-defs-assets oa-data-mission-types oa-sim-map-runtime oa-test-match)
   add_test(NAME net-match-dgun-data COMMAND oa-netgame-match-dgun-test)
   set_tests_properties(net-match-dgun-data PROPERTIES TIMEOUT 300)
   oa_game_data_tests(net-match-dgun-data)

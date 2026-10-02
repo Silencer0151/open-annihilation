@@ -5,6 +5,7 @@
 
 #include "oa/data/defs/unit_records.hpp"
 #include "oa/formats/tdf.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -21,9 +22,9 @@ constexpr std::size_t key_capacity = 0x20;
 
 struct NameList {
     char (*names)[path_capacity];
-    uint32_t count;
-    uint32_t capacity;
-    bool failed;
+    uint32_t count{};
+    uint32_t capacity{};
+    bool failed{};
 };
 
 void collect_name(void* user, const char* name) {
@@ -46,7 +47,7 @@ void collect_name(void* user, const char* name) {
         list->names = names;
         list->capacity = grown;
     }
-    std::strncpy(list->names[list->count], name, path_capacity - 1);
+    oa::base::text::copy_padded(list->names[list->count], name, path_capacity - 1);
     list->names[list->count][path_capacity - 1] = '\0';
     ++list->count;
 }
@@ -98,7 +99,7 @@ bool unit_def_tables_allocate(UnitDefTables* tables, uint32_t count) noexcept {
     tables->records = static_cast<UnitDef*>(std::calloc(count, sizeof(UnitDef)));
     if (tables->records == nullptr)
         return false;
-    std::strcpy(tables->records[0].unit_name, reserved_unit_name);
+    oa::base::text::copy_terminated(tables->records[0].unit_name, reserved_unit_name);
     tables->records[0].flags = OA_UNIT_DEF_FLAG_AVAILABLE;
     tables->count = count;
     return true;

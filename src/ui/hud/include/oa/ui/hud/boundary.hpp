@@ -14,17 +14,17 @@ namespace oa::ui::hud {
 
 /// Named controls of the loaded HUD panel. Every callback is optional.
 struct PanelControls {
-    void* user;
+    void* user{};
     /// Index of the named control, or -1 when the panel has none.
-    int32_t (*find)(void* user, const char* name);
+    int32_t (*find)(void* user, const char* name){};
     /// Sets the value shared by a control's radio/cycle group.
-    void (*set_group_value)(void* user, int32_t index, int32_t value);
+    void (*set_group_value)(void* user, int32_t index, int32_t value){};
     /// Sets one control's own value.
-    void (*set_value)(void* user, int32_t index, int32_t value);
+    void (*set_value)(void* user, int32_t index, int32_t value){};
     /// Greys a control out.
-    void (*disable)(void* user, int32_t index);
+    void (*disable)(void* user, int32_t index){};
     /// Sets a control's checked/enabled state.
-    void (*set_state)(void* user, int32_t index, int32_t state);
+    void (*set_state)(void* user, int32_t index, int32_t state){};
     /// A control's current value (checkbox state, radio group choice).
     int32_t (*value)(void* user, int32_t index){};
     /// A text control's contents.
@@ -42,21 +42,21 @@ struct PanelControls {
 
 /// Side effects the HUD raises in the rest of the game.
 struct HudEvents {
-    void* user;
+    void* user{};
     /// Plays the named interface sound (the game's named-sound table).
-    void (*play_sound)(void* user, const char* name);
+    void (*play_sound)(void* user, const char* name){};
     /// Applies a standing order tag ("CLOAK_ON", "STANDING_FIREORDER", ...)
     /// with its value to every selected unit.
-    void (*apply_standing_order)(void* user, const char* tag, int32_t value);
+    void (*apply_standing_order)(void* user, const char* tag, int32_t value){};
 };
 
 /// Read-only view over the unit pool and the unit-type table. Unit.def holds
 /// a 32-bit handle, so a type is resolved through Unit.type_index instead.
 struct UnitTable {
-    Unit* units; // units[0] is the reserved empty slot
-    uint16_t unit_count;
-    const UnitDef* defs; // indexed by Unit.type_index
-    int32_t def_count;
+    Unit* units{}; // units[0] is the reserved empty slot
+    uint16_t unit_count{};
+    const UnitDef* defs{}; // indexed by Unit.type_index
+    int32_t def_count{};
 };
 
 /// Looks up a unit's type through Unit.type_index.

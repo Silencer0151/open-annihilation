@@ -86,7 +86,10 @@ int main() {
         loaded.type.simulation.default_mission_type == 5 && loaded.type.build_angle == 65516 &&
         loaded.type.gui_page_count == 3 && loaded.type.simulation.abilities == 0x500000u
     );
-    CHECK((loaded.type.simulation.flags & 0x80811000u) == 0x80811000u);
+    constexpr uint32_t commander_type_bits =
+        OA_UNIT_DEF_FLAG_BUILD_MENU_DEFAULT | OA_UNIT_DEF_FLAG_AVAILABLE |
+        OA_UNIT_DEF_FLAG_HAS_WEAPONS | OA_UNIT_DEF_FLAG_CAN_HOVER;
+    CHECK((loaded.type.simulation.flags & commander_type_bits) == commander_type_bits);
     CHECK(
         reader.reads == std::vector<std::string>(
                             {"objects3d/body.3DO",
@@ -100,13 +103,8 @@ int main() {
     // A unit with a movement class takes the class's footprint from the
     // loaded MOVEINFO classes, so the caller must resolve it first.
     definition.movement_class = "KBOT";
-    bool rejected = false;
-    try {
-        load_runtime_type(definition, bind, reader);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    CHECK(rejected);
+    const auto unbound = load_runtime_type(definition, bind, reader);
+    CHECK(!unbound.load_error.empty() && !unbound.model && !unbound.script);
     bind.movement_footprint = std::array<int16_t, 2>{4, 5};
     reader.files.erase("scripts/ARMCOM.COB");
     auto plain = load_runtime_type(definition, bind, reader);
@@ -117,15 +115,16 @@ int main() {
     reader.files["guis/ARMCOM0.GUI"] = {};
     reader.files["guis/ARMCOM1.GUI"] = {};
     auto no_pages = load_runtime_type(definition, bind, reader);
-    CHECK(no_pages.type.gui_page_count == 0 && !(no_pages.type.simulation.flags & 0x80000000u));
+    CHECK(
+        no_pages.type.gui_page_count == 0 &&
+        !(no_pages.type.simulation.flags & OA_UNIT_DEF_FLAG_BUILD_MENU_DEFAULT)
+    );
     reader.files["scripts/ARMCOM.COB"] = {1, 2};
-    rejected = false;
-    try {
-        load_runtime_type(definition, bind, reader);
-    } catch (const std::runtime_error&) {
-        rejected = true;
-    }
-    CHECK(rejected);
+    const auto bad_script = load_runtime_type(definition, bind, reader);
+    CHECK(
+        bad_script.load_error.find("invalid unit script scripts/ARMCOM.COB") == 0 &&
+        !bad_script.model && !bad_script.script
+    );
     std::array<std::string, 3> names = {"", "ARMCOM", "CORCOM"};
     CHECK(find_type_index(names, "armcom") == 1 && find_type_index(names, "missing") == 0);
     std::cout << "unit runtime tests passed\n";

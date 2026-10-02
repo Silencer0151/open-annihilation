@@ -75,7 +75,7 @@ int main() {
     CHECK(sw.assets[1].model_instance == 100 && units[1].movement == 0);
     CHECK(unit->cell_x == 2 && unit->cell_z == 4);
     CHECK(unit->heading == static_cast<uint16_t>(7 - 0x8000 - 50));
-    CHECK(units[1].damage_kind == 7 && (units[1].flags & 0x4000));
+    CHECK(units[1].damage_kind == 7 && (units[1].flags & OA_UNIT_FLAG_DEATH_PENDING));
     CHECK(sw.player(0).unit_count == 1 && sw.player(0).units_created == 1);
     CHECK(h.calls == std::vector<std::string>({"rng100",     "resetA0", "resetB0",    "resetA1",
                                                "resetB1",    "resetA2", "resetB2",    "economy",
@@ -156,7 +156,9 @@ int main() {
         Request numeric;
         initialize_numeric(*switched, changed, numeric, callback);
         CHECK(changed.heading == static_cast<uint16_t>(7 - 0x8000 - 100));
-        CHECK((changed.flags & 0xc00000) == 0xc00000);
+        CHECK(
+            (changed.flags & (OA_UNIT_FLAG_BUILD_MENU | OA_UNIT_FLAG_BUILD_PAGE_MASK)) == 0xc00000
+        );
     }
     {
         // A new unit takes its type's standing orders over whatever the slot
@@ -187,7 +189,62 @@ int main() {
         CHECK(move_order() == 2 && fire_order() == 2);
     }
     {
-        SpawnWorld pooled(offline_pool_size(5), 1);
+        // The whole flag words a spawn leaves, from a slot with every bit set
+        // and from a cleared one. Type 0 is a structure with every type flag
+        // and two build pages, owned by the viewpoint player; type 1 a mobile
+        // unit with no type flags and one page, owned by another player.
+        SpawnWorld pinned(2, 2);
+        auto& slot = pinned.units[1];
+        slot.owner = oa::oa_ref_from_index(0);
+        pinned.player(0).index = 0;
+        (*pinned).game.viewpoint_player = 0;
+        pinned.types[0].simulation.flags = 0xffffffffu;
+        pinned.types[0].bm_code = 0;
+        pinned.types[0].gui_page_count = 2;
+        pinned.types[1].simulation.flags = 0;
+        pinned.types[1].bm_code = 1;
+        pinned.types[1].gui_page_count = 1;
+        pinned.load_types();
+        Fixture host;
+        Request structure;
+        structure.type = 0;
+        Request mobile;
+        mobile.type = 1;
+        const auto spawn = [&](const Request& request, uint32_t flags, uint32_t flags2) {
+            slot.flags = flags;
+            slot.flags2 = flags2;
+            initialize_numeric(*pinned, slot, request, host);
+        };
+        // Every spawn leaves these set: live, in the ground layer, selectable
+        // and with its position marked changed.
+        constexpr uint32_t spawned = OA_UNIT_FLAG_LIVE | ground_occupancy_state |
+                                     OA_UNIT_FLAG_SELECTABLE | OA_UNIT_FLAG_POSITION_DIRTY;
+        // A slot's own bits that a spawn keeps.
+        constexpr uint32_t kept = OA_UNIT_FLAG_CYCLE_VISITED | OA_UNIT_FLAG_CYCLE_SKIP |
+                                  OA_UNIT_FLAG_CLOAK_LOCKED | OA_UNIT_FLAG_CONSTRUCTION_DIRTY |
+                                  OA_UNIT_FLAG_NOT_SELECTABLE;
+        // What the structure type and its owner give: weapons, an air base, a
+        // building, standing orders 3 and 3, the build menu at page 1, a
+        // running cloak and the viewpoint player's ownership.
+        constexpr uint32_t from_structure =
+            OA_UNIT_FLAG_HAS_WEAPONS | OA_UNIT_FLAG_AIR_BASE | OA_UNIT_FLAG_BUILDING |
+            OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK | OA_UNIT_FLAG_BUILD_MENU |
+            (1u << OA_UNIT_FLAG_BUILD_PAGE_SHIFT) | OA_UNIT_FLAG_CLOAK_RUNNING |
+            OA_UNIT_FLAG_VIEWPOINT_OWNED;
+        spawn(structure, 0xffffffffu, 0xffffffffu);
+        CHECK(slot.flags == (spawned | kept | from_structure) && slot.flags2 == 0xffffffffu);
+        spawn(structure, 0, 0);
+        CHECK(slot.flags == (spawned | from_structure) && slot.flags2 == OA_UNIT_FLAG2_Z_BUFFER);
+        (*pinned).game.viewpoint_player = 1;
+        spawn(mobile, 0xffffffffu, 0xffffffffu);
+        CHECK(slot.flags == (spawned | kept) && slot.flags2 == ~OA_UNIT_FLAG2_Z_BUFFER);
+        spawn(mobile, 0, 0);
+        CHECK(slot.flags == spawned && slot.flags2 == 0);
+    }
+    {
+        CHECK(unit_pool_size(0) == 0 && unit_pool_size(6553) == 65531);
+        CHECK(unit_pool_size(6554) == 0 && unit_pool_size(5) == 51);
+        SpawnWorld pooled(unit_pool_size(5), 1);
         for (std::size_t i = 0; i < 10; ++i)
             pooled.player(i).index = static_cast<uint8_t>(i);
         (*pooled).game.periodic_flags = 2;
@@ -222,13 +279,8 @@ int main() {
         l[3].attach_parent = ref(1);
         CHECK(attached_child_count(*linked, l[0]) == 2);
         l[2].attach_next = ref(1);
-        bool rejected = false;
-        try {
-            (void)attached_child_count(*linked, l[0]);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        CHECK(rejected);
+        // The cycle is counted to its 65535th link, each one a child of l[0].
+        CHECK(attached_child_count(*linked, l[0]) == 65535);
     }
     {
         std::vector<oa::sim::spatial_state::Plot> plots(4);

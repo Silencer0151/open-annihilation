@@ -26,15 +26,15 @@ inline constexpr uint32_t download_unit_name_capacity = 0x20;
 
 // One DOWNLOAD\*.TDF section.
 struct DownloadMenuEntry {
-    uint16_t builder_index;                          // table index of the UNITMENU unit
-    uint8_t menu;                                    // MENU: 1-based build page
-    uint8_t button;                                  // BUTTON: slot on that page
-    char unit_name[download_unit_name_capacity + 1]; // UNITNAME
+    uint16_t builder_index{};                          // table index of the UNITMENU unit
+    uint8_t menu{};                                    // MENU: 1-based build page
+    uint8_t button{};                                  // BUTTON: slot on that page
+    char unit_name[download_unit_name_capacity + 1]{}; // UNITNAME
 };
 
 // One DOWNLOAD file: its section count and first five sections.
 struct DownloadMenuGroup {
-    int32_t count;
+    int32_t count{};
     DownloadMenuEntry entries[download_menu_entries];
 };
 
@@ -45,15 +45,15 @@ static_assert(sizeof(DownloadMenuGroup) == 0xbd);
 
 // The DOWNLOAD menus; ? 3.1c keeps their count and table in Game.download_menus.
 struct DownloadMenuTable {
-    DownloadMenuGroup* groups;
-    uint32_t count;
+    DownloadMenuGroup* groups{};
+    uint32_t count{};
 };
 
 // Game.unit_defs (records, slot 0 reserved) and Game.unit_def_count, with the
 // blocks and category masks the records reference.
 struct UnitDefTables {
-    UnitDef* records;
-    uint32_t count;
+    UnitDef* records{};
+    uint32_t count{};
     UnitDefBlocks blocks;
     CategoryRegistry categories;
     DownloadMenuTable downloads;
@@ -126,8 +126,8 @@ bool load_download_menu(const Files* files, const char* variant, UnitDefTables* 
 
 // Replaces one type's COB with the named scripts\<unitname>.COB.
 struct UnitScriptLoader {
-    void* context;
-    void (*load)(void* context, uint16_t type, const char* path);
+    void* context{};
+    void (*load)(void* context, uint16_t type, const char* path) = nullptr;
 };
 
 /// Reloads a catalog type's units\<unitname>.FBI over its record, then its COB, as the console's Reload does.

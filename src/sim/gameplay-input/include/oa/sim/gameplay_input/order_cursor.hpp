@@ -62,19 +62,21 @@ inline constexpr int32_t interface_right_click = 1;
 
 // Services owned by other systems. A null predicate answers "no".
 struct OrderCursorHooks {
-    void* context;
+    void* context{};
     // Line of sight of `player` to a map position.
     bool (*position_visible)(
         void* context, const World& world, const Player& player, const FixedVec3& position
-    );
+    ){};
     // The feature standing on the map position, or null (feature_at_position
     // on a match's plots).
-    const FeatureDef* (*feature_at)(void* context, const World& world, const FixedVec3& position);
+    const FeatureDef* (*feature_at)(void* context, const World& world, const FixedVec3& position){};
     // First-weapon reach, to a unit or to a map position.
-    bool (*unit_in_range)(void* context, const World& world, const Unit& actor, const Unit& target);
+    bool (*unit_in_range)(
+        void* context, const World& world, const Unit& actor, const Unit& target
+    ){};
     bool (*position_in_range)(
         void* context, const World& world, const Unit& actor, const FixedVec3& position
-    );
+    ){};
     // Whether the unit has a movement object (Unit.movement, made only for
     // bmcode 1 types). Null reads Unit.movement.
     bool (*movement_object)(void* context, const World& world, const Unit& unit){};
@@ -367,8 +369,8 @@ enum class ClickAction : uint8_t {
 click_action(const World& world, OrderCommand command, OrderCursor cursor) noexcept;
 
 struct SelectionOrder {
-    const Unit* actor;
-    UnitOrder order;
+    const Unit* actor{};
+    UnitOrder order{};
 };
 
 /// Resolves a click's order for each selected local unit.

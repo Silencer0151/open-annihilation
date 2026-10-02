@@ -122,7 +122,7 @@ struct InstalledUnits {
     // Each unit's corpse, loaded into the feature table as the FBI names it.
     struct Corpses {
         sim::map_runtime::FeatureDefTable& features;
-        std::vector<data::unit_definitions::TdfDocument>& documents;
+        std::vector<formats::tdf::OwnedDocument>& documents;
         std::string error;
 
         /// Finds or loads a corpse feature (UnitDefLoadHost::corpse).
@@ -150,7 +150,7 @@ struct InstalledUnits {
     std::vector<sim::match_runtime::RuntimeTypeFields> fields;
     std::vector<data::unit_definitions::UnitTargetCategoryMasks> target_masks;
     sim::combat_state::WeaponRegistry weapons;
-    std::vector<data::unit_definitions::TdfDocument> feature_documents;
+    std::vector<formats::tdf::OwnedDocument> feature_documents;
     sim::map_runtime::FeatureDefTable features;
 
     /// Loads the named types.

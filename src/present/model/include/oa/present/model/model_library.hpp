@@ -95,7 +95,7 @@ struct PreparedModel {
 //   while entries exist.
 struct ModelLibrary {
     TextureLibrary textures;
-    std::unordered_map<const formats::objects3d::Model*, std::unique_ptr<PreparedModel>> models;
+    std::unordered_map<const formats::objects3d::Model*, std::unique_ptr<PreparedModel>> models{};
     std::vector<sim::sprite_animation::Cursor*> cursors; // registration order
 };
 

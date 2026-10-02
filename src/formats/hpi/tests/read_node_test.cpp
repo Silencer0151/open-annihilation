@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -45,6 +46,17 @@ void report_failure(int line, const char* what) {
             report_failure(__LINE__, #condition);                                                  \
         }                                                                                          \
     } while (false)
+
+/// Opens an archive file the test wrote, throwing when it is refused.
+///
+/// @param path the archive
+/// @return the archive
+oa::HpiArchive opened(const fs::path& path) {
+    auto archive = oa::open_hpi_file(path);
+    if (!archive.ok())
+        throw std::runtime_error(archive.error.message);
+    return std::move(*archive.value);
+}
 
 // Several 64 KiB chunks, exactly one, and a little over one.
 constexpr std::size_t three_chunks = 2 * oa::formats::hpi::BlockBytes + 12345;
@@ -152,7 +164,7 @@ bool refuses(const oa::HpiArchive& archive, uint32_t index) {
 ///
 /// @param path archive to open
 void check_round_trip(const fs::path& path) {
-    const oa::HpiArchive archive(path);
+    const oa::HpiArchive archive = opened(path);
     const auto files = sample_files();
     int32_t files_read = 0;
     for (const auto& file : files) {
@@ -208,7 +220,7 @@ void test_corrupt_chunk(const TempDir& scratch) {
         return;
     }
     bytes[marker + corrupted_payload_byte] ^= corrupting_mask;
-    const oa::HpiArchive archive(scratch.write("corrupt.hpi", bytes));
+    const oa::HpiArchive archive = opened(scratch.write("corrupt.hpi", bytes));
     const auto corrupted = archive.lookup("data/lz77.bin");
     const auto readme = archive.lookup("readme.txt");
     const auto zlib = archive.lookup("data/zlib.bin");
@@ -296,7 +308,7 @@ constexpr std::size_t large_stored_entry = 4 << 20;
 /// @param scratch directory the archives are written into
 void test_claimed_sizes(const TempDir& scratch) {
     const Bytes original = oa::write_hpi(sample_files());
-    const oa::HpiArchive plain(scratch.write("sizes.hpi", original));
+    const oa::HpiArchive plain = opened(scratch.write("sizes.hpi", original));
     const auto readme = plain.lookup("readme.txt");
     const auto lz77 = plain.lookup("data/lz77.bin");
     CHECK(readme.has_value() && lz77.has_value());
@@ -315,7 +327,7 @@ void test_claimed_sizes(const TempDir& scratch) {
     // A stored entry claiming 4 GiB is refused by the entry limit.
     Bytes huge = original;
     put32(huge, stored_record + record_size_field, largest_claimed_size);
-    const oa::HpiArchive huge_archive(scratch.write("huge.hpi", huge));
+    const oa::HpiArchive huge_archive = opened(scratch.write("huge.hpi", huge));
     CHECK(fails_with(
         huge_archive, *readme, oa::base::bytes::DecodeCode::limit_exceeded, "entry size limit"
     ));
@@ -325,7 +337,7 @@ void test_claimed_sizes(const TempDir& scratch) {
     Bytes past_end = original;
     const auto rest = static_cast<uint32_t>(original.size() - stored.data_offset);
     put32(past_end, stored_record + record_size_field, rest + 1);
-    const oa::HpiArchive past_end_archive(scratch.write("past-end.hpi", past_end));
+    const oa::HpiArchive past_end_archive = opened(scratch.write("past-end.hpi", past_end));
     CHECK(fails_with(
         past_end_archive,
         *readme,
@@ -338,7 +350,7 @@ void test_claimed_sizes(const TempDir& scratch) {
     // A compressed entry whose chunks cannot all fit is refused too.
     Bytes unfitting = original;
     put32(unfitting, chunked_record + record_size_field, unfitting_compressed_size);
-    const oa::HpiArchive unfitting_archive(scratch.write("unfitting.hpi", unfitting));
+    const oa::HpiArchive unfitting_archive = opened(scratch.write("unfitting.hpi", unfitting));
     CHECK(fails_with(
         unfitting_archive,
         *lz77,
@@ -355,7 +367,7 @@ void test_claimed_sizes(const TempDir& scratch) {
         {"large.bin", large, static_cast<uint8_t>(oa::formats::hpi::CompressionNone)}
     };
     const auto cut_path = scratch.write("cut.hpi", oa::write_hpi(large_files));
-    const oa::HpiArchive cut(cut_path);
+    const oa::HpiArchive cut = opened(cut_path);
     const auto entry = cut.lookup("large.bin");
     CHECK(entry.has_value());
     if (!entry) {

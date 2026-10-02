@@ -49,17 +49,17 @@ uint32_t scroll_clock_advance(ScrollClock& clock, uint32_t now_ms) noexcept;
 /// kEdgeCatchPixels past the right or bottom edge of a focused window counts
 /// as sitting on that edge.
 struct ScrollPointer {
-    int32_t cursor_x, cursor_y;   // game cursor
-    bool captured;                // exclusive pointer: only the game cursor counts
-    int32_t desktop_x, desktop_y; // desktop cursor
-    bool focused;                 // the game window has keyboard focus
+    int32_t cursor_x{}, cursor_y{};   // game cursor
+    bool captured{};                  // exclusive pointer: only the game cursor counts
+    int32_t desktop_x{}, desktop_y{}; // desktop cursor
+    bool focused{};                   // the game window has keyboard focus
 };
 
 /// Arrow keys held this frame and whether the chat line (TALK.GUI) is open,
 /// which keeps the arrows for text editing.
 struct ScrollKeys {
-    bool left, up, right, down;
-    bool talk_open;
+    bool left{}, up{}, right{}, down{};
+    bool talk_open{};
 };
 
 /// The way the screen's edges scroll the camera along each axis: -1 toward
@@ -71,8 +71,8 @@ struct EdgeScroll {
 
 /// Moves the camera (the renderer clamps it); called when the position changed.
 struct CameraMover {
-    void* user;
-    void (*set_position)(void* user, int32_t x, int32_t y);
+    void* user{};
+    void (*set_position)(void* user, int32_t x, int32_t y){};
 };
 
 /// Resolves the pointer position the edge test uses.

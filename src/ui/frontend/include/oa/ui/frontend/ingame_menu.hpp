@@ -17,7 +17,7 @@
 namespace oa::ui::frontend {
 
 // Campaign-object state the menus branch on.
-enum class SessionKind : uint8_t { none = 0, campaign = 1, skirmish = 2, multiplayer = 3 };
+using SessionKind = oa::data::campaign::SessionKind;
 
 // What the exit confirmation leads to.
 enum class ExitKind : int32_t { main_menu = 0, labelled_return = 1, leave_game = 2 };

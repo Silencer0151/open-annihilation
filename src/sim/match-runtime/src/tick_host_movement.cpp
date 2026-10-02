@@ -209,8 +209,10 @@ bool TickHost::can_occupy(
     const sim::unit_movement::Unit& u, std::array<int16_t, 2> cell, uint8_t mode
 ) {
     auto& s = movement_slot(u);
-    if (!match.fields(s).runtime_metadata || !match.collision_terrain_)
-        throw std::logic_error("moving collision requires resolved type and terrain metadata");
+    if (!match.fields(s).runtime_metadata || !match.collision_terrain_) {
+        match.fault_.note("moving collision requires resolved type and terrain metadata");
+        return false;
+    }
     match.prepare_spatial_state();
     auto& projected = match.project_spatial(s);
     const auto result =
@@ -231,7 +233,7 @@ void TickHost::remove_occupancy(sim::unit_movement::Unit& u) {
     match.synchronize_spatial_state();
     ground(*s.unit).project_slot();
     if (result != sim::spatial_state::Error::none)
-        throw std::runtime_error("moving occupancy removal rejected spatial state");
+        match.fault_.note("moving occupancy removal rejected spatial state");
 }
 
 void TickHost::insert_occupancy(sim::unit_movement::Unit& u) {

@@ -85,6 +85,7 @@ inline constexpr std::size_t create_bytes = 0x30;
 // 0x0005 destroy: type, player type, id, local data, local size, remote
 // data, remote size, DPNAME, parent id, flags.
 inline constexpr std::size_t destroy_id = 0x08;
+inline constexpr std::size_t destroy_id_end = destroy_id + 4; // shortest image the game reads
 inline constexpr std::size_t destroy_remote_data = 0x14;
 inline constexpr std::size_t destroy_remote_data_size = 0x18;
 inline constexpr std::size_t destroy_name = 0x1c;
@@ -109,6 +110,31 @@ inline constexpr std::size_t player_name_id = 0x08;
 inline constexpr std::size_t player_name_name = 0x0c;
 inline constexpr std::size_t player_name_bytes = 0x1c;
 } // namespace system_message
+
+/// Reads the type every system message image starts with.
+///
+/// @param image Message image.
+/// @param size Image length in bytes.
+/// @param[out] type The image's SystemMessageType value; written only on success.
+/// @return False for a null image or one shorter than its type field.
+[[nodiscard]] bool
+read_system_message_type(const uint8_t* image, std::size_t size, uint32_t* type) noexcept;
+
+/// Decoded fields of a 0x0005 player-destroyed image that the game reads.
+struct PlayerDestroyedView {
+    uint32_t player_type{}; ///< player_type_player for a player, else a group
+    uint32_t id{};
+};
+
+/// Decodes the type, player type and id of a 0x0005 player-destroyed system message image.
+///
+/// @param image Message image.
+/// @param size Image length in bytes; at least the bytes through the id.
+/// @param[out] out The fields; written only on success.
+/// @return False for a null image, a short one or another message type.
+[[nodiscard]] bool decode_player_destroyed_image(
+    const uint8_t* image, std::size_t size, PlayerDestroyedView* out
+) noexcept;
 
 // Decoded view of a 0x0003 image (pointers into the caller's buffer).
 struct CreatePlayerView {

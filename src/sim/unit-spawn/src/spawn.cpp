@@ -4,12 +4,34 @@
 #include "oa/sim/unit_spawn/spawn.hpp"
 #include <bit>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::unit_spawn {
 namespace {
 constexpr uint8_t periodic_enabled = 2;
 constexpr uint8_t no_player = 10;
+
+// Unit.flags a spawn clears, then sets: the unit occupies the ground layer,
+// at move rate 0, unselected, unjammed, not cloaking and not carried; it is
+// selectable and its position is marked changed.
+constexpr uint32_t spawn_cleared_flags =
+    OA_UNIT_FLAG_OCCUPANCY_MASK | OA_UNIT_FLAG_MOVE_RATE_MASK | OA_UNIT_FLAG_SELECTED |
+    OA_UNIT_FLAG_JAMMED | OA_UNIT_FLAG_CLOAK_RUNNING | OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE;
+constexpr uint32_t spawn_set_flags =
+    ground_occupancy_state | OA_UNIT_FLAG_SELECTABLE | OA_UNIT_FLAG_POSITION_DIRTY;
+// Unit.flags the type's standing orders, cloak and build pages replace. The
+// spawn also clears the collision marks.
+constexpr uint32_t type_state_flags = OA_UNIT_FLAG_CLOAK_RUNNING | OA_UNIT_FLAG_MOVE_ORDER_MASK |
+                                      OA_UNIT_FLAG_FIRE_ORDER_MASK | OA_UNIT_FLAG_BUILD_MENU |
+                                      OA_UNIT_FLAG_BUILD_PAGE_MASK | OA_UNIT_FLAG_COLLISION_OTHER |
+                                      OA_UNIT_FLAG_COLLISION_SELF;
+// A type with two or more build pages opens on the build menu at page 1.
+constexpr uint32_t build_menu_first_page =
+    OA_UNIT_FLAG_BUILD_MENU | (1u << OA_UNIT_FLAG_BUILD_PAGE_SHIFT);
+
+// Returns flags with bit set when on and cleared otherwise.
+constexpr uint32_t with_flag(uint32_t flags, uint32_t bit, bool on) noexcept {
+    return (flags & ~bit) | (on ? bit : 0u);
+}
 
 uint32_t arithmetic_shift20(uint32_t value) {
     const auto high = value >> 20;
@@ -17,30 +39,25 @@ uint32_t arithmetic_shift20(uint32_t value) {
 }
 
 // Callbacks may replace the unit's type; the game reloads it from the unit.
-const oa::UnitDef& current_def(oa::World& w, const oa::Unit& u) {
-    const auto* def = oa::world_unit_def_of(&w, &u);
+// Null when a callback left the unit without one.
+const oa::UnitDef* current_def(oa::World& w, const oa::Unit& u) noexcept {
+    return oa::world_unit_def_of(&w, &u);
+}
+
+// The runtime type of the unit's current type, or null when it has none in
+// the tables.
+Type* current_type(oa::World& w, Tables& tables, const oa::Unit& u) noexcept {
+    const auto* def = current_def(w, u);
     if (!def)
-        throw std::invalid_argument("spawn callback selected an unbound unit type");
-    return *def;
+        return nullptr;
+    const auto index = oa::world_unit_def_ref(&w, def) - 1u;
+    return index < tables.types.size() ? &tables.types[index] : nullptr;
 }
 
-Type& current_type(oa::World& w, Tables& tables, const oa::Unit& u) {
-    const auto index = oa::world_unit_def_ref(&w, &current_def(w, u)) - 1u;
-    if (index >= tables.types.size())
-        throw std::invalid_argument("spawn callback selected an unbound unit type");
-    return tables.types[index];
-}
-
-SlotAssets& assets(oa::World& w, Tables& tables, const oa::Unit& u) {
-    const auto slot = oa::world_unit_slot(&w, &u);
-    if (slot >= tables.assets.size())
-        throw std::invalid_argument("spawn slot has no asset record");
-    return tables.assets[slot];
-}
-
-void require_handle(AssetHandle value, const char* name) {
-    if (!value)
-        throw std::runtime_error(name);
+// The unit's slot asset record. create checks that the asset table covers the
+// unit pool before it claims a slot.
+SlotAssets& assets(oa::World& w, Tables& tables, const oa::Unit& u) noexcept {
+    return tables.assets[oa::world_unit_slot(&w, &u)];
 }
 
 oa::oa_fixed fixed_word(uint32_t word) noexcept {
@@ -63,21 +80,25 @@ void load_unit_def(const Type& t, oa::UnitDef& d) noexcept {
     d.bm_code = std::bit_cast<int8_t>(t.bm_code);
 }
 
-void initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h) {
+SpawnFault initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h) {
     const auto* owner = oa::world_unit_owner(&w, &u);
     if (!owner)
-        throw std::invalid_argument("spawn slot has no preassigned owner");
+        return SpawnFault::no_owner;
     if (r.type >= w.unit_def_count)
-        throw std::out_of_range("spawn type index");
+        return SpawnFault::type_outside_table;
     const auto& t = w.unit_defs[r.type];
     u.flags |= OA_UNIT_FLAG_LIVE;
     u.def = oa::oa_ref_from_index(r.type);
-    u.flags = (static_cast<uint32_t>(t.bm_code == 0) << 29) | (u.flags & 0xdfffbfffu);
+    u.flags =
+        with_flag(u.flags & ~OA_UNIT_FLAG_DEATH_PENDING, OA_UNIT_FLAG_BUILDING, t.bm_code == 0);
     u.footprint_x = t.footprint_x;
     u.footprint_z = t.footprint_z;
-    u.flags = ((t.flags >> 16) << 31) | (u.flags & 0x7fffffffu);
-    u.flags2 = ((t.flags >> 7) & 1) | (u.flags2 & 0xfffffffeu);
-    u.flags = ((t.flags & 0x200) << 21) | (u.flags & 0xbfffffffu);
+    u.flags =
+        with_flag(u.flags, OA_UNIT_FLAG_HAS_WEAPONS, (t.flags & OA_UNIT_DEF_FLAG_HAS_WEAPONS) != 0);
+    u.flags2 =
+        with_flag(u.flags2, OA_UNIT_FLAG2_Z_BUFFER, (t.flags & OA_UNIT_DEF_FLAG_Z_BUFFER) != 0);
+    u.flags =
+        with_flag(u.flags, OA_UNIT_FLAG_AIR_BASE, (t.flags & OA_UNIT_DEF_FLAG_IS_AIRBASE) != 0);
     if (!r.finished) {
         u.cleared_on_unfinished_spawn = 0;
         u.health = 0;
@@ -89,11 +110,11 @@ void initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h) {
     u.health_percent = 0;
     u.previous_health_percent = 0;
     u.position.x = fixed_word(r.position[0]);
-    u.flags = (u.flags & 0xfffdf3e1u) | 0x10021;
+    u.flags = (u.flags & ~spawn_cleared_flags) | spawn_set_flags;
     u.position.y = fixed_word(r.position[1]);
     u.state_flags = 0;
     u.position.z = fixed_word(r.position[2]);
-    u.build_flags &= 0xf0;
+    u.build_flags &= static_cast<uint8_t>(~OA_UNIT_BUILD_SCRIPT_MASK);
     u.decloak_until_tick = 0;
     u.pitch = 0;
     // Wrapping arithmetic, an arithmetic shift by 20, then each grid coordinate narrows.
@@ -113,81 +134,97 @@ void initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h) {
     u.damage_countdown = 0;
     u.bank = 0;
     u.sight_center_x = 0;
+    const auto* drawn_def = current_def(w, u);
+    if (!drawn_def)
+        return SpawnFault::type_removed;
     u.heading = static_cast<uint16_t>(
-        angle + 0xffff8000u - (static_cast<uint16_t>(current_def(w, u).build_angle) >> 1)
+        angle + 0xffff8000u - (static_cast<uint16_t>(drawn_def->build_angle) >> 1)
     );
     u.sight_center_z = 0;
     u.capture_cooldown = 0;
-    u.flags = (static_cast<uint32_t>(owner->index == w.game.viewpoint_player) << 9) |
-              (u.flags & 0xfffffcffu);
+    u.flags = with_flag(
+        u.flags & ~OA_UNIT_FLAG_RADAR_CONTACT,
+        OA_UNIT_FLAG_VIEWPOINT_OWNED,
+        owner->index == w.game.viewpoint_player
+    );
     for (uint32_t i = 0; i < 3; ++i) {
         h.init_weapon_target(u, i);
         h.reset_weapon_targets(u, static_cast<uint8_t>(i));
     }
     // The type is reloaded after the callbacks.
-    if (!u.def)
-        throw std::invalid_argument("weapon reset removed unit type");
-    const auto definition_flags = current_def(w, u).flags;
+    const auto* reset_def = u.def ? current_def(w, u) : nullptr;
+    if (!reset_def)
+        return SpawnFault::type_removed;
+    const auto definition_flags = reset_def->flags;
     const auto flags_before_reset = u.flags;
     u.events = 0;
     u.veteran_level = 0;
     u.last_attacker_id = 0;
     u.last_attacker_owner = no_player;
-    const auto standing_move = (definition_flags & 3) << 18;
-    u.flags = standing_move | (flags_before_reset & 0xfff3ffffu);
-    const auto standing_fire = (definition_flags & 0xc) << 18;
-    u.flags = standing_fire | standing_move | (flags_before_reset & 0xffc3ffffu);
-    const auto cloak = (definition_flags & 0x10) << 7;
-    u.flags = cloak | standing_fire | standing_move | (flags_before_reset & 0xf3c3f7ffu);
-    if (current_def(w, u).gui_page_count < 2)
-        u.flags = cloak | standing_fire | standing_move | (flags_before_reset & 0xf003f7ffu);
-    else
-        u.flags =
-            cloak | standing_fire | standing_move | (flags_before_reset & 0xf0c3f7ffu) | 0xc00000;
+    const auto standing_move =
+        ((definition_flags & OA_UNIT_DEF_FLAG_MOVE_ORDER_MASK) << OA_UNIT_FLAG_MOVE_ORDER_SHIFT);
+    const auto standing_fire =
+        ((definition_flags & OA_UNIT_DEF_FLAG_FIRE_ORDER_MASK) >> OA_UNIT_DEF_FLAG_FIRE_ORDER_SHIFT)
+        << OA_UNIT_FLAG_FIRE_ORDER_SHIFT;
+    const auto cloak =
+        (definition_flags & OA_UNIT_DEF_FLAG_INIT_CLOAKED) != 0 ? OA_UNIT_FLAG_CLOAK_RUNNING : 0u;
+    const auto build_menu = reset_def->gui_page_count < 2 ? 0u : build_menu_first_page;
+    u.flags = cloak | standing_fire | standing_move | build_menu |
+              (flags_before_reset & ~type_state_flags);
     u.sight_band = 0;
     h.init_unit_economy(u, u.owner_index);
     u.attach_piece = 0xff;
     u.bob_phase = static_cast<uint16_t>(h.random_bounded(0x10000));
     h.assign_squad(u, 0);
+    return SpawnFault::none;
 }
 
-void attach_model_script(oa::World& w, Tables& tables, oa::Unit& u, Host& h) {
-    if (u.type_index >= tables.types.size())
-        throw std::out_of_range("spawn type index");
+SpawnFault attach_model_script(oa::World& w, Tables& tables, oa::Unit& u, Host& h) {
+    if (u.type_index >= tables.types.size() || oa::world_unit_slot(&w, &u) >= tables.assets.size())
+        return SpawnFault::type_outside_table;
     const auto& t = tables.types[u.type_index];
     auto& a = assets(w, tables, u);
     if (!t.cob) {
         a.script_instance = 0;
         u.script = 0;
         a.model_instance = h.create_model_instance(t.model);
-        require_handle(a.model_instance, "model allocation failed");
+        if (!a.model_instance)
+            return SpawnFault::model_allocation_failed;
         h.model_owner(u);
     } else {
         a.script_instance = h.allocate_script();
-        require_handle(a.script_instance, "script allocation failed");
+        if (!a.script_instance)
+            return SpawnFault::script_allocation_failed;
         u.script = 1;
-        h.load_script_state(a.script_instance, current_type(w, tables, u).cob);
-        a.model_instance = h.create_scripted_model(t.model, current_type(w, tables, u).cob, u);
-        require_handle(a.model_instance, "scripted model allocation failed");
+        const auto* script_type = current_type(w, tables, u);
+        if (!script_type)
+            return SpawnFault::type_removed;
+        h.load_script_state(a.script_instance, script_type->cob);
+        script_type = current_type(w, tables, u);
+        if (!script_type)
+            return SpawnFault::type_removed;
+        a.model_instance = h.create_scripted_model(t.model, script_type->cob, u);
+        if (!a.model_instance)
+            return SpawnFault::scripted_model_allocation_failed;
         h.bind_script_model(a.script_instance, a.model_instance);
         h.call_script_create(a.script_instance);
     }
     h.model_reset(u);
+    return SpawnFault::none;
 }
 
-std::size_t offline_pool_size(uint16_t limit) {
+std::size_t unit_pool_size(uint16_t limit) noexcept {
     const auto total = static_cast<std::size_t>(limit) * 10 + 1;
     if (limit == 0 || total > 65535)
-        throw std::invalid_argument("unit pool limit would wrap the 16-bit unit count");
+        return 0;
     return total;
 }
 
-void init_unit_pool(oa::World& w, uint16_t limit) {
-    const auto total = offline_pool_size(limit);
-    if (!w.unit_defs || w.unit_def_count == 0)
-        throw std::invalid_argument("unit pool needs reserved type zero");
-    if (!w.units || w.unit_slot_count != total)
-        throw std::invalid_argument("unit pool buffers do not match the slot count");
+bool init_unit_pool(oa::World& w, uint16_t limit) noexcept {
+    const auto total = unit_pool_size(limit);
+    if (total == 0 || !w.unit_defs || w.unit_def_count == 0 || !w.units ||
+        w.unit_slot_count != total)
+        return false;
     w.game.cycle_unit_id = 0;
     w.game.periodic_flags &= static_cast<uint8_t>(~periodic_enabled);
     w.game.units_per_player = limit;
@@ -211,17 +248,51 @@ void init_unit_pool(oa::World& w, uint16_t limit) {
             w.units[i].owner_index = owner.index;
         }
     }
+    return true;
 }
 
-oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h) {
+const char* spawn_fault_text(SpawnFault fault) noexcept {
+    switch (fault) {
+    case SpawnFault::none:
+        return "no fault";
+    case SpawnFault::player_outside_table:
+        return "spawn player index";
+    case SpawnFault::type_outside_table:
+        return "spawn type index";
+    case SpawnFault::asset_table_mismatch:
+        return "spawn asset table does not match unit pool";
+    case SpawnFault::player_slot_range:
+        return "spawn player slot range";
+    case SpawnFault::no_owner:
+        return "spawn slot has no preassigned owner";
+    case SpawnFault::type_removed:
+        return "spawn callback removed unit type";
+    case SpawnFault::model_allocation_failed:
+        return "model allocation failed";
+    case SpawnFault::script_allocation_failed:
+        return "script allocation failed";
+    case SpawnFault::scripted_model_allocation_failed:
+        return "scripted model allocation failed";
+    }
+    return "unknown spawn fault";
+}
+
+oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnFault* fault) {
+    const auto stop = [fault](SpawnFault why) -> oa::Unit* {
+        if (fault)
+            *fault = why;
+        return nullptr;
+    };
+    if (fault)
+        *fault = SpawnFault::none;
     if (r.player >= OA_PLAYER_COUNT)
-        throw std::out_of_range("spawn player index");
+        return stop(SpawnFault::player_outside_table);
     if (!r.type)
         return nullptr;
     if (r.type >= w.unit_def_count || r.type >= tables.types.size())
-        throw std::out_of_range("spawn type index");
+        return stop(SpawnFault::type_outside_table);
     if (tables.assets.size() != w.unit_slot_count)
-        throw std::invalid_argument("spawn asset table does not match unit pool");
+        return stop(SpawnFault::asset_table_mismatch);
     const auto& t = w.unit_defs[r.type];
     if (!(t.flags & OA_UNIT_DEF_FLAG_AVAILABLE))
         return nullptr;
@@ -229,7 +300,7 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h) {
     uint32_t count = 0;
     auto* first = oa::world_player_units(&w, &p, &count);
     if (count == 0 && (p.first_unit || p.last_unit))
-        throw std::out_of_range("spawn player slot range");
+        return stop(SpawnFault::player_slot_range);
     if (t.player_limit != -1) {
         int32_t owned = 0;
         for (uint32_t i = 0; i < count; ++i)
@@ -260,8 +331,10 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h) {
     auto& a = assets(w, tables, u);
     a.weapon_slots_initialized.fill(true);
     u.type_index = r.type;
-    initialize_numeric(w, u, r, h);
-    attach_model_script(w, tables, u, h);
+    if (const auto why = initialize_numeric(w, u, r, h); why != SpawnFault::none)
+        return stop(why);
+    if (const auto why = attach_model_script(w, tables, u, h); why != SpawnFault::none)
+        return stop(why);
     h.initialize_weapons(u);
     h.initialize_extraction_rate(u);
     if (t.bm_code == 1) {
@@ -269,7 +342,10 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h) {
         // A null movement object is allowed and leaves Unit.movement clear.
         u.movement = a.movement_object != 0;
         // UnitDef.build_angle is written over Unit.heading after the movement object exists.
-        u.heading = static_cast<uint16_t>(current_def(w, u).build_angle);
+        const auto* moved_def = current_def(w, u);
+        if (!moved_def)
+            return stop(SpawnFault::type_removed);
+        u.heading = static_cast<uint16_t>(moved_def->build_angle);
     }
     u.flags = ((u.flags ^ r.state) & OA_UNIT_FLAG_OCCUPANCY_MASK) ^ u.flags;
     h.fit_spawn_height(u);
@@ -278,9 +354,10 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h) {
     if (r.finished) {
         if (!t.bm_code)
             h.notify_finished(u);
-        if (!u.def)
-            throw std::invalid_argument("spawn callback removed unit type");
-        const auto flags = current_def(w, u).flags;
+        const auto* finished_def = u.def ? current_def(w, u) : nullptr;
+        if (!finished_def)
+            return stop(SpawnFault::type_removed);
+        const auto flags = finished_def->flags;
         if (flags & OA_UNIT_DEF_FLAG_ACTIVATE_WHEN_BUILT)
             h.set_activation(u, true, true);
         // A finished unit whose type is a feature is marked to die at once,
@@ -339,10 +416,16 @@ StartResult spawn_player_commander(
     int32_t viewport_width,
     int32_t viewport_height,
     Host& h,
-    StartHost& start
+    StartHost& start,
+    SpawnFault* fault
 ) {
-    if (player >= OA_PLAYER_COUNT || player >= tables.setups.size())
-        throw std::out_of_range("start player index");
+    if (fault)
+        *fault = SpawnFault::none;
+    if (player >= OA_PLAYER_COUNT || player >= tables.setups.size()) {
+        if (fault)
+            *fault = SpawnFault::player_outside_table;
+        return {};
+    }
     auto& p = w.game.players[player];
     auto& stored = tables.setups[player];
     stored.side = setup.side;
@@ -358,7 +441,7 @@ StartResult spawn_player_commander(
         return {};
     }
     request.type = start.commander_type_for_side(stored.side);
-    auto* result = create(w, tables, request, h);
+    auto* result = create(w, tables, request, h, fault);
     if (player == local_player) {
         const auto x = std::bit_cast<int16_t>(static_cast<uint16_t>(request.position[0] >> 16));
         const auto z = std::bit_cast<int16_t>(static_cast<uint16_t>(request.position[2] >> 16));
@@ -381,9 +464,7 @@ int32_t attached_child_count(const oa::World& w, const oa::Unit& unit) {
          child = oa::world_unit(&w, child->attach_next)) {
         // The slot count is a 16-bit word, so a longer chain must cycle.
         if (++seen > 65535)
-            throw std::invalid_argument(
-                "attachment sibling chain exceeds the 16-bit unit index space"
-            );
+            break;
         if (child->attach_parent == self)
             ++count;
     }

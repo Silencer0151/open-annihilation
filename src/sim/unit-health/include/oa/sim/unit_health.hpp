@@ -112,12 +112,20 @@ scale_computer_credit(float amount, uint8_t player_status, int32_t difficulty) n
     int32_t difficulty
 ) noexcept;
 
+/// Bit of a unit's event flags (the high byte of Unit.events) that a hit sets
+/// when its amount exceeds twice its threshold.
+inline constexpr uint8_t hit_reaction_over_double = 0x40;
+/// Bit of a unit's event flags that a hit sets when its amount is at most
+/// twice its threshold.
+inline constexpr uint8_t hit_reaction_within_double = 0x20;
+
 /// Records how hard a hit was in a unit's event flags, the high byte of Unit.events.
 ///
 /// Hit resolution passes enemy damage as the amount and friendly damage as the
 /// threshold, or the reverse.
 ///
-/// @param[in,out] event_flags gains 0x40 when threshold * 2 < amount, otherwise 0x20
+/// @param[in,out] event_flags gains hit_reaction_over_double when threshold * 2 < amount,
+///                otherwise hit_reaction_within_double
 /// @param amount damage compared
 /// @param threshold damage compared against
 void record_hit_reaction(uint8_t& event_flags, int amount, int threshold) noexcept;
@@ -252,7 +260,7 @@ struct DamageHost {
 /// is then shared when another player's simulation owns the target, unless the kind is
 /// 11.
 ///
-/// Throws std::invalid_argument for a target without a type.
+/// A target without a type takes no event.
 ///
 /// @param source unit responsible, or null
 /// @param[in,out] target unit hit
@@ -260,7 +268,8 @@ struct DamageHost {
 /// @param kind damage kind
 /// @param host damage application and sharing
 /// @param direction_word hit direction; its high byte is kept
-void submit_damage(
+/// @return false when the target has no type and nothing was submitted
+bool submit_damage(
     const Unit* source,
     Unit& target,
     int32_t amount,
@@ -290,6 +299,7 @@ struct RecoveryResult {
     bool performed{};
     int32_t health_amount{};
     int32_t energy_amount{};
+    bool target_untyped{}; // the target has no type, and nothing was done
 };
 
 /// Runs one repair step.
@@ -298,13 +308,14 @@ struct RecoveryResult {
 /// applied as a kind-10 event. Natural regeneration supplies
 /// `float((uint16(heal_time) * 8) / 30)` as the rate; repair orders use their own.
 ///
-/// Throws std::invalid_argument for a target without a type.
+/// A target without a type is not repaired.
 ///
 /// @param repairer unit paying for the repair
 /// @param[in,out] target unit repaired
 /// @param rate worker time this step
 /// @param host economy and damage services
-/// @return whether the repair happened, and the health and energy amounts
+/// @return whether the repair happened, the health and energy amounts, and whether
+///         the target had no type
 /// @quirk A zero build time divides by zero; the out-of-range conversions leave both
 ///        amounts zero.
 [[nodiscard]] RecoveryResult
@@ -335,6 +346,7 @@ struct ConstructionResult {
     bool completed{};
     float energy_amount{};
     float metal_amount{};
+    bool target_untyped{}; // the target has no type, and nothing was done
 };
 
 /// Adds worker time to an unfinished target, or takes it away.
@@ -343,14 +355,15 @@ struct ConstructionResult {
 /// rate decays the frame: metal is refunded, and a frame decayed back to nothing is
 /// destroyed as a reclaim.
 ///
-/// Throws std::invalid_argument for a target without a type.
+/// A target without a type is not built.
 ///
 /// @param builder unit paying for the step
 /// @param[in,out] target unfinished unit
 /// @param rate worker_time / 30 (integer, then float) for MobileBuild, or the negative
 ///        build_decay_rate
 /// @param host economy and completion services
-/// @return whether the step happened, whether it completed the target, and its costs
+/// @return whether the step happened, whether it completed the target, its costs, and
+///         whether the target had no type
 /// @quirk A zero or NaN fraction or rate returns without touching resources; the
 ///        step keeps 53 bits, and a zero build time divides to infinity.
 [[nodiscard]] ConstructionResult

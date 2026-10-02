@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/services/commands.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -196,7 +197,7 @@ bool command_table_set(
             return false;
         }
         entry = &table->entries[table->count++];
-        std::strcpy(entry->name, name);
+        oa::base::text::copy_terminated(entry->name, name);
     }
     entry->handler = handler;
     entry->mask = mask;

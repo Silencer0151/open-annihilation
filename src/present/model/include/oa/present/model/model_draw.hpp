@@ -76,7 +76,7 @@ inline constexpr uint16_t graphics_shading = 0x20;
 inline constexpr uint8_t unit_state_cloaked = 0x04;
 // Unit.flags bit set while a unit is carried with no attachment piece
 // (attached at piece -1); such a unit stays out of its carrier's image.
-inline constexpr uint32_t unit_flag_attached_without_piece = 0x00020000u;
+inline constexpr uint32_t unit_flag_attached_without_piece = OA_UNIT_FLAG_ATTACHED_WITHOUT_PIECE;
 
 // Width, height and hotspot of a model image.
 struct ImageFrame {

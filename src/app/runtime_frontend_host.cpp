@@ -3,12 +3,14 @@
 
 // Frontend dispatcher, preferences, map list and main-menu host services.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/data/campaign/campaign_assets.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/data/campaign/map_catalog.hpp"
 #include "oa/platform/preferences.hpp"
+#include "oa/platform/system.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <charconv>
@@ -132,13 +134,12 @@ void Runtime::set_app_mode(frontend::State&, int32_t mode) {
     frontend_mode_ = mode;
     frontend_game().mode = mode;
     // The extension hears of every mode set, the same one again included.
-    if (extension_.app_mode_set != nullptr)
-        extension_.app_mode_set(extension_.context, *this, mode);
+    call_hook_or_report<&Extension::app_mode_set>(extension_, hook_error_report(), *this, mode);
 }
 
 oa::Game& Runtime::frontend_game() {
     if (extension_.frontend_game != nullptr)
-        return *extension_.frontend_game(extension_.context);
+        return *call_hook_or_raise<&Extension::frontend_game>(extension_);
     return *frontend_game_;
 }
 
@@ -261,8 +262,7 @@ uint32_t Runtime::nickname_override_enabled() {
     // The first of the preferences load's three overrides asks the extension
     // once for the load; the values are copied at once.
     FrontendEntry entry{};
-    if (extension_.frontend_entry != nullptr)
-        extension_.frontend_entry(extension_.context, entry);
+    call_hook_or_raise<&Extension::frontend_entry>(extension_, entry);
     entry_nickname_ = entry.nickname != nullptr ? entry.nickname : "";
     entry_game_name_ = entry.game_name != nullptr ? entry.game_name : "";
     return entry_nickname_.empty() ? 0 : 1;
@@ -278,8 +278,8 @@ std::string Runtime::game_name_override() {
 
 std::optional<std::string> Runtime::user_name() {
     for (const char* variable : {"USER", "USERNAME"})
-        if (const auto* name = std::getenv(variable); name != nullptr && *name != '\0')
-            return std::string(name);
+        if (auto name = oa::platform::environment_value(variable); name && !name->empty())
+            return name;
     return std::nullopt;
 }
 
@@ -322,10 +322,7 @@ uint32_t Runtime::cd_audio_volume() {
 }
 
 uint8_t Runtime::keep_stored_password() {
-    return extension_.keep_stored_password != nullptr &&
-                   extension_.keep_stored_password(extension_.context)
-               ? 1
-               : 0;
+    return call_hook_or_raise<&Extension::keep_stored_password>(extension_) ? 1 : 0;
 }
 
 int32_t Runtime::selector(init::MapListHandle handle) {

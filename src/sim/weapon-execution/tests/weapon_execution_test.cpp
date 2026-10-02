@@ -118,6 +118,24 @@ int main() {
     // Zero pitch limit inherits the yaw limit.
     OA_CHECK(!turret_within_tolerance(TurretSlewInput{500, 0, 0, 0, 0, 600, false}));
     OA_CHECK(reload_ticks_after_shot(100, 25, 10, 100) == 82); // 100*.70*.? 120-2 = 82
+    OA_CHECK(reload_ticks_after_shot(100, 25, 10, 0) == 0);
+    {
+        // A unit with no maximum health fires, then its first unstockpiled
+        // slot ends the tick: the slots after it are not ticked.
+        WeaponDefinition plain{true, 0, 100, 0, 0, 0};
+        std::array<oa::UnitWeapon, weapon_slot_count> unhealthy_records{};
+        UnitState unhealthy;
+        unhealthy.slots[0] = {&plain, &unhealthy_records[0], 0, enabled_flag};
+        unhealthy.slots[1] = {&plain, &unhealthy_records[1], 0, enabled_flag};
+        Fixture shooter;
+        const auto stopped = tick_weapons(unhealthy, shooter);
+        OA_CHECK(
+            stopped.slots[0] == SlotResult::no_maximum_health && unhealthy_records[0].reload == 0
+        );
+        OA_CHECK(
+            stopped.slots[1] == SlotResult::disabled && shooter.shots == std::vector<int>({0})
+        );
+    }
     WeaponDefinition direct{true, vlaunch_flag, 100, 0, 2.0f, 3.0f};
     WeaponDefinition ballistic{true, turret_flag | stockpile_flag | commandfire_flag, 77, 0, 0, 0};
     // The reload counts down in the unit's canonical slots.

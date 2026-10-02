@@ -125,7 +125,7 @@ void send_chat_line(World& world, const char* typed, const ChatHost& host) {
 
 bool open_chat_panel(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     ChatDraft& draft,
     const PanelLoader& loader,
     const PanelControls& controls,
@@ -141,7 +141,8 @@ bool open_chat_panel(
     }
     if ((game.frame_flags & kFrameUnitInfoOpen) != 0)
         return false;
-    const bool team = chat_to_team(game) && session_kind == kSessionMultiplayer;
+    const bool team =
+        chat_to_team(game) && session_kind == oa::data::campaign::SessionKind::multiplayer;
     const char* layout = team ? "TALK2.GUI" : "TALK.GUI";
     if (loader.load == nullptr ||
         !loader.load(loader.user, layout, nullptr, team ? kTeamTalkPanelFlags : kTalkPanelFlags))
@@ -151,7 +152,7 @@ bool open_chat_panel(
     if (talk != -1 && controls.set_text != nullptr)
         controls.set_text(controls.user, talk, draft.text);
     set_group(controls, kSendTo, team ? 1 : 0);
-    if (session_kind == kSessionMultiplayer) {
+    if (session_kind == oa::data::campaign::SessionKind::multiplayer) {
         if (team) {
             set_group(controls, kSendType, game.chat_mode);
             if (host.refresh_player_slots != nullptr)
@@ -168,7 +169,7 @@ bool open_chat_panel(
 
 ChatClick chat_panel_click(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const char* name,
     int32_t control,
     ChatDraft& draft,

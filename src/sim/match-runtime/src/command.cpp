@@ -7,7 +7,6 @@
 #include "oa/data/mission_types.hpp"
 #include "oa/core/unit_def.h"
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -77,10 +76,14 @@ std::string_view resolve_combat_command(
     const std::optional<CommandTarget>& target,
     uint8_t sea_level
 ) {
-    constexpr uint32_t active = 0x10000000u, armed = 0x80000000u, stationary = 0x20000000u;
-    constexpr uint32_t aircraft = 0x800u, hover = 0x1000u, hover_attack = 0x8000000u,
-                       kamikaze = 0x10000000u;
-    constexpr uint32_t water_weapon = 0x10000u, to_air_weapon = 0x20000u, dropped_weapon = 0x100u;
+    constexpr uint32_t active = OA_UNIT_FLAG_LIVE, armed = OA_UNIT_FLAG_HAS_WEAPONS,
+                       stationary = OA_UNIT_FLAG_BUILDING;
+    constexpr uint32_t aircraft = OA_UNIT_DEF_FLAG_CAN_FLY, hover = OA_UNIT_DEF_FLAG_CAN_HOVER,
+                       hover_attack = OA_UNIT_DEF_FLAG_HOVER_ATTACK,
+                       kamikaze = OA_UNIT_DEF_FLAG_KAMIKAZE;
+    constexpr uint32_t water_weapon = OA_WEAPON_FLAG_WATER_WEAPON,
+                       to_air_weapon = OA_WEAPON_FLAG_TO_AIR_WEAPON,
+                       dropped_weapon = OA_WEAPON_FLAG_DROPPED;
     if (target && !(target->unit_flags & active))
         return {};
     if (command == 2) {
@@ -93,7 +96,7 @@ std::string_view resolve_combat_command(
         return source.type_flags & aircraft ? "VTOL_Move" : "Move_Ground";
     }
     if (command != 3)
-        throw std::invalid_argument("command case outside the combat projection");
+        return {};
     if (!source.can_attack)
         return {};
     if (source.unit_flags & armed) {
@@ -150,10 +153,10 @@ bool can_repair_target(const RepairEligibility& e) noexcept {
         return false;
     if (e.target_occupancy == 2)
         return false;
-    const bool aircraft = (e.source_type_flags & 0x800u) != 0;
+    const bool aircraft = (e.source_type_flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0;
     const auto target_top =
         static_cast<int32_t>(e.target_height) + static_cast<int32_t>(e.target_y);
-    if (aircraft && (e.source_type_flags & 0x200000u) == 0)
+    if (aircraft && (e.source_type_flags & OA_UNIT_DEF_FLAG_AMPHIBIOUS) == 0)
         if (target_top < static_cast<int32_t>(e.sea_level))
             return false;
     if (!aircraft) {

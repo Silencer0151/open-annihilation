@@ -16,17 +16,17 @@ namespace {
 constexpr std::size_t kSizeTagBytes = 16;
 
 struct Listing {
-    const DirectoryFind* find;
-    char* names;
-    std::size_t capacity;
-    std::size_t used;
-    char* tags;
-    std::size_t tag_capacity;
-    std::size_t tag_used;
-    uint32_t times[kListTimeCapacity];
-    int32_t time_count;
-    int32_t count;
-    bool strip_extensions;
+    const DirectoryFind* find{};
+    char* names{};
+    std::size_t capacity{};
+    std::size_t used{};
+    char* tags{};
+    std::size_t tag_capacity{};
+    std::size_t tag_used{};
+    uint32_t times[kListTimeCapacity]{};
+    int32_t time_count{};
+    int32_t count{};
+    bool strip_extensions{};
 };
 
 // Room for `bytes` more name bytes and the list's final NUL.

@@ -24,7 +24,7 @@ struct TestHost final : ui::Host {
     std::string selection = "None", fallback = "Fallback";
     int32_t mouse = 1, map_result = 1, capacity = 10;
     uint16_t colors = 10;
-    std::optional<uint16_t> teams = 3;
+    std::optional<uint16_t> teams = uint16_t{3};
     uint32_t disc = 1;
 
     ui::MenuHandle frontend_menu() override { return {1}; }

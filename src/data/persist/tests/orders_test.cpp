@@ -4,6 +4,7 @@
 #include "check.hpp"
 
 #include "oa/data/persist/save_orders.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -41,7 +42,9 @@ struct Types {
         std::memset(defs.data(), 0, defs.size() * sizeof(UnitDef));
         uint16_t index = 1;
         for (const auto& [name, flags] : types) {
-            std::strncpy(defs[index].unit_name, name, sizeof(defs[index].unit_name) - 1);
+            oa::base::text::copy_padded(
+                defs[index].unit_name, name, sizeof(defs[index].unit_name) - 1
+            );
             defs[index].flags = flags;
             defs[index].type_id = index;
             ++index;
@@ -223,7 +226,7 @@ void build_type_names() {
     CHECK(save_write_order(saving.world.get(), &builder, &build, &none, bank.get(), "u0003m0000"));
     CHECK(std::strcmp(bank_get_text(bank.get(), "UTYPENAME   3", ""), "ARMSOLAR") == 0);
     // The first name written for a type stays.
-    std::strcpy(saving.defs[3].unit_name, "RENAMED");
+    oa::base::text::copy_terminated(saving.defs[3].unit_name, "RENAMED");
     SavedOrder factory{.owner_id = 3, .kind = building_build, .parameter_1 = 3, .parameter_2 = 5};
     CHECK(
         save_write_order(saving.world.get(), &builder, &factory, &none, bank.get(), "u0003m0001")

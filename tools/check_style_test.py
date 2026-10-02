@@ -66,7 +66,10 @@ def run_main(argv):
     """Runs the check's main with arguments and returns its exit status and output."""
     output = io.StringIO()
     with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-        status = style.main(argv)
+        try:
+            status = style.main(argv)
+        except SystemExit as stop:
+            status = stop.code
     return status, output.getvalue()
 
 
@@ -412,52 +415,76 @@ def test_directories():
 
 
 def test_ratchet(scratch):
-    """Fails on growth and on new directories or rules; writes, lowers and reports baselines."""
+    """Fails on growth and on slack, counted per file; --update writes and lowers, never raising unasked."""
     root = scratch / "ratchet"
     one = "std::int32_t a{};\n"
     two = "std::int32_t a{};\nstd::int32_t b{};\n"
     write_tree(root, {"src/m/CMakeLists.txt": "", "src/m/a.cpp": two})
     status, output = run_main(["--root", str(root)])
     check(status == 2 and "baseline" in output, f"ratchet: a missing baseline is refused (status {status})")
-    status, output = run_main(["--root", str(root), "--write-baseline"])
+    status, output = run_main(["--root", str(root), "--update"])
     baseline = root / style.DEFAULT_BASELINE
-    check(status == 0 and json.loads(baseline.read_text())["counts"] == {"src/m": {"qualified-fixed-width": 2}},
-          f"ratchet: --write-baseline records the counts ({output.strip()})")
+    check(status == 0 and json.loads(baseline.read_text())["counts"] == {"src/m/a.cpp": {"qualified-fixed-width": 2}},
+          f"ratchet: --update writes the counts per file when there is no baseline ({output.strip()})")
     status, output = run_main(["--root", str(root)])
-    check(status == 0 and "clean within the baseline" in output, f"ratchet: the recorded tree passes ({output})")
+    check(status == 0 and "clean, every count equal to the baseline" in output,
+          f"ratchet: the recorded tree passes ({output})")
     write_tree(root, {"src/m/a.cpp": two + "std::int32_t c{};\n"})
     status, output = run_main(["--root", str(root)])
     check(status == 1 and "src/m/a.cpp:3: qualified-fixed-width" in output,
           f"ratchet: a count that grows fails and shows its findings ({output})")
-    status, output = run_main(["--root", str(root), "--write-baseline"])
-    check(status == 1 and json.loads(baseline.read_text())["counts"]["src/m"]["qualified-fixed-width"] == 2,
-          f"ratchet: --write-baseline does not raise a count ({output})")
-    write_tree(root, {"src/m/a.cpp": two, "src/n/b.cpp": one})
+    status, output = run_main(["--root", str(root), "--update"])
+    check(status == 1 and json.loads(baseline.read_text())["counts"]["src/m/a.cpp"]["qualified-fixed-width"] == 2,
+          f"ratchet: --update does not raise a count ({output})")
+    write_tree(root, {"src/m/a.cpp": two, "src/m/b.cpp": one})
     status, output = run_main(["--root", str(root)])
-    check(status == 1 and "src/n: qualified-fixed-width: 1 finding(s) against a baseline of 0" in output,
-          f"ratchet: a new directory fails ({output})")
-    write_tree(root, {"src/n/b.cpp": "int32_t b{};\n", "src/m/a.cpp": two + "int a;\nstruct P { int32_t p; };\n"})
+    check(status == 1 and "src/m/b.cpp: qualified-fixed-width: 1 finding(s) against a baseline of 0" in output,
+          f"ratchet: a new file with a finding fails ({output})")
+    write_tree(root, {"src/m/b.cpp": "int32_t b{};\n", "src/m/a.cpp": two + "int a;\nstruct P { int32_t p; };\n"})
     status, output = run_main(["--root", str(root)])
-    check(status == 1 and "src/m: member-initializer: 1 finding(s) against a baseline of 0" in output,
-          f"ratchet: a rule new to a directory fails ({output})")
-    write_tree(root, {"src/m/a.cpp": one})
+    check(status == 1 and "src/m/a.cpp: member-initializer: 1 finding(s) against a baseline of 0" in output,
+          f"ratchet: a rule new to a file fails ({output})")
+    write_tree(root, {"src/m/a.cpp": one, "src/m/b.cpp": one})
     status, output = run_main(["--root", str(root)])
-    check(status == 0 and "src/m: qualified-fixed-width: 1 finding(s) against a baseline of 2; lower it" in output,
-          f"ratchet: a count that fell passes and asks to lower the baseline ({output})")
-    status, output = run_main(["--root", str(root), "--write-baseline"])
-    check(status == 0 and json.loads(baseline.read_text())["counts"] == {"src/m": {"qualified-fixed-width": 1}},
-          f"ratchet: --write-baseline lowers a count ({output})")
-    write_tree(root, {"src/n/b.cpp": one})
-    status, output = run_main(["--root", str(root), "--write-baseline", "--accept-growth"])
-    check(status == 0 and "src/n" in json.loads(baseline.read_text())["counts"],
+    check(status == 1 and "src/m/b.cpp: qualified-fixed-width: 1 finding(s) against a baseline of 0" in output
+          and "src/m/a.cpp: qualified-fixed-width: 1 finding(s) against a baseline of 2" in output,
+          f"ratchet: a finding fixed in one file makes no room for one in another of the same directory ({output})")
+    write_tree(root, {"src/m/b.cpp": "int32_t b{};\n"})
+    status, output = run_main(["--root", str(root)])
+    check(status == 1 and "src/m/a.cpp: qualified-fixed-width: 1 finding(s) against a baseline of 2" in output
+          and "slack" in output and "--update" in output,
+          f"ratchet: a count that fell fails until the baseline is lowered ({output})")
+    check(json.loads(baseline.read_text())["counts"]["src/m/a.cpp"]["qualified-fixed-width"] == 2,
+          "ratchet: a plain run writes nothing")
+    status, output = run_main(["--root", str(root), "--update"])
+    check(status == 0 and json.loads(baseline.read_text())["counts"] == {"src/m/a.cpp": {"qualified-fixed-width": 1}},
+          f"ratchet: --update lowers a count ({output})")
+    status, output = run_main(["--root", str(root)])
+    check(status == 0, f"ratchet: the lowered baseline passes ({output})")
+    (root / "src/m/a.cpp").unlink()
+    status, output = run_main(["--root", str(root)])
+    check(status == 1 and "src/m/a.cpp: qualified-fixed-width: 0 finding(s) against a baseline of 1" in output,
+          f"ratchet: the entry of a file that is gone is slack ({output})")
+    status, output = run_main(["--root", str(root), "--update"])
+    check(status == 0 and json.loads(baseline.read_text())["counts"] == {},
+          f"ratchet: --update removes the entries of files that are gone ({output})")
+    write_tree(root, {"src/n/moved.cpp": one})
+    status, output = run_main(["--root", str(root), "--update", "--accept-growth"])
+    check(status == 0 and "src/n/moved.cpp" in json.loads(baseline.read_text())["counts"],
           f"ratchet: --accept-growth records growth ({output})")
+    status, output = run_main(["--root", str(root), "--accept-growth"])
+    check(status == 2, f"ratchet: --accept-growth alone is refused ({output})")
+    write_tree(root, {"src/m/a.cpp": two})
     status, output = run_main(["--root", str(root), "--report"])
-    check(status == 0 and "src/n: 1" in output and "qualified-fixed-width: 2 in 2 director(ies)" in output,
-          f"ratchet: --report prints the counts ({output})")
+    check(status == 0 and "src/m: 2" in output and "src/n: 1" in output
+          and "qualified-fixed-width: 3 in 2 director(ies)" in output,
+          f"ratchet: --report prints the counts per directory ({output})")
     status, output = run_main(["--root", str(root), "--list", "--rule", "qualified-fixed-width"])
-    check(status == 0 and output.count("qualified-fixed-width") == 2, f"ratchet: --list prints findings ({output})")
-    for broken in ('{"version": 1, "counts": {"src/m": {"no-such-rule": 1}}}', '{"version": 2, "counts": {}}',
-                   '{"version": 1, "counts": {"src/m": {"qualified-fixed-width": -1}}}', "not json"):
+    check(status == 0 and output.count("qualified-fixed-width") == 3, f"ratchet: --list prints findings ({output})")
+    for broken in ('{"version": 2, "counts": {"src/m/a.cpp": {"no-such-rule": 1}}}', '{"version": 1, "counts": {}}',
+                   '{"version": 2, "counts": {"src/m/a.cpp": {"qualified-fixed-width": -1}}}',
+                   '{"version": 2, "counts": {"src/m/a.cpp": {"qualified-fixed-width": 0}}}',
+                   '{"version": 2, "counts": {"src/m/a.cpp": {}}}', "not json"):
         baseline.write_text(broken)
         status, output = run_main(["--root", str(root)])
         check(status == 2, f"ratchet: a broken baseline is refused: {broken} ({output})")

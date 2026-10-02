@@ -6,7 +6,6 @@
 
 #include <bit>
 #include <limits>
-#include <stdexcept>
 
 namespace oa::sim::ground_orders {
 namespace {
@@ -136,9 +135,10 @@ int32_t search_player_credit(int32_t tick_credit, uint16_t player_count) noexcep
     return tick_credit / static_cast<int32_t>(player_count);
 }
 
-int32_t search_rescaled_heuristic(int32_t usage_count, uint16_t units_per_player, int32_t base) {
+int32_t
+search_rescaled_heuristic(int32_t usage_count, uint16_t units_per_player, int32_t base) noexcept {
     if (units_per_player == 0)
-        throw std::domain_error("path search units-per-player divisor is zero");
+        return base;
     const auto usage = usage_count / static_cast<int32_t>(units_per_player);
     if (usage < 1)
         return base * 6;
@@ -175,22 +175,19 @@ void construct_search(
     grid.allocate(world_width, world_height);
     // Arithmetic shift of (count + 0xff). Zero words is the empty grid, which
     // clears nothing.
+    // A count of 2^31 - 255 cells or more gives no words either; its cells
+    // start cleared all the same.
     const auto words = static_cast<int32_t>(grid.count + 0xffu) >> 8;
-    if (words < 0)
-        throw std::length_error("touched-map word count is negative");
-    if (words == 0) {
-        if (grid.count != 0)
-            throw std::length_error("touched-map size wrapped");
+    if (words <= 0) {
         touched.clear();
     } else {
         touched.assign(static_cast<std::size_t>(words), 0xffffffffu);
         touched.back() = 0;
         auto index = grid.count - 0x100u;
         if (index < grid.count) {
+            // index >> 8 stays below words, as index stays below the count.
             do {
                 const auto word = static_cast<std::size_t>(index >> 8);
-                if (word >= touched.size())
-                    throw std::out_of_range("touched-map index is outside the allocation");
                 touched[word] |= 1u << ((index >> 3) & 31u);
                 ++index;
             } while (index < grid.count);
@@ -210,9 +207,9 @@ void construct_search(
     }
 }
 
-SearchMapCell SearchWorker::cell(uint32_t x, uint32_t z) const {
+SearchMapCell SearchWorker::cell(uint32_t x, uint32_t z) const noexcept {
     if (!in_map(x, z))
-        throw std::out_of_range("search map cell is outside the allocated grid");
+        return {};
     return at(x, z);
 }
 
@@ -506,9 +503,13 @@ SearchAdvance SearchWorker::begin(
     SearchRecord record, const SearchBegin& begin, std::span<const uint16_t> sight_grid
 ) {
     if (!record.unit || !record.navigation || !record.goal || !record.movement_map)
-        throw std::invalid_argument(
-            "path search record requires its unit, navigator, goal and map"
-        );
+        return SearchAdvance::failed;
+    {
+        const auto& map = *record.movement_map;
+        const auto count = static_cast<std::size_t>(map.width()) * map.height();
+        if (map.width() != 0 && count / map.width() != map.height())
+            return SearchAdvance::failed;
+    }
     record_ = record;
     sight_grid_ = sight_grid;
     mask_bit_ = begin.mask_bit;
@@ -522,8 +523,6 @@ SearchAdvance SearchWorker::begin(
     const auto next_width = map.width();
     const auto next_height = map.height();
     const auto count = static_cast<std::size_t>(next_width) * next_height;
-    if (next_width != 0 && count / next_width != next_height)
-        throw std::length_error("search map dimensions overflow");
     const auto dirty_words = static_cast<std::size_t>((static_cast<uint64_t>(count) + 0xff) >> 8);
     if (width_ != next_width || height_ != next_height || cells_.size() != count) {
         width_ = next_width;
@@ -664,7 +663,8 @@ int32_t try_start_job(
     begin.mask_bit = player;
     begin.heuristic_scale = jobs.active_heuristic;
     const SearchRecord record{&unit, navigation, navigation->goal, map};
-    scheduler.controller.begin(record);
+    if (!scheduler.controller.begin(record))
+        return search_slice_expansions;
     if (scheduler.worker.begin(record, begin, sight_grid) != SearchAdvance::in_progress) {
         publish(scheduler, access, {});
         release_job(scheduler, access);
@@ -736,22 +736,25 @@ int32_t scan_player_jobs(
         state.slice_cost = 0;
         if (scheduler.controller.idle()) {
             state.slice_cost = 1;
+            bool credited = true;
             for (int turned = 0; state.credit[state.round_robin] < 1; ++turned) {
-                if (turned == static_cast<int>(search_player_slots))
-                    throw std::logic_error("path search round-robin found no positive credit");
+                if (turned == static_cast<int>(search_player_slots)) {
+                    credited = false;
+                    break;
+                }
                 const auto next = static_cast<uint8_t>(state.round_robin + 1u);
                 state.round_robin = next > 9 ? uint8_t{0} : next;
             }
+            if (!credited)
+                break;
             const auto player = state.round_robin;
             state.job_picks[player] = wrap_add(state.job_picks[player], 1);
-            if (player >= players.size())
-                throw std::out_of_range("path search player slot has no unit list");
+            if (player >= players.size() || players[player].units.empty())
+                break;
             auto& units = players[player].units;
-            if (units.empty())
-                throw std::logic_error("path search player unit list is empty");
             auto& cursor = state.unit_cursor[player];
             if (static_cast<std::size_t>(cursor) >= units.size())
-                throw std::out_of_range("path search unit cursor is outside the player's units");
+                break;
             // Step to the next unit, wrapping from the last unit to the first.
             if (static_cast<std::size_t>(cursor) + 1 == units.size())
                 cursor = 0;

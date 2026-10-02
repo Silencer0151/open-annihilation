@@ -32,9 +32,9 @@ constexpr int32_t high_ground = 60; // plot height Options::high_ground_from rai
 constexpr oa_ref32 standing = 1, burning = 2, dying = 3, reclaiming = 4, venting = 5;
 
 struct Shape {
-    uint16_t frames;
-    uint16_t duration;
-    uint8_t repeat;
+    uint16_t frames{};
+    uint16_t duration{};
+    uint8_t repeat{};
 };
 
 // Frame counts and per-frame ticks of each sequence; the burn, die and

@@ -10,8 +10,6 @@
 #include "oa/sim/scenario/state.hpp"
 
 #include <cstdint>
-#include <exception>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -112,13 +110,8 @@ mission_units::Hooks mission_unit_hooks(MissionUnitBinding& binding) {
         request.finished = finished;
         request.state = state;
         request.requested_slot = requested_slot;
-        try {
-            auto* slot = binding.match.create(request);
-            return slot != nullptr ? &slot->record : nullptr;
-        } catch (const std::exception& error) {
-            note_failure(binding, error.what());
-            return nullptr;
-        }
+        auto* slot = binding.match.create(request);
+        return slot != nullptr ? &slot->record : nullptr;
     };
     hooks.movement_object = [](void* context, const Unit& unit) {
         return movement_object(binding_of(context).match, unit);
@@ -153,28 +146,20 @@ mission_units::Hooks mission_unit_hooks(MissionUnitBinding& binding) {
                            int32_t param_b) {
         auto& binding = binding_of(context);
         const auto point = position != nullptr ? point_of(*position) : sim::ground_orders::Point{};
-        try {
-            (void)binding.match.issue_order(
-                unit.id,
-                kind,
-                flags != 0,
-                target != nullptr ? target->id : uint16_t{0},
-                position != nullptr ? &point : nullptr,
-                param_a,
-                param_b
-            );
-        } catch (const std::exception& error) {
-            note_failure(binding, error.what());
-        }
+        (void)binding.match.issue_order(
+            unit.id,
+            kind,
+            flags != 0,
+            target != nullptr ? target->id : uint16_t{0},
+            position != nullptr ? &point : nullptr,
+            param_a,
+            param_b
+        );
     };
     hooks.carry = [](void* context, Unit& child, Unit& parent, uint8_t piece, uint8_t mode) {
         auto& binding = binding_of(context);
-        try {
-            const auto link_piece = static_cast<int8_t>(piece);
-            binding.match.set_carry_link(child.id, parent.id, link_piece, mode);
-        } catch (const std::exception& error) {
-            note_failure(binding, error.what());
-        }
+        const auto link_piece = static_cast<int8_t>(piece);
+        binding.match.set_carry_link(child.id, parent.id, link_piece, mode);
     };
     hooks.no_mission_units = [](void* context) {
         sim::scenario::disable(binding_of(context).match.scenario_controller());
@@ -190,13 +175,18 @@ mission_units::Hooks mission_unit_hooks(MissionUnitBinding& binding) {
     return hooks;
 }
 
-void create_mission_units(Match& match, const data::campaign::MissionUnit* units, int32_t count) {
+bool create_mission_units(Match& match, const data::campaign::MissionUnit* units, int32_t count) {
     MissionUnitBinding binding{match, {}};
     const auto hooks = mission_unit_hooks(binding);
-    if (!mission_units::create_mission_units(match.state(), units, count, hooks))
-        throw std::runtime_error("mission unit table cannot be allocated");
-    if (!binding.failure.empty())
-        throw std::runtime_error(binding.failure);
+    if (!mission_units::create_mission_units(match.state(), units, count, hooks)) {
+        match.note_fault("mission unit table cannot be allocated");
+        return false;
+    }
+    if (!binding.failure.empty()) {
+        match.note_fault(binding.failure);
+        return false;
+    }
+    return true;
 }
 
 } // namespace oa::sim::match_runtime

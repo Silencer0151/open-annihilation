@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <tuple>
 
 namespace oa::app {
 
@@ -125,8 +126,10 @@ bool bring_window_on_display(SDL_Window* window, SDL_DisplayID display) {
         return true;
     // The window's new size reaches the game as any resize does, and the
     // screen is laid out again at it.
+    // A window system that refuses the size leaves the window as it was,
+    // which the game keeps drawing at.
     if (width != contents.w || height != contents.h)
-        (void)SDL_SetWindowSize(window, width, height);
+        std::ignore = SDL_SetWindowSize(window, width, height);
     return true;
 }
 
@@ -144,12 +147,15 @@ void keep_pointer_on_screen(SDL_Window* window) {
         return;
     // A window system that refuses leaves the pointer free, and the next
     // change of the window's state asks again.
-    (void)SDL_SetWindowMouseGrab(window, keeps_pointer_on_screen(SDL_GetWindowFlags(window)));
+    std::ignore =
+        SDL_SetWindowMouseGrab(window, keeps_pointer_on_screen(SDL_GetWindowFlags(window)));
 }
 
 void release_pointer(SDL_Window* window) {
+    // A grab the window system will not release ends when the window
+    // closes.
     if (window != nullptr)
-        (void)SDL_SetWindowMouseGrab(window, false);
+        std::ignore = SDL_SetWindowMouseGrab(window, false);
 }
 
 bool take_full_screen_event(

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
+#include "oa/base/game_math.hpp"
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 using namespace oa;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -18,7 +20,7 @@ using namespace oa;
     } while (false)
 
 namespace {
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<uint32_t> speech;
 
     void command_sound(sim::unit_spawn::Slot&, uint32_t category) override {
@@ -35,34 +37,10 @@ struct Services : sim::match_runtime::OfflineServices {
 
     std::string caption; // the last speech's caption; empty for none
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
     uint32_t last() const { return speech.empty() ? 0xffffffffu : speech.back(); }
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 constexpr uint16_t aircraft_type = 1;
 constexpr uint16_t structure_type = 2;
@@ -75,7 +53,7 @@ uint32_t step(
     sim::simulation_state::Order& order,
     uint32_t events
 ) {
-    sim::match_runtime::TickHost host(match);
+    sim::match_runtime::MatchTickAccess host(match);
     const auto result = host.dispatch_mission(match.state(), slot.record, order, events);
     if (result == 0)
         order.phase = 0;

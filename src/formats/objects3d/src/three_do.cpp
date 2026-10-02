@@ -33,36 +33,36 @@ constexpr uint32_t kMaxElementsPerObject = 1'000'000;
 constexpr uint32_t kMaxStringBytes = 4'096;
 
 struct ObjectRecord {
-    int32_t version_signature;
-    int32_t number_of_vertexes;
-    int32_t number_of_primitives;
-    int32_t offset_to_selection_prim;
-    int32_t x_from_parent;
-    int32_t y_from_parent;
-    int32_t z_from_parent;
-    int32_t offset_to_object_name;
-    int32_t reserved;
-    int32_t offset_to_vertex_array;
-    int32_t offset_to_primitive_array;
-    int32_t offset_to_sibling_object;
-    int32_t offset_to_child_object;
+    int32_t version_signature{};
+    int32_t number_of_vertexes{};
+    int32_t number_of_primitives{};
+    int32_t offset_to_selection_prim{};
+    int32_t x_from_parent{};
+    int32_t y_from_parent{};
+    int32_t z_from_parent{};
+    int32_t offset_to_object_name{};
+    int32_t reserved{};
+    int32_t offset_to_vertex_array{};
+    int32_t offset_to_primitive_array{};
+    int32_t offset_to_sibling_object{};
+    int32_t offset_to_child_object{};
 };
 
 struct VertexRecord {
-    int32_t x;
-    int32_t y;
-    int32_t z;
+    int32_t x{};
+    int32_t y{};
+    int32_t z{};
 };
 
 struct PrimitiveRecord {
-    int32_t color_index;
-    int32_t number_of_vertex_indexes;
-    int32_t reserved;
-    int32_t offset_to_vertex_index_array;
-    int32_t offset_to_texture_name;
-    int32_t word_after_texture_name;
-    int32_t word_before_is_colored;
-    int32_t is_colored;
+    int32_t color_index{};
+    int32_t number_of_vertex_indexes{};
+    int32_t reserved{};
+    int32_t offset_to_vertex_index_array{};
+    int32_t offset_to_texture_name{};
+    int32_t word_after_texture_name{};
+    int32_t word_before_is_colored{};
+    int32_t is_colored{};
 };
 
 static_assert(sizeof(ObjectRecord) == kObjectRecordBytes);

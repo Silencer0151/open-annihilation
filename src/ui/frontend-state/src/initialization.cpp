@@ -29,7 +29,7 @@ void reset_player_slots(State& state, PlayerStorage& storage, bool keep_chat_pos
         record[player_offset::alliance + index] = 1;
         record[player_offset::allied_by + index] = 1;
         descriptor[player_offset::color] = static_cast<uint8_t>(index);
-        std::fill_n(record.begin() + player_offset::player_id, 4, 0xff);
+        std::fill_n(record.begin() + player_offset::player_id, 4, uint8_t{0xff});
         record[player_offset::index] = player_offset::inactive_index;
         record[player_offset::team] = player_offset::no_team;
         if (index < state.players.size()) {

@@ -25,7 +25,7 @@
 //   draw_match_overlay, pause_changed, load_progress, speed_changed and
 //   app_mode_set; also message_hooks, console_host and team_panel_host,
 //   whose entries are single owners (below);
-// - every extension, in reverse list order: shutdown;
+// - every extension, in reverse list order: shutdown and release_runtime;
 // - the first that takes it, asking the last extension in the list first:
 //   take_option (the option goes to the first that takes it, with that
 //   extension's effects), the switch handlers (a letter goes to the first
@@ -50,8 +50,8 @@
 //   parsed, with a message that names both. Each entry of the hosts that
 //   message_hooks, console_host and team_panel_host fill is likewise one
 //   extension's: an extension that changes an entry another extension has
-//   set, in that call or an earlier one, stops the call with a message
-//   that names both.
+//   set, in that call or an earlier one, stops the call with an error
+//   that names both, which is the hook's error (below).
 // With one extension the combined table behaves as that extension's own.
 //
 // A check an extension runs from run_mode or check_multiplayer_menu drives
@@ -64,28 +64,40 @@
 // are valid for that call only unless its documentation says otherwise.
 //
 // Hooks report bad input by throwing std::runtime_error, as the engine code
-// around them does, and the exception takes the path the engine's own
-// errors take from the call. Mostly that ends the game: main() prints
-// "open-annihilation: <message>" and exits with status 1. Two kinds of path catch it:
-// - a match start the frontend falls back from: a campaign mission's
-//   start, wherever it comes from, a saved game loaded from the load
-//   dialog, and the in-game restart. The start is abandoned where it
-//   stopped and the frontend runs on; the status line shows
-//   "campaign start: <message>", "Saved game start: <message>" or
+// around them does. The engine calls every hook, and every entry of the
+// switch handler and the replay a hook returns, through one guarded call
+// (call_hook, hook_call.hpp), which catches what the hook throws, whatever
+// its type, before it reaches engine code. What follows is one of three
+// handlings, and each hook says which is its own:
+// - raised: the engine raises the hook's message as its own error at the
+//   call, before it uses anything the hook answered, and the error takes
+//   the path the engine's own errors take from that call. Mostly that ends
+//   the game: main() prints "open-annihilation: <message>" and exits with
+//   status 1. One kind of path catches it, a match start the frontend falls
+//   back from: a campaign mission's start, wherever it comes from, a saved
+//   game loaded from the load dialog, and the in-game restart. The start is
+//   abandoned where it stopped and the frontend runs on; the status line
+//   shows "campaign start: <message>", "Saved game start: <message>" or
 //   "Restart failed: <message>", which stderr also receives, and a failed
 //   restart returns to the main menu. Other starts (a skirmish from the
 //   menus or a headless run, a saved skirmish a --load run loads) are not
-//   caught. frontend_game, state, match_game, match_event, console_host,
-//   team_panel_host, return_label, load_progress, draw_loading,
-//   draw_match_hud and draw_match_overlay are reached there;
-// - a simulation tick of the main loop or of a headless run (--match-ticks,
-//   a --campaign mission, a --save-after or --load run), which reports the
-//   error as a simulation error and runs the match on: simulation_step,
-//   player_gone and message_hooks. A --benchmark run instead prints
-//   "benchmark tick stopped: <message>" and ticks that match no further.
-// A hook reached on such a path says so. speed_changed and app_mode_set
-// must not throw. docs/development/conventions.md states this rule for the
-// extension table beside the rules of each layer.
+//   caught. frontend_game, state, match_game, console_host,
+//   team_panel_host and return_label are reached there;
+// - reported: the engine reports the message and carries on as the hook
+//   says, mostly as it does for that call when the hook is null:
+//   simulation_step, player_gone, message_hooks, match_event, draw_loading,
+//   draw_match_hud, draw_match_overlay, pause_changed and load_progress.
+//   Unless the hook says otherwise the report is one line on standard
+//   error (the game's log when it plays), "open-annihilation: extension
+//   hook <hook>: <message>"; the same line again is printed only when its
+//   count reaches a power of two, with the count;
+// - must not throw: speed_changed, app_mode_set, release_runtime and the
+//   hooks of ReplayHooks. One that throws all the same is reported as a reported
+//   hook is, and the engine carries on as it does when the hook is null.
+// Every other hook's error is raised. When several extensions fill a hook,
+// those after the one that threw are not called for that call.
+// docs/development/conventions.md states this rule for the extension table
+// beside the rules of each layer.
 #pragma once
 
 #include <cstddef>
@@ -130,8 +142,17 @@
 /// takes with "-<switch> is not handled by this build". Version 9 adds
 /// open_recording, which hands an extension a recording's bytes to replay
 /// into a match the engine steps one tick at a time, with the types
-/// RecordingInput, RecordingInfo, RecordingStatus and ReplayHooks.
-#define OA_EXTENSION_API_VERSION 9
+/// RecordingInput, RecordingInfo, RecordingStatus and ReplayHooks. Version
+/// 10 calls every hook through a guarded call that catches what it throws:
+/// the errors of simulation_step, player_gone, message_hooks, match_event,
+/// draw_loading, draw_match_hud, draw_match_overlay, pause_changed and
+/// load_progress are reported and the engine carries on as for a null hook;
+/// the rest are raised as the engine's own errors at the call; a switch
+/// handler entry that throws stops the start with its message; and the
+/// hooks that must not throw, now the ReplayHooks' too, are reported when
+/// they do. Version 11 adds release_runtime, through which an extension
+/// frees what it keeps for a runtime as that runtime is destroyed.
+#define OA_EXTENSION_API_VERSION 11
 
 namespace oa {
 struct Game;
@@ -277,7 +298,8 @@ struct MatchOverlay {
     /// @param painter MatchOverlay::painter
     /// @param font the font to draw in
     /// @param x the text's left edge
-    /// @param y the top of its line
+    /// @param y its pen row; the glyphs start the font's lift above it, as
+    ///        the game draws every line of text
     /// @param text the text; read at once
     /// @param palette_index the colour, a palette index
     void (*draw_text)(
@@ -332,19 +354,23 @@ struct ReplayHooks {
     /// Runs the running match's next tick from the recording.
     ///
     /// A failed tick or a record that cannot be applied does not throw: it
-    /// counts in RecordingStatus::errors and the replay goes on.
+    /// counts in RecordingStatus::errors and the replay goes on. It must not
+    /// throw; one that throws is reported (file header) and counts as a
+    /// replay that can go no further.
     ///
     /// @param context ReplayHooks::context
     /// @return true when a tick ran; false when the replay can go no further
     bool (*step)(void* context){};
-    /// Tells where the replay stands; it must not change the runtime.
+    /// Tells where the replay stands; it must not change the runtime. It
+    /// must not throw; one that throws is reported (file header) and leaves
+    /// the status all zero.
     ///
     /// @param context ReplayHooks::context
     /// @param[out] status the replay's state, all zero and false on entry
     void (*status)(void* context, RecordingStatus& status){};
     /// Ends the replay and frees what the extension kept for it. The match
     /// stays the engine's to tear down. Called once; the hooks are not used
-    /// again.
+    /// again. It must not throw; one that throws is reported (file header).
     ///
     /// @param context ReplayHooks::context
     void (*close)(void* context){};
@@ -391,7 +417,9 @@ struct Extension {
     /// the handlers until one takes it; one of the game's reserved letters
     /// (command_line::kReservedSwitches) that no handler takes stops the
     /// start with "-<switch> is not handled by this build". Null, or a null
-    /// handler, takes no switch.
+    /// handler, takes no switch. An entry of the handler that throws stops
+    /// the start with its message once the switches are parsed; the handler
+    /// is not called again in that parse.
     ///
     /// @param context Extension::context
     /// @return the handler, kept by the extension; valid until the switches
@@ -590,10 +618,10 @@ struct Extension {
     /// bit of Game.sim_run_flags is set, nor while the in-game menu, or the
     /// preferences it opens, hold a match played on this machine alone; they
     /// hold no shared match (extension_state::shared_match), which goes on
-    /// beneath them (Runtime::match_running). An exception it throws is
-    /// reported as a simulation error on standard error (the game's log when
-    /// it plays) and on the console, the frame's remaining steps are dropped
-    /// and the match runs on.
+    /// beneath them (Runtime::match_running). Its error is reported: as a
+    /// simulation error on standard error (the game's log when it plays) and
+    /// on the console; the frame's remaining steps are dropped and the match
+    /// runs on.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -640,9 +668,9 @@ struct Extension {
     /// finished match go, shared or not (when the player leaves the screen
     /// for good, or a new match starts while it keeps one), and
     /// watching_kept when a defeated local player chooses to keep watching.
-    /// Only results_reported is limited to shared matches. An exception it
-    /// throws for torn_down, left or results_released during a match start
-    /// the file header lists abandons the start; elsewhere it ends oa-game.
+    /// Only results_reported is limited to shared matches. Its error is
+    /// reported (file header), and the engine goes on with what the event
+    /// reports: the match is torn down, left or let go all the same.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -684,13 +712,12 @@ struct Extension {
     /// fills its own: to post to the running match's message log (console
     /// lines, chat, unit reports, simulation errors, an elimination during
     /// a tick), to cycle the reported units or to change the game speed.
-    /// Their context is the runtime. An exception it throws for an
-    /// elimination takes the tick's path, as player_gone's does; elsewhere
-    /// it ends oa-game. The hook cannot tell the two apart, and where the
-    /// tick's path reports a simulation error it posts that line through the
-    /// message log, which calls the hook again: a hook that throws there too
-    /// ends oa-game. Each of the hooks is one extension's: an extension that
-    /// changes one an earlier extension set stops the call.
+    /// Their context is the runtime. Its error is reported (file header),
+    /// on standard error alone, and the line is posted with the engine's own
+    /// hooks: what the hook set before it threw is dropped for that call.
+    /// Each of the hooks is one extension's: an extension that changes one
+    /// an earlier extension set stops the call, which is reported as the
+    /// hook's error.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -701,11 +728,8 @@ struct Extension {
     /// Announces a player who lost its last unit.
     ///
     /// Called during a simulation tick of the running match, in a campaign
-    /// too. An exception it throws takes the tick's path: where the main
-    /// loop or a headless run ticks the match it is reported as a simulation
-    /// error, as simulation_step's is; a --benchmark run prints it and ticks
-    /// that match no further; where a check ticks the match itself it ends
-    /// oa-game.
+    /// too. Its error is reported as a simulation error, as simulation_step's
+    /// is, and the tick goes on as for a null hook.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -762,8 +786,8 @@ struct Extension {
     ///
     /// Called each time the loading screen is drawn while a match loads,
     /// after the engine's progress bars, with the display surface locked.
-    /// An exception it throws during a match start the file header lists
-    /// abandons the start; elsewhere it ends oa-game.
+    /// Its error is reported (file header), and the loading screen is shown
+    /// with what was drawn.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -778,9 +802,8 @@ struct Extension {
     /// Called each time the match HUD is drawn, after the resource readout
     /// and build captions and before the unit information and chat entry.
     /// What it draws shows only over the side panel and the top and bottom
-    /// bars; draw_match_overlay draws over the battlefield. An exception it
-    /// throws during a match start the file header lists abandons the start;
-    /// elsewhere it ends oa-game.
+    /// bars; draw_match_overlay draws over the battlefield. Its error is
+    /// reported (file header), and the HUD pass goes on.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -791,8 +814,7 @@ struct Extension {
     /// Called each time a match frame is drawn, after the HUD pass, the kills
     /// board and the message log, and before the profile bars and the paused
     /// or finished title; what it draws shows wherever the battlefield does.
-    /// An exception it throws during a match start the file header lists
-    /// abandons the start; elsewhere it ends oa-game.
+    /// Its error is reported (file header), and the frame is drawn on.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -806,7 +828,8 @@ struct Extension {
     /// Pause key of a finished match flips nothing. While the bit is set,
     /// whoever set it, the match clock steps no simulation and
     /// simulation_step is not called; frame still is, every frame. Null
-    /// keeps the pause on this machine.
+    /// keeps the pause on this machine. Its error is reported (file header);
+    /// the pause stays as the key set it.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -818,9 +841,8 @@ struct Extension {
     /// Called each time the loading sets a row of the loading screen while a
     /// match loads, the building of its world included, before the loading
     /// screen is drawn. No frame runs while the world is built, so an extension that
-    /// must keep working through a long load does it here. An exception it
-    /// throws during a match start the file header lists abandons the start;
-    /// elsewhere it ends oa-game.
+    /// must keep working through a long load does it here. Its error is
+    /// reported (file header), and the load goes on.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -899,8 +921,9 @@ struct Extension {
     /// it changed and set as the match's speed. The preferences' Cancel and
     /// UNDO, which put back the speed they opened with, and RESTORE, which
     /// puts back the normal speed, do not call it, nor does anything else
-    /// that sets the speed. It must not throw. Null keeps the speed on this
-    /// machine.
+    /// that sets the speed. It must not throw; one that throws is reported
+    /// (file header) and the speed stays set on this machine. Null keeps the
+    /// speed on this machine.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -914,7 +937,8 @@ struct Extension {
     /// it, also when the mode is the one it already holds: as the frontend's
     /// states and screens move between menus, as a match is set up or a
     /// saved game loads, as the end-of-game screen opens and as its buttons
-    /// leave it. A running match sets no mode here. It must not throw.
+    /// leave it. A running match sets no mode here. It must not throw; one
+    /// that throws is reported (file header) and the mode stays set.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app
@@ -952,6 +976,22 @@ struct Extension {
         ReplayHooks& replay,
         RecordingInfo& info
     ){};
+
+    /// Frees what the extension keeps for a runtime that is being destroyed.
+    ///
+    /// Called once for every runtime the engine creates, the game's own and
+    /// any second runtime a check creates beside it, as that runtime is
+    /// destroyed, also when its constructor throws after the extension's
+    /// hooks were first called for it: after the runtime's state that
+    /// follows its match is gone and before its match goes. The runtime is
+    /// given only to name which one goes: nothing of it may be used but its
+    /// address. No other hook is called for it afterwards. It must not
+    /// throw; one that throws is reported (file header) and the runtime is
+    /// destroyed all the same. Null keeps nothing to free.
+    ///
+    /// @param context Extension::context
+    /// @param runtime the runtime being destroyed
+    void (*release_runtime)(void* context, Runtime& runtime){};
 };
 
 } // namespace oa::app

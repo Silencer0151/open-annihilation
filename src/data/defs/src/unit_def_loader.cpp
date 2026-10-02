@@ -46,8 +46,8 @@ int16_t sound_category_of(const SoundCategoryTable* table, const char* name) noe
 
 // Byte a YardMap character compiles to; any other character separates cells.
 struct YardCellCode {
-    char symbol;
-    uint8_t cell;
+    char symbol{};
+    uint8_t cell{};
 };
 
 constexpr YardCellCode yard_cell_codes[] = {

@@ -4,7 +4,7 @@
 #include "oa/audio/unit_announcements.hpp"
 #include "oa/audio/game_audio.hpp"
 
-#include "oa/data/unit_definitions.hpp"
+#include "oa/formats/tdf.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -70,31 +70,35 @@ UnitSoundCatalog UnitSoundCatalog::load(const oa::AssetStore& assets) {
 }
 
 UnitSoundCatalog UnitSoundCatalog::parse_sound_tdf(std::string_view source) {
-    const auto parsed = data::unit_definitions::parse_tdf(source);
-    if (!parsed)
-        throw std::runtime_error("invalid sound.tdf: " + parsed.error.message);
+    formats::tdf::OwnedDocument parsed;
+    formats::tdf::ParseError error{};
+    if (!parsed.parse(source, &error))
+        throw std::runtime_error("invalid sound.tdf: " + formats::tdf::describe(error));
 
     UnitSoundCatalog result;
-    for (const auto& section : parsed.value.sections) {
+    for (uint32_t section_index = 0; section_index < formats::tdf::child_count(parsed.root());
+         ++section_index) {
+        const auto* section = formats::tdf::child_at(parsed.root(), section_index);
+        const auto text_of = [section](const std::string& key) {
+            const char* text = formats::tdf::find_value(section, (key + "text").c_str());
+            return text == nullptr ? std::string{} : std::string(text);
+        };
         SoundsByCategory sounds;
         for (std::size_t index = 1; index < descriptors.size(); ++index) {
-            const auto& key = descriptors[index].sound_key;
-            if (const auto* value = section.find(key); value != nullptr && !value->empty()) {
-                const auto* text = section.find(std::string(key) + "text");
-                sounds[index].push_back({*value, text == nullptr ? std::string{} : *text});
-            }
+            const std::string key(descriptors[index].sound_key);
+            if (const char* value = formats::tdf::find_value(section, key.c_str());
+                value != nullptr && value[0] != '\0')
+                sounds[index].push_back({value, text_of(key)});
             for (std::size_t variant = 1;; ++variant) {
-                std::string numbered(key);
-                numbered += std::to_string(variant);
-                const auto* value = section.find(numbered);
+                const std::string numbered = key + std::to_string(variant);
+                const char* value = formats::tdf::find_value(section, numbered.c_str());
                 if (value == nullptr)
                     break;
-                const auto* text = section.find(numbered + "text");
-                if (!value->empty())
-                    sounds[index].push_back({*value, text == nullptr ? std::string{} : *text});
+                if (value[0] != '\0')
+                    sounds[index].push_back({value, text_of(numbered)});
             }
         }
-        result.categories_.try_emplace(lower(section.name), std::move(sounds));
+        result.categories_.try_emplace(lower(section->name), std::move(sounds));
     }
     return result;
 }

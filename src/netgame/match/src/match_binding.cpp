@@ -1091,12 +1091,19 @@ void match_binding_install(MatchBinding* b) noexcept {
 
 void match_binding_tick(MatchBinding* b) {
     auto& game = b->match->state().game;
-    if ((game.sim_run_flags & run_flag_paused) != 0) {
+    // The records the pump applies refuse what does not fit the match, as
+    // they did when the match threw for it; a fault the match noted for them,
+    // or for a call made between ticks, is not the tick's, so it is cleared.
+    const auto pump = [b] {
         (void)net_match_pump(b->net);
+        b->match->clear_fault();
+    };
+    if ((game.sim_run_flags & run_flag_paused) != 0) {
+        pump();
         return;
     }
     ++game.tick;
-    (void)net_match_pump(b->net);
+    pump();
     b->match->tick();
     if (game.tick % economy_period_ticks == 0)
         net_match_economy_period(b->net);

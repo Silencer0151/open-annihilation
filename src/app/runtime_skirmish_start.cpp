@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "engine_settings_state.hpp"
 #include "oa/app/asset_files.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/data/defs/gamedata_tables.hpp"
@@ -17,6 +18,7 @@
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/hud/player_records.hpp"
 #include "oa/ui/hud/status_panel.hpp"
+#include "match_fault.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -31,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -98,7 +101,7 @@ constexpr int8_t kBuildVersionMinor = 1;
 // The unit loader loads a corpse= feature the table lacks; the first failure is kept.
 struct CorpseFeatures {
     oa::sim::map_runtime::FeatureDefTable& table;
-    std::span<const oa::data::unit_definitions::TdfDocument> documents;
+    std::span<const oa::formats::tdf::OwnedDocument> documents;
     const oa::sim::map_runtime::FeatureDefHost* host{};
     std::string error;
 
@@ -147,8 +150,13 @@ struct LosTables {
                 texts.emplace_back(text);
             }
             const std::vector<std::string_view> lines(texts.begin(), texts.end());
-            self.patterns[static_cast<std::size_t>(index)] =
-                oa::sim::visibility_state::build_altitude_pattern(lines);
+            auto pattern = oa::sim::visibility_state::build_altitude_pattern(lines);
+            if (pattern.error != nullptr) {
+                self.error =
+                    "gamedata/los.tdf TABLE" + std::to_string(index + 1) + ": " + pattern.error;
+                return false;
+            }
+            self.patterns[static_cast<std::size_t>(index)] = std::move(pattern);
             return true;
         } catch (const std::exception& failure) {
             self.error =
@@ -172,7 +180,7 @@ std::string lowered_name(std::string_view name) {
 
 } // namespace
 
-oa::data::unit_definitions::Result<std::vector<oa::data::unit_definitions::TdfDocument>>
+oa::data::unit_definitions::Result<std::vector<oa::formats::tdf::OwnedDocument>>
 Runtime::load_feature_tdf_set() const {
     return oa::sim::map_runtime::load_feature_documents(FeatureCatalogReader(assets_));
 }
@@ -249,8 +257,10 @@ oa::sim::map_runtime::FeatureDefHost Runtime::feature_def_host() {
                              uint16_t* frame_count,
                              uint8_t* repeat,
                              uint16_t* duration) {
+        // Without a sequence, or past its last frame, the frame stays empty,
+        // and its zero frame count tells the feature runtime so.
         oa::sim::feature_runtime::FeatureSequenceFrame out{};
-        (void)static_cast<Runtime*>(context)->feature_sequence_frame(sequence, frame, out);
+        std::ignore = static_cast<Runtime*>(context)->feature_sequence_frame(sequence, frame, out);
         *frame_count = out.frame_count;
         *repeat = out.repeat;
         *duration = out.duration;
@@ -333,17 +343,25 @@ void Runtime::seat_skirmish_roster(oa::World& world) {
         world,
         roster.data(),
         skirmish_settings_.slot_count,
-        oa::ui::hud::kSessionSkirmish,
+        oa::data::campaign::SessionKind::skirmish,
         kStandInPhysicalMemory
     );
 }
 
 void Runtime::seat_campaign_players(oa::World& world) {
     oa::ui::hud::init_player_slot(
-        world, 0, OA_PLAYER_STATUS_LOCAL, oa::ui::hud::kSessionCampaign, kStandInPhysicalMemory
+        world,
+        0,
+        OA_PLAYER_STATUS_LOCAL,
+        oa::data::campaign::SessionKind::campaign,
+        kStandInPhysicalMemory
     );
     oa::ui::hud::init_player_slot(
-        world, 1, OA_PLAYER_STATUS_COMPUTER, oa::ui::hud::kSessionCampaign, kStandInPhysicalMemory
+        world,
+        1,
+        OA_PLAYER_STATUS_COMPUTER,
+        oa::data::campaign::SessionKind::campaign,
+        kStandInPhysicalMemory
     );
     if (auto* info = oa::world_player_info(&world, &world.game.players[1]))
         info->color = 1;
@@ -559,9 +577,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         bindings.default_mission = static_cast<uint8_t>(record.default_mission_type);
         bindings.movement_footprint =
             std::array<int16_t, 2>{metadata.value.footprint_x, metadata.value.footprint_z};
-        loaded_commander_types_.push_back(
-            oa::sim::unit_spawn::load_runtime_type(definition, bindings, *this)
-        );
+        auto loaded = oa::sim::unit_spawn::load_runtime_type(definition, bindings, *this);
+        if (!loaded.load_error.empty())
+            throw std::runtime_error(loaded.load_error);
+        loaded_commander_types_.push_back(std::move(loaded));
         // After the FBI: the model's height, the GUI page count and
         // the page-zero bit; the COB stays with the runtime type.
         const auto& loaded_type = loaded_commander_types_.back();
@@ -849,14 +868,19 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         append_gaf_file(match_fx_, "anims/FX.GAF");
     // The explosion archives the weapons name are read before the match
     // starts, so that the first of each explosion does not wait for its file.
+    // Each is kept in the cache, which reports a damaged one; the archive
+    // itself is not needed here.
     for (std::size_t index = 0; index < oa::sim::combat_state::weapon_registry_capacity; ++index) {
         const auto& weapon = weapon_registry_.definition(static_cast<uint8_t>(index));
         for (const auto* name : {&weapon.explosion_gaf, &weapon.water_explosion_gaf})
             if (!name->empty())
-                (void)explosion_gaf_archive(*name);
+                std::ignore = explosion_gaf_archive(*name);
     }
     try {
+        if (const char* refused = oa::sim::match_runtime::Match::input_error(inputs))
+            throw std::runtime_error(std::string("cannot start the match: ") + refused);
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
+        raise_match_fault(*match_);
         std::vector<oa::sim::spatial_state::Plot>().swap(collision_plots);
         bind_match_speech();
         match_->set_difficulty(static_cast<int32_t>(preferences_.difficulty));
@@ -917,8 +941,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         // the extension writes the ones its launch switches set.
         world.game.player_timeout_seconds = kPlayerTimeoutSeconds;
         world.game.send_error_percent = 0;
-        if (extension_.match_game != nullptr)
-            extension_.match_game(extension_.context, world.game);
+        call_hook_or_raise<&Extension::match_game>(extension_, world.game);
         world.game.setup_options |= options_.launch.game_options;
         bind_player_records(world);
         if (bootstrap.seat_roster)
@@ -982,7 +1005,8 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // console values.
     if (console_)
         console_->bound_world = nullptr;
-    (void)match_console();
+    // Only the binding is wanted here; the console is not used yet.
+    std::ignore = match_console();
     effect_boundary_.clock = &match_->state().game;
     set_load_progress(3, 100);
     set_load_progress(4, 70);
@@ -1115,7 +1139,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             seeds[player].energy = skirmish_settings_.slots[player].energy;
         }
         oa::ui::hud::set_starting_resources(
-            match_->state(), oa::ui::hud::kSessionSkirmish, nullptr, seeds.data()
+            match_->state(), oa::data::campaign::SessionKind::skirmish, nullptr, seeds.data()
         );
         // Mission start rebuilds the sight grids once every commander stands.
         reset_match_sight(true);

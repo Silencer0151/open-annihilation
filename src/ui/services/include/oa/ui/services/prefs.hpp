@@ -24,10 +24,10 @@ enum class PrefStatus : uint32_t {
 };
 
 struct PrefBackend {
-    void* context;
+    void* context{};
     PrefStatus (*query)(
         void* context, const char* application, const char* name, uint8_t* data, uint32_t* size
-    );
+    ){};
     PrefStatus (*store)(
         void* context,
         const char* application,
@@ -35,7 +35,7 @@ struct PrefBackend {
         PrefType type,
         const uint8_t* data,
         uint32_t size
-    );
+    ){};
 };
 
 /// Reads or writes one configuration value.

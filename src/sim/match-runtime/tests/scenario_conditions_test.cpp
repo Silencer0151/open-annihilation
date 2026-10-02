@@ -6,6 +6,7 @@
 // local player's 30-tick checks, as the player slot update runs them.
 #include "combat_fixture.hpp"
 #include "oa/sim/match_runtime/mission_unit_binding.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -402,8 +403,8 @@ void commanders_are_named_by_their_side() {
         auto& world = f.match->state();
         world.player_info[0].side = 0;
         world.player_info[1].side = 1;
-        std::strcpy(world.game.sides[0].commander, "TESTUNIT");
-        std::strcpy(world.game.sides[1].commander, "TESTWALL");
+        oa::base::text::copy_terminated(world.game.sides[0].commander, "TESTUNIT");
+        oa::base::text::copy_terminated(world.game.sides[1].commander, "TESTWALL");
     };
     {
         Fixture f(conditions({}, {{"KillEnemyCommander", 1}}));

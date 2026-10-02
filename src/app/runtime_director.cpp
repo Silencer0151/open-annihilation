@@ -16,6 +16,7 @@
 
 #include "oa/app/director_output.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/audio/mixer.hpp"
 #include "oa/audio/offline_mix.hpp"
 #include "oa/base/sha256.hpp"
@@ -293,8 +294,7 @@ void open_recording(
     replay = {};
     info = {};
     const RecordingInput input{name.c_str(), bytes.data(), bytes.size(), true};
-    if (extension.open_recording == nullptr ||
-        !extension.open_recording(extension.context, runtime, input, replay, info))
+    if (!call_hook_or_raise<&Extension::open_recording>(extension, runtime, input, replay, info))
         throw std::runtime_error("no extension of this build replays " + name);
     if (replay.step == nullptr || replay.status == nullptr || replay.close == nullptr)
         throw std::logic_error("the extension that replays " + name + " left a replay hook null");
@@ -302,11 +302,21 @@ void open_recording(
 
 /// Returns where a replay stands.
 ///
+/// A status hook that throws, which it must not, is reported and leaves the
+/// status all zero.
+///
 /// @param replay the replay
+/// @param report takes the hook's name and the message, when the hook threw
 /// @return its status
-[[nodiscard]] RecordingStatus replay_status(const ReplayHooks& replay) {
+template <typename Report>
+[[nodiscard]] RecordingStatus replay_status(const ReplayHooks& replay, Report&& report) {
     RecordingStatus status{};
-    replay.status(replay.context, status);
+    HookError error;
+    call_hook<&ReplayHooks::status>(replay, error, status);
+    if (error.caught) {
+        status = {};
+        pass_hook_error(report, HookTraits<&ReplayHooks::status>::entry.name, error);
+    }
     return status;
 }
 
@@ -457,7 +467,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
     const uint64_t end_frame = std::min(
         shots.frame_count, director::chunk_first_frame(clock, shots.chunks, render.last_chunk + 1)
     );
-    uint32_t errors_seen = replay_status(replay).errors;
+    uint32_t errors_seen = replay_status(replay, hook_error_report()).errors;
     if (match_->state().game.tick > clock.first_tick)
         warn(
             "the replay starts on tick " + std::to_string(match_->state().game.tick) +
@@ -504,7 +514,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
                 director::frame_samples(clock, director::first_frame_of_tick(clock, before + 1))
                     .first;
             glue.audible = before + 1 >= clock.first_tick;
-            if (!replay.step(replay.context))
+            if (!call_hook_or_report<&ReplayHooks::step>(replay, hook_error_report()))
                 throw std::runtime_error(
                     "the replay ended on tick " + std::to_string(before) + ", before tick " +
                     std::to_string(cameras.tick) + " of the video"
@@ -528,7 +538,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
             // drawn frame always has the tick before at hand.
             observe_match_tick(match_models(), *match_);
             present_director_announcements();
-            const auto status = replay_status(replay);
+            const auto status = replay_status(replay, hook_error_report());
             if (status.errors > errors_seen) {
                 warn(
                     "the replay failed on tick " + std::to_string(status.tick) +
@@ -605,7 +615,7 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
     render.world_digest = director_world_digest();
     render.point_sounds = director_->tally.point_sounds;
     render.announcements = director_->tally.announcements_played;
-    render.last_status = replay_status(replay);
+    render.last_status = replay_status(replay, hook_error_report());
     render.last_error =
         render.last_status.last_error != nullptr ? render.last_status.last_error : "";
     render.last_status.last_error = nullptr;
@@ -632,7 +642,7 @@ int Runtime::run_render_script() {
     ScopeExit teardown{[&]() noexcept {
         try {
             if (replay_open)
-                replay.close(replay.context);
+                call_hook_or_report<&ReplayHooks::close>(replay, hook_error_report());
             replay_open = false;
             leave_director_mode();
             if (match_)
@@ -712,15 +722,16 @@ int Runtime::run_render_script() {
                 placed_view(director::engine_view(whole_map_view(bounds, output_size), output_size))
             );
             uint32_t stalls = 0;
-            for (auto status = replay_status(replay); !status.finished;
-                 status = replay_status(replay)) {
+            for (auto status = replay_status(replay, hook_error_report()); !status.finished;
+                 status = replay_status(replay, hook_error_report())) {
                 const uint32_t before = match_->state().game.tick;
                 if (before >= kMaxReplayTicks)
                     throw std::runtime_error(
                         "the replay did not finish by tick " + std::to_string(before)
                     );
                 bind_director_view();
-                if (!replay.step(replay.context) || !match_)
+                if (!call_hook_or_report<&ReplayHooks::step>(replay, hook_error_report()) ||
+                    !match_)
                     throw std::runtime_error(
                         "the replay ended on tick " + std::to_string(before) + " before it finished"
                     );
@@ -737,7 +748,7 @@ int Runtime::run_render_script() {
                 observe_unit_playout();
             }
             recording_end = match_->state().game.tick + 1;
-            replay.close(replay.context);
+            call_hook_or_report<&ReplayHooks::close>(replay, hook_error_report());
             replay_open = false;
             leave_director_mode();
             leave_match();
@@ -864,7 +875,7 @@ int Runtime::run_generate_script() {
             if (match_)
                 match_->event_hooks = {};
             if (replay_open)
-                replay.close(replay.context);
+                call_hook_or_report<&ReplayHooks::close>(replay, hook_error_report());
             replay_open = false;
             leave_director_mode();
             if (match_)
@@ -943,14 +954,14 @@ int Runtime::run_generate_script() {
             height
         );
         std::fflush(stdout);
-        auto status = replay_status(replay);
+        auto status = replay_status(replay, hook_error_report());
         uint32_t errors_seen = status.errors;
         uint32_t first_error_tick = errors_seen != 0 ? first_tick : 0;
         uint32_t stalls = 0;
         while (!status.finished && match_->state().game.tick < limit) {
             const uint32_t before = match_->state().game.tick;
             bind_director_view();
-            if (!replay.step(replay.context) || !match_)
+            if (!call_hook_or_report<&ReplayHooks::step>(replay, hook_error_report()) || !match_)
                 break;
             if (match_->state().game.tick == before) {
                 if (++stalls > kMaxStalledSteps)
@@ -964,7 +975,7 @@ int Runtime::run_generate_script() {
             // out after every tick, as the main loop's clock does.
             observe_unit_playout();
             recorder.after_tick(match_->state(), visibility_hooks);
-            status = replay_status(replay);
+            status = replay_status(replay, hook_error_report());
             if (status.errors > errors_seen && first_error_tick == 0)
                 first_error_tick = match_->state().game.tick;
             errors_seen = status.errors;
@@ -1371,7 +1382,9 @@ void Runtime::check_director_render() {
     // The same ticks as the generator replays them: in director mode, the
     // whole map's view bound, debris particles started once a tick, nothing
     // drawn.
-    (void)start_fight();
+    // The view is bound to the whole map, so the fight's centre is not
+    // needed.
+    start_fight();
     const auto& game = match_->state().game;
     const director::MapBounds bounds{game.map_pixel_width, game.map_pixel_height};
     const director::OutputSize check_size{kRenderCheckWidth, kRenderCheckHeight};

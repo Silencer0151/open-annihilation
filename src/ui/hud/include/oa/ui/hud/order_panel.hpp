@@ -53,11 +53,18 @@ inline constexpr uint16_t kFramePageBack = 0x0100u;
 inline constexpr uint16_t kFrameBuildMenuOff = 0x0200u;
 inline constexpr uint16_t kFrameBuildMenuOn = 0x0400u;
 inline constexpr unsigned kFrameFireOrderShift = 12; // 3-bit selection summary
+inline constexpr uint16_t kFrameFireOrderMask = 0x7000u;
 
 // OrderPanelState.order_flags fields (selection summaries and ability bits).
 inline constexpr unsigned kOrderMoveShift = 0;  // 3 bits
 inline constexpr unsigned kOrderCloakShift = 3; // 2 bits
 inline constexpr unsigned kOrderOnOffShift = 5; // 2 bits
+inline constexpr uint16_t kOrderMoveMask = 0x0007u;
+inline constexpr uint16_t kOrderCloakMask = 0x0018u;
+inline constexpr uint16_t kOrderOnOffMask = 0x0060u;
+// The cloak and on/off summaries a click on CLOAK or ONOFF sets.
+inline constexpr uint16_t kOrderCloakOn = 0x0008u;
+inline constexpr uint16_t kOrderOnOffActive = 0x0020u;
 inline constexpr uint16_t kOrderCanMove = 0x0080u;
 inline constexpr uint16_t kOrderCanStop = 0x0100u;
 inline constexpr uint16_t kOrderCanAttack = 0x0200u;
@@ -81,11 +88,11 @@ inline constexpr uint32_t kToggleMixed = 2;   // 2-bit cloak/on-off summary
 /// The order panel's words in the game state (Game.panel_unit_id,
 /// panel_unit_type, frame_flags, order_summary, order_summary_ext).
 struct OrderPanelState {
-    uint16_t unit_id;      // unit whose build/order panel is loaded; 0 none
-    uint16_t unit_type;    // that unit's type index
-    uint16_t frame_flags;  // Game.frame_flags
-    uint16_t order_flags;  // selection summaries and ability bits
-    uint16_t order_flags2; // further ability bits
+    uint16_t unit_id{};      // unit whose build/order panel is loaded; 0 none
+    uint16_t unit_type{};    // that unit's type index
+    uint16_t frame_flags{};  // Game.frame_flags
+    uint16_t order_flags{};  // selection summaries and ability bits
+    uint16_t order_flags2{}; // further ability bits
 };
 
 /// Reads the order panel's words from the game block.
@@ -219,11 +226,11 @@ void order_panel_handle_requests(
 
 /// Aggregated state of the local player's selection.
 struct SelectionSummary {
-    uint16_t frame_flags;
-    uint16_t order_flags;
-    uint16_t order_flags2;
-    int32_t count; // selected units
-    Unit* first;   // first selected unit, or null
+    uint16_t frame_flags{};
+    uint16_t order_flags{};
+    uint16_t order_flags2{};
+    int32_t count{}; // selected units
+    Unit* first{};   // first selected unit, or null
 };
 
 /// Summarises the selected units in units[first..last] into the panel words.
@@ -250,14 +257,14 @@ inline constexpr int32_t kFirstBuildButtonGadget = 4;
 
 /// Panel loading done by the gadget engine.
 struct PanelLoader {
-    void* user;
+    void* user{};
     /// Pops panels until the root HUD is on top; false when that fails.
-    bool (*close_to_root)(void* user);
+    bool (*close_to_root)(void* user){};
     /// Whether the named panel is currently loaded.
-    bool (*is_loaded)(void* user, const char* name);
+    bool (*is_loaded)(void* user, const char* name){};
     /// Loads the named panel for `unit` (null for none); `page` is the build
     /// page, or the panel flags for other panels. False when loading failed.
-    bool (*load)(void* user, const char* name, const Unit* unit, int32_t page);
+    bool (*load)(void* user, const char* name, const Unit* unit, int32_t page){};
     /// Download menus linked into build pages, download_count of them.
     const data::defs::DownloadMenuGroup* downloads{};
     uint32_t download_count{};
@@ -532,9 +539,9 @@ bool order_panel_toggle(
 enum class BuildQueueKind : uint8_t { none, weapon, mobile, building };
 
 struct BuildQueueChange {
-    BuildQueueKind kind;
-    uint16_t type;   // unit type for mobile/building entries; 0 for a weapon
-    const char* tag; // mission tag of the queued order
+    BuildQueueKind kind{};
+    uint16_t type{};   // unit type for mobile/building entries; 0 for a weapon
+    const char* tag{}; // mission tag of the queued order
 };
 
 /// Classifies a build-queue click on control `name`.
@@ -575,24 +582,24 @@ enum class BuildPanelClick : uint8_t {
 };
 
 struct BuildPanelClickResult {
-    BuildPanelClick action;
-    uint16_t type; // the building type to place
+    BuildPanelClick action{};
+    uint16_t type{}; // the building type to place
 };
 
 /// The rest of the game a build page click reaches.
 struct BuildPanelHost {
-    void* user;
-    uint16_t (*type_for_name)(void* user, const char* name);
+    void* user{};
+    uint16_t (*type_for_name)(void* user, const char* name){};
     /// Order toggles and order commands; true when the click was one of them.
-    bool (*order_click)(void* user, const char* name);
+    bool (*order_click)(void* user, const char* name){};
     /// Whether shift is held (key state of control code 0xF9).
-    bool (*shift_down)(void* user);
+    bool (*shift_down)(void* user){};
     /// Changes `builder`'s queue for button `name` by `count`.
-    void (*change_queue)(void* user, const char* name, Unit& builder, int32_t count);
+    void (*change_queue)(void* user, const char* name, Unit& builder, int32_t count){};
     /// Whether the unit's first weapon stockpiles (WeaponDef.flags, OA_WEAPON_FLAG_STOCKPILE).
-    bool (*stockpiles)(void* user, const Unit& unit);
+    bool (*stockpiles)(void* user, const Unit& unit){};
     /// Rewrites the loaded page's queued counts.
-    void (*format_counts)(void* user, const Unit& builder);
+    void (*format_counts)(void* user, const Unit& builder){};
 };
 
 /// Handles a click on a button of the loaded build or order page.

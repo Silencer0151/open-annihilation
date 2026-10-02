@@ -15,47 +15,47 @@ namespace oa::data::persist {
 enum class BankFieldType : int32_t { unset = 0, integer = 1, real = 2, text = 3 };
 
 struct BankField {
-    char* name;
-    BankFieldType type;
-    int32_t integer;
-    double real;
-    char* text; // owned when type == text
+    char* name{};
+    BankFieldType type{};
+    int32_t integer{};
+    double real{};
+    char* text{}; // owned when type == text
 };
 
 struct BankBlob {
-    int32_t named; // 0: addressed by id, 1: by name
-    int32_t id;
-    char* name;
-    int32_t size;
-    int32_t position;
-    uint8_t* data;
+    int32_t named{}; // 0: addressed by id, 1: by name
+    int32_t id{};
+    char* name{};
+    int32_t size{};
+    int32_t position{};
+    uint8_t* data{};
 };
 
 struct BankAccount {
-    char* name;
-    int32_t field_count;
-    int32_t blob_count;
-    int32_t open_blob; // -1 none
-    BankField* fields;
-    BankBlob* blobs;
+    char* name{};
+    int32_t field_count{};
+    int32_t blob_count{};
+    int32_t open_blob{}; // -1 none
+    BankField* fields{};
+    BankBlob* blobs{};
 };
 
 struct BankAccounts {
-    int32_t count;
-    BankAccount* items;
-    int32_t open; // -1 none
+    int32_t count{};
+    BankAccount* items{};
+    int32_t open{}; // -1 none
 };
 
 // A bank: its account table.
 struct Bank {
-    BankAccounts* accounts;
+    BankAccounts* accounts{};
 };
 
 // Growable byte buffer used for bank images, audit text and file contents.
 struct ByteImage {
-    uint8_t* data;
-    uint32_t size;
-    uint32_t capacity;
+    uint8_t* data{};
+    uint32_t size{};
+    uint32_t capacity{};
 };
 
 /// Frees a byte buffer and empties it.
@@ -300,7 +300,7 @@ int32_t bank_pool_append(ByteImage* pool, const char* text);
 bool bank_format_audit(const Bank* bank, ByteImage* out);
 
 struct BankError {
-    char message[160];
+    char message[160]{};
 };
 
 /// Replaces a bank with the accounts of a HAPIBANK image.
@@ -328,13 +328,14 @@ bool bank_read_image(
 
 // Platform file boundary.
 struct FileSink {
-    void* context;
-    bool (*write_file)(void* context, const char* path, const uint8_t* data, std::size_t size);
+    void* context{};
+    bool (*write_file)(void* context, const char* path, const uint8_t* data, std::size_t size) =
+        nullptr;
 };
 
 struct FileSource {
-    void* context;
-    bool (*read_file)(void* context, const char* path, ByteImage* out);
+    void* context{};
+    bool (*read_file)(void* context, const char* path, ByteImage* out) = nullptr;
 };
 
 /// Returns a file sink that writes whole files through C stdio.

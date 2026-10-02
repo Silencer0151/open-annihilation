@@ -44,28 +44,25 @@ struct Definitions : DefinitionHost {
 
 /// Checks the type-name constructors: the name stored, the type unresolved, the flags clear.
 void constructors() {
-    const auto build = build_unit_type_condition("ARMSOLAR");
+    const auto build = *build_unit_type_condition("ARMSOLAR");
     check(build.kind == Kind::build_unit_type, "build kind");
     check(std::string_view(build.type_name) == "ARMSOLAR", "BuildUnitType name");
     check(build.type_index == 0, "BuildUnitType starts unresolved");
     check(build.satisfied == 0 && build.celebrated == 0, "flags cleared");
 
-    const auto kill = kill_all_of_type_condition("CORAK");
+    const auto kill = *kill_all_of_type_condition("CORAK");
     check(kill.kind == Kind::kill_all_of_type, "KillAllOfType kind");
     check(std::string_view(kill.type_name) == "CORAK", "KillAllOfType name");
     check(kill.type_index == 0 && kill.units_counted == 0, "KillAllOfType starts unresolved");
 
-    const auto lost = all_units_killed_of_type_condition("ARMGATE");
+    const auto lost = *all_units_killed_of_type_condition("ARMGATE");
     check(lost.kind == Kind::all_units_killed_of_type, "AllUnitsKilledOfType kind");
     check(std::string_view(lost.type_name) == "ARMGATE", "AllUnitsKilledOfType name");
 
-    bool threw = false;
-    try {
-        (void)build_unit_type_condition(std::string(type_name_capacity, 'X'));
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    check(threw, "names longer than the 32-byte field are rejected");
+    check(
+        !build_unit_type_condition(std::string(type_name_capacity, 'X')),
+        "names longer than the 32-byte field are rejected"
+    );
 }
 
 /// Checks the registered UnitTypeKilled count and the AnyUnitPassesZ line and walk.

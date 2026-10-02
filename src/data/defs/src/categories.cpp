@@ -104,7 +104,7 @@ oa_ref32 category_registry_ref(CategoryRegistry* registry, const char* name) noe
     std::memmove(slot + 1, slot, sizeof(Category) * (registry->count - position));
     slot->name = copy;
     slot->mask = registry->count;
-    std::memset(&registry->masks[registry->count], 0, sizeof(CategoryMask));
+    std::memset(static_cast<void*>(&registry->masks[registry->count]), 0, sizeof(CategoryMask));
     ++registry->count;
     return slot->mask + 1u;
 }

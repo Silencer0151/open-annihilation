@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/mission_units.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -21,13 +22,13 @@ int failures = 0;
     } while (false)
 
 struct Order {
-    uint8_t kind;
-    const Unit* unit;
-    const Unit* target;
-    bool has_position;
+    uint8_t kind{};
+    const Unit* unit{};
+    const Unit* target{};
+    bool has_position{};
     FixedVec3 position;
-    int32_t a;
-    int32_t b;
+    int32_t a{};
+    int32_t b{};
 };
 
 struct Fake {
@@ -121,10 +122,10 @@ World* make_world() {
     WorldCapacity cap{16, 4, 0};
     if (w == nullptr || !world_alloc_tables(w, &cap))
         std::abort();
-    std::strcpy(w->unit_defs[1].name, "ARMCOM");
+    oa::base::text::copy_terminated(w->unit_defs[1].name, "ARMCOM");
     w->unit_defs[1].type_id = 1;
     w->unit_defs[1].max_damage = 3000;
-    std::strcpy(w->unit_defs[2].name, "ARMFUS");
+    oa::base::text::copy_terminated(w->unit_defs[2].name, "ARMFUS");
     w->unit_defs[2].type_id = 2;
     w->unit_defs[2].max_damage = 1000;
     return w;

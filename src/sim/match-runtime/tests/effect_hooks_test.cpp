@@ -5,6 +5,8 @@
 
 #include <iostream>
 #include <stdexcept>
+#include "oa/test/match_services.hpp"
+#include "oa/test/projectile_handle.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -14,35 +16,9 @@ using namespace oa;
     } while (false)
 
 namespace {
-struct Services : sim::match_runtime::OfflineServices {
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
+using Services = oa::test::QuietServices;
 
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 formats::gaf::Sequence sequence_of(size_t frames, uint16_t hold) {
     formats::gaf::Sequence sequence{};
@@ -224,15 +200,16 @@ void feature_sprays(sim::match_runtime::Match& match, const FeatureDef& feature)
 
 // The Fire path puffs startsmoke at the muzzle, a smoke-trail shot puffs
 // every smokedelay ticks, a shot that drops into the sea splashes, and an
-// inert shot still trails.
+// inert shot still trails. Each puff moves the shot's created_tick on, and a
+// ProjectileHandle stays on the shot through them.
 void fired_shots(sim::match_runtime::Match& match, const Art& art) {
     auto* shooter = match.create({0, 1, {units(150), units(80), units(40)}, true, 1, 0});
     auto* target = match.create({1, 1, {units(200), units(sea_level + 4), units(40)}, true, 1, 0});
     CHECK(shooter && target);
     shooter->unit->object_present = false;
     target->unit->object_present = false;
-    shooter->unit->flags |= 0x10000000u;
-    target->unit->flags |= 0x10000000u;
+    shooter->unit->flags |= OA_UNIT_FLAG_LIVE;
+    target->unit->flags |= OA_UNIT_FLAG_LIVE;
     auto& slot = shooter->record.weapons[0];
     slot.target_a = static_cast<int16_t>(target->unit_index);
     slot.target_b = OA_UNIT_TARGET_IS_UNIT;
@@ -243,10 +220,20 @@ void fired_shots(sim::match_runtime::Match& match, const Art& art) {
     int32_t trail_puffs = 0;
     int32_t entry_splashes = 0;
     int32_t impact_splashes = 0;
+    test::ProjectileHandle shot;
+    uint32_t launch_tick = 0;
+    bool created_tick_moved = false;
     for (int32_t step = 1; step <= 40; ++step) {
         const auto logged = world.explosion_count;
         match.simulation().tick = start + static_cast<uint32_t>(step);
         match.tick();
+        // Until the shot goes off, the end of each tick keeps it in the pool.
+        shot.follow(match.state());
+        if (!shot.empty()) {
+            const auto* record = shot.get(match.state());
+            CHECK(record && record->source == oa_unit_ref_from_slot(shooter->unit_index));
+            created_tick_moved = created_tick_moved || record->created_tick != launch_tick;
+        }
         const auto& layer = smoke_layer(match);
         const auto& last = newest(layer);
         const bool fresh =
@@ -256,6 +243,9 @@ void fired_shots(sim::match_runtime::Match& match, const Art& art) {
                 continue;
             launched_at = step;
             CHECK(fresh && last.frame_cap == 3 && last.hold == 30);
+            CHECK(match.projectiles().size() == 1);
+            shot = test::ProjectileHandle::at(match.state(), 0);
+            launch_tick = match.projectiles()[0].created_tick;
             // With its target gone the shot flies on down into the sea.
             match.apply_damage_event(*target, nullptr, 30000, 1, 0);
             continue;
@@ -273,6 +263,7 @@ void fired_shots(sim::match_runtime::Match& match, const Art& art) {
     // The shot splashes as it drops into the sea, then goes off on the water
     // with the same art a tick later.
     CHECK(entry_splashes == 1 && impact_splashes == 1);
+    CHECK(created_tick_moved && shot.empty());
     std::cout << "startsmoke, smoke trail and water entry passed\n";
 }
 } // namespace

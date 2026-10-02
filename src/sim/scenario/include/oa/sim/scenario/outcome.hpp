@@ -65,20 +65,15 @@ static_assert(query_count == static_cast<std::size_t>(Query::any_unit_passes_z) 
 
 /// Returns the query a condition kind runs.
 ///
-/// Throws std::invalid_argument for a value outside Kind.
-///
 /// @param kind condition kind
-/// @return its query
-Query query_of(Kind kind);
+/// @return its query; stored_result for a value outside Kind
+[[nodiscard]] Query query_of(Kind kind) noexcept;
 
 /// Runs one condition's query: the one query_of names for its kind.
 ///
-/// Throws std::invalid_argument for a kind outside Kind, or for MoveUnitToRadius without
-/// the host's hook.
-///
 /// @param[in,out] condition the condition
 /// @param context the match's world, view, tick and hooks
-/// @return true when met
+/// @return true when met; MoveUnitToRadius without the host's hook is never met
 bool evaluate_condition(Condition& condition, const QueryContext& context);
 /// Runs the AllUnitsKilled query: met unless one of player 0's units still qualifies.
 ///
@@ -159,27 +154,26 @@ bool any_unit_passes_x_unit(Condition& condition, int16_t cell_x);
 ///
 /// With none registered a DestroyAllUnits condition is added first.
 ///
-/// Throws std::logic_error before registration or for a corrupt condition array.
-///
 /// @param[in,out] controller registered conditions
 /// @param context the match's world, view, tick and hooks
-/// @return true when won
+/// @return true when won; false before registration, for a local player outside
+///         the table, or for a count outside the array or an empty slot within it
 bool campaign_victory(Controller& controller, const QueryContext& context);
 /// Tests campaign defeat: the defeat conditions in order until one is met.
 ///
 /// With none registered an AllUnitsKilled condition is added first.
 ///
-/// Throws std::logic_error before registration or for a corrupt condition array.
-///
 /// @param[in,out] controller registered conditions
 /// @param context the match's world, view, tick and hooks
-/// @return true when lost
+/// @return true when lost; false before registration, for a local player outside
+///         the table, or for a count outside the array or an empty slot within it
 bool campaign_defeat(Controller& controller, const QueryContext& context);
 /// Tests skirmish victory: no player other than the local one and its allies still has units.
 ///
 /// @param controller enabled word
 /// @param view live-unit counts and the local alliance row
-/// @return true when won; false while the controller is disabled
+/// @return true when won; false while the controller is disabled, before
+///         registration, or for a local player outside the table
 bool offline_victory(const Controller& controller, const OutcomeView& view);
 /// Tests skirmish defeat: the local player has no units left.
 ///
@@ -187,7 +181,8 @@ bool offline_victory(const Controller& controller, const OutcomeView& view);
 ///
 /// @param controller enabled word
 /// @param view live-unit counts
-/// @return true when lost; false while the controller is disabled
+/// @return true when lost; false while the controller is disabled, before
+///         registration, or for a local player outside the table
 bool offline_defeat(const Controller& controller, const OutcomeView& view);
 
 // The loss the game imposes when its disc check fails (?).
@@ -211,7 +206,7 @@ class DiagnosticRandom {
 /// The first call draws a deadline 9000..17999 ticks (5 to 10 minutes) ahead; the loss
 /// is due once the tick reaches it, and the deadline is then cleared.
 ///
-/// Throws std::invalid_argument for a draw outside 15 bits.
+/// A draw outside 15 bits draws no deadline: the loss is not due.
 ///
 /// @param controller enabled word; nothing while disabled
 /// @param[in,out] diagnostic whether the check failed, and the deadline

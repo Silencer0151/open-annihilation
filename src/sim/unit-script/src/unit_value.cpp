@@ -16,8 +16,8 @@ uint32_t bit(uint8_t flags, uint32_t shift) {
 // COB packs a map position as x high word, z low word (both 16.16 high words).
 // The unpack rounds x up by one unit when the z half is negative.
 struct PackedXz {
-    int32_t x;
-    int32_t z;
+    int32_t x{};
+    int32_t z{};
 };
 
 PackedXz unpack_xz(uint32_t packed) {

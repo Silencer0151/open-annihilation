@@ -6,6 +6,7 @@
 // notice's website button opens.
 #include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
+#include "web_link_state.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend_state/app_modes.hpp"
 
@@ -71,11 +72,16 @@ void Runtime::run_pending_notice_return() {
     frontend::dispatch(state_, *this, frontend_states_);
 }
 
+void Runtime::destroy_web_link_state(WebLinkState* state) noexcept {
+    delete state;
+}
+
 void Runtime::open_web_link(std::string_view address) {
-    if (web_links_.open == nullptr)
+    if (!web_links_ || web_links_->hooks.open == nullptr)
         return;
+    const auto& hooks = web_links_->hooks;
     const std::string text(address);
-    if (!web_links_.open(web_links_.context, text.c_str()))
+    if (!hooks.open(hooks.context, text.c_str()))
         status_ = "cannot open " + text + ": " + SDL_GetError();
 }
 
@@ -86,7 +92,9 @@ void Runtime::choose_web_links() {
     const bool unwatched =
         options_.unattended ||
         unattended_environment(text_or_empty(SDL_getenv("CI")), text_or_empty(driver));
-    web_links_ = unwatched ? recorded_web_links(web_link_requests_) : browser_web_links();
+    if (!web_links_)
+        web_links_.reset(new WebLinkState());
+    web_links_->hooks = unwatched ? recorded_web_links(web_links_->requests) : browser_web_links();
 }
 
 } // namespace oa::app

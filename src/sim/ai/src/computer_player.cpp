@@ -98,10 +98,6 @@ squad_member(const ComputerHost& host, const ComputerPlayer& ai, Squad squad, ui
     return host.squad_member(host.context, ai.player, squad, i);
 }
 
-bool unit_active(const oa::Unit& unit) noexcept {
-    return (unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & OA_UNIT_FLAG_DEATH_PENDING) == 0;
-}
-
 /// Averages a squad's positions from the signed high words, back in 16.16.
 ///
 /// @param host squad membership and world
@@ -478,7 +474,8 @@ void run_structures(
     for (uint32_t i = 0; i < squad_size(host, ai, task.squad); ++i) {
         const auto slot = squad_member(host, ai, task.squad, i);
         const auto* unit = unit_at(host, slot);
-        if (unit == nullptr || (unit->flags & OA_UNIT_FLAG_BUILDING) == 0 || !unit_active(*unit))
+        if (unit == nullptr || (unit->flags & OA_UNIT_FLAG_BUILDING) == 0 ||
+            !oa::unit_is_live_target(unit->flags))
             continue;
         const auto* type = computer_type(state, unit->type_index);
         if (type == nullptr)

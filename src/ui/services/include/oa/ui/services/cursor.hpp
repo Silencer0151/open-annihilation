@@ -20,24 +20,24 @@ namespace oa::ui::services {
 // Drawing boundary for the cursor, one callback per drawing operation it needs.
 // A null Surface pointer stands for the screen.
 struct CursorDraw {
-    void* context;
+    void* context{};
     // Keyed blit of src (or the screen) into dst (or the screen) at (x, y).
-    void (*blit)(void* context, Surface* dst, const Surface* src, int32_t x, int32_t y);
+    void (*blit)(void* context, Surface* dst, const Surface* src, int32_t x, int32_t y){};
     // Opaque copy of src into dst at (x, y), clipped to dst.
-    void (*copy_clipped)(void* context, Surface* dst, const Surface* src, int32_t x, int32_t y);
+    void (*copy_clipped)(void* context, Surface* dst, const Surface* src, int32_t x, int32_t y){};
     // Draw a sprite with its hotspot at (x, y). The sprite is null when no
     // cursor image has been set; the call is made anyway.
-    void (*draw_sprite)(void* context, Surface* dst, const Sprite* sprite, int32_t x, int32_t y);
+    void (*draw_sprite)(void* context, Surface* dst, const Sprite* sprite, int32_t x, int32_t y){};
     // Reset dst's clip rectangle to its full extent.
-    void (*reset_clip)(void* context, Surface* dst);
+    void (*reset_clip)(void* context, Surface* dst){};
     // Describe the screen back buffer; false when it is unavailable.
-    bool (*lock_screen)(void* context, Surface* out);
+    bool (*lock_screen)(void* context, Surface* out){};
     // Show the two changed screen rectangles.
     void (*present)(
         void* context, const Surface* screen, const Rect32* old_area, const Rect32* new_area
-    );
-    Surface* (*create_surface)(void* context, const char* tag, int32_t width, int32_t height);
-    void (*free_surface)(void* context, Surface* surface);
+    ){};
+    Surface* (*create_surface)(void* context, const char* tag, int32_t width, int32_t height){};
+    void (*free_surface)(void* context, Surface* surface){};
 };
 
 // Frame-lock tokens of the cursor redraw thread and the main thread (ASCII
@@ -56,21 +56,21 @@ inline constexpr int32_t cursor_stop_poll_limit = 20;
 
 // Cursor and pointer fields of the display context.
 struct CursorState {
-    const CursorDraw* draw;
-    const Input* input;
-    platform::TokenLock* frame_lock;
-    uint8_t display_flags; // high byte of the display flags
+    const CursorDraw* draw{};
+    const Input* input{};
+    platform::TokenLock* frame_lock{};
+    uint8_t display_flags{}; // high byte of the display flags
     PointerQueue pointer;
-    int32_t hide_count; // cursor on screen while below 1
-    const Sprite* image;
-    int32_t x; // top-left of the saved background
-    int32_t y;
-    Surface* saved_background;   // what the cursor covers on screen
-    Surface* scratch_background; // off-screen work areas of the threaded repaint
-    Surface* scratch_composite;
-    int32_t thread_started;            // 1 from a successful start until the thread stops
-    int32_t threaded;                  // 1 while the redraw thread owns the cursor
-    int32_t overlay_enabled;           // gates the threaded repaint
+    int32_t hide_count{}; // cursor on screen while below 1
+    const Sprite* image{};
+    int32_t x{}; // top-left of the saved background
+    int32_t y{};
+    Surface* saved_background{};   // what the cursor covers on screen
+    Surface* scratch_background{}; // off-screen work areas of the threaded repaint
+    Surface* scratch_composite{};
+    int32_t thread_started{};          // 1 from a successful start until the thread stops
+    int32_t threaded{};                // 1 while the redraw thread owns the cursor
+    int32_t overlay_enabled{};         // gates the threaded repaint
     std::atomic<int32_t> stop_request; // set to stop the thread, cleared by it on exit
 };
 

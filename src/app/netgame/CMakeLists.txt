@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-# Network play's part of oa-game: the Runtime members it defines (the
-# runtime_*.cpp sources here, declared in
-# src/app/include/oa/app/netgame_runtime_members.hpp, which runtime.hpp
-# includes in every build), the hooks of its extension table, the launch
+# Network play's part of oa-game: its state for each runtime and the work it
+# does on it (NetworkPlay, network_play.hpp, defined by the runtime_*.cpp
+# sources here), the hooks of its extension table, the launch
 # options and 3.1c game switches it takes, the checks that run the game
 # networked, and the API an extension built on network play links
 # (oa-app-netgame-sdk). The top-level CMakeLists.txt registers oa-app-netgame
@@ -16,7 +15,7 @@ add_library(oa::app::netgame_launch ALIAS oa-app-netgame-launch)
 target_include_directories(oa-app-netgame-launch PUBLIC include)
 target_compile_features(oa-app-netgame-launch PUBLIC cxx_std_20)
 target_link_libraries(oa-app-netgame-launch PUBLIC oa-app-command-line oa-ui-frontend-multiplayer
-  PRIVATE oa-options)
+  PRIVATE oa-base-text oa-options)
 
 # The long options and 3.1c network switches, which the option test parses
 # without a running app.
@@ -56,7 +55,7 @@ target_include_directories(oa-app-netgame-launch-binding PUBLIC "${CMAKE_CURRENT
 target_link_libraries(oa-app-netgame-launch-binding
   PUBLIC oa-app-netgame-close-handlers oa-app-netgame-launch oa-ui-frontend-multiplayer oa-core-types)
 
-# The sources that define the Runtime members and the Runtime friend.
+# The sources that define NetworkPlay, Runtime's friend, and the hooks that reach it.
 set(oa_app_netgame_sources
   runtime_console_network.cpp
   runtime_net.cpp
@@ -72,9 +71,9 @@ if(TARGET oa-game)
   add_library(oa-app-netgame STATIC ${oa_app_netgame_sources} multiplayer_menu_check.cpp)
   add_library(oa::app::netgame ALIAS oa-app-netgame)
   target_include_directories(oa-app-netgame PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-  # The engine's extension SDK: its hooks, and the Runtime its members
-  # compile into, seen as oa-game's own sources see it (the engine applies
-  # an extension's OA_RUNTIME_EXTENSION_MEMBERS to both).
+  # The engine's extension SDK: its hooks, and the Runtime NetworkPlay
+  # reaches, seen as oa-game's own sources see it (the engine applies an
+  # extension's OA_RUNTIME_EXTENSION_MEMBERS to both).
   target_link_libraries(oa-app-netgame
     PUBLIC oa-app-netgame-options oa-app-netgame-traffic-overlay oa-app-netgame-close-handlers
       oa-app-netgame-launch-binding oa-ui-frontend-multiplayer oa-netgame-match-runtime oa-session-demo
@@ -107,14 +106,13 @@ if(BUILD_TESTING)
   target_link_libraries(oa-netgame-traffic-overlay-test PRIVATE oa-app-netgame-traffic-overlay oa-netgame-match
     oa-ui-console)
   add_test(NAME netgame-traffic-overlay COMMAND oa-netgame-traffic-overlay-test)
-  # The members header and the private Runtime names these sources use stay
-  # within tools/runtime-surface-baseline.json, which only shrinks as they
-  # move behind hooks.
+  # The private Runtime names these sources use stay within
+  # tools/runtime-surface-baseline.json, which only shrinks as they move
+  # behind hooks and declared headers.
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME netgame-runtime-surface COMMAND ${Python3_EXECUTABLE}
       "${PROJECT_SOURCE_DIR}/tools/check_runtime_surface.py"
-      --members "${PROJECT_SOURCE_DIR}/src/app/include/oa/app/netgame_runtime_members.hpp"
       ${oa_app_netgame_sources})
     set_tests_properties(netgame-runtime-surface PROPERTIES TIMEOUT 60
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

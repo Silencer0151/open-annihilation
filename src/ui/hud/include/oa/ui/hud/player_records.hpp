@@ -6,6 +6,7 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/campaign/campaign_file.hpp"
 #include "oa/data/persist/hapibank.hpp"
 
 #include <cstddef>
@@ -13,9 +14,6 @@
 
 namespace oa::ui::hud {
 
-/// CampaignFile.kind values that choose where starting resources come from.
-inline constexpr int32_t kSessionCampaign = 1;
-inline constexpr int32_t kSessionSkirmish = 2;
 /// Starting shared storage never goes below this.
 inline constexpr int32_t kMinimumStartStorage = 200;
 /// PlayerSetupInfo.role bit of the host slot.
@@ -28,19 +26,19 @@ inline constexpr uint8_t kResourceSharesStorage = 0x01;
 /// Starting resources a campaign mission sets for each player (the campaign
 /// file's metal and energy, data::campaign::CampaignFile).
 struct MissionResources {
-    float metal[OA_PLAYER_COUNT];
-    float energy[OA_PLAYER_COUNT];
+    float metal[OA_PLAYER_COUNT]{};
+    float energy[OA_PLAYER_COUNT]{};
 };
 
 /// One player's row of the skirmish settings block Game.skirmish_info
 /// points at.
 struct SkirmishSlot {
-    int32_t controller; // Player.status the slot starts with
-    int32_t side;       // PlayerSetupInfo.side
-    int32_t alliance;   // shared by allies; kNoRosterAlliance for none
-    int32_t metal;
-    int32_t energy;
-    int32_t color; // PlayerSetupInfo.color
+    int32_t controller{}; // Player.status the slot starts with
+    int32_t side{};       // PlayerSetupInfo.side
+    int32_t alliance{};   // shared by allies; kNoRosterAlliance for none
+    int32_t metal{};
+    int32_t energy{};
+    int32_t color{}; // PlayerSetupInfo.color
 };
 
 #pragma pack(pop)
@@ -70,10 +68,14 @@ inline constexpr int32_t kRosterCapacity = OA_PLAYER_RECORD_COUNT;
 /// @param[in,out] world World holding the player records and their info records.
 /// @param index Player record index; an index without a record does nothing.
 /// @param status Player.status the record starts in.
-/// @param session_kind CampaignFile.kind (kSessionCampaign, kSessionSkirmish, ...).
+/// @param session_kind CampaignFile.kind of the game.
 /// @param physical_memory Machine memory in bytes.
 void init_player_slot(
-    World& world, uint8_t index, uint8_t status, int32_t session_kind, int32_t physical_memory
+    World& world,
+    uint8_t index,
+    uint8_t status,
+    oa::data::campaign::SessionKind session_kind,
+    int32_t physical_memory
 );
 
 /// Finds the next roster entry from `start` on that fights beside `entry`.
@@ -104,7 +106,7 @@ void init_player_slots_from_roster(
     World& world,
     const SkirmishSlot* roster,
     int32_t count,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     int32_t physical_memory
 );
 
@@ -122,7 +124,7 @@ void init_player_slots_from_roster(
 /// @param skirmish Skirmish slots, used in a skirmish; may be null.
 void set_starting_resources(
     World& world,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const MissionResources* mission,
     const SkirmishSlot* skirmish
 );

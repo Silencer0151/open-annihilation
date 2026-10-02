@@ -6,12 +6,14 @@
 #include "oa/data/campaign/campaign_file.hpp"
 
 #include "oa/core/game_state.h"
+#include "oa/base/text.hpp"
 
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 
 namespace oa::data::campaign {
 namespace {
@@ -89,8 +91,8 @@ void replace_extension(char* path, std::size_t capacity, const char* extension) 
     if (extension == nullptr || extension[0] == '\0')
         return;
     remove_extension(path);
-    std::strncat(path, ".", capacity - std::strlen(path) - 1);
-    std::strncat(path, extension, capacity - std::strlen(path) - 1);
+    oa::base::text::append_terminated(std::span(path, capacity), ".");
+    oa::base::text::append_terminated(std::span(path, capacity), extension);
 }
 
 } // namespace
@@ -310,7 +312,7 @@ void cursor_string(
 } // namespace
 
 void campaign_file_init(CampaignFile* file) noexcept {
-    std::memset(file, 0, sizeof(*file));
+    std::memset(static_cast<void*>(file), 0, sizeof(*file));
     oa::formats::tdf::document_init(&file->campaign);
     file->tidal_strength = -1.0f;
 }
@@ -543,13 +545,15 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
             oa::formats::tdf::document_free(&ota);
             return false;
         }
+        // The two messages below name the mission as the campaign file
+        // writes it, not the path searched.
         build_variant_path(files, path, sizeof(path), kMapsDirectory, name, "OTA");
         if (!load_tdf(files, &ota, path)) {
             std::snprintf(
                 text,
                 sizeof(text),
                 "Hey, joker!  There is no mission defintion for this mission: %s",
-                path
+                name
             );
             message(files, text);
             oa::formats::tdf::document_free(&ota);
@@ -561,7 +565,7 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
                 text,
                 sizeof(text),
                 "Hey, joker!  Mission file %s is corrupt (no header found).",
-                path
+                name
             );
             message(files, text);
             oa::formats::tdf::document_free(&ota);

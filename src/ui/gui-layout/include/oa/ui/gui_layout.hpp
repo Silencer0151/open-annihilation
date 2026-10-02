@@ -97,7 +97,7 @@ struct PanelFields {
     // The GUI loader overwrites the first record's count with the parsed
     // record count - 1.
     int16_t loaded_total_gadgets = 0;
-    Version version;
+    Version version{};
     std::string panel;
     std::string carriage_return_default;
     std::string escape_default;

@@ -37,16 +37,20 @@ sim::simulation_state::Unit& TickHost::unit_view(oa::Unit& record) {
 sim::ground_orders::GroundRuntime& TickHost::ground(sim::simulation_state::Unit& u) {
     auto& s = slot(u);
     auto* r = match.ground_runtime(s.unit_index);
-    if (!r)
-        throw std::logic_error("ground tick has no controller");
-    return *r;
+    if (r)
+        return *r;
+    match.fault_.note("ground tick has no controller");
+    match.spare_ground_ = std::make_unique<sim::ground_orders::GroundRuntime>();
+    return *match.spare_ground_;
 }
 
 Match::RuntimeOrder& TickHost::owned(sim::simulation_state::Order& order) {
     for (auto& entry : match.orders_)
         if (&entry->order == &order)
             return *entry;
-    throw std::out_of_range("order is not owned by match");
+    match.fault_.note("order is not owned by match");
+    match.spare_order_ = {};
+    return match.spare_order_;
 }
 
 std::array<uint8_t, 3> TickHost::weapon_flags(sim::unit_spawn::Slot& s) {
@@ -86,8 +90,10 @@ uint32_t TickHost::unit_abilities(const oa::Unit& unit) const {
 
 sim::unit_spawn::Slot& TickHost::movement_slot(const sim::unit_movement::Unit& u) {
     const auto index = static_cast<uint16_t>(u.id);
-    if (index >= match.slots_.size())
-        throw std::out_of_range("movement unit outside pool");
+    if (index >= match.slots_.size()) {
+        match.fault_.note("movement unit outside pool");
+        return match.slots_[0];
+    }
     return match.slots_[index];
 }
 
@@ -106,8 +112,10 @@ void TickHost::update_wind_generator(oa::Unit& record) {
     if (!(match.fields(s).definition->wind_generator > 0) || !match.wind_.changed)
         return;
     auto* instance = match.instance(s.unit_index);
-    if (!instance || !instance->script())
-        throw std::logic_error("wind generator has no script");
+    if (!instance || !instance->script()) {
+        match.fault_.note("wind generator has no script");
+        return;
+    }
     const auto direction = static_cast<int32_t>(match.wind_.direction);
     const auto speed = std::bit_cast<int32_t>(match.wind_.speed << 4);
     instance->script()->call("SetDirection", std::span(&direction, 1), false);
@@ -126,13 +134,17 @@ void TickHost::settle_on_ground(oa::Unit& record) {
         return;
     auto& g = ground(u);
     auto* object = match.instance(s.unit_index);
-    if (!object)
-        throw std::logic_error("ground fit without model");
+    if (!object) {
+        match.fault_.note("ground fit without model");
+        return;
+    }
     sim::unit_movement::GroundClock clock;
     clock.simulation_tick = match.simulation_.tick;
-    if (u.type->flags & 0x1000) {
-        if (!match.input_.uptime_milliseconds)
-            throw std::logic_error("floating fit requires clock");
+    if (u.type->flags & OA_UNIT_DEF_FLAG_CAN_HOVER) {
+        if (!match.input_.uptime_milliseconds) {
+            match.fault_.note("floating fit requires clock");
+            return;
+        }
         for (auto& n : clock.bob_ticks)
             n = sim::unit_movement::scaled_bob_tick(
                 match.input_.uptime_milliseconds(), static_cast<uint32_t>(match.input_.clock_scale)
@@ -176,7 +188,7 @@ void TickHost::local_player_ticked(oa::Player& player) {
         multiplayer.local_player_ticked(multiplayer.context, player);
         return;
     }
-    unsupported("local player tick without a multiplayer handler");
+    match.fault_.note("local player tick without a multiplayer handler");
 }
 
 bool TickHost::is_key_down(uint32_t code) {

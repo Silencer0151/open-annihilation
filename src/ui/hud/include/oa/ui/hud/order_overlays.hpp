@@ -47,24 +47,24 @@ enum UiColor : uint8_t {
 
 /// One queued order as the overlays read it.
 struct OrderOverlay {
-    uint8_t mission;     // mission kind, the index into kMissionOverlays
-    Unit* unit;          // ordered unit
-    Unit* target;        // target unit, or null
-    FixedVec3 position;  // target point
-    int16_t seen_x;      // where the target was last seen, map pixels
-    int16_t seen_z;      // where the target was last seen, map pixels
-    uint32_t parameter;  // build type (low word) or weapon slot
-    int32_t progress;    // stockpile build progress, out of the weapon's reload_time
-    uint32_t flags;      // order flags; kOrderTargetSeen
-    uint8_t state;       // order state; kOrderStockpileBuild
-    uint32_t issue_tick; // tick the order was issued
-    OrderOverlay* next;  // next order of the queue, or null
+    uint8_t mission{};     // mission kind, the index into kMissionOverlays
+    Unit* unit{};          // ordered unit
+    Unit* target{};        // target unit, or null
+    FixedVec3 position;    // target point
+    int16_t seen_x{};      // where the target was last seen, map pixels
+    int16_t seen_z{};      // where the target was last seen, map pixels
+    uint32_t parameter{};  // build type (low word) or weapon slot
+    int32_t progress{};    // stockpile build progress, out of the weapon's reload_time
+    uint32_t flags{};      // order flags; kOrderTargetSeen
+    uint8_t state{};       // order state; kOrderStockpileBuild
+    uint32_t issue_tick{}; // tick the order was issued
+    OrderOverlay* next{};  // next order of the queue, or null
 };
 
 /// What a mission kind draws: its overlay kinds and target sprite.
 struct MissionOverlay {
-    uint32_t mask;     // kOverlay* kinds
-    uint8_t indicator; // target sprite sequence; 0 none
+    uint32_t mask{};     // kOverlay* kinds
+    uint8_t indicator{}; // target sprite sequence; 0 none
 };
 
 /// Overlay kinds and target sprite (a cursor sequence) of each of the 68
@@ -144,28 +144,28 @@ inline constexpr MissionOverlay kMissionOverlays[kMissionOverlayCount] = {
 
 /// Frame count and ticks-per-frame of a sprite sequence.
 struct SpriteSequence {
-    uint16_t frame_count;
-    uint16_t rate;
+    uint16_t frame_count{};
+    uint16_t rate{};
 };
 
 enum class OverlaySprite : uint8_t { path_pip, indicator };
 
 /// Drawing and terrain services the overlays use.
 struct OverlaySink {
-    void* user;
-    void (*line)(void* user, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color);
+    void* user{};
+    void (*line)(void* user, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color){};
     /// Label text, drawn unclipped (width -1).
-    void (*label)(void* user, const char* text, int32_t x, int32_t y);
+    void (*label)(void* user, const char* text, int32_t x, int32_t y){};
     /// One frame of the path-pip sequence or of indicator sequence `index`.
     void (*sprite)(
         void* user, OverlaySprite sprite, uint8_t index, uint16_t frame, int32_t x, int32_t y
-    );
+    ){};
     /// Terrain height (integer part) under a point.
-    int32_t (*ground_height)(void* user, const FixedVec3& point);
+    int32_t (*ground_height)(void* user, const FixedVec3& point){};
     /// Whether `viewer` currently sees `unit`.
-    bool (*can_see)(void* user, const Player* viewer, const Unit& unit);
+    bool (*can_see)(void* user, const Player* viewer, const Unit& unit){};
     /// First order of a unit's primary (or secondary) queue.
-    OrderOverlay* (*orders)(void* user, const Unit& unit, bool secondary);
+    OrderOverlay* (*orders)(void* user, const Unit& unit, bool secondary){};
     /// Where a unit shows in the frame drawn, which may lie part of the way
     /// from its place at the tick before (a frame between two ticks); the
     /// overlays start their paths, centre their ranges and find their target
@@ -176,23 +176,23 @@ struct OverlaySink {
 
 /// The battlefield view the overlays are projected into.
 struct OverlayView {
-    const Unit* focus_unit; // unit the cursor rests on in this view, or null
-    int32_t camera_x;       // map pixels
-    int32_t camera_y;
+    const Unit* focus_unit{}; // unit the cursor rests on in this view, or null
+    int32_t camera_x{};       // map pixels
+    int32_t camera_y{};
 };
 
 struct OverlayContext {
-    World* world;
+    World* world{};
     OverlayView view;
     OverlaySink sink;
-    const MissionOverlay* missions; // 256 entries, by mission index
+    const MissionOverlay* missions{}; // 256 entries, by mission index
     SpriteSequence path_pips;
-    const SpriteSequence* indicators; // by MissionOverlay.indicator
-    bool show_ranges;                 // debug range display (Game.show_ranges)
+    const SpriteSequence* indicators{}; // by MissionOverlay.indicator
+    bool show_ranges{};                 // debug range display (Game.show_ranges)
 };
 
 struct ScreenPoint {
-    int32_t x, y;
+    int32_t x{}, y{};
 };
 
 /// Projects a world point onto the screen: x across, z up the screen lifted by half the height.

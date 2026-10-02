@@ -6,7 +6,6 @@
 #include "oa/sim/unit_movement/movement.hpp"
 
 #include <bit>
-#include <stdexcept>
 
 namespace oa::sim::world_environment {
 namespace {
@@ -23,10 +22,8 @@ int32_t doubled_negation(int32_t value) noexcept {
     return bits((0u - std::bit_cast<uint32_t>(value)) << negated_vector_shift);
 }
 
-float normalized_strength(int32_t numerator, int32_t denominator) {
-    if (denominator == 0) {
-        throw std::domain_error("Wind-strength divisor is zero");
-    }
+// The divisor is not zero.
+float normalized_strength(int32_t numerator, int32_t denominator) noexcept {
     // The quotient is rounded to a double, then to a float, as in 3.1c.
     const double quotient = static_cast<double>(numerator) / static_cast<double>(denominator);
     return static_cast<float>(quotient);
@@ -34,17 +31,16 @@ float normalized_strength(int32_t numerator, int32_t denominator) {
 
 } // namespace
 
-bool refresh_wind(WindState& state, WindRandomHost& random) {
+WindRefresh refresh_wind(WindState& state, WindRandomHost& random) {
     // The comparison is unsigned. Equality therefore waits too.
     if (state.change_deadline >= state.current_tick) {
         state.changed &= wind_sample_unchanged;
-        return false;
+        return WindRefresh::waiting;
     }
 
     const auto lcg = random.lcg_rand_15();
-    if (lcg >= lcg_divisor) {
-        throw std::invalid_argument("rand() callback returned a value above 32767");
-    }
+    if (lcg >= lcg_divisor)
+        return WindRefresh::random_out_of_range;
     // lcg is below lcg_divisor, so the product stays within 32 bits.
     const auto steps = (lcg * cadence_multiplier) / lcg_divisor + cadence_bias;
     state.change_deadline += steps * cadence_tick_scale;
@@ -60,18 +56,20 @@ bool refresh_wind(WindState& state, WindRandomHost& random) {
         doubled_negation(sim::unit_movement::sine_scaled(state.direction, state.strength));
     state.vector_z =
         doubled_negation(sim::unit_movement::cosine_scaled(state.direction, state.strength));
+    if (state.strength_divisor == 0)
+        return WindRefresh::zero_strength_divisor;
     state.normalized_strength = normalized_strength(state.strength, state.strength_divisor);
     if (static_cast<double>(state.normalized_strength) > normalized_strength_limit) {
         state.normalized_strength = static_cast<float>(normalized_strength_limit);
     }
     state.changed = wind_sample_changed;
-    return true;
+    return WindRefresh::changed;
 }
 
-void initialize_wind(WindState& state, WindRandomHost& random) {
+WindRefresh initialize_wind(WindState& state, WindRandomHost& random) {
     state.strength_divisor = default_wind_strength_divisor;
     state.change_deadline = initial_change_deadline;
-    refresh_wind(state, random);
+    return refresh_wind(state, random);
 }
 
 WindState wind_state(const Game& game) noexcept {
@@ -103,17 +101,26 @@ void store_wind_state(Game& game, const WindState& state) noexcept {
     game.wind_changed = state.changed;
 }
 
-bool refresh_wind(Game& game, WindRandomHost& random) {
+namespace {
+bool wind_error(WindRefresh result) noexcept {
+    return result != WindRefresh::waiting && result != WindRefresh::changed;
+}
+} // namespace
+
+WindRefresh refresh_wind(Game& game, WindRandomHost& random) {
     auto state = wind_state(game);
-    const bool changed = refresh_wind(state, random);
-    store_wind_state(game, state);
-    return changed;
+    const auto result = refresh_wind(state, random);
+    if (!wind_error(result))
+        store_wind_state(game, state);
+    return result;
 }
 
-void initialize_wind(Game& game, WindRandomHost& random) {
+WindRefresh initialize_wind(Game& game, WindRandomHost& random) {
     auto state = wind_state(game);
-    initialize_wind(state, random);
-    store_wind_state(game, state);
+    const auto result = initialize_wind(state, random);
+    if (!wind_error(result))
+        store_wind_state(game, state);
+    return result;
 }
 
 } // namespace oa::sim::world_environment

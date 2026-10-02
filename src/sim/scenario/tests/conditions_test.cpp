@@ -6,6 +6,7 @@
 // that dispatch the unit events and the queries.
 #include "oa/sim/scenario/conditions.hpp"
 #include "oa/sim/scenario/outcome.hpp"
+#include "oa/base/text.hpp"
 
 #include <array>
 #include <cmath>
@@ -70,10 +71,10 @@ Condition registered(const char* key, const char* value = nullptr) {
     Controller controller;
     register_conditions(controller, header);
     for (auto& entry : controller.victory)
-        if (entry && descriptor(entry->kind).key == key)
+        if (entry && descriptor(entry->kind)->key == key)
             return *entry;
     for (auto& entry : controller.defeat)
-        if (entry && descriptor(entry->kind).key == key)
+        if (entry && descriptor(entry->kind)->key == key)
             return *entry;
     return {};
 }
@@ -94,8 +95,8 @@ struct Match {
         world->unit_slot_count = static_cast<uint32_t>(units.size());
         world->unit_defs = defs.data();
         world->unit_def_count = static_cast<uint32_t>(defs.size());
-        std::strcpy(defs[tank].unit_name, "ARMSTUMP");
-        std::strcpy(defs[gate].unit_name, "CORGATE");
+        oa::base::text::copy_terminated(defs[tank].unit_name, "ARMSTUMP");
+        oa::base::text::copy_terminated(defs[gate].unit_name, "CORGATE");
         defs[tank].type_id = tank;
         defs[gate].type_id = gate;
         for (uint8_t index = 0; index < 2; ++index) {
@@ -106,8 +107,8 @@ struct Match {
             player.first_unit = oa_unit_ref_from_slot(1 + index * slots_per_player);
             player.last_unit = oa_unit_ref_from_slot((index + 1) * slots_per_player);
         }
-        std::strcpy(world->game.sides[0].commander, "ARMSTUMP");
-        std::strcpy(world->game.sides[1].commander, "CORGATE");
+        oa::base::text::copy_terminated(world->game.sides[0].commander, "ARMSTUMP");
+        oa::base::text::copy_terminated(world->game.sides[1].commander, "CORGATE");
     }
 
     /// Places a unit in the owner's next free slot.
@@ -449,13 +450,7 @@ void queries_follow_the_kind() {
     CHECK(evaluate_condition(radius, context) && m.radius_queries == 1 && result(radius));
     QueryContext without_hook = context;
     without_hook.host.move_unit_to_radius_met = nullptr;
-    bool threw = false;
-    try {
-        (void)evaluate_condition(radius, without_hook);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    CHECK(threw);
+    CHECK(!evaluate_condition(radius, without_hook));
 }
 
 // The inputs a query can read. Each run of query_with turns one of them to
@@ -544,7 +539,7 @@ bool query_with(Kind kind, Input input) {
     Condition c;
     c.kind = kind;
     c.satisfied = input == Input::satisfied ? 1 : 0;
-    std::strcpy(c.type_name, "ARMSTUMP");
+    oa::base::text::copy_terminated(c.type_name, "ARMSTUMP");
     c.line = line_cell;
     c.deadline = deadline;
     const uint32_t tick = input == Input::deadline_reached ? deadline : deadline - 1;
@@ -578,13 +573,7 @@ void every_kind_runs_its_own_query() {
             }
         }
     }
-    bool threw = false;
-    try {
-        (void)query_of(static_cast<Kind>(kind_count));
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    CHECK(threw);
+    CHECK(query_of(static_cast<Kind>(kind_count)) == Query::stored_result);
 }
 
 struct Random : DiagnosticRandom {

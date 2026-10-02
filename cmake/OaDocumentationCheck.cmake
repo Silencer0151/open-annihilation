@@ -43,9 +43,6 @@ function(oa_add_documentation_check)
     "${PROJECT_SOURCE_DIR}/src/*.h" "${PROJECT_SOURCE_DIR}/src/*.hpp")
   list(FILTER headers INCLUDE REGEX "/include/")
   list(FILTER headers EXCLUDE REGEX "(^|/)tests/")
-  # Network play's Runtime members are part of class Runtime, not a header
-  # of their own: they are read where runtime.hpp includes them.
-  list(FILTER headers EXCLUDE REGEX "^src/app/include/oa/app/netgame_runtime_members\\.hpp$")
   if(TARGET oa-extension-sdk)
     file(GLOB app_headers CONFIGURE_DEPENDS RELATIVE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src/app/*.hpp")
     list(APPEND headers ${app_headers})
@@ -59,6 +56,7 @@ function(oa_add_documentation_check)
     list(APPEND sources "${source}")
   endforeach()
   add_library(oa-doc-check OBJECT EXCLUDE_FROM_ALL ${sources})
+  add_library(oa::doc::check ALIAS oa-doc-check)
   target_link_libraries(oa-doc-check PRIVATE ${libraries})
   # SDL's package marks its headers as the project's own, not the system's;
   # its documentation is not the engine's to check.

@@ -3,6 +3,7 @@
 
 // Match chrome, side HUD, resource readout, fog and minimap.
 #include "oa/app/runtime.hpp"
+#include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
@@ -16,16 +17,17 @@
 #include "oa/ui/console/game_fields.hpp"
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -298,8 +300,12 @@ void Runtime::paint_text(
     if (text.empty() || scale < 1)
         return;
     auto& dest = paint_target();
+    // The glyphs are drawn into a buffer with room above the pen row for
+    // the font's lift, and two rows of margin around them.
+    const int lift = oa::formats::fnt::row_lift(font);
+    const int pen_row = 2 + std::max(0, lift);
     const auto text_w = static_cast<int>(oa::formats::fnt::measure_text(font, text)) + 4;
-    const auto text_h = static_cast<int>(oa::formats::fnt::line_height(font)) + 4;
+    const auto text_h = static_cast<int>(oa::formats::fnt::line_height(font)) + 4 + std::abs(lift);
     if (text_w <= 0 || text_h <= 0)
         return;
     thread_local std::vector<uint8_t> indices;
@@ -314,9 +320,11 @@ void Runtime::paint_text(
         indices,
         coverage
     };
-    (void)oa::formats::fnt::raster_text(target, font, text, 0, 2);
+    // The text is measured before it is drawn; where the pen stops is not
+    // needed.
+    std::ignore = oa::formats::fnt::raster_text(target, font, text, 0, pen_row);
     for (int row = 0; row < text_h * scale; ++row) {
-        const int py = y + row - 2 * scale;
+        const int py = y + row - pen_row * scale;
         if (py < 0 || py >= static_cast<int>(dest.height))
             continue;
         auto* out = dest.rgb.data() + (static_cast<std::size_t>(py) * dest.width) * 3U;
@@ -333,17 +341,6 @@ void Runtime::paint_text(
             pixel[2] = color[2];
         }
     }
-}
-
-int Runtime::tdf_int(
-    const oa::data::unit_definitions::TdfSection& section, std::string_view key, int fallback
-) {
-    const auto* value = section.find(key);
-    if (value == nullptr || value->empty())
-        return fallback;
-    int parsed = fallback;
-    const auto result = std::from_chars(value->data(), value->data() + value->size(), parsed);
-    return result.ec == std::errc{} ? parsed : fallback;
 }
 
 void Runtime::load_side_hud() {
@@ -485,7 +482,9 @@ void Runtime::draw_extension_overlay() {
         [](void* painter, int x, int y, int width, int height, uint8_t palette_index) {
             static_cast<Runtime*>(painter)->fill_hud_rect(x, y, width, height, palette_index);
         };
-    extension_.draw_match_overlay(extension_.context, *this, overlay);
+    call_hook_or_report<&Extension::draw_match_overlay>(
+        extension_, hook_error_report(), *this, overlay
+    );
 }
 
 oa::ui::display_layout::Point Runtime::hud_canvas(int x, int y) const {
@@ -782,9 +781,8 @@ void Runtime::draw_unit_panel() {
         }
     };
     hooks.localize = localize;
-    const auto panel = hud::unit_panel_snapshot(
-        world, cursor, debug_keys, static_cast<int32_t>(match_session_kind()), overlay, hooks
-    );
+    const auto panel =
+        hud::unit_panel_snapshot(world, cursor, debug_keys, match_session_kind(), overlay, hooks);
     if (panel.unit == 0)
         return;
     draw_hud_label_centered(side_hud_.unit_name.x, side_hud_.unit_name.y, panel.name, text_color);

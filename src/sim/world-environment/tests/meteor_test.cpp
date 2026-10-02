@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/world_environment/meteor.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -53,7 +54,7 @@ MeteorHost make_host(Script& script) {
 
 void test_configure_and_reset() {
     MeteorSettings settings{};
-    std::strcpy(settings.weapon, "METEOR");
+    oa::base::text::copy_terminated(settings.weapon, "METEOR");
     settings.radius = 200;
     settings.density = 4.0f;
     settings.duration = 10.0f;

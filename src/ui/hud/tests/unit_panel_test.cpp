@@ -21,7 +21,6 @@ using namespace oa::ui::hud;
 namespace {
 
 // CampaignFile.kind of a skirmish.
-constexpr int32_t kSessionSkirmish = 2;
 
 // Mission indices in name order (kMissionOverlays).
 constexpr uint8_t kMissionMobileBuild = 25;
@@ -92,8 +91,11 @@ struct Panel {
         return h;
     }
 
-    UnitPanelSnapshot
-    shown(uint16_t unit, bool debug_keys = false, int32_t session_kind = kSessionSkirmish) {
+    UnitPanelSnapshot shown(
+        uint16_t unit,
+        bool debug_keys = false,
+        oa::data::campaign::SessionKind session_kind = oa::data::campaign::SessionKind::skirmish
+    ) {
         return unit_panel_snapshot(
             *world.world, unit, debug_keys, session_kind, overlay(), hooks()
         );
@@ -176,15 +178,31 @@ void test_owner_name() {
     p.world.spawn(2, kSilo);
     p.world.spawn(3, kTank);
     p.world.spawn(4, kCommander);
-    CHECK(std::strcmp(p.shown(1, false, kSessionMultiplayer).name, "Player 0") == 0);
-    CHECK(std::strcmp(p.shown(2, false, kSessionMultiplayer).name, "Player 0") == 0);
-    CHECK(std::strcmp(p.shown(4, false, kSessionMultiplayer).name, "Player 1") == 0);
-    CHECK(std::strcmp(p.shown(3, false, kSessionMultiplayer).name, "Stumpy") == 0);
+    CHECK(
+        std::strcmp(
+            p.shown(1, false, oa::data::campaign::SessionKind::multiplayer).name, "Player 0"
+        ) == 0
+    );
+    CHECK(
+        std::strcmp(
+            p.shown(2, false, oa::data::campaign::SessionKind::multiplayer).name, "Player 0"
+        ) == 0
+    );
+    CHECK(
+        std::strcmp(
+            p.shown(4, false, oa::data::campaign::SessionKind::multiplayer).name, "Player 1"
+        ) == 0
+    );
+    CHECK(
+        std::strcmp(
+            p.shown(3, false, oa::data::campaign::SessionKind::multiplayer).name, "Stumpy"
+        ) == 0
+    );
     CHECK(std::strcmp(p.shown(1).name, "Commander") == 0);
     CHECK(std::strcmp(p.shown(2).name, "Nuclear Missile Silo") == 0);
     // An unseen commander stays unidentified.
     p.sees_enemy = false;
-    CHECK(p.shown(4, false, kSessionMultiplayer).unidentified);
+    CHECK(p.shown(4, false, oa::data::campaign::SessionKind::multiplayer).unidentified);
 }
 
 void test_unidentified() {

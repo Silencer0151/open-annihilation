@@ -410,8 +410,8 @@ RenderResult render_battlefield_viewport(
 }
 
 bool shared_radar_contact(const RadarShare& share) noexcept {
-    // A zero alliance byte, or ShareRadar bit 0x40 clear, hides the contact.
-    if (share.alliance_byte == 0 || (share.share_flags & 0x40U) == 0)
+    // A zero alliance byte, or a clear ShareRadar bit, hides the contact.
+    if (share.alliance_byte == 0 || (share.share_flags & share_flag_share_radar) == 0)
         return false;
     return true;
 }

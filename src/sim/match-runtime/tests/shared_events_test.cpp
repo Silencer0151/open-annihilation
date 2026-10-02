@@ -10,12 +10,13 @@
 // (unit_transferred, Match::transfer_unit) and a game ended from elsewhere
 // (Match::end_local_game). With an entry null nothing is shared and the event
 // still plays out here.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
 #include "combat_fixture.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 #include "oa/sim/weapon_execution/weapon_launch.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 namespace {
 
@@ -340,35 +342,9 @@ constexpr int32_t wreck_x = 20, wreck_z = 20;
 constexpr int32_t small_wreck_x = 26, small_wreck_z = 26;
 constexpr uint16_t small_wreck_feature = 1;
 
-struct Services : sim::match_runtime::OfflineServices {
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
+using Services = oa::test::QuietServices;
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Dispatches the order once and applies the sweep's phase rule for results 0 and 1.
 uint32_t step(
@@ -377,7 +353,7 @@ uint32_t step(
     sim::simulation_state::Order& order,
     uint32_t events = 0
 ) {
-    sim::match_runtime::TickHost host(match);
+    sim::match_runtime::MatchTickAccess host(match);
     order.wait_events = 0;
     const auto result = host.dispatch_mission(match.state(), unit.record, order, events);
     if (result == 0)
@@ -527,9 +503,9 @@ struct Fixture {
             "turret=1; [DAMAGE]{default=10;}}"
         );
         // A 2x2 tank wreck at (20, 20) and a 1x1 one at (26, 26).
-        std::strcpy(features[wreck_feature].name, "TANK_DEAD");
+        oa::base::text::copy_terminated(features[wreck_feature].name, "TANK_DEAD");
         features[wreck_feature].footprint_x = features[wreck_feature].footprint_z = 2;
-        std::strcpy(features[small_wreck_feature].name, "TANK_HEAP");
+        oa::base::text::copy_terminated(features[small_wreck_feature].name, "TANK_HEAP");
         features[small_wreck_feature].footprint_x = features[small_wreck_feature].footprint_z = 1;
         for (auto& def : features) {
             def.metal = 20.0F;
@@ -722,19 +698,15 @@ void mirrored_copy_is_finished() {
     CHECK(recorder.calls.empty());
 
     // A dead builder finishes nothing, and a builder slot outside the pool
-    // is ignored; a unit slot outside it throws.
+    // is ignored; a unit slot outside it is taken as reserved slot 0, which
+    // holds no unit, and nothing happens.
     auto& second = f.spawn(1, tank_type, 140, 140, false);
     recorder.calls.clear();
     f.match->finish_unit(second.unit_index, 0);
     f.match->finish_unit(second.unit_index, 0xffff);
     CHECK(second.record.build_remaining != 0.0F);
-    bool threw = false;
-    try {
-        f.match->finish_unit(0xffff, factory.unit_index);
-    } catch (const std::out_of_range&) {
-        threw = true;
-    }
-    CHECK(threw);
+    f.match->finish_unit(0xffff, factory.unit_index);
+    CHECK(recorder.calls.empty() && f.match->fault() == nullptr);
     // A building created finished elsewhere names itself: its copy is
     // finished the same way.
     f.match->finish_unit(second.unit_index, second.unit_index);
@@ -802,7 +774,7 @@ void start_building_is_shared() {
     CHECK(step(*f.match, builder, quiet) == 1);
     CHECK(
         step(*f.match, builder, quiet) == 1 &&
-        (quiet.flags & sim::match_runtime::tick_detail::order_building_flag)
+        sim::match_runtime::MatchTickAccess::order_building(quiet)
     );
     f.match->stop_orders(id);
     std::cout << "start building is shared passed\n";

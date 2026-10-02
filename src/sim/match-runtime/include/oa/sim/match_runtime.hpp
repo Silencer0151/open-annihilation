@@ -6,6 +6,7 @@
 #include "oa/sim/match_runtime/attack_orders.hpp"
 #include "oa/sim/match_runtime/construction_orders.hpp"
 #include "oa/sim/match_runtime/event_hooks.hpp"
+#include "oa/sim/match_runtime/fault.hpp"
 #include "oa/sim/match_runtime/match_trace.hpp"
 #include "oa/sim/match_runtime/spawn_bridge.hpp"
 #include "oa/sim/combat_state.hpp"
@@ -401,11 +402,24 @@ struct TransferredUnit {
 class Match final : private SpawnSubsystems, private UnitValueHost {
   public:
 
+    /// Says what keeps the inputs from building a match.
+    ///
+    /// @param input Map, type tables, masks and loaders.
+    /// @return Static text for the first refusal: type tables of different
+    ///     lengths, a per-player unit limit the pool cannot hold, a viewpoint
+    ///     outside the ten players, terrain values or collision plots that do
+    ///     not cover the map, a sight grid over 16M cells or a missing scenario
+    ///     definition host; null when the inputs build a match.
+    [[nodiscard]] static const char* input_error(const OfflineInputs& input) noexcept;
+
     /// Builds the match: the unit pool, type tables, map plots and features,
     /// sight grids, movement maps, scenario conditions, wind and effect world.
     ///
-    /// Inconsistent tables, a sight grid over 16M cells, a missing scenario
-    /// definition host or a viewpoint outside the ten players throw.
+    /// Inputs input_error refuses, or sight tables the visibility state
+    /// refuses, stop the build there with the refusal in fault(); such a
+    /// match must not be used further. A malformed scenario condition is
+    /// noted in fault() too, and the match goes on without the conditions
+    /// from it on.
     ///
     /// @param input Map, type tables, masks and loaders; the borrowed spans
     ///     must outlive the match.
@@ -413,6 +427,36 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     Match(const OfflineInputs& input, OfflineServices& services);
     Match(const Match&) = delete;
     Match& operator=(const Match&) = delete;
+
+    /// Returns the first broken invariant or refused input a match operation
+    /// met since the last clear_fault.
+    ///
+    /// The operation that met it noted it and stopped, leaving what it had
+    /// done; later operations run as before.
+    ///
+    /// @return The fault's text, or null while none is noted.
+    [[nodiscard]] const char* fault() const noexcept { return fault_.text(); }
+
+    /// Forgets the noted fault, so the next one is noted.
+    void clear_fault() noexcept { fault_.clear(); }
+
+    /// Tells whether an issue call refused its order.
+    ///
+    /// An order for a slot that holds no unit, or a move for a unit that
+    /// cannot take one, is refused: nothing is queued, and the call returns
+    /// a spare order outside every queue.
+    ///
+    /// @param order The order an issue call returned.
+    /// @return True for the spare order.
+    [[nodiscard]] bool order_refused(const sim::simulation_state::Order& order) const noexcept {
+        return &order == &spare_order_.order;
+    }
+
+    /// Notes a fault an operation on the match met, unless one is noted
+    /// (see fault()).
+    ///
+    /// @param what What went wrong.
+    void note_fault(std::string_view what) const noexcept { fault_.note(what); }
 
     /// Returns the canonical live state; every unit, player and game-state
     /// field lives here.
@@ -438,7 +482,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Takes one type's reloaded FBI record; the category handles stay this
     /// match's.
     ///
-    /// @param type Type index; one outside the table throws.
+    /// @param type Type index; one outside the table is noted and changes nothing.
     /// @param record The new UnitDef record.
     void replace_unit_def(std::size_t type, const oa::UnitDef& record);
 
@@ -483,7 +527,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     );
     /// Returns a unit's model and script instance.
     ///
-    /// @param index Unit slot; one outside the pool throws.
+    /// @param index Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @return The instance, or null for an empty slot.
     UnitInstance* instance(uint16_t index);
 
@@ -568,8 +612,10 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// the queue-head bit (0x20), or a secondary-queue order, goes to the
     /// head of its queue; others follow the queue-tail mark.
     ///
-    /// @param unit Unit slot; an inactive unit throws.
-    /// @param kind Mission kind.
+    /// @param unit Unit slot; an order for a slot that holds no unit is
+    ///     refused (see order_refused).
+    /// @param kind Mission kind; one outside the mission table is noted and
+    ///     the order refused.
     /// @param queue Whether the command was queued (shift held).
     /// @param target Target unit slot, 0 for none; kept only when the
     ///     descriptor takes one.
@@ -678,7 +724,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Returns the restore's link points of a unit's queues: their heads.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @return The primary and secondary queue heads.
     SavedOrderTails saved_order_tails(uint16_t unit);
     /// Rebuilds a saved order and links it at the tail of the primary queue,
@@ -705,15 +751,21 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// movement object: its ground navigator for a ground goal, its air
     /// driver for an air goal.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     void install_head_goal(uint16_t unit);
 
     /// Returns a unit's match-side state (model instance and its generation,
     /// SFX occupancy).
     ///
-    /// @param index Unit slot; one outside the pool throws.
+    /// @param index Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @return The slot's state.
     SlotRuntime& runtime_state(uint16_t index) { return bridge_->runtime(slots_.at(index)); }
+
+    /// Returns a unit's spawn slot: its record, its type and its script.
+    ///
+    /// @param index Unit slot; one outside the pool throws std::out_of_range.
+    /// @return The slot.
+    sim::unit_spawn::Slot& spawn_slot(std::size_t index) { return slots_.at(index); }
 
     /// Steps the COB contexts of every unit with a script, and nothing else.
     ///
@@ -727,7 +779,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Configure the local identity and alliance row after player setup and
     /// before the first full tick.
     ///
-    /// @param player Player index 0..9; another throws.
+    /// @param player Player index 0..9; another is noted and changes nothing.
     /// @param allies Nonzero for each player it counts as an ally.
     void configure_player_alliances(uint8_t player, const std::array<uint8_t, 10>& allies);
     /// Takes a player's alliances from its player record's alliance row
@@ -744,9 +796,11 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param to Player index 0..9 receiving it; another does nothing.
     void share_mapped_area(uint8_t from, uint8_t to);
     /// Sets up the local player's victory and defeat checks; full ticks
-    /// require it. It may be called once; a second call throws.
+    /// require it. It may be called once; a second call is noted and
+    /// changes nothing.
     ///
-    /// @param local_player Local player index; one outside the table throws.
+    /// @param local_player Local player index; one outside the table is
+    ///     noted and changes nothing.
     /// @param local_allies The local player's alliance row.
     /// @param defeat_allowed Whether the local player may be defeated.
     /// @param campaign Selects the campaign conditions.
@@ -772,7 +826,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Runs the unit sweep with an external simulation host, then the
     /// projectiles, explosions and path search.
     ///
-    /// configure_outcomes must have run; otherwise this throws.
+    /// configure_outcomes must have run; otherwise this is noted and runs
+    /// nothing.
     ///
     /// @param host Order, movement, combat and per-player services of the
     ///     unit sweep.
@@ -781,7 +836,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// sweep, projectiles and explosions, the players' controllers, sight
     /// and economy, features, wind, the meteor storm and particles.
     ///
-    /// A gameplay branch the engine does not support throws.
+    /// A gameplay branch the engine does not support, or a broken invariant,
+    /// is noted in fault() and stops the operation that met it.
     void tick();
     /// Flies, bursts and collides every record of the projectile pool once,
     /// then compacts the pool.
@@ -793,7 +849,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// for the unit's UNITNAME, scaled for an area blast's edge and the
     /// shooter's veterancy, as kind 1 or kind 2 for a paralyzer.
     ///
-    /// @param shot The shot; one without a weapon definition throws.
+    /// @param shot The shot; one without a weapon definition is noted and
+    ///     deals nothing.
     /// @param target Unit hit.
     /// @param scale Edge effectiveness, 1.0 for a direct hit.
     /// @return The damage applied, in health points.
@@ -909,8 +966,10 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// whose flags carry the secondary-queue bit (0x04); it inherits the old
     /// head's idle bit (0x40 of the command flags).
     ///
-    /// @param unit Unit slot; an inactive unit throws.
-    /// @param kind Mission kind; one outside the mission table throws.
+    /// @param unit Unit slot; an order for a slot that holds no unit is
+    ///     refused (see order_refused).
+    /// @param kind Mission kind; one outside the mission table is noted and
+    ///     the order refused.
     /// @param destination Signed 16.16 destination, or nothing.
     /// @param tolerance The order's first parameter.
     /// @param target Unit slot it aims at (the order's target), 0 for none;
@@ -929,8 +988,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Without `queue` the unit's orders are cleared first; idle orders at
     /// the queue head are dropped, and the order follows the queue-tail mark.
     ///
-    /// @param unit Unit slot; one without a movement object that cannot move
-    ///     throws.
+    /// @param unit Unit slot; for one without a movement object that cannot
+    ///     move, or a slot that holds no unit, the order is refused (see
+    ///     order_refused).
     /// @param destination Signed 16.16 destination.
     /// @param queue Whether the command was queued (shift held).
     /// @return The new order.
@@ -1003,7 +1063,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// the counts (second parameters) of the orders whose command flags mark
     /// them as builds (bit 0x01) and whose first parameter is the type.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @param type Type index.
     /// @return The total count.
     int32_t queued_build_count(uint16_t unit, int32_t type) const;
@@ -1087,7 +1147,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// the ten players or is not present, or the unit is not live or is
     /// already dying.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @param new_owner Player index 0..9.
     /// @param carried The state another player's machine handed over with
     ///     the unit, or null to take the unit's own.
@@ -1199,8 +1259,10 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Cloak_On, Cloak_Off, Standing_MoveOrder, Standing_FireOrder) at the
     /// head of the primary queue, dropping idle orders there first.
     ///
-    /// @param unit Unit slot; an inactive unit throws.
-    /// @param kind Mission kind.
+    /// @param unit Unit slot; an order for a slot that holds no unit is
+    ///     refused (see order_refused).
+    /// @param kind Mission kind; one outside the mission table is noted and
+    ///     the order refused.
     /// @param value The order's first parameter, the new standing order.
     /// @return The new order.
     sim::simulation_state::Order& issue_state_order(uint16_t unit, uint8_t kind, int32_t value);
@@ -1289,8 +1351,10 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// @param source Attacker slot.
     /// @param target Target slot.
-    /// @param weapon Weapon slot 0..2; one without a definition throws.
-    /// @return True when in reach.
+    /// @param weapon Weapon slot 0..2; one without a definition is noted and
+    ///     never reaches.
+    /// @return True when in reach; false when either unit has no type or
+    ///     owner.
     bool weapon_can_reach(uint16_t source, uint16_t target, uint8_t weapon);
     /// Returns a unit's own pick for its orders: the implicit slot-0 search,
     /// and only while it fires at will.
@@ -1831,13 +1895,13 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     std::span<const uint16_t> squad_members(uint8_t player, uint32_t squad) const;
     /// Moves a unit into a squad of its owner (assign_squad).
     ///
-    /// @param unit Unit slot.
+    /// @param unit Unit slot; slot 0 or one outside the pool moves nothing.
     /// @param squad Squad number; 0xffffffff joins none.
     void set_unit_squad(uint16_t unit, uint32_t squad);
     /// Settles a restored unit's footprint for its yard state, waking the
     /// units overlapping it (sim::spatial_state::refresh_footprint_occupancy).
     ///
-    /// @param unit Unit slot; a rejected refresh throws.
+    /// @param unit Unit slot; a refresh the spatial state rejects is noted.
     void refresh_restored_footprint(uint16_t unit);
     /// Tells whether a player counts another as an ally.
     ///
@@ -1886,7 +1950,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// the unit's orders are cleared first; idle orders at the queue head
     /// are dropped, and the order follows the queue-tail mark.
     ///
-    /// @param unit Unit slot; an inactive unit throws.
+    /// @param unit Unit slot; an order for a slot that holds no unit is
+    ///     refused (see order_refused).
     /// @param kind Mission kind.
     /// @param destination Signed 16.16 destination.
     /// @param queue Whether the command was queued (shift held).
@@ -1926,15 +1991,16 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Returns a player's sight coverage grid.
     ///
-    /// @param owner Player index 0..9; another throws.
+    /// @param owner Player index 0..9; another is noted and has no grid.
     /// @return One byte per sight cell: how many units see it.
     std::span<const uint8_t> player_coverage(uint8_t owner) const;
     /// Tells whether a player sees a unit: its own always, a cloaked one
     /// never, one whose top is under the sea only when flagged shown under
     /// water; otherwise when one of four corners of its bounds is in sight.
     ///
-    /// @param player Player index; one outside the table throws.
-    /// @param unit Unit slot; a type without bounds throws.
+    /// @param player Player index; one outside the table is noted and sees
+    ///     nothing.
+    /// @param unit Unit slot; a type without bounds is noted and not seen.
     /// @return True when seen.
     bool unit_visible(uint8_t player, uint16_t unit) const;
     /// Tells whether a player has line of sight to a point, or under the
@@ -2157,13 +2223,18 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Moves a unit on an occupancy layer to a position another player's
     /// simulation shared (place_unit).
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; slot 0 or one outside the pool is noted and
+    ///     moves nothing.
     /// @param x Signed 16.16 x.
     /// @param y Signed 16.16 y.
     /// @param z Signed 16.16 z.
     /// @param layer Occupancy layer (1 ground, 2 air).
     void place_unit_at(uint16_t unit, int32_t x, int32_t y, int32_t z, uint8_t layer) {
-        place_unit(slots_.at(unit), x, y, z, layer);
+        if (unit == 0 || unit >= slots_.size()) {
+            fault_.note("placed unit outside the pool");
+            return;
+        }
+        place_unit(slots_[unit], x, y, z, layer);
     }
 
     /// Launches a shot fired in another player's simulation.
@@ -2200,7 +2271,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// A unit already not live is left alone.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @param kind How it died: a DeathKind, or 0 for a unit whose slot
     ///     another player's new unit takes.
     void kill_unit(uint16_t unit, uint8_t kind);
@@ -2215,7 +2286,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// A unit already not live is left alone.
     ///
-    /// @param unit Unit slot; one outside the pool throws.
+    /// @param unit Unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @param outcome The death kind, Killed percentage and wreck level that
     ///     machine settled.
     /// @param attacker Unit slot of the unit that last damaged it there, 0
@@ -2237,7 +2308,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// Nothing happens unless both units are live.
     ///
-    /// @param unit Finished unit slot; one outside the pool throws.
+    /// @param unit Finished unit slot; one outside the pool is taken as reserved slot 0, which holds no unit.
     /// @param builder Slot of the unit whose work finished it; `unit` for a
     ///     building created finished. One outside the pool does nothing.
     void finish_unit(uint16_t unit, uint16_t builder);
@@ -2364,11 +2435,12 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param child Carried unit slot; one not carried is left alone.
     void install_be_carried(uint16_t child);
 
+    // The first broken invariant or refused input an operation met (fault()).
+    // A query that meets one notes it too, which changes no match state.
+    mutable MatchFault fault_;
     friend class TickHost;
     friend class WeaponTickHost;
     friend class TargetHost;
-    friend class ProjectileDamageHost;
-    friend struct FeatureCalls;
 
     /// Places the map's features on the canonical plots, from the loader's
     /// resolved plots in row-major order (markers first, then FeatureDefs),
@@ -2380,7 +2452,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Metal section is missing or not one byte per cell keeps that metal,
     /// where the game keeps the map's metal without it.
     ///
-    /// A placed-feature pool smaller than the game's throws.
+    /// A placed-feature pool smaller than the game's is noted and places
+    /// nothing.
     void place_map_features();
     /// Rewrites the match plots' feature fields over a rectangle from the
     /// canonical plots and FeatureDef table.
@@ -2459,6 +2532,22 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         RuntimeOrder* observer_next{};
     };
 
+    // What TickHost::owned gives for an order the match does not own, and
+    // TickHost::ground for a unit without a movement object, once the fault
+    // is noted. Each is cleared at every such call, and what is written to
+    // it goes nowhere.
+    RuntimeOrder spare_order_{};
+    std::unique_ptr<sim::ground_orders::GroundRuntime> spare_ground_;
+    /// Returns the match-side fields of an order.
+    ///
+    /// @param order An order.
+    /// @return Its fields, or null for an order the match does not own.
+    sim::ground_orders::OrderState* owned_extra(sim::simulation_state::Order* order) noexcept;
+    /// Gives the spare order in place of a refused one.
+    ///
+    /// @return The spare order, cleared, outside every queue.
+    sim::simulation_state::Order& refused_order() noexcept;
+
     std::map<sim::simulation_state::Unit*, RuntimeOrder*> target_observers_;
     /// Makes every order that targets the dead unit lose it, emptying the
     /// unit's list of observing orders.
@@ -2521,7 +2610,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Allocates and builds the map of every movement class a loaded type
     /// names, before any unit stands on the map.
     ///
-    /// More classes than the class table holds throw.
+    /// More classes than the class table holds are noted, and those past it
+    /// get no map.
     void build_movement_maps();
     /// Finds the entry of a movement class.
     ///
@@ -2534,6 +2624,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     struct MapListeners final : sim::spatial_state::Host {
         Match& match;
 
+        /// Binds the listeners to the match whose movement maps they refresh.
+        ///
+        /// @param owner The match.
         explicit MapListeners(Match& owner) : match(owner) {}
 
         /// Passes a plot height range refresh on to the services.
@@ -2580,8 +2673,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     void retarget_weapon_slot(sim::unit_spawn::Slot& unit, uint8_t slot);
     /// Searches a target for one weapon slot through the unit's sightings.
     ///
-    /// Categories the unit's type masks resolve are required; missing ones
-    /// throw.
+    /// Categories the unit's type masks resolve are required; missing ones,
+    /// a unit outside the pool or an uninitialised weapon are noted, and no
+    /// target is found.
     ///
     /// @param unit Unit searching.
     /// @param request Weapon slot and whether its range (else the sight
@@ -2626,9 +2720,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// at the head of its queue.
     ///
     /// @param source Attacker.
-    /// @param requests Orders to build; a kind outside the attack family
-    ///     throws.
-    /// @return True.
+    /// @param requests Orders to build; a kind outside the attack family is
+    ///     noted and ends the commit there.
+    /// @return True, or false for a kind outside the attack family.
     bool commit_attack_orders(
         const sim::combat_state::AttackSource& source,
         std::span<const sim::combat_state::AttackOrderRequest> requests
@@ -2647,8 +2741,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         /// Allocates the world, pool, type, plot, feature and projectile
         /// tables for the inputs and binds the legacy views over them.
         ///
-        /// @param input Match inputs; inconsistent type tables or a
-        ///     viewpoint outside the ten players throw.
+        /// @param input Match inputs; inputs Match::input_error refuses
+        ///     build the side tables without loading the types.
         explicit State(const OfflineInputs& input);
         /// Fills the UnitDef table from the FBI loader's records, or
         /// assembles each from the runtime type, and binds the category
@@ -2734,7 +2828,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///
     /// With no host seated (a skirmish) the eleventh player record's setup
     /// block stands in for the host's. A commander missing from the unit
-    /// catalog, or one that cannot be created, throws.
+    /// catalog, or one that cannot be created, is noted and no commander
+    /// comes back.
     void respawn_local_commander();
     /// Makes the defeated multiplayer player a watcher: its setup block is
     /// marked watching, mapping and line of sight go off and the sight grids
@@ -2873,9 +2968,20 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Returns the runtime type fields of a unit's type.
     ///
     /// @param slot Unit; a type outside the table or without an FBI
-    ///     definition throws.
+    ///     definition is noted, and gets unresolved_fields().
     /// @return The type's fields.
     const RuntimeTypeFields& fields(sim::unit_spawn::Slot& slot) const;
+    /// Returns the fields a unit whose type has none reads: a default FBI
+    /// definition, runtime metadata and target masks, no movement class.
+    static const RuntimeTypeFields& unresolved_fields() noexcept;
+    /// Notes a wind refresh that stopped on an error.
+    ///
+    /// @param result How the wind scheduler's run ended.
+    void note_wind(sim::world_environment::WindRefresh result) noexcept;
+    /// Notes the fault that stopped a unit update or an order walk.
+    ///
+    /// @param fault The fault, or none.
+    void note_step(sim::simulation_state::StepFault fault) noexcept;
     /// Refreshes and returns a unit's spatial projection.
     ///
     /// @param slot Unit to project.
@@ -2894,7 +3000,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// TargetCleared.
     ///
     /// @param slot Unit owning the weapon.
-    /// @param index Weapon slot 0..2; another throws.
+    /// @param index Weapon slot 0..2; another is noted and changes nothing.
     void stop_weapon(sim::unit_spawn::Slot& slot, uint32_t index) override;
     /// Brings stood-down weapon slots back: an enabled slot carrying the
     /// stand-down bit loses it and its target.
@@ -2905,15 +3011,17 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Moves the unit from its squad's member list (swapping the last member
     /// into its place) to the end of another squad's.
     ///
-    /// @param slot Unit to move; an owner outside the ten players throws.
+    /// @param slot Unit to move; one without an owner, or an owner outside the
+    ///     ten players, is noted and moves nothing.
     /// @param group Squad number; 0xffffffff (-1) joins none.
     void assign_squad(sim::unit_spawn::Slot& slot, uint32_t group) override;
     /// Sets up a new unit's weapon slots from its type's three weapons, with
     /// their muzzle offsets from the Query and AimFrom scripts.
     ///
     /// @param slot New unit.
-    /// @param runtime Its match-side state; the instance must exist, or this
-    ///     throws.
+    /// @param runtime Its match-side state; without an instance this is noted
+    ///     and arms nothing, and a host callback that clears a weapon
+    ///     definition is noted and leaves the slots unarmed.
     void initialize_weapons(sim::unit_spawn::Slot& slot, SlotRuntime& runtime) override;
     /// Sets a new unit's metal extraction rate from the plots under its
     /// footprint, calling SetSpeed on its script.
@@ -2925,8 +3033,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// type: local, or a mirrored copy for a unit another player's
     /// simulation runs.
     ///
-    /// @param slot New mobile unit; an unresolved movement class throws.
-    /// @return Handle of the movement object.
+    /// @param slot New mobile unit; an unresolved movement class, or a slot
+    ///     without a typed unit, is noted.
+    /// @return Handle of the movement object, or 0 when noted.
     sim::unit_spawn::AssetHandle create_movement(sim::unit_spawn::Slot& slot) override;
     /// Settles a new unit's height when it stands in the ground layer: on
     /// the terrain, or the higher of the terrain and the waterline for a
@@ -2935,7 +3044,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// pitch and bank from the slope under the model's ground plate. Aircraft
     /// take the ground fit like any other type.
     ///
-    /// A hovering ground fit without the platform clock throws.
+    /// A ground fit without a movement object or a model, or a hovering one
+    /// without the platform clock, is noted and fits nothing.
     ///
     /// @param slot New unit.
     /// @quirk A hovercraft's fit takes the higher of the terrain and the sea
@@ -2946,7 +3056,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Registers a unit's footprint and bucket on the map; collision can
     /// change flags on units inserted before.
     ///
-    /// @param slot Unit to register; a rejected registration throws.
+    /// @param slot Unit to register; a registration the spatial state rejects
+    ///     is noted.
     void register_occupancy(sim::unit_spawn::Slot& slot) override;
     /// Moves a unit on an occupancy layer. A new cell or layer moves its
     /// footprint, bucket and sight; otherwise only the position changes.
@@ -2965,7 +3076,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     const formats::objects3d::UnitTypeBounds*
     bounds_for(const sim::simulation_state::Unit& unit) const;
     /// Shares a new unit through multiplayer.unit_created while the run flag
-    /// is set; without a handler then, this throws.
+    /// is set; without a handler then, this is noted.
     ///
     /// @param slot New unit.
     void notify_created(sim::unit_spawn::Slot& slot) override;
@@ -3045,11 +3156,13 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     );
     /// Stamps a unit's sight on its owner's grids.
     ///
-    /// @param slot Unit; one without a type or owner throws.
+    /// @param slot Unit; one without a type or owner is noted and stamps
+    ///     nothing.
     void update_sight(sim::unit_spawn::Slot& slot) override;
     /// Moves a unit's sight stamp to where it now stands.
     ///
-    /// @param slot Unit; one without a type or owner throws.
+    /// @param slot Unit; one without a type or owner is noted and stamps
+    ///     nothing.
     void update_moving_sight(sim::unit_spawn::Slot& slot);
     /// Moves the sight stamp of every live unit in the player's range, as the
     /// player loop does each tick.
@@ -3062,7 +3175,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     void notify_scenario_created(sim::unit_spawn::Slot& slot) override;
     /// Returns the world position of a unit's script piece.
     ///
-    /// @param slot Unit; one without an instance throws.
+    /// @param slot Unit; one without an instance is noted and gives the
+    ///     unit's position.
     /// @param piece COB piece index.
     /// @return Signed 16.16 x, y, z bit patterns.
     std::array<uint32_t, 3>

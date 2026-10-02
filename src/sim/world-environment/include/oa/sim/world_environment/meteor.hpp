@@ -23,11 +23,11 @@ inline constexpr int32_t meteor_origin_weight = 0xfff;
 // Mission meteor keys (meteorweapon, meteorradius, meteordensity,
 // meteorduration, meteorinterval).
 struct MeteorSettings {
-    char weapon[0x20];
-    int32_t radius; // world units around the target
-    float density;  // hits per second
-    float duration; // seconds per strike
-    float interval; // seconds between strikes
+    char weapon[0x20]{};
+    int32_t radius{}; // world units around the target
+    float density{};  // hits per second
+    float duration{}; // seconds per strike
+    float interval{}; // seconds between strikes
 };
 
 #pragma pack(pop)
@@ -53,14 +53,14 @@ struct MeteorState {
 };
 
 struct MeteorHost {
-    void* context;
+    void* context{};
     // rand(), 0..0x7fff.
-    int32_t (*lcg_random)(void* context);
+    int32_t (*lcg_random)(void* context){};
     // WeaponDef ref for a weapon name, 0 when none.
-    oa_ref32 (*find_weapon)(void* context, const char* name);
+    oa_ref32 (*find_weapon)(void* context, const char* name){};
     void (*spawn_projectile)(
         void* context, oa_ref32 weapon, const FixedVec3* position, const FixedVec3* velocity
-    );
+    ){};
 };
 
 /// Applies the mission's meteor keys.

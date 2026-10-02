@@ -4,13 +4,15 @@
 // The order and mission handlers of the ground mission block (command, attack,
 // guard, construction, repair, reclaim and capture orders), dispatched
 // through the match as the order sweep runs them.
-#include "../src/tick_internal.hpp"
+#include "match_tick_access.hpp"
+#include "oa/sim/match_runtime/command.hpp"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 #define CHECK(x)                                                                                   \
@@ -20,6 +22,9 @@ using namespace oa;
     } while (false)
 
 namespace {
+// Unit.flags bits of the standing move and fire orders.
+constexpr uint32_t standing_order_bits =
+    OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK;
 constexpr int32_t map_cells = 32;
 constexpr uint16_t builder_type = 1; // mobile builder with a gun
 constexpr uint16_t factory_type = 2; // 2x2 structure that builds tanks
@@ -30,7 +35,7 @@ constexpr uint8_t park_kind = 28;
 constexpr uint8_t qmove_kind = 30;
 constexpr uint8_t qpatrol_kind = 31;
 
-struct Services : sim::match_runtime::OfflineServices {
+struct Services : oa::test::QuietServices {
     std::vector<uint32_t> speech;
     std::vector<std::string> captions; // one per speech; empty for none
     std::vector<std::string> taken;    // the captions of the last take()
@@ -48,26 +53,6 @@ struct Services : sim::match_runtime::OfflineServices {
         services.captions.emplace_back(caption);
     }
 
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
     std::vector<uint32_t> take() {
         auto spoken = speech;
         speech.clear();
@@ -77,11 +62,7 @@ struct Services : sim::match_runtime::OfflineServices {
     }
 };
 
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 // Dispatches the order once and applies the sweep's phase rule for results 0 and 1.
 uint32_t step(
@@ -90,7 +71,7 @@ uint32_t step(
     sim::simulation_state::Order& order,
     uint32_t events = 0
 ) {
-    sim::match_runtime::TickHost host(match);
+    sim::match_runtime::MatchTickAccess host(match);
     order.wait_events = 0;
     const auto result = host.dispatch_mission(match.state(), unit.record, order, events);
     if (result == 0)
@@ -662,7 +643,7 @@ void construction_orders() {
     // (150, 101) snaps to the 2x2 site on cells 8..9 by 5..6.
     CHECK(frame->record.position.x == (144 << 16) && frame->record.position.z == (96 << 16));
     CHECK(f.head(frame->unit_index) && f.head(frame->unit_index)->kind == get_built_kind);
-    CHECK(build.flags & 0x40);
+    CHECK(build.flags & sim::match_runtime::MatchTickAccess::building_flag);
     // Phase 2 waits for the build stance; phase 3 nanolathes each tick.
     CHECK(step(*f.match, builder, build) == 1);
     Fixture::fund(builder);
@@ -700,7 +681,10 @@ void construction_orders() {
     auto& help = f.match->issue_help_build(id, other.unit_index, false);
     CHECK(help.kind == sim::match_runtime::help_build_kind);
     CHECK(step(*f.match, builder, help) == 1 && help.wait_events == 0xe8);
-    CHECK(step(*f.match, builder, help) == 1 && (help.flags & 0x40));
+    CHECK(
+        step(*f.match, builder, help) == 1 &&
+        (help.flags & sim::match_runtime::MatchTickAccess::building_flag)
+    );
     CHECK(step(*f.match, builder, help) == 1);
     Fixture::fund(builder);
     const auto help_before = other.record.build_remaining;
@@ -741,7 +725,9 @@ void factory_orders() {
             frame = &slot;
     CHECK(frame && frame->record.build_remaining != 0.0F);
     CHECK(sim::match_runtime::link_parent(frame->record) == id);
-    CHECK((frame->record.flags & 0x3c0000u) == (factory.record.flags & 0x3c0000u));
+    CHECK(
+        (frame->record.flags & standing_order_bits) == (factory.record.flags & standing_order_bits)
+    );
     CHECK(f.head(frame->unit_index)->kind == get_built_kind);
     // Phase 3 builds a step a tick.
     Fixture::fund(factory);
@@ -787,7 +773,9 @@ void factory_orders() {
     CHECK(std::find(kinds.begin(), kinds.end(), move_ground_kind) != kinds.end());
     CHECK(std::find(kinds.begin(), kinds.end(), sim::match_runtime::patrol_kind) != kinds.end());
     CHECK(std::find(kinds.begin(), kinds.end(), park_kind) == kinds.end());
-    CHECK((frame->record.flags & 0x3c0000u) == (factory.record.flags & 0x3c0000u));
+    CHECK(
+        (frame->record.flags & standing_order_bits) == (factory.record.flags & standing_order_bits)
+    );
     // The factory passes its QMove on each minute.
     auto& rally = *f.head(id);
     CHECK(step(*f.match, factory, rally) == 6 && rally.wake_tick == f.tick() + 0x3c);
@@ -853,7 +841,11 @@ void factory_queue_counts() {
         const auto count = f.match->queue_records(id, false, records.data(), records.size());
         for (std::size_t i = 0; i < count; ++i) {
             CHECK(records[i].kind == sim::match_runtime::building_build_kind);
-            CHECK(records[i].target == 0 && (records[i].command_flags & 0x24) == 0);
+            CHECK(
+                records[i].target == 0 &&
+                (records[i].command_flags & (sim::match_runtime::command_unqueued |
+                                             sim::match_runtime::command_has_point)) == 0
+            );
             entries.emplace_back(records[i].parameter_1, records[i].parameter_2);
         }
         return entries;
@@ -1038,7 +1030,10 @@ void repair_orders() {
     CHECK(repair.kind == sim::match_runtime::repair_unit_kind);
     CHECK(step(*f.match, builder, repair) == 1);
     CHECK(f.services.take() == std::vector<uint32_t>{5});
-    CHECK(step(*f.match, builder, repair) == 1 && (repair.flags & 0x40));
+    CHECK(
+        step(*f.match, builder, repair) == 1 &&
+        (repair.flags & sim::match_runtime::MatchTickAccess::building_flag)
+    );
     CHECK(step(*f.match, builder, repair) == 1);
     Fixture::fund(builder);
     CHECK(step(*f.match, builder, repair) == 2 && repair.wait_events == 9);
@@ -1046,7 +1041,8 @@ void repair_orders() {
     // A moving patient stops the work.
     patient.record.flags |= 4u;
     CHECK(
-        step(*f.match, builder, repair) == 0 && !(repair.flags & 0x40) &&
+        step(*f.match, builder, repair) == 0 &&
+        !(repair.flags & sim::match_runtime::MatchTickAccess::building_flag) &&
         repair.wake_tick == f.tick() + 0xf
     );
     patient.record.flags &= ~4u;
@@ -1130,7 +1126,10 @@ void reclaim_and_capture() {
     CHECK(step(*f.match, builder, reclaim) == 2 && reclaim.wake_tick == f.tick() + 0xf);
     CHECK((reclaim.wait_events & 0x100e9) == 0x100e9);
     reclaim.phase = 2;
-    CHECK(step(*f.match, builder, reclaim) == 1 && (reclaim.flags & 0x40));
+    CHECK(
+        step(*f.match, builder, reclaim) == 1 &&
+        (reclaim.flags & sim::match_runtime::MatchTickAccess::building_flag)
+    );
     CHECK(step(*f.match, builder, reclaim) == 1);
     CHECK(step(*f.match, builder, reclaim) == 1);
     CHECK((f.services.take() == std::vector<uint32_t>{5, 0x0b}));

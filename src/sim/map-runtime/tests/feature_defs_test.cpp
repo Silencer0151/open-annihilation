@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,13 +25,12 @@ void require(bool condition, const char* message) {
     }
 }
 
-std::vector<data::unit_definitions::TdfDocument>
-documents(std::initializer_list<std::string_view> texts) {
-    std::vector<data::unit_definitions::TdfDocument> result;
+std::vector<formats::tdf::OwnedDocument> documents(std::initializer_list<std::string_view> texts) {
+    std::vector<formats::tdf::OwnedDocument> result;
     for (const auto text : texts) {
-        auto parsed = data::unit_definitions::parse_tdf(text);
-        require(static_cast<bool>(parsed), "test feature document parses");
-        result.push_back(std::move(parsed.value));
+        formats::tdf::OwnedDocument parsed;
+        require(parsed.parse(text), "test feature document parses");
+        result.push_back(std::move(parsed));
     }
     return result;
 }
@@ -365,6 +365,47 @@ void test_spark_time_is_stored_in_ticks() {
         require(table.defs[index].spark_time == cases[index].ticks, cases[index].message);
 }
 
+// Fields are read as the game reads a feature TDF: a number field without
+// digits reads 0, a number past 32 bits wraps, and an entry missing its ';'
+// runs on to the next ';', taking the next key with it (as in the shipped
+// CORALS.TDF and BARRIERS.TDF).
+void test_fields_read_as_the_game_reads_them() {
+    const auto docs = documents(
+        {"[ODD]\n{\n  footprintx=two;\n  footprintz=;\n  metal=4294967297;\n"
+         "  filename=Odd;\n  seqname=odd;\n  seqnameshad=oddshad\r\n\t\r\n\tanimtrans=1;\n"
+         "  blocking=yes;\n  height=12\r\n\treclaimable=1;\n}\n"}
+    );
+    Recorder recorder;
+    const auto host = make_host(recorder);
+    FeatureDefTable table;
+    require(load_feature_def(table, docs, "ODD", &host).ok(), "the odd feature loads");
+    const auto& odd = table.defs[0];
+    require(odd.footprint_x == 0 && odd.footprint_z == 0, "number fields without digits read 0");
+    require(odd.metal == 1.0f, "a number past 32 bits wraps");
+    require(odd.height == 12, "a run-on entry reads up to the first non-digit");
+    require(
+        (odd.flags & (OA_FEATURE_FLAG_RECLAIMABLE | OA_FEATURE_FLAG_ANIM_TRANS |
+                      OA_FEATURE_FLAG_BLOCKING)) == 0,
+        "keys a run-on entry swallowed are missing, and yes reads 0"
+    );
+    require(
+        recorder.sequences.size() == 2 &&
+            recorder.sequences[1] == "101:oddshad\r\n\t\r\n\tanimtrans=1:0",
+        "a run-on sequence name is looked up whole"
+    );
+
+    const auto catalog = load_feature_catalog(docs);
+    require(catalog.ok() && catalog.value->size() == 1, "the odd feature is catalogued");
+    if (!catalog.ok() || catalog.value->empty())
+        return;
+    const auto& terrain = catalog.value->front().terrain;
+    require(
+        terrain.footprint_x == 0 && terrain.footprint_z == 0 && terrain.metal == 1.0f &&
+            terrain.height == 12 && !terrain.blocking && !terrain.reclaimable,
+        "terrain fields read as the definition's do"
+    );
+}
+
 void test_null_host_leaves_refs_clear() {
     const auto docs = documents({rocks_tdf, objects_tdf});
     FeatureDefTable table;
@@ -395,6 +436,7 @@ int main() {
     test_missing_definition_is_an_error();
     test_find_or_load_and_links();
     test_spark_time_is_stored_in_ticks();
+    test_fields_read_as_the_game_reads_them();
     test_null_host_leaves_refs_clear();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

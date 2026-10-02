@@ -18,6 +18,7 @@
 
 #include "oa/data/mission_types.hpp"
 #include "test_files.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -122,7 +123,7 @@ void move_class_bad_slope_defaults_and_clamps() {
 void unit_def_assign_keeps_high_ability_bits() {
     UnitDef source{};
     UnitDef target{};
-    std::strcpy(source.unit_name, "ARMCOM");
+    oa::base::text::copy_terminated(source.unit_name, "ARMCOM");
     set_abilities(source, 0xff800001u);
     set_abilities(target, 0x00800000u);
     unit_def_assign(&target, &source);
@@ -134,7 +135,9 @@ std::vector<UnitDef> named_records(const std::vector<std::string>& names) {
     std::vector<UnitDef> records(names.size());
     for (std::size_t i = 0; i < names.size(); ++i) {
         std::memset(&records[i], 0, sizeof records[i]);
-        std::strncpy(records[i].unit_name, names[i].c_str(), sizeof records[i].unit_name - 1);
+        oa::base::text::copy_padded(
+            records[i].unit_name, names[i].c_str(), sizeof records[i].unit_name - 1
+        );
         records[i].sort_bias = static_cast<int16_t>(i);
         set_flags(records[i], unit_def_flag_available);
     }
@@ -514,17 +517,17 @@ void locale_translate_and_reverse() {
 
 void paths_follow_the_game_quirks() {
     char path[path_capacity];
-    std::strcpy(path, "maps\\v1.0\\thing");
+    oa::base::text::copy_terminated(path, "maps\\v1.0\\thing");
     remove_extension(path); // cuts at a dot in the directory
     CHECK(std::strcmp(path, "maps\\v1") == 0);
     format_with_extension("maps\\v1.0\\thing", path, sizeof path, "ota");
     CHECK(std::strcmp(path, "maps\\v1.0\\thing.ota") == 0);
     format_with_extension("units\\armcom.fbi", path, sizeof path, "cob");
     CHECK(std::strcmp(path, "units\\armcom.cob") == 0);
-    std::strcpy(path, "a\\b\\c.txt");
+    oa::base::text::copy_terminated(path, "a\\b\\c.txt");
     truncate_to_directory(path);
     CHECK(std::strcmp(path, "a\\b\\") == 0);
-    std::strcpy(path, "plain");
+    oa::base::text::copy_terminated(path, "plain");
     truncate_to_directory(path);
     CHECK(std::strcmp(path, "plain") == 0);
 
@@ -594,11 +597,11 @@ struct LoaderFixture {
         );
         move_class_table_load(&moves, &moveinfo.document);
         std::memset(weapon_defs.data(), 0, sizeof(WeaponDef) * weapon_defs.size());
-        std::strcpy(weapon_defs[0].key, "NOWEAPON");
-        std::strcpy(weapon_defs[7].key, "LASER");
-        std::strcpy(weapon_defs[9].key, "BLAST");
-        std::strcpy(sound_records[0].name, "ARM_SOLAR");
-        std::strcpy(sound_records[1].name, "ARM_KBOT");
+        oa::base::text::copy_terminated(weapon_defs[0].key, "NOWEAPON");
+        oa::base::text::copy_terminated(weapon_defs[7].key, "LASER");
+        oa::base::text::copy_terminated(weapon_defs[9].key, "BLAST");
+        oa::base::text::copy_terminated(sound_records[0].name, "ARM_SOLAR");
+        oa::base::text::copy_terminated(sound_records[1].name, "ARM_KBOT");
         category_registry_init(&categories);
         unit_def_blocks_init(&blocks);
     }
@@ -780,7 +783,7 @@ void catalog_build_lists_and_download_menu() {
     CHECK(unit_def_tables_allocate(&tables, 5));
     const char* names[] = {"None", "ARMALAB", "ARMCOM", "ARMPW", "ARMZEUS"};
     for (uint16_t index = 0; index < 5; ++index) {
-        std::strcpy(tables.records[index].unit_name, names[index]);
+        oa::base::text::copy_terminated(tables.records[index].unit_name, names[index]);
         tables.records[index].type_id = index;
     }
     tables.records[1].flags = OA_UNIT_DEF_FLAG_BUILDER;
@@ -995,11 +998,11 @@ void update_unit_def_reloads_a_catalog_type() {
     UnitDefTables tables;
     unit_def_tables_init(&tables);
     CHECK(unit_def_tables_allocate(&tables, 3));
-    std::strcpy(tables.records[1].unit_name, "ARMTEST");
+    oa::base::text::copy_terminated(tables.records[1].unit_name, "ARMTEST");
     tables.records[1].type_id = 1;
     tables.records[1].flags = OA_UNIT_DEF_FLAG_AVAILABLE;
     tables.records[1].max_damage = 5;
-    std::strcpy(tables.records[2].unit_name, "ARMGONE");
+    oa::base::text::copy_terminated(tables.records[2].unit_name, "ARMGONE");
     tables.records[2].type_id = 2;
     std::vector<std::string> scripts;
     const UnitScriptLoader loader{&scripts, [](void* context, uint16_t type, const char* path) {

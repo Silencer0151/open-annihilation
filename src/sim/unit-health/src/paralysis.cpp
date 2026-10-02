@@ -26,7 +26,7 @@ void set_state_flags(const ParalysisHooks& hooks, oa::Unit& unit, uint8_t mask, 
 ParalyzeAction paralyze_action(
     const oa::World& world, const oa::Unit& target, bool head_order_is_paralyze
 ) noexcept {
-    if ((target.flags & OA_UNIT_FLAG_LIVE) == 0 || (target.flags & OA_UNIT_FLAG_DEATH_PENDING) != 0)
+    if (!unit_is_live_target(target.flags))
         return ParalyzeAction::none;
     const Player* owner = world_unit_owner(&world, &target);
     if (owner == nullptr || owner->in_use == 0)

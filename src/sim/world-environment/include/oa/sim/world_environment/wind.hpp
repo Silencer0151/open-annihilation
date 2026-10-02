@@ -67,6 +67,15 @@ struct WindState : WindVector {
     uint32_t current_tick{};     // Game.tick
 };
 
+/// How a run of the wind scheduler ended.
+enum class WindRefresh : uint8_t {
+    waiting,               ///< the deadline has not passed; the changed flag is cleared
+    changed,               ///< a new sample was drawn
+    random_out_of_range,   ///< the rand() stream gave a value above 32767; nothing changed
+    zero_strength_divisor, ///< the strength divisor is zero; the sample is drawn, the normalized
+                           ///< strength and the changed flag are left as they were
+};
+
 class WindRandomHost {
   public:
 
@@ -96,9 +105,10 @@ class WindRandomHost {
 ///
 /// @param[in,out] state wind fields, map limits and current tick
 /// @param random rand() and shared random streams
-/// @return true exactly when a new wind sample was emitted
+/// @return changed exactly when a new wind sample was emitted, waiting before the deadline,
+///         or the error that stopped the run
 /// @quirk The deadline test is unsigned and waits on equality; a calm (zero) strength keeps the previous direction.
-bool refresh_wind(WindState& state, WindRandomHost& random);
+WindRefresh refresh_wind(WindState& state, WindRandomHost& random);
 
 /// Sets up the wind at game start and draws the first sample.
 ///
@@ -107,7 +117,8 @@ bool refresh_wind(WindState& state, WindRandomHost& random);
 ///
 /// @param[in,out] state wind fields, map limits and current tick
 /// @param random rand() and shared random streams
-void initialize_wind(WindState& state, WindRandomHost& random);
+/// @return how the first run of the scheduler ended
+WindRefresh initialize_wind(WindState& state, WindRandomHost& random);
 
 /// Copies the canonical Game wind fields into a scheduler state.
 ///
@@ -123,15 +134,20 @@ void initialize_wind(WindState& state, WindRandomHost& random);
 void store_wind_state(Game& game, const WindState& state) noexcept;
 /// Runs the wind scheduler for one tick over the canonical Game wind fields.
 ///
-/// @param[in,out] game game block holding the wind fields and tick
-/// @param random rand() and shared random streams
-/// @return true exactly when a new wind sample was emitted
-bool refresh_wind(Game& game, WindRandomHost& random);
-/// Sets up the canonical Game wind fields at game start and draws the first sample.
+/// A run that ends in an error leaves the Game fields as they were.
 ///
 /// @param[in,out] game game block holding the wind fields and tick
 /// @param random rand() and shared random streams
-void initialize_wind(Game& game, WindRandomHost& random);
+/// @return as refresh_wind over a scheduler state
+WindRefresh refresh_wind(Game& game, WindRandomHost& random);
+/// Sets up the canonical Game wind fields at game start and draws the first sample.
+///
+/// A run that ends in an error leaves the Game fields as they were.
+///
+/// @param[in,out] game game block holding the wind fields and tick
+/// @param random rand() and shared random streams
+/// @return how the first run of the scheduler ended
+WindRefresh initialize_wind(Game& game, WindRandomHost& random);
 
 /// Script hook of the sea occupy update.
 struct SeaOccupyHost {

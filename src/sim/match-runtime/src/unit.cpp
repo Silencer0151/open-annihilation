@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
-#include <stdexcept>
 
 namespace oa::sim::match_runtime {
 UnitHost::UnitHost(
@@ -20,8 +19,6 @@ UnitHost::UnitHost(
 )
     : ModelHost(instance), slot_(slot), pool_(pool), state_(state), values_(values),
       effects_(effects), random_(random) {
-    if (slot_.unit_index >= state_.unit_slot_count || state_.unit_slot_count != pool_.size())
-        throw std::invalid_argument("unit host attachment table does not match pool");
 }
 
 void UnitHost::emit_sfx(uint32_t piece, int32_t effect) {
@@ -92,14 +89,23 @@ UnitInstance::UnitInstance(
     UnitValueHost& values,
     Effects& effects,
     SharedRandom& random,
-    int32_t scale
+    int32_t scale,
+    MatchFault* fault
 )
     : slot_(slot), world_(state), model_(construct_model(loaded, slot)),
-      host_(model_, slot, pool, state, values, effects, random) {
-    if (!slot.unit)
-        throw std::invalid_argument("unit instance bound to null unit");
+      host_(model_, slot, pool, state, values, effects, random), fault_(fault) {
+    if (!slot.unit) {
+        note("unit instance bound to null unit");
+        return;
+    }
+    if (slot.unit_index >= state.unit_slot_count || state.unit_slot_count != pool.size()) {
+        note("unit host attachment table does not match pool");
+        return;
+    }
+    if (const auto* refused = sim::model_runtime::model_hierarchy_error(loaded.model))
+        note("unit model refused", refused);
     if (loaded.script) {
-        script_ = std::make_unique<ScriptInstance>(loaded.script, host_, scale);
+        script_ = std::make_unique<ScriptInstance>(loaded.script, host_, scale, fault);
         // Engine callers reach this interpreter through the World's script table.
         oa::sim::unit_script::unit_script_attach(
             &world_, &slot_.record, &script_->vm(), *loaded.script
@@ -112,16 +118,25 @@ UnitInstance::~UnitInstance() {
         oa::sim::unit_script::unit_script_detach(&world_, &slot_.record, &script_->vm());
 }
 
+void UnitInstance::note(std::string_view what, std::string_view detail) noexcept {
+    if (fault_)
+        fault_->note(what, detail);
+}
+
 bool UnitInstance::create() {
     return script_ && script_->call_no_arguments("Create", true);
 }
 
 uint32_t UnitInstance::query_weapon_piece(uint8_t slot) {
     constexpr std::array names{"QueryPrimary", "QuerySecondary", "QueryTertiary"};
-    if (slot >= names.size())
-        throw std::out_of_range("weapon query slot outside 0..2");
-    if (!script_)
-        throw std::runtime_error("weapon query requires COB instance");
+    if (slot >= names.size()) {
+        note("weapon query slot outside 0..2");
+        return no_piece;
+    }
+    if (!script_) {
+        note("weapon query requires COB instance");
+        return no_piece;
+    }
     std::array<int32_t, 4> args{};
     script_->query(names[slot], args);
     return std::bit_cast<uint32_t>(args[0]);
@@ -148,10 +163,14 @@ std::array<uint32_t, 3> UnitInstance::sweet_spot_world() {
 
 std::array<uint32_t, 3> UnitInstance::aim_from_world(uint8_t slot) {
     constexpr std::array names{"AimFromPrimary", "AimFromSecondary", "AimFromTertiary"};
-    if (slot >= names.size())
-        throw std::out_of_range("weapon aim slot outside 0..2");
-    if (!script_)
-        throw std::runtime_error("weapon aim requires COB instance");
+    if (slot >= names.size()) {
+        note("weapon aim slot outside 0..2");
+        return piece_world(no_piece);
+    }
+    if (!script_) {
+        note("weapon aim requires COB instance");
+        return piece_world(no_piece);
+    }
     std::array<int32_t, 4> args{-1, 0, 0, 0};
     script_->query(names[slot], args);
     return piece_world(args[0] == -1 ? query_weapon_piece(slot) : std::bit_cast<uint32_t>(args[0]));
@@ -164,10 +183,12 @@ void UnitInstance::set_max_reload_time(int32_t milliseconds) {
 
 void UnitInstance::tick(uint32_t elapsed) {
     if (script_)
-        script_->tick(elapsed);
+        (void)script_->tick(elapsed);
 }
 
 std::array<uint32_t, 3> UnitInstance::piece_box_center(uint32_t piece) const {
+    if (!slot_.unit)
+        return {};
     const std::array<uint32_t, 3> position = slot_.unit->position;
     if (piece >= model_.pieces().size())
         return position;
@@ -194,6 +215,8 @@ sim::model_runtime::RotationWords UnitInstance::piece_attitude(uint32_t piece) c
 }
 
 std::array<uint32_t, 3> UnitInstance::piece_world(uint32_t piece) const {
+    if (!slot_.unit)
+        return {};
     if (std::bit_cast<int32_t>(piece) < 0 || piece >= model_.pieces().size())
         return slot_.unit->position;
     const auto local = model_.attachment_position(

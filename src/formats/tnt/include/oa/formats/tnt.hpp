@@ -308,9 +308,9 @@ struct RadarPicture {
 
 // Byte reads from an open map file.
 struct MapFileReader {
-    void* context;
+    void* context{};
     // Copies `size` bytes at `offset`; false when fewer are there.
-    bool (*read)(void* context, uint32_t offset, void* out, uint32_t size);
+    bool (*read)(void* context, uint32_t offset, void* out, uint32_t size) = nullptr;
 };
 
 /// Reads a map file's header and, when its minimap flag is set, the minimap.

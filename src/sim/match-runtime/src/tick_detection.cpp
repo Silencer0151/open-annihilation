@@ -118,7 +118,7 @@ void Match::scan_contacts() {
     if (auto* units = oa::world_player_units(&world, &viewer, &owned))
         for (uint32_t i = 0; i < owned; ++i) {
             const auto& scanner = units[i];
-            if (!sim::simulation_state::unit_active(scanner) ||
+            if (!unit_is_live_target(scanner.flags) ||
                 (scanner.state_flags & OA_UNIT_STATE_ACTIVE) == 0)
                 continue;
             const auto* def = oa::world_unit_def_of(&world, &scanner);

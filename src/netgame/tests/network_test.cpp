@@ -171,9 +171,25 @@ int main() {
         size = 16;
         require(receiver.receive(transport, buffer, size) == 123, "transport status preservation");
         transport.result = success;
+        // A compressed body that ends before its end marker is dropped, as is a
+        // stored body larger than the receive storage.
         transport.packet = {4, 0, 0, 0};
         size = 16;
-        rejects([&] { (void)receiver.receive(transport, buffer, size); });
+        require(receiver.receive(transport, buffer, size) == no_message, "malformed body dropped");
+        require(!receiver.has_pending_message(), "a dropped body leaves nothing pending");
+        transport.packet =
+            oa::netgame::network::encode_stored_frame(Bytes(receive_storage_bytes + 1, 'B'));
+        buffer.assign(transport.packet.size(), 0);
+        size = static_cast<uint32_t>(buffer.size());
+        require(receiver.receive(transport, buffer, size) == no_message, "oversized body dropped");
+        // The non-throwing unwrap says what was wrong.
+        const auto refused = oa::netgame::network::unwrap_frame(bad);
+        require(
+            !refused.ok() &&
+                refused.error.detail ==
+                    static_cast<uint16_t>(oa::netgame::network::FrameProblem::checksum_mismatch),
+            "unwrap reports the checksum"
+        );
         std::cout << "network tests passed\n";
         return 0;
     } catch (const std::exception& e) {

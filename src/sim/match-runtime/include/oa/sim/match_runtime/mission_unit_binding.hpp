@@ -15,15 +15,16 @@ namespace oa::sim::match_runtime {
 
 struct MissionUnitBinding {
     Match& match;
-    // The first error a hook met (a fatal report or a failed call); the
-    // mission-unit code itself continues past it.
+    // The first fatal report a hook met; the mission-unit code itself
+    // continues past it.
     std::string failure;
 };
 
 /// Builds the mission-unit hooks over a match.
 ///
-/// A hook that fails records its first error in `binding.failure` and lets
-/// the mission-unit code continue.
+/// The fatal-report hook records its first report in `binding.failure` and
+/// lets the mission-unit code continue; a unit creation, order or carry the
+/// match refuses is noted in the match's fault record (Match::fault).
 ///
 /// @param[in,out] binding Match the hooks act on; the hooks keep a pointer
 ///     to it as their context, so it must outlive them.
@@ -33,13 +34,15 @@ sim::mission_units::Hooks mission_unit_hooks(MissionUnitBinding& binding);
 /// Creates a mission schema's units in the match and queues their
 /// InitialMission scripts.
 ///
-/// Every entry is processed; afterwards std::runtime_error is thrown with the
-/// first failure a hook met, such as the game's fatal report for an entry
-/// whose player slot is inactive.
+/// Every entry is processed; afterwards the first fatal report a hook met,
+/// such as the game's report for an entry whose player slot is inactive, is
+/// noted in the match's fault record.
 ///
 /// @param match Match the units are created in.
 /// @param units The schema's unit entries.
 /// @param count Number of entries in `units`.
-void create_mission_units(Match& match, const data::campaign::MissionUnit* units, int32_t count);
+/// @return False when the unit table could not be allocated or a hook made
+///     a fatal report; the match's fault record says which.
+bool create_mission_units(Match& match, const data::campaign::MissionUnit* units, int32_t count);
 
 } // namespace oa::sim::match_runtime

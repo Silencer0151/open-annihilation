@@ -3,6 +3,7 @@
 
 #include "oa/audio/music_decoder.hpp"
 #include "oa/base/bytes.hpp"
+#include "oa/platform/files.hpp"
 
 #include "music_codecs.h"
 
@@ -68,16 +69,6 @@ constexpr uint8_t unsigned_8_zero = 0x80;
 // Lowest and highest sample rates a music file may have, in hertz.
 constexpr uint32_t min_source_rate = resampler_min_rate;
 constexpr uint32_t max_source_rate = resampler_max_rate;
-
-// Opens a file for reading by its path, which may hold any characters the
-// file system allows.
-std::FILE* open_file(const std::filesystem::path& path) {
-#ifdef _WIN32
-    return _wfopen(path.c_str(), L"rb");
-#else
-    return std::fopen(path.c_str(), "rb");
-#endif
-}
 
 // An open file, closed with its owner.
 class File {
@@ -618,7 +609,9 @@ MusicDecoder::~MusicDecoder() {
 
 bool MusicDecoder::open(const std::filesystem::path& path, std::string& error) {
     close();
-    File file(open_file(path));
+    // By its path's wide spelling on Windows, so that any name the file
+    // system allows opens.
+    File file(platform::open_file(path, "rb"));
     if (file.get() == nullptr) {
         error = "cannot open " + path.string();
         return false;

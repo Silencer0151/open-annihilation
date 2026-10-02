@@ -85,7 +85,8 @@ struct Board {
 
     Board() {
         for (uint8_t i = 0; i < 3; ++i) {
-            const auto status = i == 0 ? OA_PLAYER_STATUS_LOCAL : OA_PLAYER_STATUS_COMPUTER;
+            const auto status =
+                static_cast<uint8_t>(i == 0 ? OA_PLAYER_STATUS_LOCAL : OA_PLAYER_STATUS_COMPUTER);
             auto& player = w.add_player(i, status);
             player.board_row = i;
         }

@@ -16,6 +16,7 @@
 #include "oa/netgame/socket_host.hpp"
 #include "oa/netgame/network.hpp"
 
+#include <charconv>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -36,14 +37,21 @@ void on_interrupt(int) {
 }
 
 bool parse_ip(const char* text, uint8_t out[4]) {
-    unsigned a = 0, b = 0, c = 0, d = 0;
-    if (std::sscanf(text, "%u.%u.%u.%u", &a, &b, &c, &d) != 4 || a > 255 || b > 255 || c > 255 ||
-        d > 255)
-        return false;
-    out[0] = static_cast<uint8_t>(a);
-    out[1] = static_cast<uint8_t>(b);
-    out[2] = static_cast<uint8_t>(c);
-    out[3] = static_cast<uint8_t>(d);
+    const char* at = text;
+    const char* const end = text + std::strlen(text);
+    for (int index = 0; index < 4; ++index) {
+        if (index > 0) {
+            if (at == end || *at != '.')
+                return false;
+            ++at;
+        }
+        unsigned value = 0;
+        const auto [next, error] = std::from_chars(at, end, value);
+        if (error != std::errc{} || value > 255)
+            return false;
+        out[index] = static_cast<uint8_t>(value);
+        at = next;
+    }
     return true;
 }
 

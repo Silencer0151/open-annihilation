@@ -176,7 +176,10 @@ void test_empty_chunks() {
     CHECK(oa::formats::sqsh::chunk_checksum({}) == 0);
     // The checksum is a byte sum that wraps at 32 bits.
     const Bytes ones(0x0101'0102, 0xFF);
-    CHECK(oa::formats::sqsh::chunk_checksum(ones) == uint32_t(0xFFu * 0x0101'0102ull));
+    CHECK(
+        oa::formats::sqsh::chunk_checksum(ones) ==
+        uint32_t((0xFFull * 0x0101'0102ull) & 0xFFFF'FFFFull)
+    );
 }
 
 } // namespace

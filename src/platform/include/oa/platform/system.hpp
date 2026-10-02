@@ -3,10 +3,12 @@
 
 #pragma once
 
-// Host clock, sleep, thread start, processor count and fatal-message services.
+// Host clock, sleep, thread start, processor count, environment and
+// fatal-message services.
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace oa::platform {
@@ -36,6 +38,12 @@ using ThreadEntry = void (*)(void* argument);
 ///
 /// @return the number of logical processors the system reports, at least 1
 [[nodiscard]] uint32_t processor_count() noexcept;
+
+/// Returns the value of an environment variable of the process.
+///
+/// @param name the variable's name
+/// @return its value, which may be empty, or nothing when it is not set
+[[nodiscard]] std::optional<std::string> environment_value(const char* name);
 
 using ErrorSink = void (*)(const char* message);
 

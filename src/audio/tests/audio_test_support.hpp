@@ -16,6 +16,10 @@
 
 namespace audio_test {
 
+/// Ends the test with exit status 1, printing the message, when `value` is false.
+///
+/// @param value the condition that must hold
+/// @param message what the condition checks
 inline void require(bool value, const char* message) {
     if (!value) {
         std::fprintf(stderr, "FAILED: %s\n", message);
@@ -47,8 +51,17 @@ struct FakeSink {
     std::vector<bool> wave_out_accepts{true, true};
     std::vector<std::string> log;
 
+    /// Returns the recorded buffer behind a handle.
+    ///
+    /// @param handle a handle the sink created
+    /// @return the buffer; throws std::out_of_range for an unknown handle
     Buffer& at(oa::audio::BufferHandle handle) { return buffers.at(handle); }
 
+    /// Builds the sound-device table over this recorder.
+    ///
+    /// Every entry records its call and reports the result the fields hold.
+    ///
+    /// @return the table, its context this recorder
     oa::audio::AudioSink sink() {
         oa::audio::AudioSink s{};
         s.context = this;
@@ -168,6 +181,12 @@ struct FakeMusic {
     uint32_t aux_volume{0x00ff1000};
     std::vector<uint32_t> aux_sets;
 
+    /// Builds the CD music device table over this recorder.
+    ///
+    /// Every entry counts its call and reports the disc, tracks and volumes the
+    /// fields hold.
+    ///
+    /// @return the table, its context this recorder
     oa::audio::MusicDevice device() {
         oa::audio::MusicDevice m{};
         m.context = this;
@@ -244,6 +263,11 @@ struct FakeTimers {
     std::vector<Timer> timers;
     std::vector<int32_t> removed;
 
+    /// Builds the timer table over this recorder.
+    ///
+    /// add appends an active timer and returns its index; remove marks it inactive.
+    ///
+    /// @return the table, its context this recorder
     oa::audio::AudioTimers table() {
         oa::audio::AudioTimers t{};
         t.context = this;
@@ -261,6 +285,11 @@ struct FakeTimers {
         return t;
     }
 
+    /// Runs a timer's callback, as its interval elapsing would.
+    ///
+    /// Fails the test when the timer has been removed.
+    ///
+    /// @param handle the index add returned
     void fire(int32_t handle) {
         const auto& t = timers.at(static_cast<std::size_t>(handle));
         require(t.active, "fired timer is active");
@@ -271,6 +300,11 @@ struct FakeTimers {
 struct FakeFiles {
     std::map<std::string, std::vector<uint8_t>> files;
 
+    /// Builds the file table over the files map.
+    ///
+    /// load copies the named file's bytes and fails for a name the map lacks.
+    ///
+    /// @return the table, its context this map
     oa::audio::AudioFiles table() {
         oa::audio::AudioFiles f{};
         f.context = this;
@@ -286,22 +320,41 @@ struct FakeFiles {
     }
 };
 
+/// Appends a 32-bit value, least significant byte first.
+///
+/// @param[in,out] out the bytes appended to
+/// @param v the value
 inline void put32(std::vector<uint8_t>& out, uint32_t v) {
     for (int i = 0; i < 4; ++i)
         out.push_back(static_cast<uint8_t>(v >> (8 * i)));
 }
 
+/// Appends a 16-bit value, least significant byte first.
+///
+/// @param[in,out] out the bytes appended to
+/// @param v the value
 inline void put16(std::vector<uint8_t>& out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v));
     out.push_back(static_cast<uint8_t>(v >> 8));
 }
 
+/// Appends a four-character chunk tag.
+///
+/// @param[in,out] out the bytes appended to
+/// @param tag the tag, at least four characters
 inline void put_tag(std::vector<uint8_t>& out, const char* tag) {
     for (int index = 0; index < 4; ++index)
         out.push_back(static_cast<uint8_t>(tag[index]));
 }
 
-// A canonical RIFF/WAVE file, optionally with an extra chunk before "data".
+/// Builds a canonical PCM RIFF/WAVE file, optionally with a LIST chunk before "data".
+///
+/// @param rate samples per second
+/// @param bits bits per sample
+/// @param channels channel count
+/// @param samples the data chunk's bytes
+/// @param extra the LIST chunk's bytes; none when empty
+/// @return the whole file
 inline std::vector<uint8_t> make_riff(
     uint32_t rate,
     uint16_t bits,
@@ -335,6 +388,13 @@ inline std::vector<uint8_t> make_riff(
     return out;
 }
 
+/// Builds a mixer over the four recorders and initialises it.
+///
+/// @param[in,out] sink the sound device the mixer uses
+/// @param[in,out] music the CD music device
+/// @param[in,out] timers the timers
+/// @param[in,out] files the files
+/// @return the initialised mixer
 inline std::unique_ptr<oa::audio::Mixer>
 make_mixer(FakeSink& sink, FakeMusic& music, FakeTimers& timers, FakeFiles& files) {
     auto mixer = std::make_unique<oa::audio::Mixer>();

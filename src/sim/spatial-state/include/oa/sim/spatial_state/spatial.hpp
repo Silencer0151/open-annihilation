@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "oa/core/unit.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,10 +15,10 @@
 namespace oa::sim::spatial_state {
 using UnitId = uint16_t;
 inline constexpr UnitId no_unit = 0;
-inline constexpr uint32_t terrain_occupancy_mask = 3;
-inline constexpr uint32_t masked_footprint_flag = 0x20000000U;
-inline constexpr uint32_t collision_other = 0x04000000U;
-inline constexpr uint32_t collision_self = 0x08000000U;
+inline constexpr uint32_t terrain_occupancy_mask = OA_UNIT_FLAG_OCCUPANCY_MASK;
+inline constexpr uint32_t masked_footprint_flag = OA_UNIT_FLAG_BUILDING;
+inline constexpr uint32_t collision_other = OA_UNIT_FLAG_COLLISION_OTHER;
+inline constexpr uint32_t collision_self = OA_UNIT_FLAG_COLLISION_SELF;
 
 // Plot feature words (MapPlot.feature). Words from first_reserved_feature up
 // carry no feature index of their own.

@@ -414,9 +414,10 @@ bool receive(void* context, mp::LobbyEvent* out) {
     while (packet_layer_receive(c.packets, static_cast<int32_t>(now), &packet)) {
         *out = mp::LobbyEvent{};
         if (packet.kind == PacketKind::system) {
-            if (packet.size < 4)
+            uint32_t message_type = 0;
+            if (!dplay::read_system_message_type(packet.data, packet.size, &message_type))
                 continue;
-            const auto type = static_cast<SystemMessageType>(load_u32(packet.data));
+            const auto type = static_cast<SystemMessageType>(message_type);
             if (type == SystemMessageType::player_created) {
                 dplay::CreatePlayerView view{};
                 if (!dplay::decode_create_player_image(packet.data, packet.size, &view) ||
@@ -428,9 +429,10 @@ bool receive(void* context, mp::LobbyEvent* out) {
                 event_name(c, view.id, out);
                 return true;
             }
-            if (type == SystemMessageType::player_destroyed && packet.size >= 12) {
+            dplay::PlayerDestroyedView destroyed{};
+            if (dplay::decode_player_destroyed_image(packet.data, packet.size, &destroyed)) {
                 out->kind = mp::LobbyEventKind::player_left;
-                out->player_id = load_u32(packet.data + dplay::system_message::destroy_id);
+                out->player_id = destroyed.id;
                 packet_layer_release_peer(c.packets, out->player_id);
                 return true;
             }

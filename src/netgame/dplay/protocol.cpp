@@ -225,12 +225,10 @@ bool read_utf16z(const Reader& r, std::size_t at, char* out, std::size_t out_cha
 
 // Offset relative to the "play" signature -> absolute, 0 meaning absent.
 bool play_offset(const Reader& r, uint32_t offset, std::size_t* at) {
-    if (offset == 0)
+    // Compared before adding, so a 32-bit size cannot wrap.
+    if (offset == 0 || r.size <= dplay_envelope_bytes || offset >= r.size - dplay_envelope_bytes)
         return false;
-    const std::size_t abs = dplay_envelope_bytes + static_cast<std::size_t>(offset);
-    if (abs >= r.size)
-        return false;
-    *at = abs;
+    *at = dplay_envelope_bytes + static_cast<std::size_t>(offset);
     return true;
 }
 
@@ -257,7 +255,7 @@ ParseError read_packed_player(const Reader& r, std::size_t at, PlayerInfo* out) 
     const std::size_t fixed = r.u32(at + 36);
     p.version = r.u32(at + 40);
     p.parent_id = r.u32(at + 44);
-    if (fixed < packed_player_fixed_bytes || short_bytes > max_message_bytes ||
+    if (fixed < packed_player_fixed_bytes || !r.has(at, fixed) || short_bytes > max_message_bytes ||
         long_bytes > max_message_bytes || sp_bytes > max_message_bytes ||
         data_bytes > max_message_bytes)
         return ParseError::bad_offset;
@@ -309,7 +307,7 @@ ParseError read_super_packed_player(const Reader& r, std::size_t* at, PlayerInfo
     p.flags = r.u32(pos + 4);
     p.id = r.u32(pos + 8);
     const uint32_t mask = r.u32(pos + 12);
-    if (fixed < super_packed_fixed_bytes || !r.has(pos + fixed, 4))
+    if (fixed < super_packed_fixed_bytes || !r.has(pos, fixed) || !r.has(pos + fixed, 4))
         return ParseError::bad_offset;
     pos += fixed;
     if ((p.flags & player_flag::system_player) != 0) {

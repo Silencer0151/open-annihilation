@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include "oa/base/bytes.hpp"
 #include "oa/formats/hpi.hpp"
 
 #include <zlib.h>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -55,22 +57,28 @@ void require_throws_containing(
     throw std::runtime_error(std::string(message));
 }
 
+/// Opens an archive file the test wrote, throwing when it is refused.
+///
+/// @param path the archive
+/// @return the archive
+oa::HpiArchive opened(const std::filesystem::path& path) {
+    auto archive = oa::open_hpi_file(path);
+    if (!archive.ok())
+        throw std::runtime_error(archive.error.message);
+    return std::move(*archive.value);
+}
+
 void put16(std::vector<uint8_t>& bytes, std::size_t offset, uint16_t value) {
     bytes[offset] = static_cast<uint8_t>(value);
     bytes[offset + 1] = static_cast<uint8_t>(value >> 8U);
 }
 
 void put32(std::vector<uint8_t>& bytes, std::size_t offset, uint32_t value) {
-    bytes[offset] = static_cast<uint8_t>(value);
-    bytes[offset + 1] = static_cast<uint8_t>(value >> 8U);
-    bytes[offset + 2] = static_cast<uint8_t>(value >> 16U);
-    bytes[offset + 3] = static_cast<uint8_t>(value >> 24U);
+    oa::base::bytes::store_le32(bytes.data() + offset, value);
 }
 
 uint32_t get32(std::span<const uint8_t> bytes, std::size_t offset) {
-    return static_cast<uint32_t>(bytes[offset]) | (static_cast<uint32_t>(bytes[offset + 1]) << 8U) |
-           (static_cast<uint32_t>(bytes[offset + 2]) << 16U) |
-           (static_cast<uint32_t>(bytes[offset + 3]) << 24U);
+    return oa::base::bytes::load_le32(bytes.data() + offset);
 }
 
 uint32_t checksum(std::span<const uint8_t> bytes) {
@@ -82,10 +90,16 @@ uint32_t checksum(std::span<const uint8_t> bytes) {
 }
 
 std::vector<uint8_t> zlib_compress(std::span<const uint8_t> input) {
-    uLongf output_size = compressBound(input.size());
+    uLongf output_size = compressBound(static_cast<uLong>(input.size()));
     std::vector<uint8_t> output(output_size);
     require(
-        compress2(output.data(), &output_size, input.data(), input.size(), Z_BEST_SPEED) == Z_OK,
+        compress2(
+            output.data(),
+            &output_size,
+            input.data(),
+            static_cast<uLong>(input.size()),
+            Z_BEST_SPEED
+        ) == Z_OK,
         "test zlib compression failed"
     );
     output.resize(output_size);
@@ -403,7 +417,7 @@ void test_hpi_archive_key() {
 
     auto plaintext = with_trailer(one_byte_archive(0xFF, 'Q'));
     TemporaryFile plain_file(plaintext);
-    oa::HpiArchive plain(plain_file.path());
+    oa::HpiArchive plain = opened(plain_file.path());
     require(
         plain.read("a").value == std::vector<uint8_t>{'Q'},
         "header byte 0xFF must not decrypt the directory"
@@ -413,7 +427,7 @@ void test_hpi_archive_key() {
     auto encrypted = one_byte_archive(0x01, 'Q');
     encrypt_hpi_tail(encrypted, key);
     TemporaryFile encrypted_file(with_trailer(encrypted));
-    oa::HpiArchive archive(encrypted_file.path());
+    oa::HpiArchive archive = opened(encrypted_file.path());
     require(
         archive.read("a").value == std::vector<uint8_t>{'Q'},
         "hpi_archive_key key must undo position ^ ~byte ^ key"
@@ -422,7 +436,7 @@ void test_hpi_archive_key() {
 
 void test_hpi_all_compression_methods() {
     TemporaryFile file(make_archive());
-    oa::HpiArchive archive(file.path());
+    oa::HpiArchive archive = opened(file.path());
     const auto entries = archive.entries();
     require(entries.size() == 4, "wrong HPI entry count");
     require(
@@ -456,9 +470,12 @@ void test_hpi_all_compression_methods() {
 void test_hpi_malformed_inputs() {
     auto wrong_version = make_archive(false);
     put32(wrong_version, 4, 0x00020000U);
-    TemporaryFile version_file(wrong_version);
-    require_throws(
-        [&] { oa::HpiArchive archive(version_file.path()); }, "HPI v2 was accepted as v1"
+    const auto version_refused = oa::HpiArchive::open(wrong_version);
+    require(
+        !version_refused.ok() &&
+            version_refused.error.code == oa::base::bytes::DecodeCode::unsupported_version &&
+            version_refused.error.offset == 4,
+        "HPI v2 was accepted as v1"
     );
 
     std::vector<uint8_t> cycle(20 + 8 + 9 + 2);
@@ -472,9 +489,25 @@ void test_hpi_malformed_inputs() {
     put32(cycle, 32, 20);
     cycle[36] = 1;
     cycle[37] = 'd';
-    TemporaryFile cycle_file(with_trailer(cycle));
-    require_throws(
-        [&] { oa::HpiArchive archive(cycle_file.path()); }, "cyclic HPI directory was accepted"
+    const auto cycle_refused = oa::HpiArchive::open(with_trailer(cycle));
+    require(
+        !cycle_refused.ok() && cycle_refused.error.code == oa::base::bytes::DecodeCode::cycle,
+        "cyclic HPI directory was accepted"
+    );
+    require(
+        oa::open_hpi_file(std::filesystem::path("no-such-archive.hpi")).error.code ==
+            oa::base::bytes::DecodeCode::not_found,
+        "a missing HPI archive file must be not_found"
+    );
+    require(
+        oa::HpiArchive::open(std::unique_ptr<oa::ArchiveSource>()).error.code ==
+            oa::base::bytes::DecodeCode::not_found,
+        "a null HPI archive source must be not_found"
+    );
+    require(
+        oa::HpiArchive::open(std::vector<uint8_t>(10, 0)).error.code ==
+            oa::base::bytes::DecodeCode::bad_signature,
+        "a short HPI archive must be refused at its marker"
     );
 
     auto bad_checksum = make_archive(false);
@@ -486,7 +519,7 @@ void test_hpi_malformed_inputs() {
     const std::size_t sqsh_offset = static_cast<std::size_t>(found - bad_checksum.begin());
     bad_checksum[sqsh_offset + 15] ^= 0x01;
     TemporaryFile checksum_file(bad_checksum);
-    oa::HpiArchive corrupt(checksum_file.path());
+    oa::HpiArchive corrupt = opened(checksum_file.path());
     require(!corrupt.read("z.bin").ok(), "bad SQSH checksum was accepted");
 
     auto bad_zlib = make_archive(false);
@@ -503,7 +536,7 @@ void test_hpi_malformed_inputs() {
         checksum(std::span<const uint8_t>(bad_zlib).subspan(payload_offset, payload_size))
     );
     TemporaryFile zlib_file(bad_zlib);
-    oa::HpiArchive invalid_zlib(zlib_file.path());
+    oa::HpiArchive invalid_zlib = opened(zlib_file.path());
     // zlib 1.0.4 leaves the expected length in place on a failed inflate, so
     // the chunk passes its size check and decodes as zero bytes.
     require(
@@ -525,7 +558,7 @@ void test_hpi_malformed_inputs() {
         std::ofstream tail(sparse_file.path(), std::ios::binary | std::ios::app);
         tail << archive_trailer;
     }
-    oa::HpiArchive sparse(sparse_file.path());
+    oa::HpiArchive sparse = opened(sparse_file.path());
     const auto oversized = sparse.read("z.bin");
     require(
         !oversized.ok() && std::string_view(oversized.error.message).find("1 MiB safety limit") !=

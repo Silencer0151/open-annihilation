@@ -128,21 +128,22 @@ enum class SaveRef : uint8_t {
 };
 
 struct SaveHooks {
-    void* context;
-    void* (*resolve)(void* context, SaveRef kind, oa_ref32 ref);
+    void* context{};
+    void* (*resolve)(void* context, SaveRef kind, oa_ref32 ref) = nullptr;
     // Camera placement (clamping belongs to the view); null stores the fields.
-    void (*set_camera)(void* context, int32_t x, int32_t z);
+    void (*set_camera)(void* context, int32_t x, int32_t z) = nullptr;
 
     // Units.
-    void (*write_script)(void* context, Unit* unit, Bank* bank);
+    void (*write_script)(void* context, Unit* unit, Bank* bank) = nullptr;
     // Visits the unit's primary queue, then its secondary queue.
-    void (*visit_orders)(void* context, const Unit* unit, SavedOrderVisit visit, void* walk);
-    void (*restore_unit)(void* context, uint16_t unit_id, Bank* bank);
+    void (*visit_orders)(void* context, const Unit* unit, SavedOrderVisit visit, void* walk) =
+        nullptr;
+    void (*restore_unit)(void* context, uint16_t unit_id, Bank* bank) = nullptr;
 
     // Features.
-    void (*load_feature_set)(void* context);
-    int16_t (*find_or_load_feature)(void* context, const char* name);
-    void (*link_feature_set)(void* context);
+    void (*load_feature_set)(void* context) = nullptr;
+    int16_t (*find_or_load_feature)(void* context, const char* name) = nullptr;
+    void (*link_feature_set)(void* context) = nullptr;
     // Places a feature type on a plot. An object feature also gets its saved
     // position and orientation, laid out as feature_record holds them; both
     // are null otherwise.
@@ -152,20 +153,20 @@ struct SaveHooks {
         uint16_t type,
         const uint8_t* position,
         const uint8_t* orientation
-    );
-    void (*burn_feature)(void* context, uint16_t x, uint16_t z);
-    void (*queue_feature_event)(void* context, uint16_t x, uint16_t z, int32_t kind);
+    ) = nullptr;
+    void (*burn_feature)(void* context, uint16_t x, uint16_t z) = nullptr;
+    void (*queue_feature_event)(void* context, uint16_t x, uint16_t z, int32_t kind) = nullptr;
 };
 
 // What the sections read and write: the World plus map and feature tables it
 // does not own yet.
 struct SaveContext {
-    World* world;
-    uint8_t* plots;           // Game.map_cells target: map_width * map_height plots
-    uint8_t* mapping;         // Game.sight_grid target
-    uint8_t* feature_records; // placed-feature records indexed by plot::feature_record
-    sim::world_environment::MeteorState* meteor;
-    const SaveHooks* hooks;
+    World* world{};
+    uint8_t* plots{};           // Game.map_cells target: map_width * map_height plots
+    uint8_t* mapping{};         // Game.sight_grid target
+    uint8_t* feature_records{}; // placed-feature records indexed by plot::feature_record
+    sim::world_environment::MeteorState* meteor{};
+    const SaveHooks* hooks{};
     // Records feature_records holds; the Features section reads and writes
     // none at or past it.
     uint32_t feature_record_count{};
@@ -216,10 +217,10 @@ void save_write_meteor(const sim::world_environment::MeteorState* meteor, Bank* 
 void save_read_meteor(sim::world_environment::MeteorState* meteor, Bank* bank);
 
 struct MeteorTdf {
-    void* context;
-    bool (*text)(void* context, const char* key, char* out, std::size_t out_bytes);
-    int32_t (*integer)(void* context, const char* key, int32_t fallback);
-    double (*real)(void* context, const char* key, double fallback);
+    void* context{};
+    bool (*text)(void* context, const char* key, char* out, std::size_t out_bytes) = nullptr;
+    int32_t (*integer)(void* context, const char* key, int32_t fallback) = nullptr;
+    double (*real)(void* context, const char* key, double fallback) = nullptr;
 };
 enum class MeteorConfigResult { loaded, missing, bogus };
 
@@ -432,10 +433,10 @@ void save_read_units(SaveContext* save, Bank* bank);
 
 // Image rows: width/height header then `height` rows of `width` bytes.
 struct ImageRows {
-    uint32_t width;
-    uint32_t height;
-    uint32_t stride;
-    const uint8_t* pixels;
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t stride{};
+    const uint8_t* pixels{};
 };
 
 /// Writes an image into the open blob from its start: width and height as
@@ -447,17 +448,17 @@ void save_write_image_rows(const ImageRows* image, Bank* bank);
 
 // Campaign, UI and mission data the Summary record needs.
 struct SummaryHooks {
-    void* context;
-    const char* build_date;
-    const char* build_time;
-    const char* (*campaign_name)(void* context);
-    void (*advance_next_mission)(void* context);
-    const char* (*mission_name)(void* context);
-    int32_t (*game_type)(void* context);
-    void (*bind_mission_info)(void* context);
-    const ImageRows* (*radar_image)(void* context);
-    void (*write_stats_panel)(void* context, Bank* bank);
-    void (*save_conditions)(void* context, Bank* bank);
+    void* context{};
+    const char* build_date{};
+    const char* build_time{};
+    const char* (*campaign_name)(void* context) = nullptr;
+    void (*advance_next_mission)(void* context) = nullptr;
+    const char* (*mission_name)(void* context) = nullptr;
+    int32_t (*game_type)(void* context) = nullptr;
+    void (*bind_mission_info)(void* context) = nullptr;
+    const ImageRows* (*radar_image)(void* context) = nullptr;
+    void (*write_stats_panel)(void* context, Bank* bank) = nullptr;
+    void (*save_conditions)(void* context, Bank* bank) = nullptr;
 };
 
 inline constexpr int32_t game_mode_in_match = 6; // Game.mode for an in-match save

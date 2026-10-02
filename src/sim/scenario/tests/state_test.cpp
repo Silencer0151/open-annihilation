@@ -119,20 +119,17 @@ void unit_event_table() {
         );
         check(!reacts_to(kind, Event::unit_created), "no created handler");
     }
-    bool caught = false;
-    try {
-        (void)reacts_to(static_cast<Kind>(kind_count), Event::unit_destroyed);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    check(caught, "kind outside the table rejected");
+    check(
+        !reacts_to(static_cast<Kind>(kind_count), Event::unit_destroyed),
+        "kind outside the table reacts to nothing"
+    );
 }
 
 /// Checks registration, the constructors' fields, the condition walk and the dispatch table.
 void tests() {
     Controller c;
     Definition defaults;
-    register_conditions(c, defaults);
+    check(register_conditions(c, defaults) == DefinitionError::none, "defaults register");
     check(
         c.victory_count == 1 && c.defeat_count == 1 &&
             c.victory[0]->kind == Kind::destroy_all_units &&
@@ -152,16 +149,11 @@ void tests() {
     check(c.enabled == 0, "notification does not gate enabled");
     destroy(c);
     check(!c.registration_complete && c.victory_count == 0, "destroy ownership");
-    bool caught = false;
-    try {
-        notify_unit_created(c, {17});
-    } catch (const std::logic_error&) {
-        caught = true;
-    }
-    check(caught, "unregistered fakeempty rejected");
+    notify_unit_created(c, {17});
+    check(!visit_conditions(c, [](Condition&) {}), "unregistered conditions visit nothing");
     construct(c);
     auto d = all();
-    register_conditions(c, d);
+    check(register_conditions(c, d) == DefinitionError::none, "every condition registers");
     check(
         c.victory_count == 11 && c.defeat_count == 7 && c.enabled == 1,
         "all condition registrations"
@@ -184,12 +176,12 @@ void tests() {
             c.victory[9]->kind == Kind::unit_type_passes_z && c.victory[9]->line == 3,
         "line constructors"
     );
-    const auto any_line = unit_type_passes_condition(Kind::unit_type_passes_z, "AnyType", -40);
+    const auto any_line = *unit_type_passes_condition(Kind::unit_type_passes_z, "AnyType", -40);
     check(
         any_line.line == -3 && any_line.type_name[0] == '\0',
         "line in cells shifts arithmetically; ANYTYPE matches without case"
     );
-    const auto named_radius = move_unit_to_radius_condition("corgate", 992, 656, -2);
+    const auto named_radius = *move_unit_to_radius_condition("corgate", 992, 656, -2);
     check(
         named_radius.point.x == 992 && named_radius.point.z == 656 &&
             named_radius.radius == -0x20000 &&
@@ -214,18 +206,17 @@ void tests() {
             *c.victory[static_cast<std::size_t>(i)] == registered[static_cast<std::size_t>(i)],
             "all known created handlers inert"
         );
-    for (auto value : {-1, 3}) {
-        caught = false;
-        try {
-            dispatch(c, static_cast<Event>(value), *world, unit, ConditionHost{});
-        } catch (const std::invalid_argument&) {
-            caught = true;
-        }
-        check(caught, "event outside the handler table rejected");
-    }
+    for (auto value : {-1, 3})
+        check(
+            !dispatch(c, static_cast<Event>(value), *world, unit, ConditionHost{}),
+            "event outside the handler table rejected"
+        );
 
     Appending walk{&c, true};
-    visit_conditions(c, [&walk](Condition&) { visit_and_append(walk); });
+    check(
+        visit_conditions(c, [&walk](Condition&) { visit_and_append(walk); }),
+        "the walk visits every condition"
+    );
     check(
         walk.visited == 19 && c.victory_count == 12, "handler count reread after callback append"
     );
@@ -239,7 +230,7 @@ void tests() {
     unusual.strings["UnitTypePassesX"] = "ANYTYPE,-17";
     unusual.strings["KillUnitType"] = "armcom,0x10 trailing";
     construct(c);
-    register_conditions(c, unusual);
+    check(register_conditions(c, unusual) == DefinitionError::none, "unusual text registers");
     check(
         c.victory_count == 4 && c.victory[2]->kills_left == 16 && c.victory[3]->line == -2,
         "presence, signed shifts, scanf prefix"
@@ -247,13 +238,11 @@ void tests() {
     Definition malformed;
     malformed.strings["KillUnitType"] = "ARM_COM,4";
     construct(c);
-    caught = false;
-    try {
-        register_conditions(c, malformed);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    check(caught && !c.registration_complete, "malformed parser rejected");
+    check(
+        register_conditions(c, malformed) == DefinitionError::missing_comma &&
+            !c.registration_complete,
+        "malformed parser rejected"
+    );
 }
 } // namespace
 

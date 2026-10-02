@@ -5,6 +5,7 @@
 #include "oa/ui/services/commands.hpp"
 #include "oa/ui/services/cursor.hpp"
 #include "oa/ui/services/label.hpp"
+#include "oa/base/bytes.hpp"
 #include "oa/base/geometry.hpp"
 #include "oa/ui/services/input.hpp"
 #include "oa/ui/services/prefs.hpp"
@@ -23,6 +24,7 @@
 
 namespace {
 namespace sv = oa::ui::services;
+using oa::base::bytes::load_le32;
 int failures = 0;
 
 void check(bool condition, const char* what) {
@@ -34,7 +36,7 @@ void check(bool condition, const char* what) {
 
 // Manual clock for deterministic timer tests.
 struct FakeClock {
-    uint32_t ms;
+    uint32_t ms{};
 };
 
 uint32_t fake_tick(void* context) {
@@ -684,10 +686,6 @@ void test_label() {
     );
 }
 
-uint32_t le32(const uint8_t* bytes) {
-    return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | static_cast<uint32_t>(bytes[3]) << 24;
-}
-
 void test_sqsh() {
     std::vector<uint8_t> input(3000);
     for (std::size_t i = 0; i < input.size(); ++i) {
@@ -707,11 +705,11 @@ void test_sqsh() {
                     out[6] == encrypt,
                 "chunk header"
             );
-            const uint32_t stored = le32(&out[7]);
-            check(size == stored + 19 && le32(&out[11]) == 3000 && stored < 3000, "sizes");
+            const uint32_t stored = load_le32(&out[7]);
+            check(size == stored + 19 && load_le32(&out[11]) == 3000 && stored < 3000, "sizes");
             std::vector<uint8_t> payload(out.begin() + 19, out.begin() + 19 + stored);
             check(
-                le32(&out[15]) == oa::formats::sqsh::chunk_checksum(payload),
+                load_le32(&out[15]) == oa::formats::sqsh::chunk_checksum(payload),
                 "checksum over stored bytes"
             );
             if (encrypt != 0) {
@@ -749,7 +747,7 @@ void test_sqsh() {
     check(
         sv::sqsh_write_chunk(small.data(), &size, input.data(), 10, 0, 0) ==
                 sv::SqshWriteStatus::ok &&
-            size == 29 && le32(&small[7]) == 10,
+            size == 29 && load_le32(&small[7]) == 10,
         "type 0 writes only the header"
     );
     check(

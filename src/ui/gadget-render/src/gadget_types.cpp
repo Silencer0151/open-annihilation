@@ -8,6 +8,7 @@
 #include "oa/base/game_math.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/ui/gui_layout.hpp"
+#include "oa/base/text.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -429,7 +430,7 @@ void draw_button(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {
         char needle[2] = {key, '\0'};
         char* found = nullptr;
         if (!grayed) {
-            std::strncpy(copy, text, field::text_bytes);
+            oa::base::text::copy_padded(copy, text, field::text_bytes);
             if (const auto offset = ui::frontend_renderer::quick_key_offset(copy, key);
                 offset != std::string_view::npos)
                 found = copy + offset;
@@ -595,7 +596,9 @@ void draw_scroll_bar(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index
         renderer.text_color = mapped_color(panel, color_slot::scroll_value);
         char caption[kNumberBytes]{};
         if (bar.bytes[field::text] != 0) {
-            std::strncpy(caption, layout::record_chars(bar, field::text), sizeof(caption) - 1);
+            oa::base::text::copy_padded(
+                caption, layout::record_chars(bar, field::text), sizeof(caption) - 1
+            );
         } else if (const int32_t scale = i32(bar, field::scroll_thickness); scale != 0) {
             const double value = static_cast<double>(knob_position) * scale /
                                  static_cast<double>(width - i16(bar, field::scroll_knob_size));
@@ -779,7 +782,7 @@ void draw_label(GadgetRenderer& renderer, GadgetPanel& panel, int32_t index) {
         const char key = static_cast<char>(label.bytes[field::label_quick_key]);
         if (key != '\0') {
             char copy[field::text_bytes + 1]{};
-            std::strncpy(copy, text, field::text_bytes);
+            oa::base::text::copy_padded(copy, text, field::text_bytes);
             char needle[2] = {key, '\0'};
             if (char* found = std::strstr(copy, needle); found != nullptr) {
                 *found = '\0';

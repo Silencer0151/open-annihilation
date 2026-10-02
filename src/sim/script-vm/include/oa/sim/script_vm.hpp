@@ -346,9 +346,10 @@ class Vm {
     /// Creates a VM for a program with no host.
     ///
     /// Starts with every context stopped and none active, then allocates the
-    /// statics and zeroed per-piece motion state. Throws std::invalid_argument
-    /// when the program is empty, exceeds the limit namespace or has an entry
-    /// point outside its code. Host-facing instructions fail with missing_host.
+    /// statics and zeroed per-piece motion state. A program that is empty,
+    /// exceeds the limit namespace or has an entry point outside its code is
+    /// not taken: the VM holds an empty program, which starts no script, and
+    /// program_error() says why. Host-facing instructions fail with missing_host.
     ///
     /// @param program code, entry points and static and piece counts
     /// @param time_scale SLEEP multiplier: delay = time_scale * ms / 1000
@@ -441,16 +442,22 @@ class Vm {
     /// @return an error when the counts, context words or host do not fit the loaded program
     [[nodiscard]] std::optional<Error> import_state(const sim::script_state::State& state);
 
+    /// Returns why the program given to the constructor was not taken.
+    ///
+    /// @return an invalid_program error, or nullopt when the VM holds its program
+    [[nodiscard]] const std::optional<Error>& program_error() const noexcept {
+        return program_error_;
+    }
+
     /// Returns the number of contexts that are not stopped.
     ///
     /// @return 0..8
     [[nodiscard]] std::size_t active_count() const noexcept;
     /// Copies one context's state.
     ///
-    /// Throws std::out_of_range for an index past the eight contexts.
-    ///
     /// @param index context index, 0..7
-    /// @return the context's state, registers and stack slots
+    /// @return the context's state, registers and stack slots; a stopped, empty
+    ///         context for an index past the eight contexts
     [[nodiscard]] ContextSnapshot context(std::size_t index) const;
     /// Reads a static variable.
     ///
@@ -480,6 +487,7 @@ class Vm {
     };
 
     Program program_;
+    std::optional<Error> program_error_;
     Host* host_ = nullptr;
     std::vector<uint32_t> statics_;
     std::array<StoredContext, context_count> contexts_{};

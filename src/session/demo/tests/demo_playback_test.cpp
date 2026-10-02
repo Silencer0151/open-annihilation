@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oa/test/match_services.hpp"
 
 using namespace oa;
 using namespace oa::netgame;
@@ -46,7 +47,7 @@ int failures = 0;
 constexpr uint16_t kUnitsPerPlayer = 4;
 constexpr int32_t kFixedOne = 1 << 16;
 constexpr auto checksum = static_cast<uint8_t>(HandshakeSubtype::def_checksum);
-constexpr auto verdict = static_cast<uint8_t>(HandshakeSubtype::verdict);
+constexpr auto verdict_subtype = static_cast<uint8_t>(HandshakeSubtype::verdict);
 
 void append16(std::vector<uint8_t>* out, uint16_t value) {
     out->push_back(static_cast<uint8_t>(value));
@@ -424,8 +425,8 @@ void unit_table_check_compares_checksum_keys() {
     auto recording = make_recording(kUnitsPerPlayer, 1, 0);
     recording.announce(checksum, 0x11, 0xa);
     recording.announce(checksum, 0x22, 0xb);
-    recording.announce(verdict, 0x11, shared_verdict);
-    recording.announce(verdict, 0x22, shared_verdict);
+    recording.announce(verdict_subtype, 0x11, shared_verdict);
+    recording.announce(verdict_subtype, 0x22, shared_verdict);
     DemoPlayback playback;
     std::string error;
     CHECK(demo_load(&playback, recording.bytes(), &error));
@@ -473,7 +474,7 @@ Recording checked_recording(bool later_type, bool recorder_types_shared) {
     auto recording = make_recording(kUnitsPerPlayer, 1, 0);
     const auto check = [&](const CheckedKey& type, bool shared) {
         recording.announce(checksum, type.key, type.checksum);
-        recording.announce(verdict, type.key, verdict_value(1, shared ? 1 : 0, -1));
+        recording.announce(verdict_subtype, type.key, verdict_value(1, shared ? 1 : 0, -1));
     };
     for (const auto& type : shared_keys)
         check(type, true);
@@ -624,35 +625,9 @@ void player_table_without_status_blocks() {
 
 // ---- round trip through two tiny matches ----
 
-struct Services : sim::match_runtime::OfflineServices {
-    void activation_sound(sim::unit_spawn::Slot&, sim::unit_activation::Sound) override {}
+using Services = oa::test::QuietServices;
 
-    void command_sound(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void attachment_notification(sim::unit_spawn::Slot&, uint32_t) override {}
-
-    void refresh_selected_unit(sim::unit_spawn::Slot&) override {}
-
-    void emit_sfx(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void explode_piece(sim::unit_spawn::Slot&, uint32_t, int32_t) override {}
-
-    void attach_unit(sim::unit_spawn::Slot&, int32_t, int32_t, int32_t) override {}
-
-    void drop_unit(sim::unit_spawn::Slot&, int32_t) override {}
-
-    void refresh_plot_height_range(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-
-    void notify_object_footprint_removed(sim::spatial_state::Unit&, uint32_t) override {}
-
-    void notify_footprint_changed(std::array<int16_t, 2>, std::array<int16_t, 2>) override {}
-};
-
-struct Scenario : sim::scenario::DefinitionHost {
-    int32_t integer(std::string_view, int32_t fallback) override { return fallback; }
-
-    std::optional<std::string> text(std::string_view) override { return std::nullopt; }
-};
+using Scenario = oa::test::EmptyScenario;
 
 struct Captured {
     uint32_t tick{};
@@ -1049,6 +1024,69 @@ void replay_reproduces_a_recorded_unit(bool paused_while_recording) {
     CHECK(stats.frames_oversized == 0 && stats.sends_dropped > 0);
 }
 
+template <class R>
+void append_record(std::vector<uint8_t>* payload, const R& record) {
+    std::array<uint8_t, record_length_table[static_cast<uint8_t>(R::type)]> bytes{};
+    std::size_t written = 0;
+    CHECK(encode_record(record, bytes.data(), bytes.size(), &written) == WireError::ok);
+    payload->insert(
+        payload->end(), bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(written)
+    );
+}
+
+// Records that reach the match's own hooks (an economy record asking for an
+// answer, an alliance, a resource give) reach the binding behind them, and
+// a packet from a player number no player chunk names is dropped rather
+// than offered as a system message.
+void recorded_records_reach_the_binding() {
+    auto recording = make_recording(kUnitsPerPlayer, 1);
+    const uint32_t watcher_id = recorded_id(0) + 1;
+    std::vector<uint8_t> payload{formats::tad::payload_marker};
+    EconomyRecord economy{};
+    economy.want_reply = 1;
+    economy.metal = 10.0f;
+    append_record(&payload, economy);
+    AllianceRecord alliance{};
+    alliance.player_id_a = recorded_id(0);
+    alliance.player_id_b = watcher_id;
+    alliance.value = 1;
+    append_record(&payload, alliance);
+    ResourceGiveRecord give{};
+    give.subtype = 3; // shared sight
+    give.from_id = recorded_id(0);
+    give.to_id = watcher_id;
+    append_record(&payload, give);
+    recording.add(1, 33, payload);
+    recording.add(9, 33, probe_payload());
+    const auto release = [](DemoSession* session) {
+        demo_session_end(session);
+        delete session;
+    };
+    std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+    std::string error;
+    CHECK(demo_load(&session->playback, recording.bytes(), &error));
+    CHECK(session->playback.stats.unknown_senders == 1);
+    CHECK(session->playback.frames.size() == 1);
+    CHECK(session->playback.watcher_id == watcher_id);
+    Machine replay;
+    replay.build(1);
+    std::array<uint8_t, OA_PLAYER_COUNT> watcher_allies{};
+    watcher_allies[1] = 1;
+    replay.match->configure_outcomes(1, watcher_allies, false);
+    CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+    if (session->match == nullptr)
+        return;
+    for (int t = 0; t < 10; ++t)
+        demo_session_frame(session.get());
+    CHECK(session->tick_errors == 0);
+    CHECK(demo_session_finished(*session));
+    const auto& world = replay.match->state();
+    CHECK(world.game.players[0].metal == 10.0f);
+    CHECK(world.game.players[0].alliance[1] == 1);
+    // The answer to the economy record goes out from the watcher, and is dropped.
+    CHECK(session->playback.stats.sends_dropped > 0);
+}
+
 } // namespace
 
 int main() {
@@ -1064,6 +1102,7 @@ int main() {
     verdict_judges_errors_and_spacing();
     replay_reproduces_a_recorded_unit(false);
     replay_reproduces_a_recorded_unit(true);
+    recorded_records_reach_the_binding();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

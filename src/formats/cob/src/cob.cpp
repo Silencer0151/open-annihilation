@@ -5,38 +5,36 @@
 #include "oa/base/bytes.hpp"
 
 #include <algorithm>
-#include <array>
+#include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <utility>
 
 namespace oa::formats::cob {
 namespace {
 
+using base::bytes::DecodeCode;
+using base::bytes::DecodeError;
+using base::bytes::Decoded;
 using base::bytes::load_le32;
 
 constexpr std::size_t kHeaderBytes = header_bytes;
 
 struct DiskHeader {
-    uint32_t version_signature;
-    uint32_t script_count;
-    uint32_t piece_count;
-    uint32_t code_word_count;
-    uint32_t static_variable_count;
-    uint32_t sound_count;
-    uint32_t script_entry_offset;
-    uint32_t script_name_offset_table;
-    uint32_t piece_name_offset_table;
-    uint32_t code_offset;
-    uint32_t name_pool_offset;
+    uint32_t version_signature{};
+    uint32_t script_count{};
+    uint32_t piece_count{};
+    uint32_t code_word_count{};
+    uint32_t static_variable_count{};
+    uint32_t sound_count{};
+    uint32_t script_entry_offset{};
+    uint32_t script_name_offset_table{};
+    uint32_t piece_name_offset_table{};
+    uint32_t code_offset{};
+    uint32_t name_pool_offset{};
 };
 
 static_assert(sizeof(DiskHeader) == header_bytes);
-
-ParseResult failure(const char* message) noexcept {
-    return ParseResult{std::nullopt, message};
-}
 
 bool add_overflow(std::size_t left, std::size_t right, std::size_t& result) noexcept {
     if (right > std::numeric_limits<std::size_t>::max() - left) {
@@ -97,12 +95,14 @@ bool read_name(
 
 } // namespace
 
-ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits) {
+Decoded<CobProgram> parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits) {
     if (bytes.size() < kHeaderBytes) {
-        return failure("COB is smaller than its 44-byte header");
+        return DecodeError{
+            DecodeCode::truncated, bytes.size(), "COB is smaller than its 44-byte header"
+        };
     }
     if (bytes.size() > limits.max_file_bytes) {
-        return failure("COB exceeds configured file bound");
+        return DecodeError{DecodeCode::limit_exceeded, 0, "COB exceeds configured file bound"};
     }
 
     const DiskHeader disk = read_disk_header(bytes);
@@ -120,26 +120,46 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
         disk.name_pool_offset
     };
     if (header.version_signature != version_ta) {
-        return failure("unsupported COB VersionSignature (TA requires 4; Kingdoms v6 is rejected)");
+        return DecodeError{
+            DecodeCode::unsupported_version,
+            0,
+            "unsupported COB VersionSignature (TA requires 4; Kingdoms v6 is rejected)"
+        };
     }
     if (header.sound_count != 0U) {
-        return failure("unsupported non-zero TA COB sound count");
+        return DecodeError{
+            DecodeCode::unsupported_version,
+            offsetof(DiskHeader, sound_count),
+            "unsupported non-zero TA COB sound count"
+        };
     }
     if (header.script_count > limits.max_scripts || header.piece_count > limits.max_pieces ||
         header.code_word_count > limits.max_code_words ||
         header.static_variable_count > limits.max_static_variables) {
-        return failure("COB count exceeds configured bounds");
+        return DecodeError{
+            DecodeCode::limit_exceeded,
+            offsetof(DiskHeader, script_count),
+            "COB count exceeds configured bounds"
+        };
     }
     if (header.code_offset < kHeaderBytes || header.script_entry_offset < header.code_offset ||
         header.script_name_offset_table < header.script_entry_offset ||
         header.piece_name_offset_table < header.script_name_offset_table ||
         header.name_pool_offset < header.piece_name_offset_table) {
-        return failure("COB sections are not in increasing order");
+        return DecodeError{
+            DecodeCode::malformed,
+            offsetof(DiskHeader, script_entry_offset),
+            "COB sections are not in increasing order"
+        };
     }
     std::size_t code_end = 0;
     if (!table_end(header.code_offset, header.code_word_count, code_end) ||
         code_end != header.script_entry_offset || code_end > bytes.size()) {
-        return failure("COB code section bounds disagree with entry table");
+        return DecodeError{
+            DecodeCode::out_of_range,
+            offsetof(DiskHeader, code_offset),
+            "COB code section bounds disagree with entry table"
+        };
     }
     std::size_t script_table_end = 0;
     std::size_t script_name_end = 0;
@@ -151,7 +171,11 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
         piece_name_end > bytes.size() || script_table_end > header.script_name_offset_table ||
         script_name_end > header.piece_name_offset_table ||
         piece_name_end > header.name_pool_offset) {
-        return failure("COB name or entry table bounds are invalid");
+        return DecodeError{
+            DecodeCode::out_of_range,
+            offsetof(DiskHeader, script_entry_offset),
+            "COB name or entry table bounds are invalid"
+        };
     }
 
     CobProgram result;
@@ -166,20 +190,22 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
     result.entry_points.reserve(header.script_count);
     result.scripts.reserve(header.script_count);
     for (uint32_t i = 0; i < header.script_count; ++i) {
-        const auto entry = load_le32(
-            bytes.data() + static_cast<std::size_t>(header.script_entry_offset) +
-            static_cast<std::size_t>(i) * sizeof(uint32_t)
-        );
+        const std::size_t entry_at = static_cast<std::size_t>(header.script_entry_offset) +
+                                     static_cast<std::size_t>(i) * sizeof(uint32_t);
+        const auto entry = load_le32(bytes.data() + entry_at);
         if (entry >= header.code_word_count) {
-            return failure("COB script entry points outside code section");
+            return DecodeError{
+                DecodeCode::out_of_range, entry_at, "COB script entry points outside code section"
+            };
         }
-        const auto name_offset = load_le32(
-            bytes.data() + static_cast<std::size_t>(header.script_name_offset_table) +
-            static_cast<std::size_t>(i) * sizeof(uint32_t)
-        );
+        const std::size_t name_at = static_cast<std::size_t>(header.script_name_offset_table) +
+                                    static_cast<std::size_t>(i) * sizeof(uint32_t);
+        const auto name_offset = load_le32(bytes.data() + name_at);
         Script script;
         if (!read_name(bytes, name_offset, header.name_pool_offset, limits, script.name)) {
-            return failure("COB script name is outside bounded name pool");
+            return DecodeError{
+                DecodeCode::out_of_range, name_at, "COB script name is outside bounded name pool"
+            };
         }
         script.entry_word = entry;
         result.entry_points.push_back(entry);
@@ -187,40 +213,18 @@ ParseResult parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits)
     }
     result.piece_names.reserve(header.piece_count);
     for (uint32_t i = 0; i < header.piece_count; ++i) {
-        const auto name_offset = load_le32(
-            bytes.data() + static_cast<std::size_t>(header.piece_name_offset_table) +
-            static_cast<std::size_t>(i) * sizeof(uint32_t)
-        );
+        const std::size_t name_at = static_cast<std::size_t>(header.piece_name_offset_table) +
+                                    static_cast<std::size_t>(i) * sizeof(uint32_t);
+        const auto name_offset = load_le32(bytes.data() + name_at);
         std::string name;
         if (!read_name(bytes, name_offset, header.name_pool_offset, limits, name)) {
-            return failure("COB piece name is outside bounded name pool");
+            return DecodeError{
+                DecodeCode::out_of_range, name_at, "COB piece name is outside bounded name pool"
+            };
         }
         result.piece_names.push_back(std::move(name));
     }
-    return ParseResult{std::move(result), {}};
-}
-
-ParseResult load_cob_file(const char* path, const ParseLimits& limits) {
-    if (path == nullptr || *path == '\0') {
-        return failure("COB path is empty");
-    }
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) {
-        return failure("cannot open COB file");
-    }
-    const std::streamoff end = input.tellg();
-    if (end < 0 || static_cast<uintmax_t>(end) > limits.max_file_bytes) {
-        return failure("COB file size is invalid or exceeds configured bound");
-    }
-    std::vector<uint8_t> bytes(static_cast<std::size_t>(end));
-    input.seekg(0, std::ios::beg);
-    if (!bytes.empty() &&
-        !input.read(
-            reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
-        )) {
-        return failure("cannot read COB file");
-    }
-    return parse_cob(bytes, limits);
+    return result;
 }
 
 } // namespace oa::formats::cob

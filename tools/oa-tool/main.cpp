@@ -82,7 +82,8 @@ int main(int argc, char** argv) {
         }
         const std::string command = argv[1];
         if (command == "list" && argc == 3) {
-            for (const auto& entry : oa::HpiArchive(argv[2]).entries())
+            const auto archive = oa::ui::decoded::require(oa::open_hpi_file(argv[2]), argv[2]);
+            for (const auto& entry : archive.entries())
                 std::cout << entry.path << '\t' << entry.size << '\n';
         } else if (command == "asset-extract" && argc >= 5) {
             oa::AssetStore store(argv[2]);
@@ -93,8 +94,8 @@ int main(int argc, char** argv) {
             std::cout << (asset.archived ? "archive: " : "loose: ") << asset.source.string() << " ("
                       << asset.bytes.size() << " bytes)\n";
         } else if ((command == "extract" || command == "preview") && argc == 5) {
-            const auto data =
-                oa::ui::decoded::require(oa::HpiArchive(argv[2]).read(argv[3]), argv[3]);
+            const auto archive = oa::ui::decoded::require(oa::open_hpi_file(argv[2]), argv[2]);
+            const auto data = oa::ui::decoded::require(archive.read(argv[3]), argv[3]);
             if (command == "extract")
                 write_file(argv[4], data);
             else

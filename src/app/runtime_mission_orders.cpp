@@ -4,6 +4,7 @@
 // Orders a headless campaign run gives the local player's units, so that a
 // mission plays towards its victory conditions without a player.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/data/mission_types.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -32,9 +33,8 @@ namespace scenario = oa::sim::scenario;
 // square, so a position shifted right by kCellShift is its cell.
 constexpr int32_t kFixedShift = 16;
 constexpr int32_t kFixedOne = 1 << kFixedShift;
-constexpr int32_t kCellPixels = 16;
 constexpr int32_t kCellShift = 20;
-static_assert(1 << (kCellShift - kFixedShift) == kCellPixels);
+static_assert(1 << (kCellShift - kFixedShift) == OA_MAP_CELL_PIXELS);
 // Rings of map cells searched around a builder for a structure's site.
 constexpr int32_t kSiteNearest = 3;
 constexpr int32_t kSiteFarthest = 24;
@@ -187,15 +187,15 @@ bool Runtime::order_structure_near(uint16_t builder, uint16_t type) {
                     continue;
                 // The footprint's centre, at the site's height.
                 best = oa::sim::ground_orders::Point{
-                    (x * kCellPixels + fx * kCellPixels / 2) * kFixedOne,
+                    (x * OA_MAP_CELL_PIXELS + fx * OA_MAP_CELL_PIXELS / 2) * kFixedOne,
                     static_cast<int32_t>(static_cast<uint32_t>(*height) << kFixedShift),
-                    (z * kCellPixels + fz * kCellPixels / 2) * kFixedOne
+                    (z * OA_MAP_CELL_PIXELS + fz * OA_MAP_CELL_PIXELS / 2) * kFixedOne
                 };
                 best_metal = metal;
             }
     if (!best)
         return false;
-    (void)match_->issue_mobile_build(builder, type, *best, false);
+    match_->issue_mobile_build(builder, type, *best, false);
     return true;
 }
 
@@ -362,7 +362,7 @@ void Runtime::give_mission_orders() {
             if (!mobile || !armed)
                 continue;
             if (goal && (goal_type.empty() || tdf_names_equal(name_of(slot.record), goal_type))) {
-                (void)match_->issue_ground_move(unit, *goal, false);
+                match_->issue_ground_move(unit, *goal, false);
                 ++movers;
                 continue;
             }

@@ -12,8 +12,8 @@ namespace oa::platform {
 namespace {
 
 struct alignas(std::max_align_t) BlockHeader {
-    std::size_t size;
-    const char* tag;
+    std::size_t size{};
+    const char* tag{};
 };
 
 std::atomic<uint64_t> live_blocks{0};

@@ -12,6 +12,7 @@
 #include "oa/ui/hud/unit_labels.hpp"
 
 #include "oa/core/world.h"
+#include "oa/data/campaign/campaign_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -89,7 +90,7 @@ struct UnitPanelSnapshot {
 /// @param world units, players and Game.viewpoint_player
 /// @param cursor_unit unit under the cursor (Game.cursor_unit_id); 0 for none
 /// @param debug_keys whether the debug keys are on
-/// @param session_kind CampaignFile.kind of the game (kSessionMultiplayer for multiplayer)
+/// @param session_kind CampaignFile.kind of the game
 /// @param overlay order-queue service (OverlaySink::orders) and the world
 /// @param hooks sight and language services
 /// @return the panel; unit 0 draws nothing
@@ -97,7 +98,7 @@ struct UnitPanelSnapshot {
     const World& world,
     uint16_t cursor_unit,
     bool debug_keys,
-    int32_t session_kind,
+    oa::data::campaign::SessionKind session_kind,
     const OverlayContext& overlay,
     const UnitPanelHooks& hooks
 );

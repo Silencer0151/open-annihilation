@@ -838,14 +838,22 @@ void host_opcode_rejects_before_consuming_stack() {
 }
 
 void constructor_checks_bounds_before_allocation() {
-    bool rejected = false;
-    try {
-        vm::Vm machine({{vm::opcode::return_}, {0}, std::numeric_limits<std::size_t>::max(), 0});
-        (void)machine;
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    require(rejected, "oversized static table was not rejected before allocation");
+    vm::Vm machine({{vm::opcode::return_}, {0}, std::numeric_limits<std::size_t>::max(), 0});
+    require(
+        machine.program_error() &&
+            machine.program_error()->code == vm::ErrorCode::invalid_program &&
+            !machine.start(0).ok(),
+        "oversized static table was not rejected before allocation"
+    );
+    vm::Vm outside({{vm::opcode::return_}, {1}, 0, 0});
+    require(
+        outside.program_error() && !outside.start(0).ok(),
+        "entry point outside code was not rejected"
+    );
+    require(
+        outside.context(vm::context_count).state == vm::ContextState::stopped,
+        "a context index past the eight contexts reads as stopped"
+    );
 }
 
 void context_reuse_preserves_unreset_words() {

@@ -13,6 +13,7 @@
 #include "combat_fixture.hpp"
 #include "oa/data/unit_definitions.hpp"
 #include "oa/sim/weapon_execution/weapon_launch.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -399,7 +400,7 @@ void self_destruct_and_sweep_are_shared() {
     }
     Fixture f(death_options(art));
     f.match->state().game.session_rules = 1;
-    std::strcpy(f.match->state().game.sides[0].commander, "testunit");
+    oa::base::text::copy_terminated(f.match->state().game.sides[0].commander, "testunit");
     auto& commander = idle(f, 0, 64, 64);
     auto& first = idle(f, 0, 128, 64);
     auto& second = idle(f, 0, 64, 128);

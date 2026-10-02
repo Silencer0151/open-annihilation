@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/locale.hpp"
+#include "oa/base/text.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -103,7 +104,7 @@ bool parse_entries(LocaleTable* table, formats::tdf::Document* document) noexcep
             return true;
         const formats::tdf::Block* section = formats::tdf::cursor(document);
         char source[locale_text_capacity];
-        std::strncpy(source, section->name, sizeof source - 1);
+        oa::base::text::copy_padded(source, section->name, sizeof source - 1);
         source[sizeof source - 1] = '\0';
         char translation[locale_text_capacity];
         formats::tdf::get_string(section, table->language, translation, sizeof translation, "");
@@ -132,7 +133,7 @@ bool locale_table_load(
     if (formats::tdf::compare_nocase(language, table->language) == 0)
         return true;
     clear_entries(table);
-    std::strncpy(table->language, language, sizeof table->language - 1);
+    oa::base::text::copy_padded(table->language, language, sizeof table->language - 1);
     table->language[sizeof table->language - 1] = '\0';
     return parse_entries(table, document);
 }
@@ -178,9 +179,9 @@ bool get_localized_string(
     const char* fallback
 ) noexcept {
     char localized[locale_text_capacity];
-    std::strncpy(localized, language, sizeof localized - 1);
+    oa::base::text::copy_padded(localized, language, sizeof localized - 1);
     localized[sizeof localized - 1] = '\0';
-    std::strncat(localized, key, sizeof localized - std::strlen(localized) - 1);
+    oa::base::text::append_terminated(localized, key);
     const char* first_fallback = fallback != nullptr ? fallback : "";
     if (formats::tdf::get_string(block, localized, out, size, first_fallback))
         return true;

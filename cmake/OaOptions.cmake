@@ -9,6 +9,7 @@
 include_guard(GLOBAL)
 if(NOT TARGET oa-options)
   add_library(oa-options INTERFACE)
+  add_library(oa::options ALIAS oa-options)
   if(MSVC)
     # No warning that a type was padded to the alignment alignas asks for,
     # which is what alignas is for.
@@ -18,11 +19,14 @@ if(NOT TARGET oa-options)
   endif()
   # OA_WARNINGS_AS_ERRORS turns every warning those options raise into an
   # error, in the targets that link oa-options; SDL and the third-party
-  # sources keep their own warnings. CI turns it on for Clang and GCC.
+  # sources keep their own warnings. CI turns it on for every compiler.
   option(OA_WARNINGS_AS_ERRORS "Fail the build on any compiler warning in engine code" OFF)
   if(OA_WARNINGS_AS_ERRORS)
     if(MSVC)
+      # The linker's warnings too, in the programs and libraries that link
+      # oa-options.
       target_compile_options(oa-options INTERFACE /WX)
+      target_link_options(oa-options INTERFACE /WX)
     else()
       target_compile_options(oa-options INTERFACE -Werror)
     endif()

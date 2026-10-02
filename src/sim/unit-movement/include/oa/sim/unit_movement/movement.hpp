@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace oa::sim::unit_movement {
 using Fixed = int32_t; // Signed 16.16 world coordinates/speeds.
@@ -35,7 +36,7 @@ struct Unit {
     uint16_t heading{};                 // Unit.heading
     int16_t pitch{};                    // Unit.pitch
     uint32_t flags{};                   // Unit.flags
-    Type type;
+    Type type{};
 };
 
 // The movement object's motion state.
@@ -147,12 +148,11 @@ void turn(Unit& unit, Movement& movement, int16_t requested) noexcept;
 void accelerate(Unit& unit, Movement& movement, Fixed acceleration, uint8_t sea_level) noexcept;
 /// Returns the distance needed to stop from a speed at a deceleration.
 ///
-/// Throws std::domain_error when the wrapped divisor is zero.
-///
 /// @param speed signed 16.16 world units per tick
 /// @param deceleration signed 16.16 world units per tick per tick
-/// @return speed^2 / (2 * deceleration) in 16.16 world units, the square narrowed to 32 bits
-int64_t braking_distance(Fixed speed, Fixed deceleration);
+/// @return speed^2 / (2 * deceleration) in 16.16 world units, the square narrowed to 32 bits;
+///         nullopt when the doubled deceleration wraps to zero
+[[nodiscard]] std::optional<int64_t> braking_distance(Fixed speed, Fixed deceleration) noexcept;
 /// Integrates the position of an unattached unit for one tick.
 ///
 /// Adds the velocity. A move within the same cell and occupancy only updates the

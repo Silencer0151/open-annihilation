@@ -203,7 +203,7 @@ void test_round_trip_every_format() {
                 std::vector<uint8_t> rows = noise(row_bytes(header, {}) * header.height, seed++);
                 clear_row_padding(header, rows);
                 const std::vector<Rgb> palette = format.color == ColorType::palette
-                                                     ? grey_ramp(1u << format.depth)
+                                                     ? grey_ramp(std::size_t{1} << format.depth)
                                                      : std::vector<Rgb>{};
                 const auto file = encode(header, rows, palette);
                 Log log;

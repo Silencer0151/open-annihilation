@@ -177,7 +177,10 @@ void Match::update_player_economy(size_t player_index) {
         totals[3] += unit.economy.metal.gate;
     }
 
-    auto& staging = match_player_economy(*this, player_index);
+    // A player without a staging block settles into a spare one.
+    oa::UnitEconomy spare_staging{};
+    auto* staged = match_player_economy(*this, player_index);
+    auto& staging = staged ? *staged : spare_staging;
     const auto energy_produced = staging.energy.produced + totals[6];
     const auto energy_requested = staging.energy.requested + totals[4];
     totals[0] += staging.energy.accepted;

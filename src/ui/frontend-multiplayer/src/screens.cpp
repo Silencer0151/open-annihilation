@@ -23,6 +23,7 @@
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/platform/system.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -545,10 +546,10 @@ void settings_write(void*, const char* address) {
 }
 
 bool settings_user(void*, char* out, std::size_t capacity) {
-    const char* user = std::getenv("USER");
-    if (user == nullptr || *user == '\0')
+    const auto user = oa::platform::environment_value("USER");
+    if (!user || user->empty())
         return false;
-    std::snprintf(out, capacity, "%s", user);
+    std::snprintf(out, capacity, "%s", user->c_str());
     return true;
 }
 

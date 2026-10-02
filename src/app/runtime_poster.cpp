@@ -5,6 +5,7 @@
 // strips and streamed into a bottom-up BMP, and the numbered PCX screenshots
 // and film frames of the frame on screen.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 
 #include "oa/present/pcx.hpp"
 #include "oa/present/surface.hpp"
@@ -12,6 +13,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/console/hotkeys.hpp"
 #include "oa/ui/hud/game_fields.hpp"
+#include "oa/platform/files.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -33,7 +35,6 @@ namespace {
 namespace console = oa::ui::console;
 namespace present = oa::present;
 
-constexpr int32_t kCellPixels = 16;
 constexpr const char* kPosterExtension = "bmp";
 constexpr std::size_t kPosterPathBytes = 0x104;
 constexpr uint8_t kSightFlags =
@@ -125,11 +126,8 @@ bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
             static_cast<Runtime*>(context)->list_save_files(pattern, visit, user);
         };
     files.open = [](void* context, const char* path, present::ByteStream* stream) {
-        std::FILE* file = std::fopen(
-            (static_cast<Runtime*>(context)->save_game_root() / save_relative_path(path))
-                .string()
-                .c_str(),
-            "wb"
+        std::FILE* file = oa::platform::open_file(
+            static_cast<Runtime*>(context)->save_game_root() / save_relative_path(path), "wb"
         );
         if (file == nullptr)
             return false;
@@ -242,8 +240,7 @@ void Runtime::render_poster(
             static_cast<Runtime*>(context)->list_save_files(pattern, visit, user);
         };
     console::next_indexed_file_name(name, sizeof name, &files, directory, prefix, kPosterExtension);
-    std::FILE* file =
-        std::fopen((save_game_root() / save_relative_path(name)).string().c_str(), "wb");
+    std::FILE* file = oa::platform::open_file(save_game_root() / save_relative_path(name), "wb");
     present::ByteStream stream = file_stream(file);
     present::BmpStripWriter writer;
     present::bmp_strip_writer_init(writer);
@@ -258,8 +255,8 @@ void Runtime::render_poster(
     match_zoom_ = 1.0F;
     bind_match_view();
     oa::Game& game = match_->state().game;
-    const int32_t tile_width = game.view_cells_width * kCellPixels;
-    int32_t strip_rows = game.view_cells_height * kCellPixels - 1;
+    const int32_t tile_width = game.view_cells_width * OA_MAP_CELL_PIXELS;
+    int32_t strip_rows = game.view_cells_height * OA_MAP_CELL_PIXELS - 1;
     std::vector<uint8_t> strip;
     try {
         strip.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(strip_rows));
@@ -412,8 +409,8 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
     const float zoom = match_zoom_;
     match_zoom_ = 1.0F;
     const PosterScene scene = enter_poster_scene();
-    const int32_t tile_width = game.view_cells_width * kCellPixels;
-    const int32_t strip_rows = game.view_cells_height * kCellPixels - 1;
+    const int32_t tile_width = game.view_cells_width * OA_MAP_CELL_PIXELS;
+    const int32_t strip_rows = game.view_cells_height * OA_MAP_CELL_PIXELS - 1;
     const auto view_at = [&](int32_t x, int32_t y) {
         match_camera_x_ = x;
         match_camera_z_ = y;
@@ -452,7 +449,7 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
     const auto small = read(folder / "BIGSHOT0002.bmp");
     require(
         small.size() > present::bmp_pixel_offset && le32(small, 18) == tile_width &&
-            le32(small, 22) == game.view_cells_height * kCellPixels,
+            le32(small, 22) == game.view_cells_height * OA_MAP_CELL_PIXELS,
         "MakePoster 10 10 did not write BIGSHOT0002.bmp one view in size"
     );
     // Ctrl+F9 numbers the frame after the highest SHOTnnnn.pcx

@@ -11,9 +11,9 @@ namespace oa::present::world_renderer {
 
 // 12-byte entry filled by the display-mode scan.
 struct DisplayMode {
-    int32_t width;
-    int32_t height;
-    int32_t bits;
+    int32_t width{};
+    int32_t height{};
+    int32_t bits{};
 };
 
 static_assert(sizeof(DisplayMode) == 12);
