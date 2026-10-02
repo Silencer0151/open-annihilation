@@ -8,6 +8,10 @@
 // the first after the tier is switched on or the window resized among them;
 // the standard tier's picture for the readers that keep one; and the card's
 // textures made once and its prescale targets drawn once a painted frame.
+// The tier comes from the game's own decision: --hardware-acceleration
+// switches it on after the start-up function test passed, and the check
+// switches it off and on again as --no-hardware-acceleration and
+// --hardware-acceleration would.
 #include "oa/app/runtime.hpp"
 
 #include "render_host.hpp"
@@ -197,33 +201,38 @@ int Runtime::check_render_tiers() {
     // Under the 2 GiB threshold the accelerated tier never runs, whatever
     // the flags; on a renderer the probe rejects it runs only when forced.
     const auto machine = oa::platform::read_machine_traits();
-    if (machine.memory < policy::smallest_accelerated_memory) {
+    auto& inputs = render_run_->host->tier_inputs();
+    if (inputs.memory < policy::smallest_accelerated_memory) {
         std::cout << "render tiers check: skipped: the machine reports less than the 2 GiB "
                      "threshold of memory\n";
         return skipped_exit_code;
     }
-    // What the renderer host found of the renderer when it made it.
+    // What the renderer host found of the renderer when it made it, and the
+    // capability the tier was decided from.
     const auto& facts = render_run_->host->facts();
-    policy::RendererFacts renderer_facts{};
-    renderer_facts.driver.software =
-        facts.renderer == oa::platform::render_probe::software_renderer;
-    renderer_facts.max_texture_size = render_texture_limit();
-    renderer_facts.adapter_known =
-        facts.adapter_state == oa::platform::render_probe::AdapterState::read;
-    renderer_facts.software_rasteriser = facts.software_rasteriser;
-    renderer_facts.virtual_adapter = facts.virtual_adapter;
-    renderer_facts.under_wine = facts.wine;
-    const auto capability = policy::assess_renderer(renderer_facts, false, false);
-    if (capability != policy::Capability::capable && !options_.force_capable) {
+    if (inputs.capability != policy::Capability::capable && !options_.force_capable) {
         std::cout << "render tiers check: skipped: the renderer " << facts.renderer
                   << " is not capable of the accelerated tier\n";
         return skipped_exit_code;
     }
+    if (options_.hardware_acceleration != true)
+        fail("needs --hardware-acceleration, which switches the accelerated tier on");
+    // The tier as the flags decide it, switched as --hardware-acceleration
+    // and --no-hardware-acceleration switch it.
+    const auto switch_tier = [&](bool on) {
+        options_.hardware_acceleration = on;
+        update_render_tier();
+        if (accelerated_presentation() != on)
+            fail(
+                on ? "--hardware-acceleration did not switch the accelerated tier on"
+                   : "--no-hardware-acceleration did not switch the accelerated tier off"
+            );
+    };
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
     // SDL's software renderer is held to its own LINEAR exactly; a card to
     // the references within its precision.
-    const bool software = renderer_facts.driver.software;
+    const bool software = facts.renderer == oa::platform::render_probe::software_renderer;
     const int most_scaled_difference = software ? most_software_difference : most_card_difference;
     const auto scaled_reference = [&](const wr::RgbSource& source,
                                       const CardScale& card,
@@ -296,9 +305,18 @@ int Runtime::check_render_tiers() {
         return bytes;
     };
 
+    // The start-up function test passed, so the tier the flag asks for is
+    // accelerated; from here it draws at the check's rung.
+    if (inputs.function_test != policy::FunctionTest::passed)
+        fail("the start-up function test did not pass");
+    render_run_->rung = rung;
+    switch_tier(false);
+    switch_tier(true);
+    if (render_run_->tier.tier != policy::RenderTier::accelerated)
+        fail("the tier decided for --hardware-acceleration is not the accelerated tier");
+
     // The main menu, letterboxed at 2.25 by the card's filter, and at 2 by
     // NEAREST with no prescale target.
-    switch_accelerated_presentation(true, rung);
     for (const auto& [width, height] :
          {std::pair{kDefaultWindowWidth, kDefaultWindowHeight},
           std::pair{whole_scale_width, whole_scale_height}}) {
@@ -365,7 +383,7 @@ int Runtime::check_render_tiers() {
         fail("the loading screen was not drawn by the card's filter");
     std::cout << "render tiers check: the loading screen drew "
               << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
-    switch_accelerated_presentation(false, rung);
+    switch_tier(false);
     resize(whole_scale_width, whole_scale_height);
     // The cursor waits in the blank corner right of the bottom bar.
     update_pointer(
@@ -422,7 +440,7 @@ int Runtime::check_render_tiers() {
     // The pictures for the maintainer: one moment at each zoom in both tiers.
     for (const float zoom : picture_zooms)
         for (const bool on : {false, true}) {
-            switch_accelerated_presentation(on, rung);
+            switch_tier(on);
             at_zoom(zoom);
             const auto read = presented();
             write_png(
@@ -437,11 +455,11 @@ int Runtime::check_render_tiers() {
     // pixel is, byte for byte, the terrain the standard tier's box filter
     // averages.
     {
-        switch_accelerated_presentation(false, rung);
+        switch_tier(false);
         at_zoom(kMinBattlefieldZoom);
         std::ignore = presented();
         const auto boxed = match_terrain_cache_;
-        switch_accelerated_presentation(true, rung);
+        switch_tier(true);
         std::ignore = presented();
         const auto& scene = match_terrain_cache_;
         if (accelerated_.frame.method != SceneMethod::area || accelerated_.frame.draw_scale != 1.0F)
@@ -462,7 +480,7 @@ int Runtime::check_render_tiers() {
                      "box filter's, "
                   << boxed.width << 'x' << boxed.height << '\n';
     }
-    switch_accelerated_presentation(true, rung);
+    switch_tier(true);
     // Zoom 1 at a whole-number chrome scale: the frame the processor composes.
     at_zoom(1.0F);
     {
@@ -630,10 +648,10 @@ int Runtime::check_render_tiers() {
     // The very first frame after the tier is switched on, and the first
     // after each change of the window's size, is magnified as every other.
     for (const float zoom : first_frame_zooms) {
-        switch_accelerated_presentation(false, rung);
+        switch_tier(false);
         at_zoom(zoom);
         std::ignore = presented();
-        switch_accelerated_presentation(true, rung);
+        switch_tier(true);
         check_magnified(zoom, presented(), "the first frame after the tier was switched on");
     }
     for (const float zoom : first_frame_zooms)
@@ -658,11 +676,11 @@ int Runtime::check_render_tiers() {
     // frame's counts of units drawn nor the HUD's resource readout, which
     // saves keep.
     for (const float zoom : kept_picture_zooms) {
-        switch_accelerated_presentation(false, rung);
+        switch_tier(false);
         at_zoom(zoom);
         std::ignore = presented();
         const auto standard = composed();
-        switch_accelerated_presentation(true, rung);
+        switch_tier(true);
         std::ignore = presented();
         if (accelerated_.frame.method == SceneMethod::none)
             fail("zoom " + zoom_text(zoom) + " was drawn as the standard tier draws it");
@@ -781,7 +799,7 @@ int Runtime::check_render_tiers() {
             fail("the HUD was drawn into its prescale target with its layer unchanged");
     }
     // Switched off, every frame is the standard tier's again.
-    switch_accelerated_presentation(false, rung);
+    switch_tier(false);
     resize(whole_scale_width, whole_scale_height);
     for (const float zoom : {0.5F, 1.0F, 2.0F}) {
         at_zoom(zoom);

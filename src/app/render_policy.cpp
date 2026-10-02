@@ -148,6 +148,78 @@ bool function_test_may_run(const TierInputs& inputs) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Acting on the tier
+
+bool windowless_video_driver(std::string_view video_driver) noexcept {
+    return std::any_of(
+        windowless_video_drivers.begin(),
+        windowless_video_drivers.end(),
+        [video_driver](std::string_view windowless) {
+            return video_driver.size() == windowless.size() &&
+                   std::equal(
+                       video_driver.begin(),
+                       video_driver.end(),
+                       windowless.begin(),
+                       [](char letter, char lower) {
+                           return (letter >= 'A' && letter <= 'Z'
+                                       ? static_cast<char>(letter - 'A' + 'a')
+                                       : letter) == lower;
+                       }
+                   );
+        }
+    );
+}
+
+AccelerationFlag acceleration_flag(std::optional<bool> flag) noexcept {
+    if (!flag)
+        return AccelerationFlag::none;
+    return *flag ? AccelerationFlag::on : AccelerationFlag::off;
+}
+
+TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept {
+    if (decision.reason == TierReason::function_test_due)
+        return TierAction::run_function_test;
+    const bool accelerated = decision.tier == RenderTier::accelerated;
+    if (accelerated && !presentation_on)
+        return TierAction::switch_on;
+    if (!accelerated && presentation_on)
+        return TierAction::switch_off;
+    return TierAction::none;
+}
+
+void forget_failures(TierInputs& inputs) noexcept {
+    if (inputs.function_test == FunctionTest::failed ||
+        inputs.function_test == FunctionTest::trial_unwritten)
+        inputs.function_test = FunctionTest::not_run;
+    if (inputs.drop != Drop::memory)
+        inputs.drop = Drop::none;
+}
+
+TierStep step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestHooks& test) {
+    TierStep step;
+    step.decision = decide_render_tier(inputs);
+    if (step.decision.reason == TierReason::function_test_due && test.run != nullptr) {
+        inputs.function_test = test.run(test.context);
+        step.decision = decide_render_tier(inputs);
+    }
+    note_match_frame(
+        inputs.match, step.decision.tier, step.decision.reason == TierReason::device_lost
+    );
+    step.action = tier_action(step.decision, presentation_on);
+    // A test still due, with nothing that ran it, leaves the frame standard.
+    if (step.action == TierAction::run_function_test)
+        step.action = presentation_on ? TierAction::switch_off : TierAction::none;
+    return step;
+}
+
+FunctionTest start_function_test(const TierInputs& inputs) noexcept {
+    const bool asked = inputs.flag == AccelerationFlag::on || inputs.force_capable;
+    return records_on_disk(inputs.players_own_profile, inputs.render_driver_named) && !asked
+               ? FunctionTest::trial_unwritten
+               : FunctionTest::not_run;
+}
+
+// ---------------------------------------------------------------------------
 // Creating the renderer
 
 namespace {

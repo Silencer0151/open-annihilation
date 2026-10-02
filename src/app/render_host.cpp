@@ -4,14 +4,22 @@
 #include "render_host.hpp"
 
 #include "graphics_report.hpp"
+#include "oa/app/acceleration_status.hpp"
+#include "oa/app/scaled_world.hpp"
 #include "oa/base/float_precision.hpp"
+#include "oa/platform/machine.hpp"
+#include "oa/platform/memory_status.hpp"
+#include "oa/present/world_renderer/scene_filter.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 
 namespace oa::app {
@@ -278,6 +286,427 @@ constexpr std::string_view device_lost_reason = "the graphics device was lost";
 
 } // namespace
 
+namespace {
+
+namespace world_renderer = oa::present::world_renderer;
+
+/// Bytes of an RGB24 pixel.
+constexpr std::size_t rgb_bytes = 3;
+/// Bytes of an ARGB8888 texel.
+constexpr std::size_t argb_bytes = 4;
+/// An ARGB8888 texel's alpha, opaque.
+constexpr uint32_t opaque_alpha = 0xFF000000U;
+/// The bits each channel of an ARGB8888 texel is shifted by.
+constexpr uint32_t red_shift = 16;
+constexpr uint32_t green_shift = 8;
+
+/// (a) and (b): the side of the first target and of the texture reduced by
+/// half, and the side of the half.
+constexpr int small_side = 4;
+constexpr int half_side = 2;
+/// (a): the pixel read back, and the colour the target is cleared to.
+constexpr int cleared_pixel_x = 1;
+constexpr int cleared_pixel_y = 2;
+constexpr std::array<uint8_t, 3> cleared_colour{0x30, 0x90, 0xC0};
+
+/// (d): the known pattern's side; the gutter of texels round it, as a
+/// tile's; the NEAREST prescale factor; and the side of the LINEAR
+/// reduction at 0.75, 1.5 times the pattern's.
+constexpr uint32_t pattern_side = 32;
+constexpr uint32_t pattern_gutter = 1;
+constexpr uint32_t prescale_factor = 2;
+constexpr uint32_t reduced_side = 48;
+/// The pattern's scale onto the reduction.
+constexpr double pattern_scale = 1.5;
+/// (d): the overlay's opaque square, from its first texel to the one past
+/// its last, across and down.
+constexpr uint32_t square_first = 12;
+constexpr uint32_t square_end = 30;
+/// The seeds of the pattern and of the square's colours.
+constexpr uint32_t pattern_seed = 0x2545F491U;
+constexpr uint32_t square_seed = 0x6C078965U;
+/// The linear congruential sequence the patterns draw from:
+/// x = x * 1664525 + 1013904223, its top byte taken.
+constexpr uint32_t random_multiplier = 1664525U;
+constexpr uint32_t random_increment = 1013904223U;
+constexpr uint32_t random_byte_shift = 24;
+
+/// Returns the next byte of a seeded sequence.
+///
+/// @param[in,out] state the sequence's state
+/// @return the byte
+uint8_t next_byte(uint32_t& state) noexcept {
+    state = state * random_multiplier + random_increment;
+    return static_cast<uint8_t>(state >> random_byte_shift);
+}
+
+/// Returns an opaque ARGB8888 texel of an RGB24 pixel.
+///
+/// @param rgb the pixel's three bytes
+/// @return the texel
+uint32_t opaque_texel(const uint8_t* rgb) noexcept {
+    return opaque_alpha | (uint32_t{rgb[0]} << red_shift) | (uint32_t{rgb[1]} << green_shift) |
+           uint32_t{rgb[2]};
+}
+
+/// The textures and targets the function test makes, destroyed with it, and
+/// the renderer's draw colour and target put back.
+class FunctionTestRun {
+  public:
+
+    explicit FunctionTestRun(SDL_Renderer* renderer) : renderer_(renderer) {
+        saved_colour_ =
+            SDL_GetRenderDrawColor(renderer_, &colour_[0], &colour_[1], &colour_[2], &colour_[3]);
+    }
+
+    FunctionTestRun(const FunctionTestRun&) = delete;
+    FunctionTestRun& operator=(const FunctionTestRun&) = delete;
+
+    /// Puts back the window as the target and the draw colour, and destroys
+    /// what was made.
+    ~FunctionTestRun() {
+        std::ignore = SDL_SetRenderTarget(renderer_, nullptr);
+        if (saved_colour_)
+            std::ignore =
+                SDL_SetRenderDrawColor(renderer_, colour_[0], colour_[1], colour_[2], colour_[3]);
+        for (SDL_Texture* texture : made_)
+            SDL_DestroyTexture(texture);
+    }
+
+    /// Makes an ARGB8888 texture.
+    ///
+    /// Throws std::runtime_error when SDL refuses it or its modes.
+    ///
+    /// @param width texels across
+    /// @param height texels down
+    /// @param access streaming or target
+    /// @param blend its blend mode
+    /// @param scale its scale mode
+    /// @return the texture, destroyed with the run
+    SDL_Texture* make(
+        int width, int height, SDL_TextureAccess access, SDL_BlendMode blend, SDL_ScaleMode scale
+    ) {
+        SDL_Texture* texture =
+            SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, access, width, height);
+        if (texture == nullptr)
+            fail("SDL_CreateTexture");
+        made_.push_back(texture);
+        if (!SDL_SetTextureBlendMode(texture, blend) || !SDL_SetTextureScaleMode(texture, scale))
+            fail("a texture's blend or scale mode");
+        return texture;
+    }
+
+    /// Uploads ARGB8888 texels to a texture.
+    ///
+    /// Throws std::runtime_error when SDL refuses.
+    ///
+    /// @param texture the texture
+    /// @param texels its texels, row after row
+    /// @param width texels a row
+    void upload(SDL_Texture* texture, const std::vector<uint32_t>& texels, int width) {
+        if (!SDL_UpdateTexture(
+                texture, nullptr, texels.data(), width * static_cast<int>(argb_bytes)
+            ))
+            fail("SDL_UpdateTexture");
+    }
+
+    /// Sets a target and clears it to a colour.
+    ///
+    /// Throws std::runtime_error when SDL refuses.
+    ///
+    /// @param target the target
+    /// @param colour the colour's red, green and blue
+    void clear(SDL_Texture* target, const std::array<uint8_t, 3>& colour) {
+        if (!SDL_SetRenderTarget(renderer_, target) ||
+            !SDL_SetRenderDrawColor(renderer_, colour[0], colour[1], colour[2], SDL_ALPHA_OPAQUE) ||
+            !SDL_RenderClear(renderer_))
+            fail("clearing a render target");
+    }
+
+    /// Draws a texture, or a rectangle of it, into a rectangle of the target.
+    ///
+    /// Throws std::runtime_error when SDL refuses.
+    ///
+    /// @param texture the texture
+    /// @param source the texels drawn; null for all
+    /// @param side the destination's side, from the target's corner
+    void draw(SDL_Texture* texture, const SDL_FRect* source, float side) {
+        const SDL_FRect destination{0.0F, 0.0F, side, side};
+        if (!SDL_RenderTexture(renderer_, texture, source, &destination))
+            fail("SDL_RenderTexture");
+    }
+
+    /// Reads back a rectangle of the target as RGB24.
+    ///
+    /// Throws std::runtime_error when SDL refuses.
+    ///
+    /// @param area the rectangle
+    /// @return its pixels, row after row
+    std::vector<uint8_t> read(const SDL_Rect& area) {
+        SDL_Surface* surface = SDL_RenderReadPixels(renderer_, &area);
+        if (surface == nullptr)
+            fail("SDL_RenderReadPixels");
+        std::vector<uint8_t> rgb(static_cast<std::size_t>(area.w) * area.h * rgb_bytes);
+        bool readable = true;
+        for (int y = 0; y < area.h && readable; ++y)
+            for (int x = 0; x < area.w && readable; ++x) {
+                uint8_t* pixel =
+                    rgb.data() + (static_cast<std::size_t>(y) * area.w + x) * rgb_bytes;
+                uint8_t alpha = 0;
+                readable =
+                    SDL_ReadSurfacePixel(surface, x, y, &pixel[0], &pixel[1], &pixel[2], &alpha);
+            }
+        SDL_DestroySurface(surface);
+        if (!readable)
+            fail("SDL_ReadSurfacePixel");
+        return rgb;
+    }
+
+  private:
+
+    /// Throws what failed with SDL's reason.
+    ///
+    /// @param what the call that failed
+    [[noreturn]] static void fail(std::string_view what) {
+        throw std::runtime_error(std::string(what) + ": " + SDL_GetError());
+    }
+
+    SDL_Renderer* renderer_{};
+    std::vector<SDL_Texture*> made_{};
+    std::array<uint8_t, 4> colour_{};
+    bool saved_colour_{};
+};
+
+/// Returns the largest difference of two pictures' channels and adds their
+/// differences to a sum.
+///
+/// @param picture one picture
+/// @param reference the other, of the same size
+/// @param[in,out] sum the sum of the differences
+/// @return the largest difference
+int largest_difference(
+    const std::vector<uint8_t>& picture, const std::vector<uint8_t>& reference, uint64_t& sum
+) noexcept {
+    int largest = 0;
+    for (std::size_t index = 0; index < picture.size() && index < reference.size(); ++index) {
+        const int difference = std::abs(int{picture[index]} - int{reference[index]});
+        largest = std::max(largest, difference);
+        sum += static_cast<uint64_t>(difference);
+    }
+    return largest;
+}
+
+/// (a): a render target clears to a colour and reads it back.
+///
+/// @param run the test's run
+/// @return what failed; empty when it passed
+std::string test_target(FunctionTestRun& run) {
+    SDL_Texture* target = run.make(
+        small_side, small_side, SDL_TEXTUREACCESS_TARGET, SDL_BLENDMODE_NONE, SDL_SCALEMODE_NEAREST
+    );
+    run.clear(target, cleared_colour);
+    const auto read = run.read({cleared_pixel_x, cleared_pixel_y, 1, 1});
+    if (!std::equal(cleared_colour.begin(), cleared_colour.end(), read.begin()))
+        return "a render target read back another colour than it was cleared to";
+    return {};
+}
+
+/// (b): a texture drawn LINEAR at half its size reads back the average of
+/// each block of texels it covers.
+///
+/// @param run the test's run
+/// @param nearest draw it NEAREST instead, as a test forces
+/// @return what failed; empty when it passed
+std::string test_linear_half(FunctionTestRun& run, bool nearest) {
+    constexpr int texels = small_side * small_side;
+    std::vector<uint8_t> rgb(static_cast<std::size_t>(texels) * rgb_bytes);
+    uint32_t state = pattern_seed;
+    for (auto& level : rgb)
+        level = next_byte(state);
+    std::vector<uint32_t> words(texels);
+    for (int index = 0; index < texels; ++index)
+        words[static_cast<std::size_t>(index)] =
+            opaque_texel(rgb.data() + static_cast<std::size_t>(index) * rgb_bytes);
+    SDL_Texture* source = run.make(
+        small_side,
+        small_side,
+        SDL_TEXTUREACCESS_STREAMING,
+        SDL_BLENDMODE_NONE,
+        nearest ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR
+    );
+    run.upload(source, words, small_side);
+    SDL_Texture* half = run.make(
+        half_side, half_side, SDL_TEXTUREACCESS_TARGET, SDL_BLENDMODE_NONE, SDL_SCALEMODE_NEAREST
+    );
+    run.clear(half, {0, 0, 0});
+    run.draw(source, nullptr, static_cast<float>(half_side));
+    const auto read = run.read({0, 0, half_side, half_side});
+    constexpr int block = small_side / half_side;
+    for (int y = 0; y < half_side; ++y)
+        for (int x = 0; x < half_side; ++x)
+            for (std::size_t channel = 0; channel < rgb_bytes; ++channel) {
+                int sum = 0;
+                for (int dy = 0; dy < block; ++dy)
+                    for (int dx = 0; dx < block; ++dx)
+                        sum +=
+                            rgb[(static_cast<std::size_t>(y * block + dy) * small_side +
+                                 static_cast<std::size_t>(x * block + dx)) *
+                                    rgb_bytes +
+                                channel];
+                const int average = (sum + block * block / 2) / (block * block);
+                const int got =
+                    read[(static_cast<std::size_t>(y) * half_side + x) * rgb_bytes + channel];
+                if (std::abs(got - average) > function_test_half_most_difference)
+                    return "a LINEAR reduction by half did not read back the texels' average";
+            }
+    return {};
+}
+
+/// (d): the known pattern drawn as the accelerated tier draws reads back as
+/// the processor computes it.
+///
+/// @param run the test's run
+/// @param nearest reduce the prescaled pattern NEAREST instead of LINEAR,
+///     as a test forces
+/// @return what failed; empty when it passed
+std::string test_known_pattern(FunctionTestRun& run, bool nearest) {
+    constexpr uint32_t pattern_pixels = pattern_side * pattern_side;
+    std::vector<uint8_t> pattern(pattern_pixels * rgb_bytes);
+    uint32_t state = pattern_seed;
+    for (auto& level : pattern)
+        level = next_byte(state);
+    // The pattern with a gutter round it that repeats its edge, as a tile's.
+    constexpr uint32_t framed_side = pattern_side + 2 * pattern_gutter;
+    std::vector<uint32_t> framed(framed_side * framed_side);
+    for (uint32_t y = 0; y < framed_side; ++y)
+        for (uint32_t x = 0; x < framed_side; ++x) {
+            const uint32_t source_x =
+                std::min(pattern_side - 1, x > pattern_gutter ? x - pattern_gutter : 0U);
+            const uint32_t source_y =
+                std::min(pattern_side - 1, y > pattern_gutter ? y - pattern_gutter : 0U);
+            framed[y * framed_side + x] =
+                opaque_texel(pattern.data() + (source_y * pattern_side + source_x) * rgb_bytes);
+        }
+    // The overlay: transparent but for an opaque square of seeded colours.
+    std::vector<uint32_t> overlay(reduced_side * reduced_side, 0);
+    uint32_t square_state = square_seed;
+    for (uint32_t y = square_first; y < square_end; ++y)
+        for (uint32_t x = square_first; x < square_end; ++x) {
+            std::array<uint8_t, 3> colour{};
+            for (auto& level : colour)
+                level = next_byte(square_state);
+            overlay[y * reduced_side + x] = opaque_texel(colour.data());
+        }
+    SDL_Texture* source = run.make(
+        static_cast<int>(framed_side),
+        static_cast<int>(framed_side),
+        SDL_TEXTUREACCESS_STREAMING,
+        SDL_BLENDMODE_NONE,
+        SDL_SCALEMODE_NEAREST
+    );
+    run.upload(source, framed, static_cast<int>(framed_side));
+    constexpr uint32_t prescaled_side = pattern_side * prescale_factor;
+    SDL_Texture* prescaled = run.make(
+        static_cast<int>(prescaled_side),
+        static_cast<int>(prescaled_side),
+        SDL_TEXTUREACCESS_TARGET,
+        SDL_BLENDMODE_NONE,
+        nearest ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR
+    );
+    run.clear(prescaled, {0, 0, 0});
+    const SDL_FRect inside{
+        static_cast<float>(pattern_gutter),
+        static_cast<float>(pattern_gutter),
+        static_cast<float>(pattern_side),
+        static_cast<float>(pattern_side)
+    };
+    run.draw(source, &inside, static_cast<float>(prescaled_side));
+    SDL_Texture* reduced = run.make(
+        static_cast<int>(reduced_side),
+        static_cast<int>(reduced_side),
+        SDL_TEXTUREACCESS_TARGET,
+        SDL_BLENDMODE_NONE,
+        SDL_SCALEMODE_NEAREST
+    );
+    run.clear(reduced, {0, 0, 0});
+    run.draw(prescaled, nullptr, static_cast<float>(reduced_side));
+    SDL_Texture* layer = run.make(
+        static_cast<int>(reduced_side),
+        static_cast<int>(reduced_side),
+        SDL_TEXTUREACCESS_STREAMING,
+        SDL_BLENDMODE_BLEND,
+        SDL_SCALEMODE_NEAREST
+    );
+    run.upload(layer, overlay, static_cast<int>(reduced_side));
+    run.draw(layer, nullptr, static_cast<float>(reduced_side));
+    const auto read =
+        run.read({0, 0, static_cast<int>(reduced_side), static_cast<int>(reduced_side)});
+
+    std::vector<uint8_t> reference(reduced_side * reduced_side * rgb_bytes);
+    const world_renderer::RgbSource scene{pattern.data(), pattern_side, pattern_side, pattern_side};
+    const world_renderer::RgbTarget picture{
+        reference.data(), reduced_side, reduced_side, reduced_side
+    };
+    world_renderer::ScenePlacement placement{};
+    placement.scale_x = pattern_scale;
+    placement.scale_y = pattern_scale;
+    world_renderer::sharp_bilinear_rgb24(scene, placement, prescale_factor, picture);
+    world_renderer::overlay_rgb24(picture, overlay.data(), reduced_side);
+    uint64_t sum = 0;
+    const int largest = largest_difference(read, reference, sum);
+    const double mean = static_cast<double>(sum) / static_cast<double>(reference.size());
+    if (largest > function_test_pattern_most_difference ||
+        mean > function_test_most_mean_difference)
+        return "the known pattern did not read back as the processor computes it";
+    return {};
+}
+
+/// Returns the machine's physical memory as the system reports it.
+///
+/// @return bytes; 0 when the system does not say
+uint64_t physical_memory() noexcept {
+    oa::platform::SystemMemorySample sample{};
+    if (oa::platform::sample_system_memory(&sample) && sample.physical != 0)
+        return sample.physical;
+    return oa::platform::read_machine_traits().memory;
+}
+
+/// The line logged when the start-up function test fails.
+///
+/// @param failure what failed
+/// @return the line, without its line break
+std::string function_test_log_line(std::string_view failure) {
+    std::string line(graphics_log_prefix);
+    line += "the start-up test failed: ";
+    line += failure;
+    return line;
+}
+
+} // namespace
+
+FunctionTestResult run_function_test(SDL_Renderer* renderer, const FunctionTestFaults& faults) {
+    FunctionTestResult result;
+    if (renderer == nullptr) {
+        result.failure = "there is no renderer";
+        return result;
+    }
+    try {
+        FunctionTestRun run(renderer);
+        result.failure = test_target(run);
+        if (result.failure.empty())
+            result.failure = test_linear_half(run, faults.half_nearest);
+        if (result.failure.empty())
+            result.failure = test_known_pattern(run, faults.pattern_nearest);
+    } catch (const std::runtime_error& error) {
+        result.failure = error.what();
+    }
+    result.passed = result.failure.empty();
+    // The pixel-art scale mode only chooses the filter, so it is asked even
+    // where the rest failed, and its own textures go with it.
+    result.pixelart = result.passed && probe_pixelart(renderer, nullptr);
+    return result;
+}
+
 RendererHost::~RendererHost() {
     destroy();
 }
@@ -286,6 +715,8 @@ void RendererHost::create(SDL_Window* window, const RenderFaultHooks& faults) {
     destroy();
     window_ = window;
     faults_ = faults;
+    adapter_asked_ = false;
+    machine_.legacy_windows = oa::platform::running_on_windows_before_vista();
     DriverNames names;
     const render_policy::CreationInputs inputs = driver_inputs(names);
     named_ = inputs.render_driver_named;
@@ -318,11 +749,32 @@ void RendererHost::rebuild(std::string_view reason) {
         throw std::runtime_error(outcome.error);
     renderer_ = creation.renderer;
     take_renderer();
+    // The driver failed, so the processor draws everything for the rest of
+    // the run unless it was dropped for another reason already; the new
+    // renderer's function test is to run again.
+    tier_.function_test = render_policy::FunctionTest::not_run;
+    if (tier_.drop == render_policy::Drop::none)
+        tier_.drop = render_policy::Drop::driver_failure;
+    std::string tier(standard_tier_description);
+    tier += " (";
+    tier += failed_driver_reason;
+    tier += ')';
+    std::cout << graphics_log_line(facts_, tier) << '\n' << std::flush;
 }
 
 void RendererHost::take_renderer() {
-    facts_ = report_game_renderer(renderer_);
+    facts_ = describe_game_renderer(renderer_, adapter_asked_);
     oa::base::float_precision::restore_program_float_control();
+    tier_.renderer = renderer_ != nullptr;
+    // The renderer is assessed at the host's texture limit, which a fault
+    // hook may lower. No command line accepts a virtual adapter yet.
+    render_policy::RendererFacts renderer = renderer_facts(facts_);
+    renderer.max_texture_size = texture_limit();
+    tier_.capability = render_policy::assess_renderer(renderer, machine_.legacy_windows, false);
+    machine_.driver = driver_traits(facts_.renderer);
+    machine_.run_class = render_probe::accelerated_tier_run(facts_.renderer)
+                             ? render_policy::ClassTesting::tested
+                             : render_policy::ClassTesting::untested;
     layer_formats_ = render_policy::layer_formats(
         facts_.renderer == render_probe::software_renderer, rgb565_window(), named_
     );
@@ -358,6 +810,7 @@ void RendererHost::destroy() noexcept {
         SDL_DestroyRenderer(renderer_);
     renderer_ = nullptr;
     facts_ = {};
+    tier_.renderer = false;
 }
 
 SDL_Renderer* RendererHost::renderer() const noexcept {
@@ -398,6 +851,76 @@ render_probe::DeviceState RendererHost::device_state() const {
 
 RenderFaultHooks& RendererHost::faults() noexcept {
     return faults_;
+}
+
+void RendererHost::decide_start_tier(const TierRequest& request) {
+    // SDL_RENDER_DRIVER on its own reads no adapter, but a flag that asks
+    // for more than SDL's own start has it read, as every other start does,
+    // so that an adapter that cannot be read or a software rasteriser keeps
+    // the standard tier there too.
+    if (named_ && renderer_ != nullptr && !adapter_asked_ &&
+        (request.flag.value_or(false) || request.force_capable)) {
+        adapter_asked_ = true;
+        take_renderer();
+    }
+    tier_.renderer = renderer_ != nullptr;
+    tier_.flag = render_policy::acceleration_flag(request.flag);
+    tier_.force_capable = request.force_capable;
+    tier_.render_driver_named = named_;
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    tier_.virtual_video_driver =
+        render_policy::windowless_video_driver(video_driver != nullptr ? video_driver : "");
+    tier_.players_own_profile = request.players_own_profile;
+    tier_.setting_on = request.setting_on;
+    tier_.memory = physical_memory();
+    const oa::platform::MachineTraits machine = oa::platform::read_machine_traits();
+    machine_.processors = machine.processors;
+    machine_.memory = tier_.memory;
+    machine_.light_machine = oa::platform::light_machine(machine);
+    machine_.raspberry_pi = oa::platform::running_on_raspberry_pi();
+    machine_.other_arm = render_probe::untried_arm_processor();
+    // No trial is written before the test yet, so on the player's own
+    // profile it waits for the player or a flag.
+    tier_.function_test = render_policy::start_function_test(tier_);
+    const render_policy::TierDecision decision =
+        render_policy::step_tier(tier_, false, function_test_hooks()).decision;
+    const AccelerationReport report = report_acceleration(tier_acceleration_facts(
+        tier_, start_rung(), decision.tier == render_policy::RenderTier::accelerated
+    ));
+    std::cout << graphics_log_line(facts_, tier_description(report.status)) << '\n' << std::flush;
+}
+
+void RendererHost::test_function() {
+    const FunctionTestResult result = run_function_test(renderer_, faults_.function_test);
+    oa::base::float_precision::restore_program_float_control();
+    tier_.function_test =
+        result.passed ? render_policy::FunctionTest::passed : render_policy::FunctionTest::failed;
+    machine_.pixelart = result.pixelart;
+    if (!result.passed)
+        std::cout << function_test_log_line(result.failure) << '\n' << std::flush;
+}
+
+render_policy::FunctionTestHooks RendererHost::function_test_hooks() noexcept {
+    render_policy::FunctionTestHooks hooks;
+    hooks.context = this;
+    hooks.run = [](void* context) {
+        auto& host = *static_cast<RendererHost*>(context);
+        host.test_function();
+        return host.tier_.function_test;
+    };
+    return hooks;
+}
+
+render_policy::TierInputs& RendererHost::tier_inputs() noexcept {
+    return tier_;
+}
+
+const render_policy::TierInputs& RendererHost::tier_inputs() const noexcept {
+    return tier_;
+}
+
+render_policy::LadderState RendererHost::start_rung() const noexcept {
+    return render_policy::start_rung(machine_);
 }
 
 } // namespace oa::app

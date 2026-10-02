@@ -9,6 +9,8 @@
 // readers that keep a picture. It is off unless its host switches it on.
 #include "oa/app/runtime.hpp"
 
+#include "render_host.hpp"
+#include "render_run.hpp"
 #include "xrgb_conversion.hpp"
 
 #include <SDL3/SDL.h>
@@ -84,6 +86,11 @@ void Runtime::drop_acceleration(const std::string& reason) {
                   << "); the processor draws everything from now on\n";
     free_accelerated_presentation();
     accelerated_.on = false;
+    if (render_run_ && render_run_->host != nullptr) {
+        auto& inputs = render_run_->host->tier_inputs();
+        if (inputs.drop == render_policy::Drop::none)
+            inputs.drop = render_policy::Drop::driver_failure;
+    }
 }
 
 void Runtime::free_accelerated_layout_textures() noexcept {

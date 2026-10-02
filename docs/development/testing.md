@@ -78,10 +78,16 @@ its default, the seeded skirmish writes the same trace stream and draws the
 same frame as with no file, and the director render keeps its pinned frames
 and sound. With a named file Hardware acceleration and Vertical sync are
 Off, and the windowed checks' `SDL_RENDER_DRIVER=software` locks both, so no
-check draws through the graphics card or waits for the display. Only
-`native-engine-settings` passes `--force-capable`, which lifts those locks
-so that it can turn Vertical sync On and read it back; it leaves Hardware
-acceleration Off.
+check draws through the graphics card or waits for the display. Three
+checks pass `--force-capable`, which lifts those locks:
+`native-engine-settings`, so that it can turn Vertical sync On and read it
+back, and turn Hardware acceleration On and Off through the dialog in one
+step of its own, which from 2 GiB draws in the accelerated tier on SDL's
+software renderer and retries it after a drop or a function test forced to
+fail, every other step leaving it Off; and `native-render-tiers` and
+`native-demo-render-tiers`, which with `--hardware-acceleration` run the
+start-up function test on SDL's software renderer and draw in the
+accelerated tier, switching it off and on as the flags would.
 
 ### Threads
 
@@ -145,12 +151,13 @@ installer itself. These tests read it:
   save and load dialog: the notices, MULTI's among them, the grayed-out
   entries and the campaign's way in and out;
 - `native-demo-render-tiers` starts the game the same way, windowed on
-  SDL's software renderer, and runs `--check-render-tiers --force-capable`
-  over the main menu and the demo's first Arm mission (`--campaign "Arm
-  Campaign" --mission 0`), as `native-render-tiers` runs it over a skirmish
-  of the installed game: the accelerated presentation's frames held to the
-  processor's composition and to that renderer's own filters. It skips with
-  the game's check on a machine under 2 GiB of memory;
+  SDL's software renderer, and runs `--check-render-tiers
+  --hardware-acceleration --force-capable` over the main menu and the
+  demo's first Arm mission (`--campaign "Arm Campaign" --mission 0`), as
+  `native-render-tiers` runs it over a skirmish of the installed game: the
+  accelerated presentation's frames held to the processor's composition
+  and to that renderer's own filters. It skips with the game's check on a
+  machine under 2 GiB of memory;
 - `native-demo-campaign-ending` starts the game the same way and plays the
   demo's last Arm mission, AC03, at easy with `--give-orders`: it must be won
   without a failed tick, and its end screen must leave through the ending

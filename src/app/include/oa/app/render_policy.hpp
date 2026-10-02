@@ -19,6 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -322,6 +323,99 @@ struct TierDecision {
 /// @param inputs the run's and the frame's facts
 /// @return true when decide_render_tier answers function_test_due
 [[nodiscard]] bool function_test_may_run(const TierInputs& inputs) noexcept;
+
+// ---------------------------------------------------------------------------
+// Acting on the tier
+
+/// SDL's names of the video drivers that draw no window.
+inline constexpr std::array<std::string_view, 2> windowless_video_drivers{"dummy", "offscreen"};
+
+/// Tells whether a video driver draws no window.
+///
+/// @param video_driver SDL's name for the video driver
+/// @return true for a name of windowless_video_drivers, in any letter case
+[[nodiscard]] bool windowless_video_driver(std::string_view video_driver) noexcept;
+
+/// Returns what the command line asks of hardware acceleration.
+///
+/// @param flag true for --hardware-acceleration, false for
+///     --no-hardware-acceleration; empty for neither
+/// @return the flag
+[[nodiscard]] AccelerationFlag acceleration_flag(std::optional<bool> flag) noexcept;
+
+/// What the host does before it draws a frame, to make its presentation
+/// match the tier decided for the frame.
+enum class TierAction : uint8_t {
+    none,              ///< the presentation already matches the tier
+    run_function_test, ///< run the function test, then decide again
+    switch_on,         ///< switch the accelerated presentation on
+    switch_off,        ///< switch it off: the frame is drawn in the standard tier
+};
+
+/// Returns what the host does before it draws a frame.
+///
+/// @param decision the tier decided for the frame (decide_render_tier)
+/// @param presentation_on the accelerated presentation is on
+/// @return TierAction::run_function_test when only the function test is
+///     missing, else switch_on or switch_off where the presentation differs
+///     from the tier, else TierAction::none
+[[nodiscard]] TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept;
+
+/// Forgets what keeps the tier standard that switching Hardware
+/// acceleration Off then On, or Restore defaults, lets the run try again: a
+/// function test that failed or whose trial could not be written, which
+/// then runs again, and a drop, except the memory guard's.
+///
+/// @param[in,out] inputs the run's facts
+void forget_failures(TierInputs& inputs) noexcept;
+
+/// What runs the start-up function test for step_tier.
+struct FunctionTestHooks {
+    void* context{};
+    /// Runs the function test on the renderer and returns what it found,
+    /// FunctionTest::passed or FunctionTest::failed. Null runs none, so the
+    /// frame stays in the standard tier with the test still due.
+    FunctionTest (*run)(void* context){};
+};
+
+/// A frame's tier and what the host does before it draws the frame.
+struct TierStep {
+    TierDecision decision{}; ///< the frame's tier, decided after any function test
+    /// TierAction::switch_on, TierAction::switch_off or TierAction::none:
+    /// what makes the presentation match the tier.
+    TierAction action{TierAction::none};
+};
+
+/// Decides which tier draws a frame and what the host does for it, as the
+/// game does before each frame: decides the tier
+/// (decide_render_tier); where only the function test is missing, runs it
+/// through the hooks, keeps its result and decides again; notes the
+/// decision in a shared game or a replay (note_match_frame), so that a
+/// frame decided standard, other than for a lost device, keeps it standard
+/// until the match ends; and says how the presentation must switch to
+/// match (tier_action). A test still due because the hooks ran none leaves
+/// the frame standard.
+///
+/// @param[in,out] inputs the run's and the frame's facts; the function
+///     test's result and the match's gate are kept in them
+/// @param presentation_on the accelerated presentation is on
+/// @param test what runs the function test
+/// @return the frame's decision and what the host does
+[[nodiscard]] TierStep
+step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestHooks& test);
+
+/// Returns what the function test starts a run as while no trial record is
+/// written before it: FunctionTest::trial_unwritten where the records
+/// would live on disk (records_on_disk) and neither --hardware-acceleration
+/// nor --force-capable asks for the test, so that a start on the player's
+/// own profile never runs it unguarded, and only the player switching
+/// Hardware acceleration Off then On, or Restore defaults
+/// (forget_failures), lets it run; FunctionTest::not_run otherwise, as with
+/// a named preferences file, whose records live in memory.
+///
+/// @param inputs the run's facts as the start fills them
+/// @return the function test's state at start
+[[nodiscard]] FunctionTest start_function_test(const TierInputs& inputs) noexcept;
 
 // ---------------------------------------------------------------------------
 // Creating the renderer

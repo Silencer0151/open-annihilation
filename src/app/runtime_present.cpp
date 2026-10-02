@@ -733,6 +733,9 @@ void Runtime::render() {
     if (sdl_.renderer != nullptr && frontend_texture_.tile_count() == 0 &&
         screen_ != Screen::match && screen_ != Screen::loading)
         apply_output_mode();
+    // The frame's tier decides how its battlefield is drawn, so it comes
+    // before the frame is composed.
+    update_render_tier();
     const auto compose_start = std::chrono::steady_clock::now();
     rebuild_surface();
     const auto composed = elapsed_since(compose_start);

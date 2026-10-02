@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The probe's pure tables: the names of software and virtual rasterisers,
-// the drivers that report a fixed texture limit and the video drivers whose
-// windows have a framebuffer of their own. Built on every system.
+// the drivers that report a fixed texture limit or need their adapter read,
+// the one driver that may be accelerated on Windows before Vista, the class
+// of machine the accelerated tier has been run on, and the video
+// drivers whose windows have a framebuffer of their own. Built on every
+// system.
 #include "oa/platform/render_probe.hpp"
 
 #include <algorithm>
@@ -44,6 +47,34 @@ constexpr std::array<std::string_view, 4> kVirtualAdapters{
 /// The OpenGL vendor string, in lower case, of VirtualBox's older OpenGL
 /// pass-through.
 constexpr std::string_view kVirtualVendor = "humper";
+
+/// SDL's names of the render drivers whose adapter must be read for the
+/// renderer to be accelerated.
+constexpr std::array<std::string_view, 3> kAdapterNeeded{"direct3d12", "vulkan", "gpu"};
+
+/// SDL's name of the one render driver that may draw through the graphics
+/// card on Windows before Vista: its Direct3D 9 renderer.
+constexpr std::string_view kBeforeVistaRenderer = "direct3d";
+
+/// SDL's name of the render driver the accelerated tier has been run on with
+/// this build's system and processor architecture; empty for none.
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+constexpr std::string_view kRunRenderer = "metal";
+#elif defined(_WIN32) &&                                                                           \
+    (defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)) &&           \
+    !defined(_M_ARM64EC)
+constexpr std::string_view kRunRenderer = "direct3d11";
+#else
+constexpr std::string_view kRunRenderer{};
+#endif
+
+/// This build runs on an ARM processor other than Apple's.
+#if (defined(__aarch64__) || defined(__arm__) || defined(_M_ARM64) || defined(_M_ARM)) &&          \
+    !defined(__APPLE__)
+constexpr bool kUntriedArm = true;
+#else
+constexpr bool kUntriedArm = false;
+#endif
 
 /// SDL's names, in lower case, of the video drivers whose windows have a
 /// framebuffer of their own.
@@ -144,6 +175,23 @@ bool vendor_names_virtual_adapter(std::string_view vendor) noexcept {
 
 bool reports_fixed_texture_limit(std::string_view renderer) noexcept {
     return renderer == vulkan_renderer || renderer == gpu_renderer;
+}
+
+bool adapter_needed(std::string_view renderer) noexcept {
+    return std::find(kAdapterNeeded.begin(), kAdapterNeeded.end(), renderer) !=
+           kAdapterNeeded.end();
+}
+
+bool capable_before_vista(std::string_view renderer) noexcept {
+    return renderer == kBeforeVistaRenderer;
+}
+
+bool accelerated_tier_run(std::string_view renderer) noexcept {
+    return !kRunRenderer.empty() && renderer == kRunRenderer;
+}
+
+bool untried_arm_processor() noexcept {
+    return kUntriedArm;
 }
 
 void classify(AdapterFacts& facts) noexcept {

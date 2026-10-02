@@ -181,6 +181,7 @@ void Runtime::present_indexed_frame(
 ) {
     if (sdl_.renderer == nullptr || pixels == nullptr || width <= 0 || height <= 0 || pitch < width)
         return;
+    update_render_tier();
     auto& output = indexed_output_;
     if (!output.texels_ready || std::memcmp(&output.palette, &palette, sizeof palette) != 0) {
         output.palette = palette;

@@ -33,6 +33,9 @@ struct Runtime::EngineSettingsState {
     /// The machine's physical memory in bytes, as read once at start; 0 when
     /// the system does not say.
     uint64_t physical_memory{};
+    /// The open dialog's requests to try the graphics card afresh
+    /// (Dialog::forget_renderer_failures) that the run has acted on.
+    uint32_t retries_taken{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
     /// The section the dialog showed when it last closed; it opens there.
     oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};

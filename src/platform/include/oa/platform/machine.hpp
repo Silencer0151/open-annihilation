@@ -5,7 +5,9 @@
 
 // The machine the game runs on, where it changes what the game offers by
 // default: a Raspberry Pi starts with settings its graphics keep up with, and
-// so does a light machine (one processor, no SSE2 or little memory).
+// so does a light machine (one processor, no SSE2 or little memory); on
+// Windows before Vista only one render driver may draw through the graphics
+// card.
 
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +48,25 @@ inline constexpr std::size_t model_file_limit = 256;
 /// @return on Linux, whether device_tree_model_path names a Raspberry Pi
 ///     (model_file_names_raspberry_pi); false on every other system
 [[nodiscard]] bool running_on_raspberry_pi();
+
+/// The major version Windows Vista reports, the first Windows whose display
+/// drivers recover from a fault in the graphics card.
+inline constexpr uint32_t vista_major_version = 6;
+
+/// Tells whether a Windows major version is one before Vista, such as XP's
+/// 5.
+///
+/// @param major_version the major version the system reports
+/// @return true under vista_major_version
+[[nodiscard]] bool windows_before_vista(uint32_t major_version) noexcept;
+
+/// Tells whether the game runs on Windows before Vista.
+///
+/// @return on Windows, whether the version the system itself reports, which
+///     an application's manifest does not change, is before Vista
+///     (windows_before_vista), and true where that version cannot be read;
+///     false on every other system
+[[nodiscard]] bool running_on_windows_before_vista() noexcept;
 
 /// The physical memory under which a machine is light, in bytes: 512 MiB.
 inline constexpr uint64_t light_machine_memory = uint64_t{512} * 1024 * 1024;

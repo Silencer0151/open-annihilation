@@ -43,6 +43,12 @@ struct Runtime::RenderRun {
     uint32_t resets_handled{};           ///< device resets whose textures were made again
     std::optional<Screen> reset_on{};    ///< the screen the last device reset was taken on
     uint32_t stall_logs{};               ///< times the stall rule logged
+    /// The tier the last frame was decided to be drawn in, and why
+    /// (update_render_tier).
+    render_policy::TierDecision tier{};
+    /// The rung --check-render-tiers switches the accelerated presentation
+    /// on at; unset for the rung the machine starts at.
+    std::optional<render_policy::LadderState> rung{};
     /// The failure --check-renderer-ladder forces next; unset for none.
     std::optional<RenderFaultPoint> fault{};
     /// The presented frame of the run the failure comes at.

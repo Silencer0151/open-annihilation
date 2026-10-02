@@ -6,9 +6,11 @@
 // made, and the adapter the "+stats" overlay names: a hardware adapter
 // named, one that could not be named, one not read, SDL's software
 // renderer with no limit, and a limit the device's own cuts; whether
-// SDL_RENDER_DRIVER's value lets the start read the adapter; then SDL's
-// software renderer on the dummy video driver, reported as the game
-// reports it.
+// SDL_RENDER_DRIVER's value, and the flags with it, let the start read the
+// adapter; the tier the line names, with what it does or why the processor
+// draws everything; what the render policy reads of a renderer, Windows
+// before Vista's one driver among it; then SDL's software renderer
+// on the dummy video driver, reported as the game reports it.
 #include "graphics_report.hpp"
 
 #include "oa/test/check.hpp"
@@ -159,7 +161,8 @@ void test_stats_adapter() {
 }
 
 /// The adapter is read where SDL_RENDER_DRIVER names no driver, unset or
-/// empty, and never where it names one, known to SDL or not.
+/// empty, and where it names one, known to SDL or not, only when a flag
+/// asks for more than SDL's own start.
 void test_adapter_read_for() {
     using oa::app::adapter_read_for;
     using oa::platform::render_probe::AdapterRead;
@@ -168,6 +171,12 @@ void test_adapter_read_for() {
     OA_CHECK(adapter_read_for("software") == AdapterRead::skip);
     OA_CHECK(adapter_read_for("opengl") == AdapterRead::skip);
     OA_CHECK(adapter_read_for("bogus") == AdapterRead::skip);
+    // --hardware-acceleration or --force-capable reads it under a named
+    // driver too, as every other start does.
+    OA_CHECK(adapter_read_for("vulkan", true) == AdapterRead::read);
+    OA_CHECK(adapter_read_for("opengl", true) == AdapterRead::read);
+    OA_CHECK(adapter_read_for("", true) == AdapterRead::read);
+    OA_CHECK(adapter_read_for("vulkan", false) == AdapterRead::skip);
 }
 
 /// SDL's software renderer on the dummy video driver, reported as the game
@@ -208,8 +217,140 @@ void test_report_software_renderer() {
 
 } // namespace
 
+/// The start-up line's tier: in use, what the graphics card does at each
+/// reach; otherwise the standard tier with the status's reason.
+void test_tier_description() {
+    using oa::app::tier_description;
+    using oa::ui::engine_settings::AccelerationReach;
+    using oa::ui::engine_settings::AccelerationState;
+    using oa::ui::engine_settings::AccelerationStatus;
+    const auto described = [](AccelerationState state, AccelerationReach reach) {
+        AccelerationStatus status{};
+        status.state = state;
+        status.reach = reach;
+        return tier_description(status);
+    };
+    const auto standard = [&](AccelerationState state) {
+        return described(state, AccelerationReach::zoomed_out);
+    };
+    OA_CHECK(
+        described(AccelerationState::in_use, AccelerationReach::menus) ==
+        "accelerated tier: the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::in_use, AccelerationReach::zoomed_in) ==
+        "accelerated tier: the graphics card scales the interface and the zoomed-in view"
+    );
+    OA_CHECK(
+        described(AccelerationState::in_use, AccelerationReach::zoomed_out) ==
+        "accelerated tier: the graphics card scales the interface and the zoomed-in view, and "
+        "the zoomed-out view is smoothed"
+    );
+    OA_CHECK(
+        described(AccelerationState::in_use_no_smoothing, AccelerationReach::nearest_zoomed_out) ==
+        "accelerated tier: the zoomed-out view is smoothed"
+    );
+    OA_CHECK(
+        described(AccelerationState::in_use, AccelerationReach::nearest_none) ==
+        "accelerated tier: the view is drawn as in the standard tier"
+    );
+    for (const auto state :
+         {AccelerationState::off_by_setting,
+          AccelerationState::off_by_command_line,
+          AccelerationState::off_driver_skipped})
+        OA_CHECK(
+            standard(state) ==
+            "standard tier: the processor draws everything (hardware acceleration is off)"
+        );
+    OA_CHECK(
+        standard(AccelerationState::needs_memory) ==
+        "standard tier: the processor draws everything (it needs at least 2 GB of memory)"
+    );
+    OA_CHECK(
+        standard(AccelerationState::environment_driver) ==
+        "standard tier: the processor draws everything (the environment names a driver)"
+    );
+    OA_CHECK(
+        standard(AccelerationState::no_usable_card) ==
+        "standard tier: the processor draws everything (no usable graphics card was found)"
+    );
+    OA_CHECK(
+        standard(AccelerationState::lacks_feature) ==
+        "standard tier: the processor draws everything (the graphics card lacks a feature)"
+    );
+    OA_CHECK(
+        standard(AccelerationState::driver_failed) ==
+        "standard tier: the processor draws everything (the graphics driver failed)"
+    );
+    // The tier goes into the line after the texture limit.
+    AccelerationStatus in_use{};
+    in_use.state = AccelerationState::in_use;
+    in_use.reach = AccelerationReach::zoomed_in;
+    OA_CHECK(
+        graphics_log_line(
+            facts_of("metal", "cocoa", AdapterState::read, "Apple M2", 16384),
+            tier_description(in_use)
+        ) == "open-annihilation: graphics: metal on cocoa (Apple M2), textures up to 16384; "
+             "accelerated tier: the graphics card scales the interface and the zoomed-in view"
+    );
+}
+
+/// What the render policy reads of a renderer: the driver's traits, the
+/// corrected limit and the adapter's classification.
+void test_renderer_facts() {
+    using oa::app::renderer_facts;
+    using oa::app::render_policy::Capability;
+    using oa::app::render_policy::assess_renderer;
+    auto software = facts_of("software", "dummy", AdapterState::none, "", 0);
+    software.software_rasteriser = true;
+    const auto software_facts = renderer_facts(software);
+    OA_CHECK(software_facts.driver.software);
+    OA_CHECK(software_facts.software_rasteriser);
+    OA_CHECK(assess_renderer(software_facts, false, false) == Capability::software_renderer);
+    const auto metal =
+        renderer_facts(facts_of("metal", "cocoa", AdapterState::read, "Apple M2", 16384));
+    OA_CHECK(!metal.driver.software && !metal.driver.adapter_required);
+    OA_CHECK(metal.adapter_known && metal.max_texture_size == 16384);
+    OA_CHECK(assess_renderer(metal, false, false) == Capability::capable);
+    // An unread adapter on vulkan cannot rule out a software rasteriser.
+    const auto vulkan = renderer_facts(facts_of("vulkan", "x11", AdapterState::unknown, "", 16384));
+    OA_CHECK(vulkan.driver.adapter_required && !vulkan.adapter_known);
+    OA_CHECK(vulkan.max_texture_size == 8192);
+    OA_CHECK(assess_renderer(vulkan, false, false) == Capability::unknown_adapter);
+    // A small limit, a virtual adapter and Wine.
+    OA_CHECK(
+        assess_renderer(
+            renderer_facts(facts_of("opengl", "x11", AdapterState::read, "card", 512)), false, false
+        ) == Capability::small_texture_limit
+    );
+    auto virtual_adapter = facts_of("opengl", "x11", AdapterState::read, "VMware SVGA3D", 8192);
+    virtual_adapter.virtual_adapter = true;
+    OA_CHECK(
+        assess_renderer(renderer_facts(virtual_adapter), false, false) ==
+        Capability::virtual_adapter
+    );
+    auto wine = facts_of("direct3d11", "windows", AdapterState::read, "card", 16384);
+    wine.wine = true;
+    OA_CHECK(assess_renderer(renderer_facts(wine), false, false) == Capability::under_wine);
+    // Before Vista only direct3d may be accelerated: opengl, which SDL
+    // reaches when direct3d refuses, is not, nor is direct3d11.
+    const auto direct3d =
+        renderer_facts(facts_of("direct3d", "windows", AdapterState::read, "card", 4096));
+    OA_CHECK(direct3d.driver.capable_before_vista);
+    OA_CHECK(assess_renderer(direct3d, true, false) == Capability::capable);
+    for (const char* renderer : {"opengl", "direct3d11", "opengles2"}) {
+        const auto other =
+            renderer_facts(facts_of(renderer, "windows", AdapterState::read, "card", 16384));
+        OA_CHECK(!other.driver.capable_before_vista);
+        OA_CHECK(assess_renderer(other, true, false) == Capability::before_vista_driver);
+        OA_CHECK(assess_renderer(other, false, false) == Capability::capable);
+    }
+}
+
 int main() {
     test_corrected_texture_limit();
+    test_tier_description();
+    test_renderer_facts();
     test_log_line();
     test_stats_adapter();
     test_adapter_read_for();

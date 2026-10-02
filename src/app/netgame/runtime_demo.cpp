@@ -105,10 +105,10 @@ void NetworkPlay::start_demo_playback() {
         {.units_per_player = recording.max_units,
          .place_commanders = false,
          .defeat_allowed = false,
-         .unit_filter = {
-             const_cast<oa::ui::frontend_multiplayer::UnitSync*>(verdicts),
-             verdicts != nullptr ? mark_recorded_units : nullptr
-         }}
+         .unit_filter =
+             {const_cast<oa::ui::frontend_multiplayer::UnitSync*>(verdicts),
+              verdicts != nullptr ? mark_recorded_units : nullptr},
+         .replay = true}
     );
     if (!runtime_.match_ || runtime_.altitude_sight_blocked_)
         throw std::runtime_error("demo playback: " + runtime_.status_);

@@ -7,11 +7,14 @@
 The game starts with --skip-intro --mute --frames 1 on the dummy SDL drivers,
 with SDL_RENDER_DRIVER unset, so the game walks SDL's render drivers in SDL's
 order and ends on SDL's software renderer, which has no adapter and no texture
-limit (native-renderer-walk checks the refusals logged before it). The start
+limit (native-renderer-walk checks the refusals logged before it). The named
+preferences file leaves Hardware acceleration at its default, Off, so the
+line gives that as the reason the processor draws everything. The start
 must end with status 0 and log, once and as a whole line, exactly:
 
   open-annihilation: graphics: software on dummy, textures of any size;
-  standard tier: the processor draws everything
+  standard tier: the processor draws everything (hardware acceleration is
+  off)
 
 (on one line).
 """
@@ -28,7 +31,7 @@ import tempfile
 RUNNER = shlex.split(os.environ.get("OA_TEST_RUNNER", ""))
 # The line a start on SDL's software renderer and the dummy video driver logs.
 EXPECTED = ("open-annihilation: graphics: software on dummy, textures of any size; "
-            "standard tier: the processor draws everything")
+            "standard tier: the processor draws everything (hardware acceleration is off)")
 FRAMES = "1"
 RUN_TIMEOUT = 900
 

@@ -568,10 +568,13 @@ void Runtime::check_engine_settings_in_match() {
         );
 
         // A shared game runs on under the dialog, which says so, and the host
-        // sets Pathfinding cycles and Unit limit.
+        // sets Pathfinding cycles and Unit limit. The match turns shared
+        // here rather than at its loading screen, so the tier is told so
+        // as a shared game's bootstrap tells it.
         extension_.state = [](void*, const Runtime&) -> uint32_t {
             return extension_state::multiplayer | extension_state::shared_match;
         };
+        begin_render_tier_match(render_policy::MatchKind::shared_game);
         show_match_pause_menu();
         send_key(SDLK_COMMA, kShortcutModifier, true, false);
         send_key(SDLK_COMMA, kShortcutModifier, false, false);
@@ -644,6 +647,7 @@ void Runtime::check_engine_settings_in_match() {
         );
         require(engine_settings_dialog() == nullptr, "Escape did not close the dialog" + on);
         extension_ = saved_extension;
+        begin_render_tier_match(render_policy::MatchKind::none);
         resume_match_pause();
         std::cout << "engine settings check: the in-game menu's OA button at " << button.x << ','
                   << button.y << " and the dialog at " << dialog_at.x << ',' << dialog_at.y << on

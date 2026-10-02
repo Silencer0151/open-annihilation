@@ -40,6 +40,18 @@ only declares `SDL_Renderer`.
   report of 0 means no limit (SDL's software renderer sets none), and on
   these two drivers the device's own limit is taken where it was read, and
   otherwise the report at most 8192.
+- `adapter_needed(renderer)`: true for `direct3d12`, `vulkan` and `gpu`,
+  on which an adapter that cannot be read leaves the renderer not capable,
+  since a software rasteriser cannot be ruled out there.
+- `capable_before_vista(renderer)`: true only for `direct3d`, SDL's
+  Direct3D 9 renderer, the one driver that may draw through the graphics
+  card on Windows before Vista; any other there keeps the standard tier.
+- `accelerated_tier_run(renderer)`: true for the one driver the
+  accelerated tier has been run on with this build's system and processor
+  architecture, `metal` on 64-bit ARM macOS and `direct3d11` on x86 and
+  x64 Windows; every other class is one nobody has run, which the render
+  policy starts at the lowest budget. `untried_arm_processor()` is true in
+  an ARM build for any system but macOS.
 - `classify(facts)` fills `software_rasteriser` (SDL's software renderer,
   the interface's software flag, a software rasteriser's name or WARP's
   identifiers) and `virtual_adapter` (a virtual machine's adapter by name or
@@ -80,17 +92,22 @@ source. Wine is found by `GetProcAddress` of `wine_get_version` in
 ## Who uses it
 
 Start-up describes the renderer it made and logs one line, with the
-texture limit the render policy corrects, and the +stats overlay names the
-driver and adapter ([src/app](../../app/README.md)). The walk of the render
-drivers that makes it asks `native_window_framebuffer` what to set the
-framebuffer hint to before SDL's software renderer.
-Every frame is still drawn as before: the probe only reports.
+texture limit the render policy corrects and the tier the first frame is
+drawn in, and the +stats overlay names the driver and adapter
+([src/app](../../app/README.md)). The walk of the render drivers that makes
+it asks `native_window_framebuffer` what to set the framebuffer hint to
+before SDL's software renderer. The render policy reads what the probe
+found (`adapter_needed`, `capable_before_vista`, the classification, the
+corrected limit) to tell whether the renderer can be accelerated, and `accelerated_tier_run` and
+`untried_arm_processor` for the rung it starts at.
 
 ## Tests
 
 `platform-render-probe` checks the name tables over names real drivers
 give, in any letter case, and real cards' names against them; WARP's
-identifiers; the drivers that report a fixed texture limit; the
+identifiers; the drivers that report a fixed texture limit or need their
+adapter read, the one driver that may be accelerated on Windows before
+Vista, and the class the accelerated tier has been run on; the
 classification and the cleaning of names; what `describe_reported` reads
 through a stand-in reader, for SDL's software renderer and for others,
 with the adapter read or skipped, named, failing or blank; the video

@@ -4,9 +4,11 @@
 // What the settings dialog says of the renderer: the Hardware acceleration
 // row's status, first rule first, for the machine's memory against the 2 GiB
 // threshold, the setting, either flag, the environment's driver, a shared
-// game or a replay, the renderer, looked at or not, and --force-capable;
-// whether nothing could help the run; and whether Vertical sync is out of
-// reach.
+// game or a replay, the renderer, looked at or not, lacking a feature or
+// failed in the run, and --force-capable; in use, at the lowest budget or
+// above it; whether nothing could help the run; what the graphics card
+// does at each rung; the status the facts the tier is decided from give;
+// and whether Vertical sync is out of reach.
 
 #include "oa/app/acceleration_status.hpp"
 
@@ -218,6 +220,186 @@ void in_use_says_what_it_does_here() {
     OA_CHECK(!report.acceleration_unavailable);
 }
 
+void a_renderer_that_lacks_a_feature_says_so() {
+    auto facts = able();
+    facts.renderer_capable = false;
+    facts.lacks_feature = true;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::lacks_feature);
+    OA_CHECK(report.acceleration_unavailable);
+    // SDL's software renderer has no graphics card, whatever it lacks.
+    facts.software_renderer = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::no_usable_card);
+    // Off, the environment and memory say so first.
+    facts = able();
+    facts.renderer_capable = false;
+    facts.lacks_feature = true;
+    facts.asked = false;
+    OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
+}
+
+void a_driver_that_failed_says_so_until_it_is_in_use_again() {
+    auto facts = able();
+    facts.driver_failed = true;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::driver_failed);
+    // The row stays within reach, so that Off then On can try again.
+    OA_CHECK(!report.acceleration_unavailable);
+    // So it does where the rebuild landed on SDL's software renderer, which
+    // the failure explains.
+    {
+        auto rebuilt = facts;
+        rebuilt.software_renderer = true;
+        rebuilt.renderer_capable = false;
+        report = report_acceleration(rebuilt);
+        OA_CHECK(report.status.state == State::driver_failed);
+        OA_CHECK(!report.acceleration_unavailable);
+        rebuilt.driver_failed = false;
+        OA_CHECK(report_acceleration(rebuilt).acceleration_unavailable);
+    }
+    // In a shared game the failure shows rather than the wait.
+    facts.shared_game = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+    // Off says so first; in use again, the failure no longer shows.
+    facts.shared_game = false;
+    facts.asked = false;
+    OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
+    facts.asked = true;
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
+}
+
+void in_use_at_the_lowest_budget_says_nothing_smooths() {
+    auto facts = able();
+    facts.tier_accelerated = true;
+    facts.no_smoothing = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use_no_smoothing);
+    facts.tier_accelerated = false;
+    OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+}
+
+void the_reach_follows_the_rung() {
+    using oa::app::acceleration_reach;
+    using oa::app::render_policy::LadderState;
+    using oa::app::render_policy::SceneBudget;
+    LadderState rung{};
+    rung.filtered_chrome = true;
+    rung.budget = SceneBudget::none;
+    rung.magnify = false;
+    OA_CHECK(acceleration_reach(rung) == Reach::menus);
+    rung.magnify = true;
+    OA_CHECK(acceleration_reach(rung) == Reach::zoomed_in);
+    rung.budget = SceneBudget::reduced;
+    OA_CHECK(acceleration_reach(rung) == Reach::zoomed_out);
+    rung.budget = SceneBudget::full;
+    OA_CHECK(acceleration_reach(rung) == Reach::zoomed_out);
+    // The NEAREST-chrome rung scales nothing.
+    rung.filtered_chrome = false;
+    OA_CHECK(acceleration_reach(rung) == Reach::nearest_zoomed_out);
+    rung.budget = SceneBudget::none;
+    OA_CHECK(acceleration_reach(rung) == Reach::nearest_none);
+}
+
+void the_tier_facts_give_the_status() {
+    using oa::app::tier_acceleration_facts;
+    namespace policy = oa::app::render_policy;
+    policy::TierInputs inputs{};
+    inputs.renderer = true;
+    inputs.memory = kAmpleMemory;
+    inputs.players_own_profile = true;
+    inputs.setting_on = true;
+    policy::LadderState rung{};
+    rung.filtered_chrome = true;
+    rung.magnify = true;
+    rung.budget = policy::SceneBudget::reduced;
+    // In use, at its reach.
+    auto report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    OA_CHECK(report.status.state == State::in_use);
+    OA_CHECK(report.status.reach == Reach::zoomed_out);
+    rung.budget = policy::SceneBudget::none;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    OA_CHECK(report.status.state == State::in_use_no_smoothing);
+    OA_CHECK(report.status.reach == Reach::zoomed_in);
+    // The flags decide over the setting.
+    inputs.flag = policy::AccelerationFlag::off;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
+        State::off_by_command_line
+    );
+    inputs.flag = policy::AccelerationFlag::on;
+    inputs.setting_on = false;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, true)).status.state ==
+        State::in_use_no_smoothing
+    );
+    inputs.flag = policy::AccelerationFlag::none;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
+        State::off_by_setting
+    );
+    inputs.setting_on = true;
+    // A failed function test lacks a feature and locks the row; a small
+    // texture limit too; SDL's software renderer has no usable card.
+    inputs.function_test = policy::FunctionTest::failed;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::lacks_feature && report.acceleration_unavailable);
+    inputs.function_test = policy::FunctionTest::not_run;
+    inputs.capability = policy::Capability::small_texture_limit;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
+        State::lacks_feature
+    );
+    inputs.capability = policy::Capability::software_renderer;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::no_usable_card);
+    OA_CHECK(report.vertical_sync_unavailable);
+    // --force-capable lifts both the renderer's and the environment's.
+    inputs.force_capable = true;
+    inputs.virtual_video_driver = true;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    OA_CHECK(report.status.state == State::in_use_no_smoothing);
+    OA_CHECK(!report.acceleration_unavailable && !report.vertical_sync_unavailable);
+    // It never lifts a function test that drew wrongly.
+    inputs.function_test = policy::FunctionTest::failed;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::no_usable_card && report.acceleration_unavailable);
+    inputs.function_test = policy::FunctionTest::not_run;
+    inputs.force_capable = false;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
+        State::environment_driver
+    );
+    inputs.virtual_video_driver = false;
+    inputs.capability = policy::Capability::capable;
+    // A drop after a driver failure, and a shared game or a replay waited for.
+    inputs.drop = policy::Drop::driver_failure;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::driver_failed && !report.acceleration_unavailable);
+    // A rebuild after the failure that landed on SDL's software renderer,
+    // the last of the walk: the failure explains it, so the row stays
+    // within reach for Off then On.
+    inputs.capability = policy::Capability::software_renderer;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::driver_failed);
+    OA_CHECK(!report.acceleration_unavailable);
+    inputs.drop = policy::Drop::none;
+    OA_CHECK(
+        report_acceleration(tier_acceleration_facts(inputs, rung, false)).acceleration_unavailable
+    );
+    inputs.capability = policy::Capability::capable;
+    inputs.drop = policy::Drop::driver_failure;
+    inputs.drop = policy::Drop::none;
+    inputs.match.kind = policy::MatchKind::replay;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::waiting_for_game_end && report.status.replay);
+    // Headless: no renderer, nothing ruled out by it; under 2 GiB first.
+    inputs = {};
+    inputs.memory = 0;
+    inputs.setting_on = true;
+    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    OA_CHECK(report.status.state == State::needs_memory && report.acceleration_unavailable);
+}
+
 void vertical_sync_is_out_of_reach_on_the_software_renderer() {
     auto facts = able();
     OA_CHECK(!report_acceleration(facts).vertical_sync_unavailable);
@@ -254,6 +436,11 @@ int main() {
     a_renderer_not_yet_looked_at_leaves_the_row_within_reach();
     a_shared_game_or_a_replay_waits_for_its_end();
     in_use_says_what_it_does_here();
+    a_renderer_that_lacks_a_feature_says_so();
+    a_driver_that_failed_says_so_until_it_is_in_use_again();
+    in_use_at_the_lowest_budget_says_nothing_smooths();
+    the_reach_follows_the_rung();
+    the_tier_facts_give_the_status();
     vertical_sync_is_out_of_reach_on_the_software_renderer();
     return oa::test::check_exit_status();
 }

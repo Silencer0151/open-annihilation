@@ -14,12 +14,22 @@
 // the render policy's (render_policy.hpp); this is the part that acts. When a
 // renderer fails while the game runs, it is made again the same way from
 // the driver after the one that failed (RendererHost::rebuild).
+//
+// Once the renderer is made, the start decides the tier its first frame is
+// drawn in from the command line, the setting, the environment, the
+// machine's memory and what the probe found of the renderer, and logs it
+// in the start-up line. Where the tier could be accelerated it first runs
+// the start-up function test, which draws known patterns into render
+// targets as the accelerated tier draws and reads them back
+// (run_function_test). The facts the tier is decided from stay with the
+// renderer for the runtime to keep up to date (RendererHost::tier_inputs).
 #pragma once
 
 #include "oa/app/render_policy.hpp"
 #include "oa/platform/render_probe.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,8 +51,18 @@ inline constexpr std::string_view no_render_driver = "no render driver is availa
 /// The reason a render driver gives when --render-fault create refuses it.
 inline constexpr std::string_view refused_by_fault = "refused by --render-fault create";
 
-/// What --check-renderer-ladder forces of the renderer; a player's run
-/// leaves every member empty.
+/// What a test forces the start-up function test to draw wrongly, as a
+/// graphics card that ignored a scale mode would; a player's run leaves
+/// both false.
+struct FunctionTestFaults {
+    /// (b) draws its reduction by half NEAREST in place of LINEAR.
+    bool half_nearest{};
+    /// (d) draws its reduction at 0.75 NEAREST in place of LINEAR.
+    bool pattern_nearest{};
+};
+
+/// What --check-renderer-ladder and the checks force of the renderer; a
+/// player's run leaves every member empty.
 struct RenderFaultHooks {
     void* context{};
     /// Says whether a render driver refuses to start, as if it had failed;
@@ -57,6 +77,8 @@ struct RenderFaultHooks {
     /// Answers in place of the window whether its pixels are 16-bit RGB565;
     /// null asks the window.
     bool (*rgb565_window)(void* context){};
+    /// What the start-up function test draws wrongly (run_function_test).
+    FunctionTestFaults function_test{};
 };
 
 /// One attempt of a walk of the render drivers.
@@ -161,9 +183,70 @@ walk_render_drivers(const render_policy::CreationInputs& inputs, const CreationH
 /// @return the line, without its line break
 [[nodiscard]] std::string rebuild_log_line(std::string_view driver, std::string_view reason);
 
+/// The most a channel of the start-up function test's LINEAR reduction by
+/// half may differ from the average of the texels it covers: the graphics
+/// card weighs neighbours to its own precision and rounds its own way.
+inline constexpr int function_test_half_most_difference = 2;
+/// The most a channel of the known pattern may differ from what the
+/// processor computes for it after its two reductions. SDL's software
+/// renderer weighs two texels in 128ths and truncates after each of its
+/// passes, where the reference weighs exactly and rounds once, which reads
+/// the pattern back up to 3 from it at a few texels.
+inline constexpr int function_test_pattern_most_difference = 3;
+/// The most the mean difference of the known pattern's channels may be.
+inline constexpr double function_test_most_mean_difference = 0.5;
+
+/// What the start-up function test found of a renderer.
+struct FunctionTestResult {
+    /// A render target read back the colour it was cleared to, a LINEAR
+    /// reduction by half read back the average of the texels it covers,
+    /// and the known pattern drawn as the accelerated tier draws read back
+    /// as the processor computes it.
+    bool passed{};
+    bool pixelart{};       ///< the renderer's pixel-art scale mode works
+    std::string failure{}; ///< what failed first; empty when it passed
+};
+
+/// Runs the start-up function test on a renderer, a few milliseconds of
+/// work that only a tier that could be accelerated asks for:
+/// (a) a 4x4 ARGB8888 render target is cleared and one pixel read back;
+/// (b) a 4x4 texture is drawn LINEAR into a 2x2 target, which must read back
+/// the average of each 2x2 block within function_test_half_most_difference;
+/// (c) whether the pixel-art scale mode works (probe_pixelart);
+/// (d) a seeded 32x32 ARGB8888 texture, drawn with no blending through a
+/// source rectangle NEAREST at 2x into a 64x64 target, that target LINEAR
+/// at 0.75 into a 48x48 target, and a 48x48 overlay, transparent but for an
+/// opaque square, blended over it, must read back as the sharp-bilinear
+/// reference at 1.5 and then the overlay rule
+/// (oa::present::world_renderer::sharp_bilinear_rgb24, overlay_rgb24)
+/// within function_test_pattern_most_difference and, on the mean,
+/// function_test_most_mean_difference. A failure of (a), (b) or (d), or
+/// of any SDL call they make, fails the test; (c) only chooses the filter.
+/// Its textures and targets are destroyed and the render target set back
+/// to the window when it ends.
+///
+/// @param renderer the renderer
+/// @param faults what a test forces it to draw wrongly; empty in a
+///     player's run
+/// @return what it found
+[[nodiscard]] FunctionTestResult
+run_function_test(SDL_Renderer* renderer, const FunctionTestFaults& faults = {});
+
+/// What the command line and the settings ask of the tier as the game
+/// starts.
+struct TierRequest {
+    /// --hardware-acceleration (true) or --no-hardware-acceleration (false);
+    /// empty for neither.
+    std::optional<bool> flag{};
+    bool force_capable{};       ///< --force-capable, which only a check passes
+    bool players_own_profile{}; ///< no --preferences-file was named
+    bool setting_on{};          ///< the Hardware acceleration setting the run starts with
+};
+
 /// The game's renderer, made for its window and kept for the run, with what
-/// the probe found of it and the attempts that made it. HostDisplay owns
-/// one; the runtime borrows it.
+/// the probe found of it and the attempts that made it, and the facts the
+/// tier each frame is drawn in is decided from. HostDisplay owns one; the
+/// runtime borrows it.
 class RendererHost {
   public:
 
@@ -174,8 +257,10 @@ class RendererHost {
     /// Destroys the renderer (destroy).
     ~RendererHost();
 
-    /// Makes the renderer of a window and logs what was made
-    /// (report_game_renderer). With SDL_RENDER_DRIVER set, by SDL's own
+    /// Makes the renderer of a window and describes it
+    /// (describe_game_renderer), on Windows before Vista with only direct3d
+    /// capable (oa::platform::running_on_windows_before_vista);
+    /// decide_start_tier logs it. With SDL_RENDER_DRIVER set, by SDL's own
     /// call, which tries only the drivers it names. Otherwise by walking
     /// SDL's render drivers (walk_render_drivers): no driver is recorded as
     /// failed yet, so the walk tries every driver in SDL's order and stops
@@ -197,13 +282,17 @@ class RendererHost {
     void create(SDL_Window* window, const RenderFaultHooks& faults = {});
 
     /// Makes the renderer again after it failed while the game ran, and
-    /// logs what was made (report_game_renderer): destroys it, since a
-    /// window holds one renderer, then walks the drivers after the one that
-    /// failed (walk_rebuild_drivers), under SDL_RENDER_DRIVER those its list
+    /// logs what was made (report_game_renderer), on the standard tier
+    /// since the driver failed: destroys it, since a window holds one
+    /// renderer, then walks the drivers after the one that failed
+    /// (walk_rebuild_drivers), under SDL_RENDER_DRIVER those its list
     /// names, ending with SDL's software renderer. Then the floating-point
     /// settings the game started with are put back, should a driver have
-    /// changed them. Every texture made on the renderer must be destroyed
-    /// first.
+    /// changed them. The tier's facts take the new renderer's capability,
+    /// its function test is to run again, and acceleration is dropped
+    /// for the run (render_policy::Drop::driver_failure) unless it was
+    /// dropped already. Every texture made on the renderer must be
+    /// destroyed first.
     ///
     /// Throws std::runtime_error, beginning renderer_creation_error, when
     /// no driver starts: the run ends, as a start does.
@@ -286,9 +375,61 @@ class RendererHost {
     /// @return the faults, which the check may change
     [[nodiscard]] RenderFaultHooks& faults() noexcept;
 
+    /// Decides the tier the first frame is drawn in and logs the start-up
+    /// line (graphics_log_line, with tier_description).
+    ///
+    /// Fills the tier's facts: the request, SDL_RENDER_DRIVER as the start
+    /// saw it, whether the video driver draws no window, the machine's
+    /// physical memory as the system reports it
+    /// (oa::platform::sample_system_memory), and the capability probe items
+    /// 1 to 3 found (render_policy::assess_renderer), with the adapter read
+    /// under SDL_RENDER_DRIVER too when --hardware-acceleration or
+    /// --force-capable asks for more than SDL's own start; and the facts the
+    /// starting rung is sized from. On the player's own profile the
+    /// function test waits for the player, unless a flag asks for it
+    /// (render_policy::start_function_test). Where the tier could be
+    /// accelerated but for the function test, and so never under 2 GiB,
+    /// runs it first (render_policy::step_tier, test_function).
+    ///
+    /// @param request what the command line and the settings ask
+    void decide_start_tier(const TierRequest& request);
+
+    /// Runs the start-up function test on the renderer (run_function_test,
+    /// with the faults' function_test), puts back the floating-point
+    /// settings the game started with, and keeps what it found: the
+    /// function test passed or failed in the tier's facts, logging a
+    /// failure, and whether the pixel-art scale mode works for the starting
+    /// rung.
+    void test_function();
+
+    /// Returns the hooks through which render_policy::step_tier runs the
+    /// start-up function test on this renderer (test_function).
+    ///
+    /// @return the hooks, valid while the host lives
+    [[nodiscard]] render_policy::FunctionTestHooks function_test_hooks() noexcept;
+
+    /// Returns the facts the tier is decided from: those of the start, the
+    /// function test's result, and what the runtime keeps up to date (the
+    /// setting, a drop, a lost device, the director and a shared game).
+    ///
+    /// @return the facts
+    [[nodiscard]] render_policy::TierInputs& tier_inputs() noexcept;
+
+    /// Returns the facts the tier is decided from.
+    ///
+    /// @return the facts
+    [[nodiscard]] const render_policy::TierInputs& tier_inputs() const noexcept;
+
+    /// Returns the rung the accelerated tier starts at on this machine and
+    /// renderer (render_policy::start_rung).
+    ///
+    /// @return the rung
+    [[nodiscard]] render_policy::LadderState start_rung() const noexcept;
+
   private:
 
-    /// Notes what was made: the facts, the layers' formats and the
+    /// Notes what was made: the facts, with the adapter read as
+    /// adapter_asked_ says, the capability, the layers' formats and the
     /// floating-point settings put back.
     void take_renderer();
 
@@ -304,7 +445,12 @@ class RendererHost {
     std::vector<CreationAttempt> attempts_{};
     RenderFaultHooks faults_{};
     render_policy::LayerFormats layer_formats_{};
-    bool named_{};      ///< SDL_RENDER_DRIVER named the drivers at the start
+    render_policy::TierInputs tier_{};     ///< what the tier is decided from
+    render_policy::StartInputs machine_{}; ///< what the starting rung is sized from
+    bool named_{};                         ///< SDL_RENDER_DRIVER named the drivers at the start
+    /// A flag asks for the adapter under SDL_RENDER_DRIVER, which otherwise
+    /// reads none.
+    bool adapter_asked_{};
     bool lost_noted_{}; ///< take_event saw the device lost; service rebuilds
 };
 

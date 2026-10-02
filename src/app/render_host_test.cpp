@@ -26,7 +26,15 @@
 // software again, throws when nothing starts, a lost device noted before
 // the runtime exists is mended by service, and a named list's rebuild
 // tries software alone. The faults refuse drivers with their own reason
-// and stand in for the texture limit and the device's state.
+// and stand in for the texture limit and the device's state. The start-up
+// function test passes on SDL's software renderer, which has no PIXELART,
+// and puts back the render target and the draw colour, and fails the
+// reduction by half or the known pattern drawn NEAREST; the start's tier on
+// the dummy video driver, standard with the reason in the line, waiting
+// for the player on the player's own profile, or with
+// --hardware-acceleration and --force-capable accelerated after the
+// function test passed, from 2 GiB, and standard where it failed; and a
+// rebuild drops the tier for the run.
 #include "render_host.hpp"
 
 #include "oa/test/check.hpp"
@@ -758,6 +766,224 @@ void test_named_list_rebuild() {
 
 } // namespace
 
+/// Returns the lines a call logs on standard output.
+///
+/// @param call what logs
+/// @return the lines, without their line breaks
+template <typename Call>
+std::vector<std::string> logged_lines(Call&& call) {
+    std::ostringstream logged;
+    std::streambuf* const standard_output = std::cout.rdbuf(logged.rdbuf());
+    try {
+        call();
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "logged call: %s\n", error.what());
+        OA_CHECK(false);
+    }
+    std::cout.rdbuf(standard_output);
+    std::vector<std::string> lines;
+    std::istringstream reading(logged.str());
+    for (std::string line; std::getline(reading, line);)
+        lines.push_back(line);
+    return lines;
+}
+
+/// The start-up function test on SDL's software renderer: its target, its
+/// LINEAR reduction and the known pattern read back as they should, so it
+/// passes; PIXELART there is nearest, so the probe finds it missing. The
+/// window is the render target again and the draw colour as it was.
+void test_function_test_on_software() {
+    SDL_Window* window = open_window();
+    SDL_Renderer* renderer =
+        window != nullptr
+            ? SDL_CreateRenderer(window, oa::app::render_policy::software_driver.data())
+            : nullptr;
+    OA_CHECK(renderer != nullptr);
+    if (renderer != nullptr) {
+        constexpr uint8_t draw_red = 12, draw_green = 34, draw_blue = 56, draw_alpha = 78;
+        OA_CHECK(SDL_SetRenderDrawColor(renderer, draw_red, draw_green, draw_blue, draw_alpha));
+        const auto result = oa::app::run_function_test(renderer);
+        if (!result.passed)
+            std::fprintf(stderr, "function test: %s\n", result.failure.c_str());
+        OA_CHECK(result.passed);
+        OA_CHECK(result.failure.empty());
+        OA_CHECK(!result.pixelart);
+        OA_CHECK(SDL_GetRenderTarget(renderer) == nullptr);
+        uint8_t red = 0, green = 0, blue = 0, alpha = 0;
+        OA_CHECK(SDL_GetRenderDrawColor(renderer, &red, &green, &blue, &alpha));
+        OA_CHECK(
+            red == draw_red && green == draw_green && blue == draw_blue && alpha == draw_alpha
+        );
+        SDL_DestroyRenderer(renderer);
+    }
+    // No renderer fails it.
+    OA_CHECK(!oa::app::run_function_test(nullptr).passed);
+    close_window(window);
+}
+
+/// The start-up function test fails a renderer that draws wrongly: on SDL's
+/// software renderer, the reduction by half drawn NEAREST fails (b), and
+/// the known pattern reduced NEAREST fails (d), each with its own words,
+/// and neither leaves the render target set.
+void test_function_test_fails_wrong_draws() {
+    SDL_Window* window = open_window();
+    SDL_Renderer* renderer =
+        window != nullptr
+            ? SDL_CreateRenderer(window, oa::app::render_policy::software_driver.data())
+            : nullptr;
+    OA_CHECK(renderer != nullptr);
+    if (renderer != nullptr) {
+        oa::app::FunctionTestFaults half{};
+        half.half_nearest = true;
+        const auto half_result = oa::app::run_function_test(renderer, half);
+        OA_CHECK(!half_result.passed && !half_result.pixelart);
+        OA_CHECK(
+            half_result.failure ==
+            "a LINEAR reduction by half did not read back the texels' average"
+        );
+        oa::app::FunctionTestFaults pattern{};
+        pattern.pattern_nearest = true;
+        const auto pattern_result = oa::app::run_function_test(renderer, pattern);
+        OA_CHECK(!pattern_result.passed);
+        OA_CHECK(
+            pattern_result.failure ==
+            "the known pattern did not read back as the processor computes it"
+        );
+        OA_CHECK(SDL_GetRenderTarget(renderer) == nullptr);
+        // Drawn right again, it passes.
+        OA_CHECK(oa::app::run_function_test(renderer).passed);
+        SDL_DestroyRenderer(renderer);
+    }
+    close_window(window);
+}
+
+/// The start's tier on the dummy video driver, which draws no window: with
+/// the setting On the processor draws everything, the function test does
+/// not run, waiting for the player on the player's own profile, and the
+/// line says why; a named preferences file says it is off; with
+/// --hardware-acceleration and --force-capable the function test runs and
+/// passes on SDL's software renderer and the tier is accelerated, where the
+/// machine has 2 GiB, and otherwise the line says it needs the memory; and
+/// with the faults drawing the known pattern wrongly the test fails, which
+/// --force-capable does not lift, and the line says no usable graphics card
+/// was found.
+void test_start_tier_on_dummy() {
+    namespace policy = oa::app::render_policy;
+    const std::string started =
+        "open-annihilation: graphics: software on dummy, textures of any size; ";
+
+    struct Case {
+        oa::app::TierRequest request;
+        bool tested;           ///< the function test runs, with 2 GiB
+        std::string_view tier; ///< what the line ends with, with 2 GiB
+        bool draws_wrongly{};  ///< the faults draw the known pattern wrongly
+        /// The function test's state where it does not run.
+        policy::FunctionTest untested{policy::FunctionTest::not_run};
+    };
+
+    oa::app::TierRequest own{};
+    own.players_own_profile = true;
+    own.setting_on = true;
+    oa::app::TierRequest named{};
+    oa::app::TierRequest flagged{};
+    flagged.flag = true;
+    flagged.force_capable = true;
+    oa::app::TierRequest refused{};
+    refused.flag = false;
+    refused.setting_on = true;
+    const Case cases[] = {
+        {own,
+         false,
+         "standard tier: the processor draws everything (the environment names a driver)",
+         false,
+         policy::FunctionTest::trial_unwritten},
+        {named,
+         false,
+         "standard tier: the processor draws everything (hardware acceleration is off)"},
+        {refused,
+         false,
+         "standard tier: the processor draws everything (hardware acceleration is off)"},
+        {flagged, true, "accelerated tier: the graphics card scales the interface"},
+        {flagged,
+         true,
+         "standard tier: the processor draws everything (no usable graphics card was found)",
+         true},
+    };
+    for (const auto& run : cases) {
+        SDL_Window* window = open_window();
+        if (window == nullptr) {
+            close_window(window);
+            continue;
+        }
+        RendererHost host;
+        oa::app::RenderFaultHooks faults{};
+        faults.function_test.pattern_nearest = run.draws_wrongly;
+        const auto lines = logged_lines([&]() {
+            host.create(window, faults);
+            host.decide_start_tier(run.request);
+        });
+        const auto& inputs = host.tier_inputs();
+        const bool memory = inputs.memory >= policy::smallest_accelerated_memory;
+        const std::string_view tier =
+            memory ? run.tier
+                   : "standard tier: the processor draws everything (it needs at least 2 GB of "
+                     "memory)";
+        OA_CHECK(!lines.empty() && lines.back() == started + std::string(tier));
+        OA_CHECK(inputs.renderer && inputs.virtual_video_driver);
+        OA_CHECK(inputs.capability == policy::Capability::software_renderer);
+        const policy::FunctionTest tested =
+            run.draws_wrongly ? policy::FunctionTest::failed : policy::FunctionTest::passed;
+        OA_CHECK(inputs.function_test == (run.tested && memory ? tested : run.untested));
+        OA_CHECK(
+            (policy::decide_render_tier(inputs).tier == policy::RenderTier::accelerated) ==
+            (run.tested && memory && !run.draws_wrongly)
+        );
+        // A failed test logs what failed before the start-up line.
+        OA_CHECK(
+            !(run.draws_wrongly && memory) ||
+            (lines.size() >= 2 &&
+             lines[lines.size() - 2] ==
+                 "open-annihilation: graphics: the start-up test failed: the known pattern did "
+                 "not read back as the processor computes it")
+        );
+        // The start never draws at the magnify rungs on a class nobody has run.
+        OA_CHECK(!host.start_rung().magnify && host.start_rung().filtered_chrome);
+        host.destroy();
+        close_window(window);
+    }
+}
+
+/// A rebuild drops the accelerated tier for the run and leaves the new
+/// renderer's function test to run again, and the line it logs says the
+/// driver failed.
+void test_rebuild_drops_the_tier() {
+    namespace policy = oa::app::render_policy;
+    SDL_Window* window = open_window();
+    if (window == nullptr) {
+        close_window(window);
+        return;
+    }
+    RendererHost host;
+    oa::app::TierRequest flagged{};
+    flagged.flag = true;
+    flagged.force_capable = true;
+    const auto lines = logged_lines([&]() {
+        host.create(window);
+        host.decide_start_tier(flagged);
+        host.rebuild("a test");
+    });
+    OA_CHECK(host.tier_inputs().drop == policy::Drop::driver_failure);
+    OA_CHECK(host.tier_inputs().function_test == policy::FunctionTest::not_run);
+    OA_CHECK(
+        !lines.empty() && lines.back().ends_with(
+                              "standard tier: the processor draws everything (the graphics "
+                              "driver failed)"
+                          )
+    );
+    host.destroy();
+    close_window(window);
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string_view(argv[1]) == "--case" &&
         std::string_view(argv[2]) == "named-missing") {
@@ -781,5 +1007,9 @@ int main(int argc, char** argv) {
     test_named_list_rebuild();
     test_named_missing(true);
     test_named_software();
+    test_function_test_on_software();
+    test_function_test_fails_wrong_draws();
+    test_start_tier_on_dummy();
+    test_rebuild_drops_the_tier();
     return oa::test::check_exit_status();
 }

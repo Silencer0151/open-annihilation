@@ -5,11 +5,13 @@
 // matched in any letter case as parts of the names drivers give; the
 // Microsoft Basic Render Driver's identifiers; the drivers that report a
 // fixed texture limit; the classification and cleaning of what a driver
-// reports; what describe reads, through a stand-in reader, for each
-// renderer and each choice of reading; the video drivers whose windows have
-// a framebuffer of their own; and a Direct3D 9 device's answers read as its
-// states. Then SDL's software renderer on the dummy video driver, described
-// as the game describes it, and its device state, unknown.
+// reports; the drivers that need their adapter read, the one driver that
+// may be accelerated on Windows before Vista and the class the accelerated
+// tier has been run on; what describe reads, through a stand-in reader, for
+// each renderer and each choice of reading; the video drivers whose windows
+// have a framebuffer of their own; and a Direct3D 9 device's answers read as
+// its states. Then SDL's software renderer on the dummy video driver,
+// described as the game describes it, and its device state, unknown.
 #include "oa/platform/render_probe.hpp"
 
 #include "oa/test/check.hpp"
@@ -124,6 +126,62 @@ void test_fixed_texture_limit() {
         OA_CHECK(!reports_fixed_texture_limit(renderer));
     OA_CHECK(!reports_fixed_texture_limit("Vulkan"));
     OA_CHECK(!reports_fixed_texture_limit("gpu "));
+}
+
+/// direct3d12, vulkan and gpu need their adapter read, in SDL's own
+/// spelling; no other driver does.
+void test_adapter_needed() {
+    for (const std::string_view renderer : {"direct3d12", "vulkan", "gpu"})
+        OA_CHECK(adapter_needed(renderer));
+    for (const std::string_view renderer :
+         {"software", "opengl", "opengles2", "direct3d", "direct3d11", "metal", "", "Vulkan"})
+        OA_CHECK(!adapter_needed(renderer));
+}
+
+/// The class the accelerated tier has been run on is this build's own
+/// system and architecture with one driver; software never is, and an ARM
+/// processor of Apple's is never untried.
+void test_run_class() {
+    OA_CHECK(!accelerated_tier_run("software"));
+    OA_CHECK(!accelerated_tier_run(""));
+    OA_CHECK(!accelerated_tier_run("opengl"));
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    OA_CHECK(accelerated_tier_run("metal"));
+    OA_CHECK(!accelerated_tier_run("direct3d11"));
+    OA_CHECK(!untried_arm_processor());
+#elif defined(__APPLE__)
+    OA_CHECK(!accelerated_tier_run("metal"));
+    OA_CHECK(!untried_arm_processor());
+#elif defined(_WIN32) &&                                                                           \
+    (defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)) &&           \
+    !defined(_M_ARM64EC)
+    // Both the x86 and the x64 Windows packages have been run on direct3d11.
+    OA_CHECK(accelerated_tier_run("direct3d11"));
+    OA_CHECK(!accelerated_tier_run("direct3d"));
+    OA_CHECK(!accelerated_tier_run("direct3d12"));
+    OA_CHECK(!accelerated_tier_run("metal"));
+#endif
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    OA_CHECK(!untried_arm_processor());
+#endif
+}
+
+/// On Windows before Vista only direct3d, SDL's Direct3D 9 renderer, may be
+/// accelerated, in SDL's own spelling.
+void test_capable_before_vista() {
+    OA_CHECK(capable_before_vista("direct3d"));
+    for (const std::string_view renderer :
+         {"opengl",
+          "opengles2",
+          "direct3d11",
+          "direct3d12",
+          "software",
+          "vulkan",
+          "gpu",
+          "",
+          "Direct3D",
+          "direct3d "})
+        OA_CHECK(!capable_before_vista(renderer));
 }
 
 /// What a stand-in reader gives describe_reported, and how often it was
@@ -417,6 +475,9 @@ int main() {
     test_rasteriser_names();
     test_device_state();
     test_fixed_texture_limit();
+    test_adapter_needed();
+    test_run_class();
+    test_capable_before_vista();
     test_describe_reported();
     test_classify();
     test_clean_name();

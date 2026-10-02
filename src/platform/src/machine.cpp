@@ -54,6 +54,36 @@ bool running_on_raspberry_pi() {
 #endif
 }
 
+bool windows_before_vista(uint32_t major_version) noexcept {
+    return major_version < vista_major_version;
+}
+
+bool running_on_windows_before_vista() noexcept {
+#if defined(_WIN32)
+    // The system's own version, which a compatibility manifest does not
+    // change, from the system library every Windows process has loaded.
+    using VersionFunction = LONG(WINAPI*)(OSVERSIONINFOW*);
+    // What the version reader returns when it read the version.
+    constexpr LONG version_read = 0;
+    const HMODULE system_library = GetModuleHandleW(L"ntdll.dll");
+    const auto read_version =
+        system_library != nullptr
+            ? reinterpret_cast<VersionFunction>(
+                  reinterpret_cast<void*>(GetProcAddress(system_library, "RtlGetVersion"))
+              )
+            : nullptr;
+    OSVERSIONINFOW version{};
+    version.dwOSVersionInfoSize = sizeof version;
+    // A version that cannot be read counts as before Vista, which keeps the
+    // processor drawing.
+    if (read_version == nullptr || read_version(&version) != version_read)
+        return true;
+    return windows_before_vista(static_cast<uint32_t>(version.dwMajorVersion));
+#else
+    return false;
+#endif
+}
+
 bool light_machine(const MachineTraits& machine) noexcept {
     return machine.processors <= 1 || !machine.sse2 ||
            (machine.memory != 0 && machine.memory < light_machine_memory);

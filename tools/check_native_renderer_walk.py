@@ -42,8 +42,9 @@ REFUSAL = re.compile(re.escape(PREFIX) + r"renderer (\S+) refused: (.*)$")
 # The line a second walk from the top logs.
 SECOND_WALK = PREFIX + "no driver left could present"
 # The line a start on SDL's software renderer and the dummy video driver logs.
+# The named preferences file leaves Hardware acceleration Off.
 STARTED = (PREFIX + "software on dummy, textures of any size; "
-           "standard tier: the processor draws everything")
+           "standard tier: the processor draws everything (hardware acceleration is off)")
 SOFTWARE = "software"
 # The error a start that made no renderer ends with.
 FAILED = "open-annihilation: SDL_CreateRenderer: "

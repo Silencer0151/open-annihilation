@@ -29,10 +29,11 @@ target_link_libraries(oa-platform-render-probe PRIVATE SDL3::SDL3 oa-options)
 
 if(BUILD_TESTING)
   # The software and virtual rasteriser names, the drivers that report a
-  # fixed texture limit, the classification and cleaning of what a driver
-  # reports, what describe reads through a stand-in reader, the video
-  # drivers whose windows have a framebuffer of their own, and SDL's
-  # software renderer on the dummy video driver described.
+  # fixed texture limit or need their adapter read, the class the
+  # accelerated tier has been run on, the classification and cleaning of
+  # what a driver reports, what describe reads through a stand-in reader,
+  # the video drivers whose windows have a framebuffer of their own, and
+  # SDL's software renderer on the dummy video driver described.
   add_executable(oa-platform-render-probe-test tests/render_probe_test.cpp)
   target_link_libraries(oa-platform-render-probe-test PRIVATE oa-platform-render-probe SDL3::SDL3
     oa-test-support oa-options)

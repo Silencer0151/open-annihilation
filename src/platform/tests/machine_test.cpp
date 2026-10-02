@@ -3,7 +3,8 @@
 
 // Telling a Raspberry Pi from its board's model, given as text and as the
 // model file Linux keeps it in; telling a light machine from its processors,
-// SSE2 and memory, and reading this machine's.
+// SSE2 and memory, and reading this machine's; and telling Windows before
+// Vista from its major version.
 
 #include "oa/platform/machine.hpp"
 #include "oa/test/scratch_directory.hpp"
@@ -145,12 +146,31 @@ void this_machine_is_read() {
               << (platform::light_machine(traits) ? "light" : "not light") << '\n';
 }
 
+/// Windows before Vista is told by its major version: XP and Server 2003
+/// report 5, Vista 6 and Windows 10 and 11 report 10. Only Windows reads
+/// its own; every other system is never before Vista.
+void windows_before_vista_is_told_apart() {
+    CHECK(platform::windows_before_vista(0));
+    CHECK(platform::windows_before_vista(5));
+    CHECK(platform::windows_before_vista(platform::vista_major_version - 1));
+    CHECK(!platform::windows_before_vista(platform::vista_major_version));
+    CHECK(!platform::windows_before_vista(10));
+#if !defined(_WIN32)
+    CHECK(!platform::running_on_windows_before_vista());
+#endif
+    std::cout << "this system: "
+              << (platform::running_on_windows_before_vista() ? "Windows before Vista"
+                                                              : "not Windows before Vista")
+              << '\n';
+}
+
 int main() {
     every_raspberry_pi_model_is_one();
     other_boards_are_not();
     model_files_are_read_up_to_their_limit();
     only_linux_reads_the_device_tree();
     light_machines_are_told_apart();
+    windows_before_vista_is_told_apart();
     this_machine_is_read();
     return failures == 0 ? 0 : 1;
 }

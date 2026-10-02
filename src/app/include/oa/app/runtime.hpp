@@ -997,6 +997,9 @@ class Runtime final : public menu::Host,
         // click, a resumed skirmish and Restart do.
         bool seat_roster{false};
         bool multiplayer{false};
+        /// A recorded game played back, which keeps the tier it begins
+        /// with until it ends, as a shared game does.
+        bool replay{false};
     };
 
     /// Builds the match world from the selected map and skirmish slots and enters the match.
@@ -2287,18 +2290,67 @@ class Runtime final : public menu::Host,
 
     /// Returns what the run knows now of whether the graphics card could
     /// scale its frames: the setting and the flags, the environment's
-    /// driver, the machine's memory, the renderer and the match. Nothing
-    /// looks at the renderer yet, so whether it is able stays unknown, but
-    /// for SDL's software renderer, which never is.
+    /// driver, the machine's memory, the renderer and the match. With the
+    /// game's renderer these are the facts the tier is decided from
+    /// (RendererHost::tier_inputs), the function test's result among them,
+    /// with whether the accelerated presentation draws now and what it does
+    /// at its rung (tier_acceleration_facts). A runtime without it, as a
+    /// headless run's, has not looked at a renderer, so whether one is able
+    /// stays unknown, but for SDL's software renderer, which never is.
     ///
     /// @return the facts
     [[nodiscard]] AccelerationFacts acceleration_facts() const;
 
+    /// Decides the tier the next frame is drawn in from the facts the
+    /// game's renderer keeps (RendererHost::tier_inputs), brought up to date
+    /// with the flags, the Hardware acceleration setting in effect, the
+    /// director and a lost device, as render_policy::step_tier decides it:
+    /// the start-up function test first where only it is missing
+    /// (RendererHost::function_test_hooks), and the frame noted in a shared
+    /// game or a replay; then switches the accelerated presentation on, at
+    /// the rung the machine starts at or the one a check set
+    /// (render_tier_rung), or off, to match. A runtime without the game's
+    /// renderer keeps the standard tier.
+    void update_render_tier();
+
+    /// Notes that a match's loading screen begins: in a shared game or a
+    /// replay the tier keeps what it has, and what would start the
+    /// accelerated tier waits for the match to end
+    /// (render_policy::begin_match).
+    ///
+    /// @param kind the match's kind, from its bootstrap; MatchKind::none for
+    ///     a match played alone
+    void begin_render_tier_match(render_policy::MatchKind kind);
+
+    /// Notes that the match ended, so that what waited for its end applies
+    /// from the next frame (render_policy::end_match).
+    void end_render_tier_match();
+
+    /// Lets the tier try again, in this run, what switching Hardware
+    /// acceleration Off then On or Restore defaults retries: a function test
+    /// that failed and a drop (render_policy::forget_failures).
+    void forget_render_failures();
+
+    /// Acts on the dialog's requests to try the graphics card afresh, as
+    /// Hardware acceleration passing from Off to On and Restore defaults
+    /// make them (Dialog::forget_renderer_failures): once for any new
+    /// request since the dialog opened, the run forgets what failed
+    /// (forget_render_failures).
+    ///
+    /// @param dialog the open dialog
+    void take_renderer_retry(const oa::ui::engine_settings::Dialog& dialog);
+
+    /// Returns the rung the accelerated presentation is switched on at: the
+    /// one a check set, else the one the machine starts at
+    /// (RendererHost::start_rung).
+    ///
+    /// @return the rung; the default rung without the game's renderer
+    [[nodiscard]] render_policy::LadderState render_tier_rung() const;
+
     /// Returns what the settings dialog says of the renderer now: Hardware
     /// acceleration's status, and whether nothing could help the run or
     /// Vertical sync is out of reach (acceleration_status.hpp), from
-    /// acceleration_facts. The graphics card does not scale the frames yet,
-    /// so every run draws on the processor.
+    /// acceleration_facts.
     ///
     /// @return the report
     [[nodiscard]] AccelerationReport acceleration_report() const;
@@ -4390,8 +4442,9 @@ class Runtime final : public menu::Host,
     /// Switches the accelerated presentation on, at a rung of the step-down
     /// ladder, or off, for every frame from the next. The renderer host's
     /// texture limit (render_texture_limit) is taken when it is switched on.
-    /// Off frees every texture and buffer it made. Nothing switches it on but
-    /// its host: a check, until the setting and the flags reach it.
+    /// Off frees every texture and buffer it made. The tier each frame is
+    /// drawn in switches it (update_render_tier); --check-render-tiers sets
+    /// its rung.
     ///
     /// @param on true to switch it on
     /// @param rung the rung it draws at
@@ -4406,7 +4459,9 @@ class Runtime final : public menu::Host,
     /// Drops the accelerated presentation for the rest of the run after a
     /// call only it makes failed: logs the reason once and frees every texture
     /// and buffer it made, so that frames are presented as the standard tier
-    /// presents them.
+    /// presents them, and keeps the tier standard until switching Hardware
+    /// acceleration Off then On, or Restore defaults, lifts the drop
+    /// (render_policy::Drop::driver_failure).
     ///
     /// @param reason what failed
     void drop_acceleration(const std::string& reason);
@@ -5786,8 +5841,12 @@ class Runtime final : public menu::Host,
     ///
     /// Skips, with exit code 77, on a machine reporting less than the 2 GiB
     /// threshold of memory, and on a renderer the probe finds not capable
-    /// unless --force-capable was given. Then, with the accelerated
-    /// presentation switched on at the full scene budget with magnify on:
+    /// unless --force-capable was given. It needs --hardware-acceleration,
+    /// whose tier must be accelerated, its start-up function test passed;
+    /// it switches the tier off and on as --no-hardware-acceleration and
+    /// --hardware-acceleration would (update_render_tier). Then, with the
+    /// accelerated presentation switched on at the full scene budget with
+    /// magnify on:
     /// zoom 1 at a whole-number chrome scale equals compose_match_frame
     /// exactly in the battlefield and within 1 in the HUD; zoom 0.5, 0.6 and
     /// 0.75 by the area pass equal the processor's composition exactly in the

@@ -129,6 +129,8 @@ bool Runtime::take_render_event(const SDL_Event& event) {
 
 void Runtime::forget_render_textures() {
     destroy_match_layer_textures();
+    // The accelerated presentation makes its own again as it draws.
+    free_accelerated_presentation();
     frontend_texture_.reset();
     output_texture_w_ = 0;
     output_texture_h_ = 0;

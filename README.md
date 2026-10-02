@@ -118,17 +118,23 @@ they are open; a multiplayer game keeps running.
   size, from the next start: Desktop, the default, leaves the screen at the
   desktop's size; 640×480, 800×600, 1024×768 or 1280×1024 switches the
   screen to that size in full screen, and opens the window at that size.
-  Hardware acceleration (on by default): the graphics card may scale the
+  Hardware acceleration (on by default): the graphics card scales the
   picture, only where it is able to and the computer has at least 2 GB of
-  memory; its two status lines say whether it is in use, and why not. This
-  build does not use the graphics card yet: the processor draws and scales
-  every frame, as before. Vertical sync (off by default): each frame waits
-  for the display, so that none tears, and the frame rate keeps just below
-  the display's; SDL's software renderer does not offer it, and neither,
-  for now, does SDL's `direct3d` renderer, whose graphics device each
-  change would reset. The Graphics section is taller than the dialog and
-  scrolls, with the mouse wheel, its scroll bar, Page Up, Page Down, Home
-  and End.
+  memory; a short test first draws known patterns on the card and reads
+  them back, and a card that draws them wrongly is not used. The game does
+  not yet keep the records that would let it skip that test after it
+  crashed a graphics driver, so a start does not run it by itself: switching
+  the setting Off and On, Restore defaults or `--hardware-acceleration`
+  runs it. Its two status lines say whether it is in use, and why not. Off,
+  or wherever it is not in use, the processor draws and scales every frame,
+  as before; turned Off or On it applies at once. `--hardware-acceleration`
+  and `--no-hardware-acceleration` decide it for one run. Vertical sync
+  (off by default): each frame waits for the display, so that none tears,
+  and the frame rate keeps just below the display's; SDL's software
+  renderer does not offer it, and neither, for now, does SDL's `direct3d`
+  renderer, whose graphics device each change would reset. The Graphics
+  section is taller than the dialog and scrolls, with the mouse wheel, its
+  scroll bar, Page Up, Page Down, Home and End.
 - **Developer:** Show performance statistics: frame and tick times over the
   battlefield, as the `+stats` console command shows them.
 

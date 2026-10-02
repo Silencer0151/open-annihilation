@@ -153,6 +153,39 @@ names_software_rasteriser(std::string_view name, uint32_t vendor, uint32_t devic
 /// @return true for a driver whose reported limit is fixed
 [[nodiscard]] bool reports_fixed_texture_limit(std::string_view renderer) noexcept;
 
+/// Says whether a render driver's renderer can be accelerated only where
+/// its adapter was read, since otherwise a software rasteriser cannot be
+/// ruled out: true for direct3d12, vulkan and gpu.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true where an adapter that cannot be read leaves the renderer
+///     not capable
+[[nodiscard]] bool adapter_needed(std::string_view renderer) noexcept;
+
+/// Says whether a render driver may draw through the graphics card on
+/// Windows before Vista: only direct3d, SDL's Direct3D 9 renderer. Any other
+/// there, opengl included, keeps the standard tier.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true for direct3d
+[[nodiscard]] bool capable_before_vista(std::string_view renderer) noexcept;
+
+/// Says whether the accelerated tier has been run with this build's system
+/// and processor architecture on a render driver: metal on 64-bit ARM
+/// macOS, and direct3d11 on x86 and x64 Windows. Every other class is one
+/// nobody has run, which starts at the lowest budget.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true for a class that has been run
+[[nodiscard]] bool accelerated_tier_run(std::string_view renderer) noexcept;
+
+/// Says whether this build runs on an ARM processor that has not been run
+/// on the accelerated tier: any ARM processor but Apple's, whose builds are
+/// for macOS.
+///
+/// @return true on such a processor
+[[nodiscard]] bool untried_arm_processor() noexcept;
+
 /// Fills the classification of facts already read: software_rasteriser for
 /// SDL's software renderer, a set software_flag, a name on the software part
 /// of names_software_rasteriser's list or the Microsoft Basic Render

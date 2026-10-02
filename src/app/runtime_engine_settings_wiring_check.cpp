@@ -5,6 +5,8 @@
 // in step with its console command and the command line.
 
 #include "engine_settings_state.hpp"
+#include "render_host.hpp"
+#include "render_run.hpp"
 
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
@@ -13,6 +15,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -22,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 
 namespace oa::app {
 
@@ -246,6 +250,113 @@ void Runtime::check_engine_settings_wiring() {
                  : ruled_out                    ? settings::Lock::unavailable
                                                 : settings::Lock::none),
             "Hardware acceleration's lock did not go back"
+        );
+    }
+
+    // Hardware acceleration through the dialog, where the graphics card may
+    // be used: here SDL's software renderer, which --force-capable lets the
+    // accelerated tier use from 2 GiB. On draws in the accelerated tier at
+    // once, Off in the standard tier at once. A failure in the run keeps the
+    // standard tier, and the row within reach, until the row is switched
+    // Off then On or Restore defaults is pressed: a drop after a failed
+    // call, and a start-up function test that drew wrongly, which then runs
+    // again.
+    if (options_.force_capable && !options_.hardware_acceleration && render_run_ &&
+        render_run_->host != nullptr &&
+        enough_memory_for_acceleration(acceleration_facts().physical_memory)) {
+        auto& host = *render_run_->host;
+        auto& inputs = host.tier_inputs();
+        const auto graphics = settings::page_settings(settings::Page::graphics);
+        const auto row =
+            std::find(graphics.begin(), graphics.end(), settings::Setting::hardware_acceleration);
+        require(row != graphics.end(), "Hardware acceleration is not in the Graphics section");
+        const int32_t row_control =
+            settings::first_row_control + static_cast<int32_t>(row - graphics.begin());
+        // Clicks the middle of the dialog's part that shows a control, with
+        // a text where it is given, and does what the click asks.
+        const auto click = [&](int32_t control, std::string_view text) {
+            auto* dialog = engine_settings_dialog();
+            require(dialog != nullptr, "the dialog is not open");
+            std::ignore = settings::dialog_key(*dialog, settings::DialogKey::end);
+            const auto parts = settings::dialog_layout(*dialog);
+            const auto part = std::find_if(parts.begin(), parts.end(), [&](const auto& shown) {
+                return shown.control == control && (text.empty() || shown.text == text);
+            });
+            require(part != parts.end(), "a control of the dialog does not show");
+            const int32_t x = part->rect.x + part->rect.width / 2;
+            const int32_t y = part->rect.y + part->rect.height / 2;
+            std::ignore = settings::dialog_pointer_move(*dialog, x, y);
+            std::ignore = settings::dialog_pointer_down(*dialog, x, y);
+            std::ignore = take_engine_settings_action(settings::dialog_pointer_up(*dialog, x, y));
+        };
+        const auto off_then_on = [&] {
+            click(row_control, "OFF");
+            require(!accelerated_presentation(), "Off did not switch the accelerated tier off");
+            click(row_control, "ON");
+        };
+        require(!accelerated_presentation(), "the accelerated tier drew before it was turned On");
+        state.last_page = settings::Page::graphics;
+        std::ignore = open_engine_settings_dialog();
+        click(row_control, "ON");
+        require(
+            engine_settings().hardware_acceleration && accelerated_presentation() &&
+                inputs.function_test == render_policy::FunctionTest::passed,
+            "Hardware acceleration On did not draw in the accelerated tier at once"
+        );
+        click(row_control, "OFF");
+        require(
+            !accelerated_presentation(),
+            "Hardware acceleration Off did not draw in the standard tier at once"
+        );
+        // A drop: the standard tier, the failure said, the row within reach.
+        click(row_control, "ON");
+        drop_acceleration("the engine settings check drops it");
+        update_render_tier();
+        const auto dropped = acceleration_report();
+        require(
+            !accelerated_presentation() &&
+                dropped.status.state == settings::AccelerationState::driver_failed &&
+                !dropped.acceleration_unavailable,
+            "a drop did not keep the standard tier with the row within reach"
+        );
+        off_then_on();
+        require(accelerated_presentation(), "Off then On did not lift a drop");
+        // A function test that draws wrongly: it runs again on Off then On,
+        // fails and keeps the standard tier; drawn right, it passes.
+        host.faults().function_test.pattern_nearest = true;
+        inputs.function_test = render_policy::FunctionTest::failed;
+        off_then_on();
+        require(
+            !accelerated_presentation() &&
+                inputs.function_test == render_policy::FunctionTest::failed,
+            "a function test that drew wrongly did not keep the standard tier"
+        );
+        host.faults().function_test.pattern_nearest = false;
+        off_then_on();
+        require(
+            accelerated_presentation() &&
+                inputs.function_test == render_policy::FunctionTest::passed,
+            "Off then On did not run the function test again"
+        );
+        // Restore defaults retries too, here under --hardware-acceleration,
+        // whose lock keeps the row: the next frame draws accelerated again.
+        click(settings::cancel_control, {});
+        options_.hardware_acceleration = true;
+        update_render_tier();
+        drop_acceleration("the engine settings check drops it");
+        update_render_tier();
+        require(!accelerated_presentation(), "a drop did not keep the standard tier");
+        std::ignore = open_engine_settings_dialog();
+        click(settings::restore_control, {});
+        update_render_tier();
+        require(accelerated_presentation(), "Restore defaults did not lift a drop");
+        click(settings::cancel_control, {});
+        options_.hardware_acceleration.reset();
+        update_render_tier();
+        require(
+            engine_settings_dialog() == nullptr && !engine_settings().hardware_acceleration &&
+                !accelerated_presentation(),
+            "Cancel did not put Hardware acceleration back Off"
         );
     }
 
@@ -489,7 +600,8 @@ void Runtime::check_engine_settings_wiring() {
         "the skirmish did not go back to the settings"
     );
     std::cout << "engine settings check: the maximum frame rate (and --max-fps over it), "
-                 "enhanced anti-aliasing, Vertical sync, the acceleration flags' lock, the "
+                 "enhanced anti-aliasing, Vertical sync, the acceleration flags' lock, "
+                 "Hardware acceleration and its retries, the "
                  "performance statistics, SwitchAlt, the wheel zoom with Cancel, Escape's order, "
                  "a failed save, and the path credit and unit limit of the next game take "
                  "effect\n";

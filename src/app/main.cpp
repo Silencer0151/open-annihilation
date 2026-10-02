@@ -150,8 +150,11 @@ struct HostDisplay {
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
     /// (start_settings, starting_screen_size), and its renderer
-    /// (RendererHost::create), which it describes and logs. A window of a
-    /// set screen size takes the display mode nearest it in full screen.
+    /// (RendererHost::create), which it describes and logs with the tier its
+    /// first frame is drawn in, from the flags and the Hardware acceleration
+    /// setting read before the window opens (RendererHost::decide_start_tier).
+    /// A window of a set screen size takes the display mode nearest it in
+    /// full screen.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
     ///
@@ -191,6 +194,12 @@ struct HostDisplay {
             take_screen_size(window, screen, options.start_full_screen);
         set_window_icon(window);
         renderer_host.create(window, start_faults(options));
+        TierRequest request;
+        request.flag = options.hardware_acceleration;
+        request.force_capable = options.force_capable;
+        request.players_own_profile = !options.preferences_file.has_value();
+        request.setting_on = start.hardware_acceleration;
+        renderer_host.decide_start_tier(request);
     }
 
     ~HostDisplay() {

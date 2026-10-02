@@ -388,6 +388,13 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // map selection, nor the last game's end screen.
     release_endgame();
     teardown_match();
+    // From its loading screen a shared game or a replay keeps the tier it
+    // has.
+    begin_render_tier_match(
+        bootstrap.multiplayer ? render_policy::MatchKind::shared_game
+        : bootstrap.replay    ? render_policy::MatchKind::replay
+                              : render_policy::MatchKind::none
+    );
     altitude_sight_blocked_ = false;
     match_tick_blocked_ = false;
     match_timing_ = {};

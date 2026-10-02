@@ -26,10 +26,11 @@ the grayed-out entries and the campaign's way in and out), saved-games
 (--check-load-save, which over data with no save and load dialog checks that
 every entry to it is grayed out), multiplayer-menu
 (--check-multiplayer-menu, whose MULTI shows the notice for data with no
-multiplayer map) or render-tiers (--check-render-tiers with --force-capable
-on SDL's software renderer, which switches the accelerated presentation on
-over the main menu and the demo's first Arm mission, since the demo has no
-skirmish map). Each must end with status 0 and print the line its check
+multiplayer map) or render-tiers (--check-render-tiers with
+--hardware-acceleration and --force-capable on SDL's software renderer, which
+switch the accelerated presentation on, once the start-up function test
+passed, over the main menu and the demo's first Arm mission, since the demo
+has no skirmish map). Each must end with status 0 and print the line its check
 prints when it passes; a check that skips, as render-tiers does on a machine
 under 2 GiB of memory, ends with 77 and the demo check skips with it.
 
@@ -73,7 +74,8 @@ GAME_CHECKS = {
                   "LOADGAME are grayed out and take no press"),
     "multiplayer-menu": (["--check-multiplayer-menu"],
                          "multiplayer menu check: MULTI shows the notice for data with no multiplayer map"),
-    "render-tiers": (["--check-render-tiers", "--force-capable", "--campaign", "Arm Campaign", "--mission", "0"],
+    "render-tiers": (["--check-render-tiers", "--hardware-acceleration", "--force-capable",
+                      "--campaign", "Arm Campaign", "--mission", "0"],
                      "render tiers check: the accelerated presentation draws within its references at every zoom"),
 }
 

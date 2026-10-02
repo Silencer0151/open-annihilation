@@ -264,8 +264,9 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 # the next start and the records that keep it, the step-down ladder, the
 # chrome's filter and the tiles of a texture larger than the renderer
 # allows, as pure functions with no SDL and no files. The game uses its walk
-# of the render drivers and its texture limit, in the line it logs at start;
-# the rest waits for the code that acts on it.
+# of the render drivers, its texture limit and the tier each frame is drawn
+# in; the records, the step-down and the memory guard wait for the code that
+# acts on them.
 add_library(oa-app-render-policy src/app/render_policy.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
@@ -275,7 +276,7 @@ target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-opti
 add_library(oa-app-acceleration-status src/app/acceleration_status.cpp)
 add_library(oa::app::acceleration_status ALIAS oa-app-acceleration-status)
 target_link_libraries(oa-app-acceleration-status PUBLIC oa-app-headers oa-ui-engine-settings
-  PRIVATE oa-options)
+  oa-app-render-policy PRIVATE oa-options)
 # The developer's video capture (--capture-video): presented frames and the
 # mix SDL plays, encoded by the ffmpeg program (docs/capture.md).
 if(OA_BUILD_PLATFORM)
@@ -285,7 +286,9 @@ if(OA_BUILD_PLATFORM)
   # The game's renderer (render_host.hpp): made by walking SDL's render
   # drivers in SDL's own order, logging each refusal, with the framebuffer
   # hint set before SDL's software renderer, or by SDL's own call under
-  # SDL_RENDER_DRIVER; then described and logged (graphics_report.hpp);
+  # SDL_RENDER_DRIVER; then described, its first frame's tier decided after
+  # the start-up function test where it could be accelerated, and logged
+  # (graphics_report.hpp);
   # made again after a failure while the game runs; its window-size
   # textures, as tiles beyond its texture limit, and the accelerated tier's
   # drawing on the card (scaled_world.hpp), with the frames' conversion for
@@ -294,7 +297,8 @@ if(OA_BUILD_PLATFORM)
     src/app/scaled_world.cpp src/app/xrgb_conversion.cpp)
   add_library(oa::app::render_host ALIAS oa-app-render-host)
   target_link_libraries(oa-app-render-host PUBLIC oa-app-headers oa-app-render-policy
-    oa-platform-render-probe oa-platform-job-pool oa-present-world-renderer PRIVATE
+    oa-platform-render-probe oa-ui-engine-settings oa-app-acceleration-status
+    oa-platform-job-pool oa-present-world-renderer PRIVATE oa-platform-shims
     oa-base-float-precision SDL3::SDL3 oa-options)
   if(BUILD_TESTING)
     add_executable(oa-app-video-capture-test src/app/video_capture_test.cpp)
@@ -308,8 +312,12 @@ if(OA_BUILD_PLATFORM)
     # SDL_RENDER_DRIVER. Then on the dummy video driver: the walk ends on
     # the renderer SDL's own choice makes, with the hint set; a named
     # driver that does not exist ends the start with one attempt and no
-    # hint; software named is made with no hint. app-render-host-env names
-    # the missing driver through the environment variable itself.
+    # hint; software named is made with no hint; the start-up function test
+    # passes on SDL's software renderer; the start's tier, logged with its
+    # reason, accelerated only with --hardware-acceleration and
+    # --force-capable from 2 GiB; and a rebuild drops the tier.
+    # app-render-host-env names the missing driver through the environment
+    # variable itself.
     add_executable(oa-app-render-host-test src/app/render_host_test.cpp)
     target_link_libraries(oa-app-render-host-test PRIVATE oa-app-render-host SDL3::SDL3
       oa-test-support oa-options)
@@ -415,8 +423,10 @@ if(BUILD_TESTING)
   # The settings dialog's word on the renderer: Hardware acceleration's
   # status for the machine's memory against the 2 GiB threshold, the
   # setting, the flags, the environment's driver, a shared game or a replay
-  # and the renderer, looked at or not; its lock; and Vertical sync's lock
-  # on SDL's software renderer and on a renderer whose device it resets.
+  # and the renderer, looked at or not, lacking a feature or failed in the
+  # run, and in use at a budget; its lock; what the graphics card does at
+  # each rung; and Vertical sync's lock on SDL's software renderer and on a
+  # renderer whose device it resets.
   add_executable(oa-app-acceleration-status-test src/app/acceleration_status_test.cpp)
   target_link_libraries(oa-app-acceleration-status-test PRIVATE oa-app-acceleration-status
     oa-test-support oa-options)
@@ -472,7 +482,9 @@ if(BUILD_TESTING)
   # driver walk and its framebuffer hint, strikes and records, their values
   # written and read back, the sentinel and the trial through a run, present
   # stalls, the starting rung and the step-down fed synthetic frames, the
-  # chrome's filter, the prescale budget and the tile grids.
+  # chrome's filter, the prescale budget and the tile grids; and acting on
+  # the tier as the game does: a player's run through the setting, a shared
+  # game and a failed function test, beside the runs that stay standard.
   add_executable(oa-app-render-policy-test src/app/render_policy_test.cpp)
   target_link_libraries(oa-app-render-policy-test PRIVATE oa-app-render-policy oa-test-support oa-options)
   add_test(NAME app-render-policy COMMAND oa-app-render-policy-test)
@@ -498,13 +510,14 @@ if(BUILD_TESTING)
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
     # The texture limit the render policy corrects from the probe's report,
     # the line the game logs once its renderer is made, naming the driver,
-    # the adapter, the texture limit and the standard tier, and the adapter
-    # the +stats overlay names; SDL's software renderer on the dummy video
-    # driver reported as the game reports it.
+    # the adapter, the texture limit and the tier with what it does or why
+    # the processor draws everything, what the render policy reads of a
+    # renderer, and the adapter the +stats overlay names; SDL's software
+    # renderer on the dummy video driver reported as the game reports it.
     add_executable(oa-app-graphics-report-test src/app/graphics_report_test.cpp
       src/app/graphics_report.cpp)
     target_link_libraries(oa-app-graphics-report-test PRIVATE oa-platform-render-probe
-      oa-app-render-policy SDL3::SDL3 oa-test-support oa-options)
+      oa-app-render-policy oa-ui-engine-settings SDL3::SDL3 oa-test-support oa-options)
     add_test(NAME app-graphics-report COMMAND oa-app-graphics-report-test)
     set_tests_properties(app-graphics-report PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
@@ -526,7 +539,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_order_panel.cpp src/app/runtime_order_check.cpp
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
-  src/app/runtime_accelerated.cpp src/app/runtime_render_tiers_check.cpp
+  src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp
+  src/app/runtime_render_tiers_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
@@ -655,22 +669,23 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-match-layers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_layer_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # The accelerated presentation, switched on for this check alone, on
-      # SDL's software renderer taken as capable: the main menu and a fight's
-      # match read back at zoom 1, by the area pass at 0.5, 0.6 and 0.75 and
-      # magnified at 1.37, 2 and 4 must equal the processor's composition or
-      # keep within that renderer's own filters; a frame must not depend on
-      # those before it, the first after the tier is switched on or the
-      # window resized among them; the picture kept for screenshots must be
-      # the standard tier's and ease nothing; a zoom ease must make no
-      # texture; prescale targets are drawn once a painted frame; switched
-      # off, every frame is the standard tier's. Pictures of one moment at
-      # zoom 0.5, 1 and 2.5 in both tiers go to local/reports. Skips under
-      # 2 GiB of memory.
+      # The accelerated presentation, switched on by --hardware-acceleration
+      # once the start-up function test passed, on SDL's software renderer
+      # taken as capable, and off and on again as the flags switch it: the
+      # main menu and a fight's match read back at zoom 1, by the area pass
+      # at 0.5, 0.6 and 0.75 and magnified at 1.37, 2 and 4 must equal the
+      # processor's composition or keep within that renderer's own filters;
+      # a frame must not depend on those before it, the first after the tier
+      # is switched on or the window resized among them; the picture kept for
+      # screenshots must be the standard tier's and ease nothing; a zoom ease
+      # must make no texture; prescale targets are drawn once a painted
+      # frame; switched off, every frame is the standard tier's. Pictures of
+      # one moment at zoom 0.5, 1 and 2.5 in both tiers go to local/reports.
+      # Skips under 2 GiB of memory.
       set(oa_render_tiers_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers")
       file(MAKE_DIRECTORY "${oa_render_tiers_check_dir}")
       add_test(NAME native-render-tiers COMMAND oa-game --game-dir "${OA_GAME_DIR}"
-        --skip-intro --mute --check-render-tiers --force-capable
+        --skip-intro --mute --check-render-tiers --hardware-acceleration --force-capable
         --preferences-file "${oa_render_tiers_check_dir}/render-tiers.conf")
       set_tests_properties(native-render-tiers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_render_tiers_check_dir}" SKIP_RETURN_CODE 77
@@ -727,8 +742,10 @@ if(OA_BUILD_PLATFORM)
       # a game, the command line and the renderer put on it, and each setting
       # taking effect. --force-capable lifts the software renderer's lock on
       # Vertical sync, which the dialog turns On and reads back from the
-      # renderer; Hardware acceleration stays Off, so every frame compared is
-      # drawn on the processor.
+      # renderer, and on Hardware acceleration, which one step turns On and
+      # Off through the dialog, from 2 GiB, to see the accelerated tier
+      # follow it at once and come back after a drop or a function test
+      # forced to fail; every frame compared is drawn on the processor.
       set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
       file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
       add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -1106,8 +1123,8 @@ if(OA_BUILD_PLATFORM)
       # grayed-out save and load entries, the notice MULTI shows over data
       # with no multiplayer map, and the accelerated presentation on SDL's
       # software renderer taken as capable over the main menu and the first
-      # Arm mission (--check-render-tiers --force-capable), which skips
-      # under 2 GiB of memory.
+      # Arm mission (--check-render-tiers --hardware-acceleration
+      # --force-capable), which skips under 2 GiB of memory.
       set(oa_demo_game_checks navigation saved-games multiplayer-menu render-tiers)
       foreach(check IN LISTS oa_demo_game_checks)
         add_test(NAME native-demo-${check} COMMAND ${Python3_EXECUTABLE}

@@ -8,6 +8,8 @@
 
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
+#include "render_host.hpp"
+#include "render_run.hpp"
 #include "screen_size.hpp"
 #include "oa/platform/machine.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
@@ -263,12 +265,39 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
                               .value_or(oa::present::model::UnitSupersampling::off);
     if (chosen.frame_stats != before.frame_stats)
         show_frame_stats(chosen.frame_stats);
+    // Off applies at once; so does On, but in a shared game or a replay,
+    // which keeps the tier it began with until it ends.
+    if (chosen.hardware_acceleration != before.hardware_acceleration)
+        update_render_tier();
     apply_vertical_sync();
 }
 
 AccelerationFacts Runtime::acceleration_facts() const {
     AccelerationFacts facts{};
     const bool setting = engine_settings_ && engine_settings_->current.hardware_acceleration;
+    if (render_run_ && render_run_->host != nullptr) {
+        // The facts the tier is decided from, the function test's result
+        // and the presentation drawing now among them.
+        const bool drawing = accelerated_presentation();
+        facts = tier_acceleration_facts(
+            render_run_->host->tier_inputs(),
+            drawing ? accelerated_.rung : render_tier_rung(),
+            drawing
+        );
+        facts.asked = hardware_acceleration_asked(options_, setting);
+        facts.flag = options_.hardware_acceleration;
+        facts.force_capable = options_.force_capable;
+        const std::string_view renderer_name = render_run_->host->facts().renderer;
+        facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
+        facts.vertical_sync_refused = vertical_sync_refused_;
+        if (match_) {
+            const uint32_t extension = current_extension_state();
+            facts.shared_game =
+                facts.shared_game || (extension & extension_state::shared_match) != 0;
+            facts.replay = facts.replay || (extension & extension_state::replay) != 0;
+        }
+        return facts;
+    }
     facts.asked = hardware_acceleration_asked(options_, setting);
     facts.flag = options_.hardware_acceleration;
     facts.force_capable = options_.force_capable;
@@ -280,9 +309,9 @@ AccelerationFacts Runtime::acceleration_facts() const {
          std::find(kWindowlessVideoDrivers.begin(), kWindowlessVideoDrivers.end(), video_driver) !=
              kWindowlessVideoDrivers.end());
     facts.physical_memory = engine_settings_ ? engine_settings_->physical_memory : 0;
-    // Nothing looks at the renderer yet, so whether it is able stays
-    // unknown (renderer_capable empty); only SDL's software renderer is
-    // known unable.
+    // A renderer the runtime made itself is not looked at, so whether it is
+    // able stays unknown (renderer_capable empty); only SDL's software
+    // renderer is known unable.
     const char* renderer = sdl_.renderer != nullptr ? SDL_GetRendererName(sdl_.renderer) : nullptr;
     const std::string_view renderer_name = renderer != nullptr ? renderer : "";
     facts.software_renderer = renderer_name == SDL_SOFTWARE_RENDERER;
@@ -294,6 +323,14 @@ AccelerationFacts Runtime::acceleration_facts() const {
         facts.replay = (extension & extension_state::replay) != 0;
     }
     return facts;
+}
+
+void Runtime::take_renderer_retry(const settings::Dialog& dialog) {
+    auto& state = engine_settings_state();
+    if (dialog.forget_renderer_failures == state.retries_taken)
+        return;
+    state.retries_taken = dialog.forget_renderer_failures;
+    forget_render_failures();
 }
 
 AccelerationReport Runtime::acceleration_report() const {
@@ -349,6 +386,7 @@ settings::Dialog& Runtime::open_engine_settings_dialog() {
     state.opened_zoom_target = match_zoom_target_;
     state.opened_run_unit_limit = frontend_game().max_units_setting;
     auto& dialog = state.dialog.emplace();
+    state.retries_taken = 0;
     settings::open_dialog(
         dialog,
         state.current,
@@ -377,9 +415,11 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
     case settings::DialogAction::redraw:
         return false;
     case settings::DialogAction::changed:
+        take_renderer_retry(*dialog);
         apply_engine_settings(dialog->chosen);
         return false;
     case settings::DialogAction::accepted: {
+        take_renderer_retry(*dialog);
         apply_engine_settings(dialog->chosen);
         const auto failure = save_engine_settings(dialog->opened, dialog->chosen, dialog->restored);
         state.last_page = dialog->page;

@@ -221,11 +221,12 @@ logs it.
   range and every window's battlefield the scene holds every pixel the
   nearest resample and the area pass read.
 - The accelerated presentation (`runtime_accelerated.cpp`,
-  `scaled_world.hpp`, `scaled_world.cpp`): a component its host switches on
-  at a rung of the step-down ladder (`switch_accelerated_presentation`);
-  nothing switches it on yet but `--check-render-tiers`, so every other
-  run, the director, headless runs and every other check draw and present
-  as the standard tier always has. Switched on, a zoomed-out match frame
+  `scaled_world.hpp`, `scaled_world.cpp`): a component switched on at a
+  rung of the step-down ladder (`switch_accelerated_presentation`) when
+  the tier of the frame is accelerated (`runtime_render_tier.cpp`, below).
+  Headless runs, the director, a named `--preferences-file` at its
+  defaults and every check but `--check-render-tiers` draw and present as
+  the standard tier always has. Switched on, a zoomed-out match frame
   draws its scene at the draw scale and the exact area pass reduces it into
   the world layer on the drawing threads, which is then painted over and
   uploaded 1:1 as always; lasers, lightning and selection lines are drawn
@@ -268,18 +269,60 @@ logs it.
   scenes and prescale targets in tiles among it; `app-world-draws` checks
   the thick lines band by band; and
   `--check-render-tiers` (`runtime_render_tiers_check.cpp`,
-  `native-render-tiers`, with `--force-capable` on that renderer, and
-  `native-demo-render-tiers` over the demo's first Arm mission) checks the
-  presented frames of the main menu and a fight at zooms from 0.5 to 4,
-  against the references of `scene_filter.hpp` on a card and against that
-  model on SDL's software renderer; that a frame depends on none before it,
-  the first after the tier is switched on or the window resized among
+  `native-render-tiers`, with `--hardware-acceleration` and
+  `--force-capable` on that renderer, which the start-up function test
+  passes, and `native-demo-render-tiers` over the demo's first Arm
+  mission) checks the presented frames of the main menu and a fight at
+  zooms from 0.5 to 4, against the references of `scene_filter.hpp` on a
+  card and against that model on SDL's software renderer, switching the
+  tier off and on as the flags would; that a frame depends on none before
+  it, the first after the tier is switched on or the window resized among
   them; that the picture kept for a reader is the standard tier's and eases
   nothing; that a zoom ease makes no texture; and that prescale targets are
   drawn once a painted frame; it writes pictures of one moment at zoom
-  0.5, 1 and 2.5 in both tiers. The setting, the flags, the probe's function test, the records,
-  the step-down's feed and the memory guard that would switch it on in a
-  player's game are not wired yet.
+  0.5, 1 and 2.5 in both tiers. The records, the step-down's feed and the
+  memory guard are not wired yet.
+- The tier each frame is drawn in (`runtime_render_tier.cpp`): at start,
+  once the renderer is made, `RendererHost::decide_start_tier` fills the
+  render policy's facts (the flags, the Hardware acceleration setting read
+  before the window opens, `SDL_RENDER_DRIVER`, a video driver with no
+  window, a named preferences file, the machine's physical memory against
+  the 2 GiB threshold, and what probe items 1 to 3 found of the renderer:
+  on Windows before Vista only `direct3d` is capable, and under
+  `SDL_RENDER_DRIVER` the adapter is read only when
+  `--hardware-acceleration` or `--force-capable` asks for more than SDL's
+  own start) and, where the tier could be accelerated but for it, runs the
+  start-up function test (`run_function_test`): a render target cleared
+  and read back, a LINEAR reduction by half within 2 of the texels'
+  average, PIXELART (`probe_pixelart`), and a seeded pattern drawn NEAREST
+  through a source rectangle into a prescale target, reduced LINEAR and
+  overlaid, read back against `sharp_bilinear_rgb24` and `overlay_rgb24`
+  within 3 and 0.5 on the mean. No trial record is written before the
+  test yet, so on the player's own profile a start does not run it by
+  itself: it waits for the player to switch the setting Off then On, or
+  Restore defaults, unless `--hardware-acceleration` asks for it
+  (`start_function_test`); with a named preferences file it runs where
+  the file turns the setting On. The start-up line names the tier with
+  what it does, or the reason the processor draws everything
+  (`tier_description`). Before each frame, `Runtime::update_render_tier`
+  brings the facts up to date (the flags, the setting in effect, the
+  director, a lost device) and takes the frame's step from the render
+  policy (`step_tier`): the tier, the function test run where only it is
+  missing, the frame noted in a shared game or a replay, and the switch
+  that makes the accelerated presentation match, on at the machine's
+  starting rung or off. Turning Hardware acceleration Off applies at
+  once; On applies at once too, except in a shared game or a replay, known
+  from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
+  the tier it began with until it ends (`begin_render_tier_match`,
+  `end_render_tier_match`). Switching it Off then On, or Restore defaults,
+  lets a failed function test run again and lifts a drop
+  (`take_renderer_retry`). A failed call of the accelerated tier, or a
+  renderer made again, drops it for the run. The dialog's status and
+  locks follow these facts (`tier_acceleration_facts`); a driver that
+  failed in the run locks nothing, so that the row can retry it. `+stats`
+  names the tier. `native-engine-settings` turns the row On and Off
+  through the dialog under `--force-capable` and retries it after a drop
+  and after a function test forced to draw wrongly.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
   match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
   Game Settings sheet, the removal question) is placed as 3.1c's panel
@@ -572,10 +615,14 @@ logs it.
   1.75 GiB as the system reports it, so that a machine sold with 2 GB
   counts. Then come the setting and the flags, `SDL_RENDER_DRIVER` or a
   video driver with no window, a shared game or a replay, and whether the
-  renderer is able.
-  Nothing looks at the renderer yet: only SDL's software renderer is known
-  unable, any other leaves the row unlocked with On taking effect from the
-  next start, and the processor draws every frame. Vertical sync is locked
+  renderer is able. With the game's renderer the status follows the facts
+  the tier is decided from (`tier_acceleration_facts`): probe items 1 to 3
+  and the start-up function test decide whether the renderer is able, a
+  failure in the run says the graphics driver failed and leaves the row
+  within reach, whatever renderer it left, and in use the second line says
+  what the graphics card does at its rung (`acceleration_reach`). A runtime
+  without it does not look at the renderer: only SDL's software renderer
+  is known unable. Vertical sync is locked
   on SDL's software renderer; on SDL's `direct3d` renderer, where each
   change resets the graphics device and the game cannot yet recover one
   the reset leaves lost; and once the renderer refused it.
@@ -694,6 +741,13 @@ logs it.
   recorded as failed yet, so the walk skips none. `walk_rebuild_drivers`
   and `RendererHost::rebuild` make the renderer again after a failure;
   `RenderFaultHooks` are what `--check-renderer-ladder` forces.
+  `RendererHost::decide_start_tier` decides the first frame's tier and
+  logs the start-up line, running the start-up function test
+  (`run_function_test`) where the tier could be accelerated; the facts the
+  tier is decided from stay with the host (`tier_inputs`), and a rebuild
+  drops the accelerated tier for the run. `app-render-host` runs the
+  function test on SDL's software renderer, and sees it fail where its
+  faults draw a reduction NEAREST (`FunctionTestFaults`).
   `runtime_renderer.cpp` holds the runtime's side: the render events,
   present errors and rebuilds, a lost device's wait and the stall rule;
   `runtime_renderer_ladder_check.cpp` the ladder check.
@@ -710,10 +764,13 @@ logs it.
   decisions of hardware-accelerated presentation as pure functions, with
   no SDL, no files and no clock, of which the game uses so far the walk of
   the render drivers and its rebuilds (`render_host.hpp`), the texture
-  limit, in the line it logs at start and for the tiles, the stall rule,
-  the count of device resets (`note_device_reset`), the layers' texture
-  formats (`layer_formats`) and the tiles of a texture beyond the
-  renderer's limit. The walk
+  limit, in the line it logs at start and for the tiles, the capability,
+  the tier each frame is drawn in and the step that acts on it
+  (`step_tier`, `tier_action`, `forget_failures`, `start_function_test`),
+  the shared-game gate, the starting rung, the stall rule, the count of
+  device resets (`note_device_reset`), the layers' texture formats
+  (`layer_formats`) and the tiles of a texture beyond the renderer's
+  limit. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed (`failed_driver_list` of the renderer records) but never
   `software`, with the framebuffer hint set before
