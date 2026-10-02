@@ -3,6 +3,7 @@
 
 // oa-game entry point: display setup, intro playback and runtime launch.
 #include "oa/app/runtime.hpp"
+#include "graphics_report.hpp"
 #include "screen_size.hpp"
 #include "oa/app/extension_list.hpp"
 #include "oa/app/full_screen.hpp"
@@ -119,11 +120,14 @@ struct HostDisplay {
     bool active = false;
     // The mode Alt+Enter last asked for while the intro movies play.
     FullScreenSwitch full_screen{};
+    // What the probe found of the renderer, logged once it was made.
+    oa::platform::render_probe::AdapterFacts renderer_facts{};
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
-    /// (starting_screen_size), and its renderer. A window of a set screen
-    /// size takes the display mode nearest it in full screen.
+    /// (starting_screen_size), and its renderer, which it describes and logs
+    /// (report_game_renderer). A window of a set screen size takes the
+    /// display mode nearest it in full screen.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
     ///
@@ -162,6 +166,7 @@ struct HostDisplay {
         renderer = SDL_CreateRenderer(window, nullptr);
         if (renderer == nullptr)
             throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
+        renderer_facts = report_game_renderer(renderer);
         oa::base::float_precision::restore_program_float_control();
     }
 
@@ -329,6 +334,10 @@ int main(int argc, char** argv) {
         );
         runtime->take_video_capture(std::move(capture));
         runtime->take_full_screen_switch(display.full_screen);
+        if (display.renderer != nullptr)
+            runtime->take_renderer_names(
+                display.renderer_facts.renderer, stats_adapter_name(display.renderer_facts)
+            );
         return runtime->run();
     } catch (const std::exception& error) {
         report_fatal(error.what());

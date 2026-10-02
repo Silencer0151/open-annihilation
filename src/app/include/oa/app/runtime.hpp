@@ -288,6 +288,13 @@ class Runtime final : public menu::Host,
     /// @param full_screen the switch the movies used
     void take_full_screen_switch(const FullScreenSwitch& full_screen) noexcept;
 
+    /// Hands the runtime the names of the renderer it borrows, which the
+    /// "+stats" overlay's renderer row shows.
+    ///
+    /// @param driver SDL's name for the render driver
+    /// @param adapter the adapter's name; empty where none was read
+    void take_renderer_names(std::string driver, std::string adapter);
+
     /// Starts the saved game the load dialog chose.
     ///
     /// A failure is shown on the status line and stderr.
@@ -8396,6 +8403,13 @@ class Runtime final : public menu::Host,
     ///     as the rate it keeps
     [[nodiscard]] frame_pacing::FrameStatsNotes frame_stats_notes() const;
 
+    /// Returns what the "+stats" overlay's renderer row names: the standard
+    /// tier, and the render driver and adapter the runtime was handed
+    /// (take_renderer_names), or that it named when it made its own.
+    ///
+    /// @return the names, valid while the runtime keeps them
+    [[nodiscard]] frame_pacing::FrameStatsRenderer frame_stats_renderer() const;
+
     /// Draws the "+stats" overlay at the battlefield's bottom right, when
     /// shown, in the match label font, and notes where it drew it
     /// (frame_stats_place_). It reads the statistics and writes nothing of
@@ -8474,6 +8488,8 @@ class Runtime final : public menu::Host,
     /// The eases the frame's resource readout takes; empty for one a draw.
     std::optional<uint32_t> readout_eases_{};
     bool frame_stats_shown_ = false; ///< "+stats" shows the overlay
+    std::string renderer_driver_{};  ///< SDL's name for the render driver; empty without one
+    std::string renderer_adapter_{}; ///< the adapter's name; empty where none was read
     /// Where the last frame drew the "+stats" overlay; empty when it drew none.
     std::optional<FrameStatsPlace> frame_stats_place_{};
     uint64_t frame_time_ns_{};       ///< the time the frame being run stands for

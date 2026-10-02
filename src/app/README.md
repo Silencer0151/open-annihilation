@@ -34,6 +34,20 @@ reported, and the game starts without it. The branding is not under the
 project's licence (`COPYRIGHT`). `branding-icons` checks the icons' sizes,
 and `app-window-icon` that the embedded one decodes.
 
+Once the renderer is made, start-up describes it with the
+[render probe](../platform/render-probe/README.md) and logs one line
+(`graphics_report.hpp`): the render driver on the video driver, the
+adapter in brackets where it was read, the largest texture side as the
+render policy corrects it (`corrected_texture_limit`, which asks the
+policy's `texture_limit`) and the tier every frame is drawn in, as in `open-annihilation: graphics: metal on
+cocoa (Apple M2), textures up to 16384; standard tier: the processor draws
+everything`. Under `SDL_RENDER_DRIVER` the adapter is not read and the
+brackets are left out, and so they are for SDL's software renderer, which
+has no adapter; no limit reads "textures of any size". The +stats overlay
+names the same renderer. `app-graphics-report` checks the limit and the
+line, and `native-renderer-report` that a start on the dummy video driver
+logs it.
+
 ## Adding a screen or overlay
 
 1. In your package, write `void oa::app::register_<pkg>_screens(ScreenRegistry*)`
@@ -195,8 +209,13 @@ and `app-window-icon` that the embedded one decodes.
   palette's light and dark edge colours, and on it a table
   (`frame_stats_table`) titled "Frame stats (ms)" of the frames a second
   of the last second, with the rate the loop keeps, the frame, work, tick,
-  draw and present times' least, mean and most in columns, and the units
-  the last frame drew. Each time is graded as it is taken, against the
+  draw and present times' least, mean and most in columns, the units
+  the last frame drew, and the renderer: the tier frames are drawn in and
+  the render driver, as in "standard: metal", with the adapter's name, each
+  cut to 23 bytes, never inside a character. The panel keeps its width
+  whatever the names: it cuts the renderer row, in its font's own widths,
+  where it would pass the panel's padding (`fit_run_on_row`). Each
+  time is graded as it is taken, against the
   allowance of the frame it belongs to (`frame_allowance_ns`: 1 / the rate
   kept, and half a millisecond after a precise wait or two after an idle
   one, whose wait is rounded up to whole milliseconds), and shows in a
@@ -210,8 +229,9 @@ and `app-window-icon` that the embedded one decodes.
   colour, capped in white past the graph's 40 ms, over a gray line at a
   tick and a fainter dotted one at the frame's allowance.
   `frame_stats_panel` lays the panel out in the match label font for the
-  widest texts the table shows (`frame_stats_widest_table`), so nothing in
-  it moves from frame to frame, and places it at the HUD's text scale, or
+  widest texts the table shows (`frame_stats_widest_table`, which keeps no
+  room for the renderer row), so nothing in it moves from frame to frame,
+  and places it at the HUD's text scale, or
   at the largest whole scale below it at which it fits the battlefield's
   bottom right quarter; it reads the statistics and writes nothing of the
   match. The console check types "+stats" and checks the panel's outline,
@@ -419,7 +439,8 @@ and `app-window-icon` that the embedded one decodes.
   screen given the display mode nearest it.
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
-  no SDL, no files and no clock, which the game does not use yet. The walk
+  no SDL, no files and no clock, of which the game uses only the texture
+  limit so far, in the line it logs at start. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed but never `software`, with the framebuffer hint set before
   `software` and never empty, a second walk with the records ignored

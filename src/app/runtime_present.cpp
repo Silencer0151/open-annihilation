@@ -3,6 +3,7 @@
 
 // SDL output textures, viewport sizing and frame presentation.
 #include "oa/app/runtime.hpp"
+#include "graphics_report.hpp"
 #include "xrgb_conversion.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace oa::app {
 namespace {
@@ -170,6 +172,8 @@ void Runtime::initialize_sdl() {
         sdl_.renderer = SDL_CreateRenderer(sdl_.window, nullptr);
         if (sdl_.renderer == nullptr)
             throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
+        const auto facts = report_game_renderer(sdl_.renderer);
+        take_renderer_names(facts.renderer, stats_adapter_name(facts));
         oa::base::float_precision::restore_program_float_control();
     }
     apply_output_mode();
@@ -185,6 +189,11 @@ bool Runtime::take_full_screen_event(const SDL_Event& event) {
 
 void Runtime::take_full_screen_switch(const FullScreenSwitch& full_screen) noexcept {
     full_screen_switch_ = full_screen;
+}
+
+void Runtime::take_renderer_names(std::string driver, std::string adapter) {
+    renderer_driver_ = std::move(driver);
+    renderer_adapter_ = std::move(adapter);
 }
 
 SDL_Texture* Runtime::ensure_streaming_texture(

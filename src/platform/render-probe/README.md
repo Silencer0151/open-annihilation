@@ -1,0 +1,108 @@
+# Render probe
+
+What the game can learn about the renderer SDL made and the graphics adapter
+behind it. Target `oa-platform-render-probe`, header
+`oa/platform/render_probe.hpp`, namespace `oa::platform::render_probe`.
+It is built only where SDL is, and links SDL privately; its public header
+only declares `SDL_Renderer`.
+
+## Entry points
+
+- `describe(renderer, read)` returns `AdapterFacts`: SDL's name for the
+  render driver and the video driver, the texture limit SDL reports, and,
+  with `AdapterRead::read`, the adapter: its name, its
+  vendor string and PCI identifiers where the interface gives them, its
+  software flag, the device's own texture limit, and whether the game runs
+  under Wine. With `AdapterRead::skip` only SDL's properties are read, as
+  for a start whose `SDL_RENDER_DRIVER` names the driver. SDL's software
+  renderer has no adapter (`AdapterState::none`); an adapter that its
+  interface would not name, or a renderer this build has no reader for,
+  is `AdapterState::unknown`. `describe_reported(renderer, video_driver,
+  reported_texture_limit, read, reader)` is the same from SDL's names and
+  report, with the adapter read through a hook (`AdapterReader`): the part
+  of `describe` a test can drive without a graphics interface.
+- `names_software_rasteriser(name, vendor, device)`: true for a name that
+  holds, in any letter case, `llvmpipe`, `softpipe`, `lavapipe`, `swrast`,
+  `software rasterizer`, `swiftshader`, `gdi generic`, `apple software
+  renderer`, `microsoft basic render driver`, `virtualbox`, `vmware`,
+  `svga3d` or `chromium`, and for vendor 0x1414 with device 0x008C (the
+  Microsoft Basic Render Driver, which WARP reports). Mesa's drivers layered
+  over a software rasteriser (zink, virgl, its Direct3D 12 driver over WARP)
+  carry the rasteriser's name in their own. `names_virtual_adapter` is the
+  part of the list that names a virtual machine's adapter, and
+  `vendor_names_virtual_adapter` matches the OpenGL vendor string, for
+  `humper` alone (VirtualBox's older OpenGL pass-through).
+- `reports_fixed_texture_limit(renderer)`: true for `vulkan` and `gpu`,
+  for which SDL reports a fixed 16384 rather than the device's own limit.
+  The probe keeps both limits as reported and read; the app's render policy
+  corrects them (`texture_limit` in
+  [render_policy.hpp](../../app/include/oa/app/render_policy.hpp)): a
+  report of 0 means no limit (SDL's software renderer sets none), and on
+  these two drivers the device's own limit is taken where it was read, and
+  otherwise the report at most 8192.
+- `classify(facts)` fills `software_rasteriser` (SDL's software renderer,
+  the interface's software flag, a software rasteriser's name or WARP's
+  identifiers) and `virtual_adapter` (a virtual machine's adapter by name or
+  vendor string); `software_or_virtual(facts)` adds Wine, under which every
+  renderer draws through Wine's own translation.
+- `clean_name(name)` turns control characters into spaces, trims the ends
+  and cuts a name at 255 bytes without splitting a character.
+
+## How each interface is read
+
+Which readers exist is chosen per system at compile time; inside them
+everything is found at run time. Nothing links a graphics library: each
+reader reaches its interface through the object SDL made for the renderer
+(its properties) or through a function looked up at run time, so one
+Windows package still starts on every Windows release from XP, and Linux
+needs no Vulkan library to start.
+
+| Renderer | Systems | Read |
+| --- | --- | --- |
+| `direct3d` | Windows | The device's creation parameters, its `IDirect3D9`, and `GetAdapterIdentifier` of that adapter with flags 0, the cheap form |
+| `direct3d11` | Windows | The device's `IDXGIDevice`, its adapter, and `IDXGIAdapter1::GetDesc1` (name, identifiers, `DXGI_ADAPTER_FLAG_SOFTWARE`), or `GetDesc` where the adapter is older |
+| `direct3d12` | Windows, where the toolchain has `d3d12.h` and `dxgi1_4.h` | The swap chain's `IDXGIFactory4`, `EnumAdapterByLuid` with the device's adapter identifier, and `GetDesc1` |
+| `opengl`, `opengles2` | every system | `glGetString` for the renderer and vendor strings, looked up with `SDL_GL_GetProcAddress`, and only while SDL's context is current |
+| `vulkan` | Windows, Linux | `vkGetPhysicalDeviceProperties` through SDL's `vkGetInstanceProcAddr` and the renderer's instance: the name, identifiers, CPU device type and largest 2D image side, from a head of the structure declared here |
+| `metal` | Apple | The name of the Metal layer's device, by Objective-C messages |
+| `gpu` | SDL 3.4 and later | The name of SDL's graphics device; on SDL 3.2 the adapter is unknown |
+
+The interface identifiers the Windows reader asks for are defined in its
+source. Wine is found by `GetProcAddress` of `wine_get_version` in
+`ntdll.dll`, which every Windows process has loaded.
+
+## Who uses it
+
+Start-up describes the renderer it made and logs one line, with the
+texture limit the render policy corrects, and the +stats overlay names the
+driver and adapter ([src/app](../../app/README.md)).
+Every frame is still drawn as before: the probe only reports.
+
+## Tests
+
+`platform-render-probe` checks the name tables over names real drivers
+give, in any letter case, and real cards' names against them; WARP's
+identifiers; the drivers that report a fixed texture limit; the
+classification and the cleaning of names; what `describe_reported` reads through a stand-in
+reader, for SDL's software renderer and for others, with the adapter read
+or skipped, named, failing or blank; and SDL's software renderer on the
+dummy video driver described.
+
+The readers of the graphics interfaces themselves have no automated test:
+the checks run on the dummy video driver, where SDL makes only its software
+renderer. They were checked by hand on a Mac, where the Metal, OpenGL and
+`gpu` renderers each named the Apple GPU, the start-up line capped `gpu`'s
+limit at 8192 and a skipped read left the adapter empty.
+
+## Known limitations
+
+- It does not yet report a Direct3D 9 device's lost state, or an OpenGL
+  out-of-memory error.
+- The test does not yet read its own executable's imports on Windows to show
+  that no graphics library is linked; list a Windows build's imports to
+  check it.
+- The Windows readers have been compiled only by the cross-compiled
+  Windows build (x86-64), not yet by the compiler of the Windows build CI
+  makes. The Direct3D 12 read calls `ID3D12Device::GetAdapterLuid`, whose
+  returned structure each toolchain's headers declare in their own way;
+  build the module with that compiler before relying on it there.

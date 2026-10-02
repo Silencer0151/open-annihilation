@@ -714,10 +714,14 @@ void test_frame_stats() {
     // second and a precise wait.
     CHECK(window.allowance_ns == frame_allowance_ns(120, FrameWait::precise));
     const oa::app::frame_pacing::FrameStatsNotes notes{120, 120, 0, 0};
+    oa::app::frame_pacing::FrameStatsRenderer renderer{};
+    renderer.tier = "standard";
+    renderer.driver = "metal";
+    renderer.adapter = "Apple M2";
     CHECK(!roll_frame_stats(window, kClockStart));
-    FrameStatsTable table = oa::app::frame_pacing::frame_stats_table(window, notes);
+    FrameStatsTable table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(table.row_count == oa::app::frame_pacing::kFrameStatsRowsMost);
-    CHECK(table.row_count == 9);
+    CHECK(table.row_count == 10);
     CHECK(table.rows[0].kind == FrameStatsRowKind::title);
     CHECK(row_reads(table.rows[0], "Frame stats (ms)", "", "", "", ""));
     CHECK(table.rows[1].kind == FrameStatsRowKind::heading);
@@ -732,6 +736,9 @@ void test_frame_stats() {
     // The units row shows from the start, so the panel keeps its height.
     CHECK(table.rows[8].kind == FrameStatsRowKind::count);
     CHECK(row_reads(table.rows[8], "units", "", "0", "", "0 between ticks"));
+    // The renderer row: the tier and the driver, and the adapter as its note.
+    CHECK(table.rows[9].kind == FrameStatsRowKind::renderer);
+    CHECK(row_reads(table.rows[9], "standard: metal", "", "", "", "Apple M2"));
     // A second of 120 frames 8 to 9 ms apart, 30 ticks of 2 to 4 ms.
     for (uint32_t frame = 0; frame < 120; ++frame) {
         note_frame_measure(
@@ -749,7 +756,7 @@ void test_frame_stats() {
         );
     CHECK(!roll_frame_stats(window, kClockStart + kNanosecondsPerSecond - 1));
     CHECK(roll_frame_stats(window, kClockStart + kNanosecondsPerSecond));
-    table = oa::app::frame_pacing::frame_stats_table(window, notes);
+    table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(row_reads(table.rows[2], "FPS", "", "120", "", "limit 120"));
     CHECK(row_reads(table.rows[3], "frame", "8.00", "8.50", "9.00", ""));
     CHECK(row_reads(table.rows[4], "work", "5.00", "5.00", "5.00", ""));
@@ -769,28 +776,28 @@ void test_frame_stats() {
     // The next second starts empty; the shown one stays until it ends.
     CHECK(window.measuring[0].count == 0);
     // Idle, no limit, and the units the drawing reports.
-    table = oa::app::frame_pacing::frame_stats_table(window, {120, 30, 0, 0});
+    table = oa::app::frame_pacing::frame_stats_table(window, {120, 30, 0, 0}, renderer);
     CHECK(table.rows[2].note.view() == "idle 30");
-    table = oa::app::frame_pacing::frame_stats_table(window, {0, 0, 0, 0});
+    table = oa::app::frame_pacing::frame_stats_table(window, {0, 0, 0, 0}, renderer);
     CHECK(table.rows[2].note.view() == "no limit");
-    table = oa::app::frame_pacing::frame_stats_table(window, {120, 120, 40, 38});
+    table = oa::app::frame_pacing::frame_stats_table(window, {120, 120, 40, 38}, renderer);
     CHECK(row_reads(table.rows[8], "units", "", "40", "", "38 between ticks"));
     CHECK(table.rows[8].values[1].severity == TimeSeverity::none);
     // The rate shown beside them grades nothing: each time keeps the grade
     // it had when it was taken.
-    table = oa::app::frame_pacing::frame_stats_table(window, {240, 240, 0, 0});
+    table = oa::app::frame_pacing::frame_stats_table(window, {240, 240, 0, 0}, renderer);
     CHECK(table.rows[4].values[1].severity == TimeSeverity::within_frame);
     CHECK(table.rows[3].values[2].severity == TimeSeverity::within_tick);
     // A second with no tick (a paused match) shows none.
     CHECK(roll_frame_stats(window, kClockStart + 2 * kNanosecondsPerSecond));
-    table = oa::app::frame_pacing::frame_stats_table(window, notes);
+    table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(row_reads(table.rows[5], "tick", "", "--", "", "0/s"));
     CHECK(row_reads(table.rows[2], "FPS", "", "0", "", "limit 120"));
     // A slow second: frames over a tick grade over it, in every column.
     for (uint32_t frame = 0; frame < 10; ++frame)
         note_frame_measure(window, FrameMeasure::frame, 50 * kNanosecondsPerMillisecond);
     CHECK(roll_frame_stats(window, kClockStart + 3 * kNanosecondsPerSecond));
-    table = oa::app::frame_pacing::frame_stats_table(window, notes);
+    table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(row_reads(table.rows[2], "FPS", "", "10", "", "limit 120"));
     CHECK(table.rows[2].values[1].severity == TimeSeverity::over_tick);
     CHECK(row_reads(table.rows[3], "frame", "50.00", "50.00", "50.00", ""));
@@ -809,7 +816,7 @@ void test_frame_stats() {
         note_frame_measure(window, FrameMeasure::frame, 8 * kNanosecondsPerMillisecond);
     note_frame_measure(window, FrameMeasure::frame, 20 * kNanosecondsPerMillisecond);
     CHECK(roll_frame_stats(window, kClockStart + 4 * kNanosecondsPerSecond));
-    table = oa::app::frame_pacing::frame_stats_table(window, notes);
+    table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(row_reads(table.rows[3], "frame", "8.00", "11.83", "34.00", ""));
     CHECK(table.rows[3].values[0].severity == TimeSeverity::within_frame);
     CHECK(table.rows[3].values[1].severity == TimeSeverity::within_frame);
@@ -817,6 +824,67 @@ void test_frame_stats() {
     const auto newest = oa::app::frame_pacing::frame_history_column(window.history, 0);
     CHECK(newest.frame_ns == 20 * kNanosecondsPerMillisecond);
     CHECK(newest.severity == TimeSeverity::within_tick);
+}
+
+// The renderer row names the tier alone without a driver; cuts the
+// tier and driver, and the adapter, each to one of the table's texts,
+// never inside a character; and the widest table keeps it empty, since
+// the panel cuts it to its width.
+void test_renderer_row() {
+    using oa::app::frame_pacing::FrameStatsRenderer;
+    using oa::app::frame_pacing::kFrameStatsRowsMost;
+    using oa::app::frame_pacing::kFrameStatsTextBytes;
+    const oa::app::frame_pacing::FrameStatsWindow window{};
+    const oa::app::frame_pacing::FrameStatsNotes notes{120, 120, 0, 0};
+    constexpr std::size_t kRendererRow = kFrameStatsRowsMost - 1;
+    constexpr std::size_t kTextCharacters = kFrameStatsTextBytes - 1;
+    FrameStatsRenderer renderer{};
+    renderer.tier = "standard";
+    auto row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row.kind == FrameStatsRowKind::renderer);
+    CHECK(row_reads(row, "standard", "", "", "", ""));
+    renderer.driver = "direct3d11";
+    renderer.adapter = "NVIDIA GeForce RTX 3060 Laptop GPU";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row_reads(row, "standard: direct3d11", "", "", "", "NVIDIA GeForce RTX 3060"));
+    CHECK(row.note.view().size() == kTextCharacters);
+    // A two-byte character across the cut is left out whole; one that ends
+    // at the cut is kept.
+    renderer.adapter = "Radeon Graphics 012345\xc3\xa9t";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row.note.view() == "Radeon Graphics 012345");
+    renderer.adapter = "Radeon Graphics 01234\xc3\xa9t";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row.note.view() == "Radeon Graphics 01234\xc3\xa9");
+    // A driver longer than the text holds is cut where the text ends.
+    renderer.driver = "a-render-driver-with-a-long-name";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row.label.view() == "standard: a-render-driv");
+    CHECK(row.label.view().size() == kTextCharacters);
+    renderer.driver = "a-render-dri\xc3\xa9";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row.label.view() == "standard: a-render-dri");
+    const auto widest = oa::app::frame_pacing::frame_stats_widest_table().rows[kRendererRow];
+    CHECK(widest.kind == FrameStatsRowKind::renderer);
+    CHECK(row_reads(widest, "", "", "", "", ""));
+}
+
+// A cut keeps whole characters: the whole text when it fits, and else
+// backs off to the start of the character the limit falls in.
+void test_whole_characters() {
+    using oa::app::frame_pacing::whole_characters;
+    CHECK(whole_characters("Apple M2", 23) == "Apple M2");
+    CHECK(whole_characters("Apple M2", 5) == "Apple");
+    CHECK(whole_characters("Apple M2", 0).empty());
+    CHECK(whole_characters("", 4).empty());
+    // A two-byte, a three-byte and a four-byte character, the limit inside
+    // each.
+    CHECK(whole_characters("ab\xc3\xa9", 3) == "ab");
+    CHECK(whole_characters("ab\xc3\xa9", 4) == "ab\xc3\xa9");
+    CHECK(whole_characters("a\xe2\x84\xa2z", 2) == "a");
+    CHECK(whole_characters("a\xe2\x84\xa2z", 3) == "a");
+    CHECK(whole_characters("a\xe2\x84\xa2z", 4) == "a\xe2\x84\xa2");
+    CHECK(whole_characters("\xf0\x9f\x96\xa5x", 3).empty());
 }
 
 void test_time_severity() {
@@ -957,6 +1025,8 @@ int main() {
     test_presentation_holds();
     test_scroll_distance();
     test_frame_stats();
+    test_renderer_row();
+    test_whole_characters();
     test_time_severity();
     test_frame_history();
     if (failures != 0) {

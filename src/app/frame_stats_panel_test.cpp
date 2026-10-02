@@ -56,39 +56,33 @@ int fixed_width(void* context, std::string_view text) {
     return static_cast<int>(text.size()) * *static_cast<const int*>(context);
 }
 
+/// The first character console_width has a width for: the space.
+constexpr unsigned char kFirstPrintable = ' ';
+/// The widths, in pixels, of the match label font's glyphs
+/// (fonts/CONSOLE.FNT) for the printable ASCII characters, from the space
+/// to the tilde: digits are six pixels wide, and letters from four (i, l)
+/// to eight (A, T, V to Y, m, v, w, y).
+constexpr std::array<uint8_t, 95> kConsoleWidths{
+    7, 2, 5, 7, 6, 8, 8, 2, 5, 5, 6, 6, 3, 6, 3, 8, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 3, 3, 6, 8, 6, 6,
+    8, 8, 6, 7, 6, 6, 6, 7, 6, 6, 5, 6, 6, 7, 6, 7, 6, 8, 7, 6, 8, 6, 8, 8, 8, 8, 7, 4, 8, 4, 8, 8,
+    3, 7, 6, 6, 6, 6, 7, 6, 6, 4, 5, 6, 4, 8, 6, 6, 6, 6, 6, 5, 6, 6, 8, 8, 7, 8, 6, 5, 2, 5, 8
+};
+/// The widest of the font's glyphs, which console_width gives every byte
+/// outside printable ASCII.
+constexpr int kWidestGlyph = 8;
+
 /// Measures a text in the widths of the match label font's glyphs
-/// (fonts/CONSOLE.FNT): six pixels for most, three for a full stop, four
-/// for i and l, five for s, seven for a space and eight for m, v, w and y.
+/// (kConsoleWidths), every other byte as kWidestGlyph.
 ///
 /// @param text the text
 /// @return the text's width
 int console_width(void*, std::string_view text) {
     int width = 0;
     for (const char glyph : text) {
-        switch (glyph) {
-        case '.':
-            width += 3;
-            break;
-        case 'i':
-        case 'l':
-            width += 4;
-            break;
-        case 's':
-            width += 5;
-            break;
-        case ' ':
-            width += 7;
-            break;
-        case 'm':
-        case 'v':
-        case 'w':
-        case 'y':
-            width += 8;
-            break;
-        default:
-            width += 6;
-            break;
-        }
+        // A byte below the space wraps past the table's end.
+        const std::size_t code =
+            static_cast<std::size_t>(static_cast<unsigned char>(glyph)) - kFirstPrintable;
+        width += code < kConsoleWidths.size() ? kConsoleWidths[code] : kWidestGlyph;
     }
     return width;
 }
@@ -217,6 +211,112 @@ void test_graph_under_a_wider_table() {
     CHECK(layout.row_y[1] == kInner + kRowHeight);
 }
 
+// The renderer row sets no width: the panel is as wide as without it,
+// however long its texts. Its label runs on from the labels' left edge and
+// its note a gap after the label, each cut where it would pass the panel's
+// padding, and the note left out when the label is cut.
+void test_renderer_row_sets_no_width() {
+    frame_pacing::FrameStatsTable table{};
+    add_row(table, frame_pacing::FrameStatsRowKind::measure, "frame", "8.00", "8.50", "9.00", "");
+    frame_pacing::FrameStatsTable alone = table;
+    add_row(
+        table, frame_pacing::FrameStatsRowKind::renderer, "standard: metal", "", "", "", "Apple M2"
+    );
+    constexpr int kGap = panel::kColumnGap;
+    int pixels = 6;
+    const panel::TextWidthHooks measure{&pixels, fixed_width};
+    // At six pixels a character the graph sets the width, and the whole row
+    // fits: the label 90 wide, and the note 48 after a gap.
+    auto layout = panel::lay_out_panel(table, measure, kRowHeight);
+    auto without = panel::lay_out_panel(alone, measure, kRowHeight);
+    CHECK(layout.width == 2 * kInner + kFramedGraph);
+    CHECK(layout.width == without.width);
+    CHECK(layout.value_right == without.value_right);
+    CHECK(layout.note_x[1] == layout.label_x);
+    auto fit = panel::fit_run_on_row(table.rows[1], measure, layout);
+    CHECK(fit.label_bytes == 15);
+    CHECK(fit.note_x == kInner + 90 + kGap);
+    CHECK(fit.note_bytes == 8);
+    // At twenty the measure row sets the width, 100 + 3 * (8 + 80) = 364:
+    // the label, 300, fits, and two characters of the note in the 56 left.
+    pixels = 20;
+    layout = panel::lay_out_panel(table, measure, kRowHeight);
+    without = panel::lay_out_panel(alone, measure, kRowHeight);
+    constexpr int kTable = 5 * 20 + 3 * (kGap + 4 * 20);
+    static_assert(kTable > kFramedGraph);
+    CHECK(layout.width == 2 * kInner + kTable);
+    CHECK(layout.width == without.width);
+    fit = panel::fit_run_on_row(table.rows[1], measure, layout);
+    CHECK(fit.label_bytes == 15);
+    CHECK(fit.note_x == kInner + 300 + kGap);
+    CHECK(fit.note_bytes == 2);
+    // A label wider than the panel: 18 characters fit in 364, and no note.
+    put(table.rows[1].label, "standard: a-render-driv");
+    fit = panel::fit_run_on_row(table.rows[1], measure, layout);
+    CHECK(fit.label_bytes == 18);
+    CHECK(fit.note_x == kInner + 18 * 20 + kGap);
+    CHECK(fit.note_bytes == 0);
+}
+
+// In the match label font, whose capitals are up to two pixels wider than
+// its digits, the renderer row never passes the panel's padding, and the
+// panel laid out from the widest table is as wide as without that row: a
+// short adapter's name shows whole; a long one, or one of capitals, is cut
+// where one more character would pass the padding; one of two-byte
+// characters is cut between them.
+void test_renderer_row_fits_the_panel() {
+    const panel::TextWidthHooks measure{nullptr, console_width};
+    const auto widest = frame_pacing::frame_stats_widest_table();
+    const auto layout = panel::lay_out_panel(widest, measure, kRowHeight);
+    auto without = widest;
+    --without.row_count;
+    CHECK(panel::lay_out_panel(without, measure, kRowHeight).width == layout.width);
+    const int right = layout.width - kInner;
+    // Eleven e-acutes, each two bytes.
+    constexpr std::string_view kTwoByteName =
+        "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9";
+
+    struct Names {
+        std::string_view driver;  ///< the render driver
+        std::string_view adapter; ///< the adapter's name
+        bool cut;                 ///< the panel cuts the adapter's name
+    };
+
+    const std::array kNames{
+        Names{"metal", "Apple M2", false},
+        Names{"direct3d11", "NVIDIA GeForce RTX 3060 Laptop GPU", true},
+        Names{"direct3d12", "AMD Radeon(TM) Graphics", true},
+        Names{"opengles2", "WWWWWWWWWWWWWWWWWWWWWWWWWWWW", true},
+        Names{"vulkan", kTwoByteName, true},
+    };
+    for (const auto& names : kNames) {
+        frame_pacing::FrameStatsRenderer renderer{};
+        renderer.tier = "standard";
+        renderer.driver = names.driver;
+        renderer.adapter = names.adapter;
+        const auto table = frame_pacing::frame_stats_table({}, {}, renderer);
+        const auto& row = table.rows[table.row_count - 1];
+        CHECK(row.kind == frame_pacing::FrameStatsRowKind::renderer);
+        const auto fit = panel::fit_run_on_row(row, measure, layout);
+        const auto label = row.label.view();
+        const auto note = row.note.view();
+        CHECK(fit.label_bytes == label.size());
+        const int label_end = layout.label_x + console_width(nullptr, label);
+        CHECK(label_end <= right);
+        CHECK(fit.note_x == label_end + panel::kColumnGap);
+        const auto shown = note.substr(0, fit.note_bytes);
+        CHECK(fit.note_x + console_width(nullptr, shown) <= right);
+        CHECK((fit.note_bytes < note.size()) == names.cut);
+        if (fit.note_bytes < note.size()) {
+            CHECK(frame_pacing::whole_characters(note, fit.note_bytes).size() == fit.note_bytes);
+            std::size_t next = fit.note_bytes + 1;
+            while (frame_pacing::whole_characters(note, next).size() != next)
+                ++next;
+            CHECK(fit.note_x + console_width(nullptr, note.substr(0, next)) > right);
+        }
+    }
+}
+
 // With no measure every text is 0 wide: the columns are a gap apart and
 // the graph sets the width.
 void test_without_a_measure() {
@@ -259,10 +359,18 @@ void test_layout_stays_in_place() {
              frame_pacing::FrameStatsNotes{1000, 1000, 1200, 1200},
              frame_pacing::FrameStatsNotes{0, 0, 9999, 9999},
          }) {
-        const auto table = frame_pacing::frame_stats_table(window, notes);
+        frame_pacing::FrameStatsRenderer renderer{};
+        renderer.tier = "standard";
+        renderer.driver = "direct3d12";
+        renderer.adapter = "NVIDIA GeForce RTX 4090";
+        const auto table = frame_pacing::frame_stats_table(window, notes, renderer);
         CHECK(table.row_count == widest.row_count);
         for (std::size_t row = 0; row < table.row_count; ++row) {
             CHECK(table.rows[row].kind == widest.rows[row].kind);
+            // The renderer row keeps no room: it is cut where it is drawn
+            // (test_renderer_row_fits_the_panel).
+            if (table.rows[row].kind == frame_pacing::FrameStatsRowKind::renderer)
+                continue;
             for (std::size_t column = 0; column < table.rows[row].values.size(); ++column)
                 CHECK(
                     table.rows[row].values[column].view().size() <=
@@ -367,6 +475,8 @@ int main() {
     test_columns_under_a_wider_graph();
     test_graph_under_a_wider_table();
     test_without_a_measure();
+    test_renderer_row_sets_no_width();
+    test_renderer_row_fits_the_panel();
     test_layout_stays_in_place();
     test_panel_place();
     test_bar_heights();

@@ -1,0 +1,179 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// What the game can learn about the renderer SDL made and the graphics
+// adapter behind it: the render driver's name, its texture limit, the
+// adapter's name and identifiers where its graphics interface gives them,
+// and whether the adapter draws on the processor or in a virtual machine.
+// The code that reads each graphics interface is chosen per operating system
+// at compile time; it reaches the interfaces only through the objects SDL
+// has already made, or through functions the program looks up at run time,
+// and links none of their libraries.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+struct SDL_Renderer;
+
+namespace oa::platform::render_probe {
+
+/// SDL's name for its software renderer, which draws on the processor.
+inline constexpr std::string_view software_renderer = "software";
+/// SDL's name for its Vulkan renderer.
+inline constexpr std::string_view vulkan_renderer = "vulkan";
+/// SDL's name for its renderer over SDL's own graphics device.
+inline constexpr std::string_view gpu_renderer = "gpu";
+
+/// The longest adapter name the probe keeps, bytes; a longer one is cut.
+inline constexpr std::size_t adapter_name_limit = 255;
+
+/// Whether describe reads the adapter as well as SDL's own properties.
+enum class AdapterRead : uint8_t {
+    read, ///< the name, the texture limit and the adapter
+    skip, ///< the name and the texture limit alone, from SDL's properties
+};
+
+/// What is known of the adapter behind a renderer.
+enum class AdapterState : uint8_t {
+    skipped, ///< not read: the caller asked for SDL's properties alone
+    none,    ///< SDL's software renderer, which draws on the processor with no adapter
+    unknown, ///< read, but its graphics interface gave nothing usable, or no reader exists here
+    read,    ///< named by its graphics interface
+};
+
+/// What the probe found out about a renderer and the adapter behind it.
+struct AdapterFacts {
+    std::string renderer{};     ///< SDL's name for the render driver ("metal", "direct3d11")
+    std::string video_driver{}; ///< SDL's name for the video driver ("cocoa", "windows", "x11")
+    int64_t
+        reported_texture_limit{}; ///< the renderer's largest texture side as SDL reports it; 0 for none
+    uint32_t
+        device_texture_limit{};   ///< the device's own largest texture side where read; 0 where not
+    AdapterState adapter_state{}; ///< whether the adapter was read
+    std::string adapter{};        ///< the adapter's name; empty unless adapter_state is read
+    std::string vendor{};         ///< the vendor's name, where the interface gives one apart
+    uint32_t vendor_id{};         ///< the adapter's PCI vendor identifier; 0 where not given
+    uint32_t device_id{};         ///< the adapter's PCI device identifier; 0 where not given
+    bool software_flag{}; ///< the graphics interface marks the adapter as drawing on the processor
+    bool wine{};          ///< the game runs on Windows' interfaces as provided by Wine
+    bool software_rasteriser{}; ///< the renderer draws on the processor
+    bool virtual_adapter{};     ///< the adapter is a virtual machine's
+};
+
+/// Reads the adapter behind a renderer for describe_reported.
+struct AdapterReader {
+    void* context{}; ///< handed back to read
+    /// Fills the adapter's name, vendor, identifiers, software flag and
+    /// device texture limit where it can; returns true when the adapter was
+    /// read. Null reads nothing.
+    bool (*read)(void* context, AdapterFacts& facts){};
+};
+
+/// Describes a renderer from what SDL reports of it, reading the adapter
+/// through a reader only where that is asked for and there is an adapter:
+/// SDL's software renderer has none (AdapterState::none), AdapterRead::skip
+/// reads nothing (AdapterState::skipped), and otherwise the adapter is read
+/// (AdapterState::read) or, where the reader fails or gives a name that
+/// cleans to nothing, unknown. The names are cleaned (clean_name) and the
+/// facts classified (classify); the texture limits are kept as reported and
+/// read, for the render policy to correct. describe is this with SDL's own
+/// properties and the readers of this system, and on Windows also asks
+/// whether the game runs under Wine.
+///
+/// @param renderer SDL's name for the render driver
+/// @param video_driver SDL's name for the video driver
+/// @param reported_texture_limit the largest texture side SDL reports
+/// @param read whether to read the adapter
+/// @param reader what reads it
+/// @return what was found
+[[nodiscard]] AdapterFacts describe_reported(
+    std::string_view renderer,
+    std::string_view video_driver,
+    int64_t reported_texture_limit,
+    AdapterRead read,
+    const AdapterReader& reader
+);
+
+/// Describes a renderer: its name and texture limit from SDL's properties,
+/// and, when asked, the adapter behind it.
+///
+/// The adapter is read through the objects SDL made for the renderer, with
+/// cheap queries only: a Direct3D 9 device's adapter identifier, a Direct3D
+/// 11 or 12 device's DXGI adapter description, the OpenGL renderer and
+/// vendor strings while SDL's context is current, a Vulkan physical device's
+/// properties, the Metal device's name, and the name of SDL's graphics device
+/// (SDL 3.4 and later). A renderer this build has no reader for, on this
+/// system or this SDL, reads as unknown. On Windows it also asks whether the
+/// game runs under Wine. Then it classifies the adapter by name and flags
+/// (classify), as describe_reported does.
+///
+/// @param renderer the renderer SDL created; null gives facts with every field empty
+/// @param read whether to read the adapter
+/// @return what was found
+[[nodiscard]] AdapterFacts describe(SDL_Renderer* renderer, AdapterRead read);
+
+/// Says whether an adapter's name, or its PCI identifiers, mark a software
+/// or virtual rasteriser: a name holding, in any letter case, llvmpipe,
+/// softpipe, lavapipe, swrast, software rasterizer, swiftshader, gdi
+/// generic, apple software renderer, microsoft basic render driver,
+/// virtualbox, vmware, svga3d or chromium, or vendor 0x1414 with device
+/// 0x008C, the Microsoft Basic Render Driver.
+///
+/// @param name the adapter's name as its driver gives it
+/// @param vendor its PCI vendor identifier; 0 for none
+/// @param device its PCI device identifier; 0 for none
+/// @return true for a software or virtual rasteriser
+[[nodiscard]] bool
+names_software_rasteriser(std::string_view name, uint32_t vendor, uint32_t device) noexcept;
+
+/// Says whether an adapter's name marks a virtual machine's adapter, the
+/// part of names_software_rasteriser's list that draws on the host's
+/// graphics card: virtualbox, vmware, svga3d or chromium, in any letter case.
+///
+/// @param name the adapter's name as its driver gives it
+/// @return true for a virtual machine's adapter
+[[nodiscard]] bool names_virtual_adapter(std::string_view name) noexcept;
+
+/// Says whether an OpenGL vendor string marks a virtual machine's adapter:
+/// humper, in any letter case, VirtualBox's older OpenGL pass-through.
+///
+/// @param vendor the OpenGL vendor string
+/// @return true for that pass-through
+[[nodiscard]] bool vendor_names_virtual_adapter(std::string_view vendor) noexcept;
+
+/// Says whether SDL reports a fixed texture limit for a render driver
+/// rather than its device's own: true for vulkan and gpu, which report
+/// 16384 whatever the device, so the render policy takes the device's own
+/// limit (device_texture_limit) where it was read.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true for a driver whose reported limit is fixed
+[[nodiscard]] bool reports_fixed_texture_limit(std::string_view renderer) noexcept;
+
+/// Fills the classification of facts already read: software_rasteriser for
+/// SDL's software renderer, a set software_flag, a name on the software part
+/// of names_software_rasteriser's list or the Microsoft Basic Render
+/// Driver's identifiers; virtual_adapter for a name names_virtual_adapter
+/// accepts or a vendor vendor_names_virtual_adapter accepts.
+///
+/// @param[in,out] facts the facts; software_rasteriser and virtual_adapter are set
+void classify(AdapterFacts& facts) noexcept;
+
+/// Says whether facts describe a renderer that draws on the processor, in a
+/// virtual machine, or under Wine.
+///
+/// @param facts the facts, classified
+/// @return true for a software or virtual rasteriser
+[[nodiscard]] bool software_or_virtual(const AdapterFacts& facts) noexcept;
+
+/// Cleans a name a driver gives: control characters become spaces, the
+/// spaces at either end go, and the rest is cut at adapter_name_limit bytes.
+///
+/// @param name the name as the driver gave it
+/// @return the cleaned name
+[[nodiscard]] std::string clean_name(std::string_view name);
+
+} // namespace oa::platform::render_probe

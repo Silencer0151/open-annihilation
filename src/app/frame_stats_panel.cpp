@@ -20,13 +20,41 @@ namespace {
 /// Returns a text's width, 0 for an empty one.
 ///
 /// @param measure the widths of the table's texts
-/// @param text the text
+/// @param view the text
 /// @return source pixels
-int text_width(const TextWidthHooks& measure, const FrameStatsText& text) {
-    const auto view = text.view();
+int text_width(const TextWidthHooks& measure, std::string_view view) {
     if (view.empty() || measure.width == nullptr)
         return 0;
     return std::max(0, measure.width(measure.context, view));
+}
+
+/// Returns a table text's width, 0 for an empty one.
+///
+/// @param measure the widths of the table's texts
+/// @param text the text
+/// @return source pixels
+int text_width(const TextWidthHooks& measure, const FrameStatsText& text) {
+    return text_width(measure, text.view());
+}
+
+/// Returns how many bytes of a text's start fit in a width without ending
+/// inside a character (frame_pacing::whole_characters).
+///
+/// @param measure the widths of the table's texts
+/// @param text the text
+/// @param room source pixels the start may take
+/// @return bytes of the longest start that fits; 0 when none does
+std::size_t fitting_bytes(const TextWidthHooks& measure, std::string_view text, int room) {
+    std::size_t fits = 0;
+    for (std::size_t end = 1; end <= text.size(); ++end) {
+        const auto start = frame_pacing::whole_characters(text, end);
+        if (start.size() != end)
+            continue;
+        if (text_width(measure, start) > room)
+            break;
+        fits = end;
+    }
+    return fits;
 }
 
 } // namespace
@@ -52,7 +80,8 @@ PanelLayout lay_out_panel(
     layout.row_height = row_height;
     const std::size_t rows = std::min(table.row_count, table.rows.size());
     // The columns' widths, then where they end with the labels at 0. The
-    // title runs across the columns and sets none of them.
+    // title runs across the columns and sets none of them; the renderer row
+    // sets nothing, as its texts are fitted where they are drawn.
     int labels = 0;
     int title = 0;
     std::array<int, kFrameStatsValueColumns> widths{};
@@ -62,6 +91,8 @@ PanelLayout lay_out_panel(
             title = std::max(title, text_width(measure, cells.label));
             continue;
         }
+        if (cells.kind == FrameStatsRowKind::renderer)
+            continue;
         labels = std::max(labels, text_width(measure, cells.label));
         for (std::size_t column = 0; column < kFrameStatsValueColumns; ++column)
             widths[column] = std::max(widths[column], text_width(measure, cells.values[column]));
@@ -78,7 +109,7 @@ PanelLayout lay_out_panel(
     int table_width = title;
     for (std::size_t row = 0; row < rows; ++row) {
         const auto& cells = table.rows[row];
-        if (cells.kind == FrameStatsRowKind::title)
+        if (cells.kind == FrameStatsRowKind::title || cells.kind == FrameStatsRowKind::renderer)
             continue;
         int last = labels;
         for (std::size_t column = 0; column < kFrameStatsValueColumns; ++column)
@@ -104,7 +135,8 @@ PanelLayout lay_out_panel(
     int y = inner;
     for (std::size_t row = 0; row < rows; ++row) {
         layout.row_y[row] = y;
-        layout.note_x[row] = inner + notes[row] + shift;
+        const bool runs_on = table.rows[row].kind == FrameStatsRowKind::renderer;
+        layout.note_x[row] = runs_on ? inner : inner + notes[row] + shift;
         y += row_height;
         if (table.rows[row].kind == FrameStatsRowKind::heading && layout.rule_y < 0) {
             layout.rule_y = y;
@@ -118,6 +150,21 @@ PanelLayout lay_out_panel(
     layout.width = 2 * inner + content;
     layout.height = layout.graph.y + kGraphHeight + kGraphEdge + inner;
     return layout;
+}
+
+RunOnFit fit_run_on_row(
+    const frame_pacing::FrameStatsRow& row, const TextWidthHooks& measure, const PanelLayout& layout
+) noexcept {
+    const int right = layout.width - kBevel - kPadding;
+    const auto label = row.label.view();
+    const auto note = row.note.view();
+    RunOnFit fit{};
+    fit.label_bytes = fitting_bytes(measure, label, right - layout.label_x);
+    fit.note_x =
+        layout.label_x + text_width(measure, label.substr(0, fit.label_bytes)) + kColumnGap;
+    if (fit.label_bytes == label.size())
+        fit.note_bytes = fitting_bytes(measure, note, right - fit.note_x);
+    return fit;
 }
 
 oa::ui::display_layout::Rect

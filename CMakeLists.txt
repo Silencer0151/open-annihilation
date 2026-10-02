@@ -132,6 +132,7 @@ add_subdirectory(src/platform/xp-runtime)
 add_subdirectory(src/platform/steady-clock)
 add_subdirectory(src/platform/app-menu)
 add_subdirectory(src/platform/job-pool)
+add_subdirectory(src/platform/render-probe)
 add_subdirectory(src/platform/sound-device)
 add_subdirectory(src/ui/decoded)
 add_subdirectory(src/ui/services)
@@ -242,8 +243,8 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 # the tier each frame is drawn in, what a crash or a failure counts for at
 # the next start and the records that keep it, the step-down ladder, the
 # chrome's filter and the tiles of a texture larger than the renderer
-# allows, as pure functions with no SDL and no files. The game does not use
-# it yet.
+# allows, as pure functions with no SDL and no files. The game uses only its
+# texture limit so far, in the line it logs at start.
 add_library(oa-app-render-policy src/app/render_policy.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
@@ -368,9 +369,23 @@ if(BUILD_TESTING)
     add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
     set_tests_properties(app-full-screen PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+    # The texture limit the render policy corrects from the probe's report,
+    # the line the game logs once its renderer is made, naming the driver,
+    # the adapter, the texture limit and the standard tier, and the adapter
+    # the +stats overlay names; SDL's software renderer on the dummy video
+    # driver reported as the game reports it.
+    add_executable(oa-app-graphics-report-test src/app/graphics_report_test.cpp
+      src/app/graphics_report.cpp)
+    target_link_libraries(oa-app-graphics-report-test PRIVATE oa-platform-render-probe
+      oa-app-render-policy SDL3::SDL3 oa-test-support oa-options)
+    add_test(NAME app-graphics-report COMMAND oa-app-graphics-report-test)
+    set_tests_properties(app-graphics-report PROPERTIES TIMEOUT 60
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+      ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:")
   endif()
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
+  src/app/graphics_report.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
   src/app/runtime_builtin_screens.cpp
   src/app/runtime_camera.cpp src/app/runtime_campaign.cpp src/app/runtime_checks.cpp
@@ -424,8 +439,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
-  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-ui-decoded oa-base-bytes
-  oa-base-float-precision)
+  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
+  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -766,6 +781,16 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-saveload PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The game's start on the dummy video driver, with no render driver
+        # named: SDL's walk ends on its software renderer, which has no
+        # adapter and no texture limit, and the start-up line names it, its
+        # video driver and the standard tier, word for word, and the start
+        # ends with status 0.
+        add_test(NAME native-renderer-report COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_renderer_report.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-renderer-report PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The headless menu, match, composed-frame, message log, speed and
         # build placement checks, from fresh preferences each run.
         add_test(NAME native-navigation COMMAND ${Python3_EXECUTABLE}

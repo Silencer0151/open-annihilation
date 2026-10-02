@@ -397,6 +397,15 @@ struct FrameStatsNotes {
     uint32_t units_between_ticks{};     ///< of those, drawn between two ticks
 };
 
+/// What the "+stats" table's renderer row names. The tier and the driver,
+/// joined, and the adapter are each cut to one of the table's texts, never
+/// inside a character (whole_characters).
+struct FrameStatsRenderer {
+    std::string_view tier{};    ///< the tier frames are drawn in: "standard"
+    std::string_view driver{};  ///< SDL's name for the render driver; empty without a renderer
+    std::string_view adapter{}; ///< the adapter's name; empty where none was read
+};
+
 /// What a frame's drawing showed of the units. The loop clears it before each
 /// match frame is drawn; the unit drawing adds to it, and the frame
 /// statistics and the frame log of a --frame-rate run read it.
@@ -420,8 +429,17 @@ inline constexpr std::size_t kFrameStatsMeanColumn = 1;
 /// The value column of a measure's most time.
 inline constexpr std::size_t kFrameStatsMostColumn = 2;
 /// Rows of the "+stats" table: the title, the column names, the frames a
-/// second, one for each measure and the units drawn.
-inline constexpr std::size_t kFrameStatsRowsMost = 3 + kFrameMeasureCount + 1;
+/// second, one for each measure, the units drawn and the renderer.
+inline constexpr std::size_t kFrameStatsRowsMost = 3 + kFrameMeasureCount + 2;
+
+/// Returns the start of a UTF-8 text that fits in a number of bytes and
+/// does not end inside a character: the whole text when it fits, else the
+/// text cut at the start of the character the limit falls in.
+///
+/// @param text the text
+/// @param bytes the most bytes kept
+/// @return the start of text
+[[nodiscard]] std::string_view whole_characters(std::string_view text, std::size_t bytes) noexcept;
 
 /// One text of the "+stats" table and the grade of the time it shows.
 struct FrameStatsText {
@@ -441,6 +459,10 @@ enum class FrameStatsRowKind : uint8_t {
     rate,    ///< the frames drawn in the last second, and the rate the loop keeps
     measure, ///< a measure's least, mean and most time, in milliseconds
     count,   ///< the units the last frame drew, and those drawn between two ticks
+    /// the tier frames are drawn in and the render driver, which run on
+    /// across the columns as the title does, and the adapter as the note;
+    /// the panel cuts the row where it would pass its width
+    renderer,
 };
 
 /// One row of the "+stats" table: a label, up to three right-aligned
@@ -468,23 +490,30 @@ struct FrameStatsTable {
 /// rows with their least, mean and most times in milliseconds, the least
 /// and the most graded as they were when they were taken and the mean
 /// against the mean of its samples' allowances, the tick row noting the
-/// ticks a second; and the units the last frame drew as the mean column's
-/// value, with how many were drawn between two ticks as the note. Before
-/// the first whole second, and for a measure with no sample in it, the
-/// mean column reads "--".
+/// ticks a second; the units the last frame drew as the mean column's
+/// value, with how many were drawn between two ticks as the note; and the
+/// renderer: the tier and the render driver as "standard: metal", or the
+/// tier alone without a driver, with the adapter as the note, each cut to
+/// the kFrameStatsTextBytes - 1 bytes of a text, never inside a character.
+/// Before the first whole second, and for a measure with no sample in it,
+/// the mean column reads "--".
 ///
 /// @param window the statistics
 /// @param notes the rates and counts to show beside them
+/// @param renderer the renderer to name
 /// @return the table, kFrameStatsRowsMost rows
-[[nodiscard]] FrameStatsTable
-frame_stats_table(const FrameStatsWindow& window, const FrameStatsNotes& notes) noexcept;
+[[nodiscard]] FrameStatsTable frame_stats_table(
+    const FrameStatsWindow& window, const FrameStatsNotes& notes, const FrameStatsRenderer& renderer
+) noexcept;
 
 /// Describes the "+stats" table with the widest text each of its cells
 /// shows in play, which its layout reserves room for: the rows of
 /// frame_stats_table, each time "000.00", the frames a second "0000" with
 /// "limit 0000", the ticks a second "000/s", and "0000" units with "0000
 /// between ticks". A time of a second or more, or a count past these, runs
-/// past its column.
+/// past its column. The renderer row holds no text: no room is kept for
+/// it, and the panel cuts its names where they would pass its width, so
+/// the panel is as wide whatever the names.
 ///
 /// @return the table, kFrameStatsRowsMost rows
 [[nodiscard]] FrameStatsTable frame_stats_widest_table() noexcept;

@@ -8,6 +8,7 @@
 // times and the latest frames' graph, with its console check.
 #include "oa/app/runtime.hpp"
 #include "frame_stats_panel.hpp"
+#include "graphics_report.hpp"
 #include "match_clock.hpp"
 #include "oa/app/frame_pacing.hpp"
 #include "oa/app/match_console.hpp"
@@ -303,6 +304,14 @@ void Runtime::show_frame_stats(bool shown) {
     frame_stats_shown_ = shown;
 }
 
+frame_pacing::FrameStatsRenderer Runtime::frame_stats_renderer() const {
+    frame_pacing::FrameStatsRenderer renderer{};
+    renderer.tier = standard_tier_name;
+    renderer.driver = renderer_driver_;
+    renderer.adapter = renderer_adapter_;
+    return renderer;
+}
+
 FrameStatsNotes Runtime::frame_stats_notes() const {
     FrameStatsNotes notes{};
     notes.max_frames_per_second = options_.max_frames_per_second;
@@ -323,7 +332,7 @@ void Runtime::draw_frame_stats() {
         return;
     ensure_ui_colors();
     const FrameStatsTable table =
-        frame_pacing::frame_stats_table(frame_stats_, frame_stats_notes());
+        frame_pacing::frame_stats_table(frame_stats_, frame_stats_notes(), frame_stats_renderer());
     LabelFont label_font{font};
     panel::TextWidthHooks measure{};
     measure.context = &label_font;
@@ -467,6 +476,23 @@ void Runtime::draw_frame_stats() {
                 row_y * scale,
                 row.label.view(),
                 static_cast<uint8_t>(kUiColorText)
+            );
+            continue;
+        }
+        if (row.kind == FrameStatsRowKind::renderer) {
+            // The renderer's names, cut where they would pass the panel.
+            const auto fit = panel::fit_run_on_row(row, measure, layout);
+            text(
+                layout.label_x * scale,
+                row_y * scale,
+                row.label.view().substr(0, fit.label_bytes),
+                kLabelSlot
+            );
+            text(
+                fit.note_x * scale,
+                row_y * scale,
+                row.note.view().substr(0, fit.note_bytes),
+                kNoteSlot
             );
             continue;
         }
@@ -790,7 +816,8 @@ void Runtime::check_console_stats(const std::function<void(const char*)>& enter_
                 "console check: +stats did not show a time of each grade in its colour"
             );
     }
-    const auto table = frame_pacing::frame_stats_table(synthetic, frame_stats_notes());
+    const auto table =
+        frame_pacing::frame_stats_table(synthetic, frame_stats_notes(), frame_stats_renderer());
     const auto frame_row = static_cast<std::size_t>(
         std::find_if(
             table.rows.begin(),

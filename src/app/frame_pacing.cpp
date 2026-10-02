@@ -115,7 +115,18 @@ constexpr std::size_t kRateRow = 2;
 constexpr std::size_t kFirstMeasureRow = 3;
 /// The row of the units drawn.
 constexpr std::size_t kCountRow = kFirstMeasureRow + kFrameMeasureCount;
-static_assert(kCountRow + 1 == kFrameStatsRowsMost);
+/// The row of the renderer.
+constexpr std::size_t kRendererRow = kCountRow + 1;
+static_assert(kRendererRow + 1 == kFrameStatsRowsMost);
+/// The top two bits of a UTF-8 byte, which tell a continuation byte.
+constexpr unsigned kUtf8LeadMask = 0xC0;
+/// The top two bits of a UTF-8 continuation byte.
+constexpr unsigned kUtf8Continuation = 0x80;
+/// What joins the tier and the render driver in the renderer row's label.
+constexpr std::string_view kTierDriverJoin = ": ";
+/// The characters one of the table's texts holds, its terminating zero
+/// left out.
+constexpr std::size_t kTextCharacters = kFrameStatsTextBytes - 1;
 
 /// Starts the "+stats" table: every row's kind and label, the title and the
 /// value columns' names.
@@ -144,7 +155,33 @@ FrameStatsTable table_rows() noexcept {
     }
     table.rows[kCountRow].kind = FrameStatsRowKind::count;
     set_text(table.rows[kCountRow].label, "units");
+    table.rows[kRendererRow].kind = FrameStatsRowKind::renderer;
     return table;
+}
+
+/// Fills the renderer row: the tier and the driver as its label, and the
+/// adapter as its note, each cut to one of the table's texts, never inside
+/// a character.
+///
+/// @param[out] row the row, its kind already set
+/// @param renderer the renderer to name
+void set_renderer_row(FrameStatsRow& row, const FrameStatsRenderer& renderer) noexcept {
+    // A byte more than a text holds, so that the cut can see whether the
+    // character at the limit goes on past it.
+    std::array<char, kTextCharacters + 1> label{};
+    std::size_t length = 0;
+    const auto append = [&](std::string_view part) {
+        const std::size_t taken = std::min(part.size(), label.size() - length);
+        std::copy_n(part.data(), taken, label.data() + length);
+        length += taken;
+    };
+    append(renderer.tier);
+    if (!renderer.driver.empty()) {
+        append(kTierDriverJoin);
+        append(renderer.driver);
+    }
+    set_text(row.label, whole_characters({label.data(), length}, kTextCharacters));
+    set_text(row.note, whole_characters(renderer.adapter, kTextCharacters));
 }
 
 /// Returns the frame graph's column a time lies in.
@@ -409,13 +446,24 @@ TimeSeverity time_severity(uint64_t elapsed_ns, uint64_t allowance_ns) noexcept 
     return elapsed_ns <= kTickBudgetNs ? TimeSeverity::within_tick : TimeSeverity::over_tick;
 }
 
+std::string_view whole_characters(std::string_view text, std::size_t bytes) noexcept {
+    if (text.size() <= bytes)
+        return text;
+    std::size_t length = bytes;
+    while (length > 0 &&
+           (static_cast<unsigned char>(text[length]) & kUtf8LeadMask) == kUtf8Continuation)
+        --length;
+    return text.substr(0, length);
+}
+
 std::string_view FrameStatsText::view() const noexcept {
     const auto end = std::find(text.begin(), text.end(), '\0');
     return {text.data(), static_cast<std::size_t>(end - text.begin())};
 }
 
-FrameStatsTable
-frame_stats_table(const FrameStatsWindow& window, const FrameStatsNotes& notes) noexcept {
+FrameStatsTable frame_stats_table(
+    const FrameStatsWindow& window, const FrameStatsNotes& notes, const FrameStatsRenderer& renderer
+) noexcept {
     const bool shown = window.shown_span_ns != 0;
     const uint32_t rate = notes.paced_frames_per_second;
     FrameStatsTable table = table_rows();
@@ -462,6 +510,7 @@ frame_stats_table(const FrameStatsWindow& window, const FrameStatsNotes& notes) 
         "%u between ticks",
         notes.units_between_ticks
     );
+    set_renderer_row(table.rows[kRendererRow], renderer);
     return table;
 }
 
@@ -480,6 +529,7 @@ FrameStatsTable frame_stats_widest_table() noexcept {
     );
     set_text(table.rows[kCountRow].values[kFrameStatsMeanColumn], "0000");
     set_text(table.rows[kCountRow].note, "0000 between ticks");
+    // The renderer row stays empty: the panel cuts its names to its width.
     return table;
 }
 

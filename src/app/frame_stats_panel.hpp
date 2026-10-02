@@ -14,6 +14,7 @@
 #include "oa/ui/display_layout.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -84,7 +85,8 @@ struct PanelLayout {
     int rule_width{}; ///< columns of the rule, as wide as the table and graph
     /// Each value column's right edge, where its values end.
     std::array<int, frame_pacing::kFrameStatsValueColumns> value_right{};
-    /// Where each row's note starts.
+    /// Where each row's note starts; label_x for the renderer row, whose
+    /// note is placed after its label where it is drawn (fit_run_on_row).
     std::array<int, frame_pacing::kFrameStatsRowsMost> note_x{};
     Box graph{}; ///< the bars' area, inside the graph's sunken edge
 };
@@ -105,15 +107,17 @@ struct TextWidthHooks {
 /// across the columns. The three value columns follow, kColumnGap apart,
 /// each as wide as its widest text, every value ending at its column's
 /// right edge. A row's note starts kColumnGap after the last value column
-/// the row fills, or after the labels in a row that fills none. Under the
-/// table, kGraphGap below its last row, the graph holds a column kBarWidth
-/// across for each column of the frame history
-/// (frame_pacing::kFrameGraphColumns) and is kGraphHeight high, inside a
-/// sunken edge of kGraphEdge. The panel is as wide as the wider of the
-/// table and the graph: when the graph is wider, the value columns and the
-/// notes move right together, so that the widest row ends at the panel's
-/// padding and the labels stay at the left; when the table is wider, the
-/// graph ends at the right padding.
+/// the row fills, or after the labels in a row that fills none. The
+/// renderer row (FrameStatsRowKind::renderer) sets no width: its label and
+/// note run on from the labels' left edge and are cut to the panel's width
+/// where they are drawn (fit_run_on_row). Under the table, kGraphGap below
+/// its last row, the graph holds a column kBarWidth across for each column
+/// of the frame history (frame_pacing::kFrameGraphColumns) and is
+/// kGraphHeight high, inside a sunken edge of kGraphEdge. The panel is as
+/// wide as the wider of the table and the graph: when the graph is wider,
+/// the value columns and the notes move right together, so that the widest
+/// row ends at the panel's padding and the labels stay at the left; when
+/// the table is wider, the graph ends at the right padding.
 ///
 /// @param table the rows, each text the widest its cell shows
 ///     (frame_pacing::frame_stats_widest_table)
@@ -123,6 +127,28 @@ struct TextWidthHooks {
 /// @return the layout
 [[nodiscard]] PanelLayout lay_out_panel(
     const frame_pacing::FrameStatsTable& table, const TextWidthHooks& measure, int row_height
+) noexcept;
+
+/// How much of the renderer row fits the panel, and where its note starts.
+struct RunOnFit {
+    std::size_t label_bytes{}; ///< the bytes of the label drawn, from the labels' left edge
+    int note_x{};              ///< where the note starts: kColumnGap after the label drawn
+    std::size_t note_bytes{};  ///< the bytes of the note drawn; 0 when the label was cut
+};
+
+/// Fits the renderer row (FrameStatsRowKind::renderer) to a panel laid out
+/// by lay_out_panel, whose width it never changes: its label from the
+/// labels' left edge (label_x), and its note kColumnGap after the label.
+/// Each is cut, never inside a character (frame_pacing::whole_characters),
+/// where it would pass the panel's padding at the right; a cut label leaves
+/// no room for the note.
+///
+/// @param row the row as frame_stats_table describes it
+/// @param measure the widths of the table's texts, as the drawing draws them
+/// @param layout the panel's layout
+/// @return how much of each text is drawn, and where the note starts
+[[nodiscard]] RunOnFit fit_run_on_row(
+    const frame_pacing::FrameStatsRow& row, const TextWidthHooks& measure, const PanelLayout& layout
 ) noexcept;
 
 /// Returns the battlefield's bottom right quarter on a canvas.
