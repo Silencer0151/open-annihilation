@@ -13,8 +13,9 @@ preferences file the check writes:
   digest and draws the same last frame, byte for byte.
 - With every setting that only changes the look or the input away from its
   default (wheel zoom off, Escape opens the game menu, Select groups without
-  Alt, the lowest maximum frame rate, the performance statistics), it writes
-  the same trace stream and reaches the same world digest.
+  Alt, the lowest maximum frame rate, the performance statistics, hardware
+  acceleration and vertical sync, which a headless run has no renderer
+  for), it writes the same trace stream and reaches the same world digest.
 - At each level of enhanced anti-aliasing it writes the same trace stream
   and reaches the same world digest, and its last frame differs: units are
   drawn finer.
@@ -59,6 +60,9 @@ DEFAULTS = {
     "open-annihilation.max-fps": "120",
     "open-annihilation.anti-aliasing": "1",
     "open-annihilation.frame-stats": "0",
+    "open-annihilation.screen-size": "desktop",
+    "open-annihilation.hardware-acceleration": "0",
+    "open-annihilation.vertical-sync": "0",
 }
 # The settings that change only the look or the input, away from their defaults.
 PRESENTATION = {
@@ -66,6 +70,8 @@ PRESENTATION = {
     "open-annihilation.escape-opens-menu": "1",
     "open-annihilation.max-fps": "40",
     "open-annihilation.frame-stats": "1",
+    "open-annihilation.hardware-acceleration": "1",
+    "open-annihilation.vertical-sync": "1",
     SWITCH_ALT_KEY: "1",
 }
 ANTI_ALIASING_KEY = "open-annihilation.anti-aliasing"

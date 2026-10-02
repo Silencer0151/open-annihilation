@@ -227,8 +227,16 @@ void Runtime::EngineSettingsMenuHost::take_action(
 void Runtime::EngineSettingsMenuHost::dialog_tick(ScreenContext* context, void*) {
     auto& runtime = *static_cast<Runtime*>(context->host);
     auto& host = runtime.engine_settings_menu_host();
-    if (!host.dialog_shown || runtime.screen_ == Screen::main_menu)
+    if (!host.dialog_shown)
         return;
+    if (runtime.screen_ == Screen::main_menu) {
+        // Hardware acceleration's status follows the renderer while the
+        // dialog shows; the main menu is drawn every frame.
+        if (auto* dialog = runtime.engine_settings_dialog())
+            std::ignore =
+                settings::set_acceleration_status(*dialog, runtime.acceleration_report().status);
+        return;
+    }
     host.dialog_shown = false;
     // Cancel always closes an open dialog.
     std::ignore = runtime.take_engine_settings_action(settings::DialogAction::cancelled);

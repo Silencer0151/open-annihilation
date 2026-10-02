@@ -3,15 +3,17 @@
 
 // --check-engine-settings, the dialog's part: the dialog on the main menu
 // driven through the SDL presenter's pointer and keys (every section, each
-// setting changed and in effect at once, OK, Cancel and Restore defaults and
-// the preferences they leave), and the main menu with its OA button and the
-// dialog as the window shows them at several sizes.
+// setting changed and in effect at once, Vertical sync read back from the
+// renderer, OK, Cancel and Restore defaults and the preferences they
+// leave), and the main menu with its OA button and the dialog as the window
+// shows them at several sizes, the Graphics section at its top and its end.
 
 #include "check_host_input.hpp"
 #include "engine_settings_menu_host.hpp"
 #include "engine_settings_state.hpp"
 #include "engine_settings_tall_section.hpp"
 
+#include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
@@ -144,8 +146,21 @@ std::string_view label_of(settings::Setting setting) {
         return "Screen size";
     case settings::Setting::frame_stats:
         return "Show performance statistics";
+    case settings::Setting::hardware_acceleration:
+        return "Hardware acceleration";
+    case settings::Setting::vertical_sync:
+        return "Vertical sync";
     }
     return {};
+}
+
+/// Tells whether the renderer waits for the display, as SDL reports it.
+///
+/// @param renderer the renderer
+/// @return true when SDL_GetRenderVSync reads 1
+bool renderer_waits(SDL_Renderer* renderer) {
+    int vsync = 0;
+    return SDL_GetRenderVSync(renderer, &vsync) && vsync == 1;
 }
 
 /// Finds a part of the dialog's layout by its control and text.
@@ -375,7 +390,14 @@ void Runtime::check_engine_settings_dialog() {
         click(settings::page_control(page), {}, name + "'s entry in the list");
         dialog = engine_settings_dialog();
         require(dialog->page == page, "a click on " + name + "'s entry did not show it");
-        const auto parts = settings::dialog_layout(*dialog);
+        auto parts = settings::dialog_layout(*dialog);
+        // A section taller than its view shows the rest of its rows at its end.
+        if (dialog->scroll[static_cast<std::size_t>(page)] == 0) {
+            tap(SDLK_END);
+            const auto at_end = settings::dialog_layout(*dialog);
+            parts.insert(parts.end(), at_end.begin(), at_end.end());
+            tap(SDLK_HOME);
+        }
         const auto rows = settings::page_settings(page);
         for (std::size_t row = 0; row < rows.size(); ++row)
             require(
@@ -529,6 +551,61 @@ void Runtime::check_engine_settings_dialog() {
         unit_supersampling_ == oa::present::model::UnitSupersampling::x4,
         "Enhanced anti-aliasing at 4x did not draw units finer"
     );
+    // Hardware acceleration, Off with a named preferences file, says the
+    // processor draws, or, under 2 GiB, that the machine needs more memory;
+    // it is never switched here, so that every frame the check compares is
+    // drawn as without the setting. It is locked under 2 GiB, and on SDL's
+    // software renderer or the environment's driver unless --force-capable
+    // lifts them; a renderer nothing has looked at leaves it unlocked.
+    dialog = engine_settings_dialog();
+    const auto facts = acceleration_facts();
+    const bool memory = enough_memory_for_acceleration(facts.physical_memory);
+    require(
+        dialog->acceleration.state == (memory ? settings::AccelerationState::off_by_setting
+                                              : settings::AccelerationState::needs_memory),
+        "Hardware acceleration's status does not say it is Off, or why not under 2 GiB"
+    );
+    const bool ruled_out =
+        !memory || (!facts.force_capable && (facts.software_renderer || facts.environment_driver));
+    require(
+        dialog->locks.hardware_acceleration ==
+            (ruled_out ? settings::Lock::unavailable : settings::Lock::none),
+        "Hardware acceleration is not locked as the renderer and the memory give it"
+    );
+    // Vertical sync: Down to it scrolls Graphics to its end, and Right turns
+    // it On, in effect at once: the renderer waits for the display. On SDL's
+    // software renderer it is out of reach unless --force-capable lifts it,
+    // as the command that registers this check does.
+    const bool vertical_sync = dialog->locks.vertical_sync == settings::Lock::none;
+    require(
+        vertical_sync == options_.force_capable,
+        "Vertical sync is within reach otherwise than as --force-capable gives it"
+    );
+    if (vertical_sync) {
+        require(!renderer_waits(sdl_.renderer), "the renderer waits for the display at Off");
+        focus(settings::first_row_control + 4, "Vertical sync");
+        require(
+            dialog->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 80,
+            "the focus on Vertical sync did not scroll Graphics to its end"
+        );
+        require(
+            shows_text(
+                settings::dialog_layout(*dialog),
+                memory ? "Off: the processor draws and scales the view."
+                       : "Not in use: it needs at least 2 GB of memory."
+            ),
+            "Graphics at its end does not show Hardware acceleration's status"
+        );
+        tap(SDLK_RIGHT);
+        chosen.vertical_sync = true;
+        expect("Vertical sync On");
+        require(renderer_waits(sdl_.renderer), "Vertical sync On did not reach the renderer");
+    } else {
+        require(
+            dialog->locks.vertical_sync == settings::Lock::unavailable,
+            "Vertical sync is locked other than on the software renderer"
+        );
+    }
 
     click(settings::page_control(settings::Page::developer), {}, "Developer's entry");
     click(settings::first_row_control, "ON", "Show performance statistics' On");
@@ -543,7 +620,7 @@ void Runtime::check_engine_settings_dialog() {
         engine_settings_dialog() == nullptr && !host.dialog_shown, "OK did not close the dialog"
     );
     require(engine_settings() == chosen, "OK did not keep the settings chosen");
-    const std::map<std::string, std::string> expected_keys{
+    std::map<std::string, std::string> expected_keys{
         {std::string(settings::key::path_search_nodes), std::to_string(kChosenPathNodes)},
         {std::string(settings::key::wheel_zoom), "0"},
         {std::string(settings::key::escape_opens_menu), "1"},
@@ -553,6 +630,8 @@ void Runtime::check_engine_settings_dialog() {
          std::to_string(static_cast<int>(kChosenAntiAliasing))},
         {std::string(settings::key::frame_stats), "1"},
     };
+    if (vertical_sync)
+        expected_keys.emplace(std::string(settings::key::vertical_sync), "1");
     const auto saved = oa::platform::preferences::load(preference_path_);
     require(engine_keys(saved) == expected_keys, "OK did not save exactly the settings changed");
     require(saved_general_number("SwitchAlt") == 1, "OK did not save SwitchAlt");
@@ -591,10 +670,15 @@ void Runtime::check_engine_settings_dialog() {
             unit_supersampling_ == oa::present::model::UnitSupersampling::off,
         "Restore defaults did not reset every setting at once"
     );
+    require(!renderer_waits(sdl_.renderer), "Restore defaults did not stop the renderer waiting");
     tap(SDLK_ESCAPE);
     require(
         engine_settings_dialog() == nullptr && engine_settings() == chosen,
         "Escape after Restore defaults did not put the settings back"
+    );
+    require(
+        renderer_waits(sdl_.renderer) == vertical_sync,
+        "Escape after Restore defaults did not put Vertical sync back"
     );
     dialog = open("for Restore defaults and OK");
     click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
@@ -605,6 +689,7 @@ void Runtime::check_engine_settings_dialog() {
     );
     const auto restored = oa::platform::preferences::load(preference_path_);
     require(engine_keys(restored).empty(), "Restore defaults and OK left settings in the file");
+    require(!renderer_waits(sdl_.renderer), "Restore defaults and OK left the renderer waiting");
     require(saved_general_number("SwitchAlt") == 0, "Restore defaults did not save SwitchAlt off");
     rest();
     host.latched_key = 0;
@@ -733,6 +818,24 @@ void Runtime::check_engine_settings_window_sizes() {
                     ": " + std::to_string(shown) + " pixels differ"
             );
             snapshot("menu-dialog-" + std::string(page_slug(page)) + '-' + size);
+            if (page != settings::Page::graphics)
+                continue;
+            // Graphics scrolls: at its end too, as the window shows the picture.
+            tap(SDLK_END);
+            require(
+                dialog->scroll[static_cast<std::size_t>(page)] == 80,
+                "End did not scroll Graphics to its end" + on
+            );
+            present(presented, picture);
+            const auto at_end =
+                letterbox_differences(presented, picture, area, window_width, kRestingPointer);
+            require(
+                at_end == 0,
+                "the window does not show Graphics at its end" + on + ": " +
+                    std::to_string(at_end) + " pixels differ"
+            );
+            snapshot("menu-dialog-graphics-end-" + size);
+            tap(SDLK_HOME);
         }
         tap(SDLK_ESCAPE);
         require(engine_settings_dialog() == nullptr, "Escape did not close the dialog" + on);

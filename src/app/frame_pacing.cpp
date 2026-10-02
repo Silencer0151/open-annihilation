@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <string_view>
 
@@ -285,6 +286,25 @@ uint32_t paced_frame_rate(uint32_t max_frames_per_second, const FrameActivity& a
     if (max_frames_per_second == 0)
         return kIdleFramesPerSecond;
     return std::min(max_frames_per_second, kIdleFramesPerSecond);
+}
+
+uint32_t vsync_frame_cap(float display_hz) noexcept {
+    // Not a number, 0 and below: the display reports no rate.
+    if (!(display_hz > 0.0F))
+        return 0;
+    // A whole number of hertz has the next number down below it; any other
+    // rate the whole number at or under it.
+    const float bounded = std::min(display_hz, static_cast<float>(kHighestVsyncCap + 1));
+    const auto below = static_cast<uint32_t>(std::ceil(bounded)) - 1U;
+    return std::max(below, kTicksPerSecond);
+}
+
+uint32_t capped_frame_rate(uint32_t frames_per_second, uint32_t cap) noexcept {
+    if (cap == 0)
+        return frames_per_second;
+    if (frames_per_second == 0)
+        return cap;
+    return std::min(frames_per_second, cap);
 }
 
 float next_presentation_alpha(

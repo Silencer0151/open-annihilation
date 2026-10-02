@@ -6,13 +6,16 @@
 
 #include "engine_settings_state.hpp"
 
+#include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
 #include "screen_size.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <exception>
 #include <filesystem>
@@ -53,6 +56,14 @@ constexpr int32_t kSaveFailedMessageWidth = 300;
 
 /// The installation's options file, whose UnitLimit the unit limit defaults to.
 constexpr std::string_view kInstallationIniName = "totala.ini";
+
+/// SDL's names of the video drivers that draw no window.
+constexpr std::array<std::string_view, 2> kWindowlessVideoDrivers{"dummy", "offscreen"};
+
+/// SDL's name of the renderer that resets its device at each change of the
+/// wait for the display. The game does not yet recover a device such a reset
+/// leaves lost, so Vertical sync is out of reach there.
+constexpr std::string_view kDeviceResettingRenderer = "direct3d";
 
 /// Returns a text in lower case, ASCII letters only.
 ///
@@ -207,6 +218,7 @@ void Runtime::load_engine_settings() {
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
+    state.physical_memory = oa::platform::read_machine_traits().memory;
     const bool switch_alt = (preferences_.graphics_flags & init::preference_flags::switch_alt) != 0;
     const auto read =
         settings::read_settings(preference_values_, EngineSettingsState::inputs(*this), switch_alt);
@@ -251,6 +263,67 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
                               .value_or(oa::present::model::UnitSupersampling::off);
     if (chosen.frame_stats != before.frame_stats)
         show_frame_stats(chosen.frame_stats);
+    apply_vertical_sync();
+}
+
+AccelerationFacts Runtime::acceleration_facts() const {
+    AccelerationFacts facts{};
+    const bool setting = engine_settings_ && engine_settings_->current.hardware_acceleration;
+    facts.asked = hardware_acceleration_asked(options_, setting);
+    facts.flag = options_.hardware_acceleration;
+    facts.force_capable = options_.force_capable;
+    const char* named_driver = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    facts.environment_driver =
+        (named_driver != nullptr && *named_driver != '\0') ||
+        (video_driver != nullptr &&
+         std::find(kWindowlessVideoDrivers.begin(), kWindowlessVideoDrivers.end(), video_driver) !=
+             kWindowlessVideoDrivers.end());
+    facts.physical_memory = engine_settings_ ? engine_settings_->physical_memory : 0;
+    // Nothing looks at the renderer yet, so whether it is able stays
+    // unknown (renderer_capable empty); only SDL's software renderer is
+    // known unable.
+    const char* renderer = sdl_.renderer != nullptr ? SDL_GetRendererName(sdl_.renderer) : nullptr;
+    const std::string_view renderer_name = renderer != nullptr ? renderer : "";
+    facts.software_renderer = renderer_name == SDL_SOFTWARE_RENDERER;
+    facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
+    facts.vertical_sync_refused = vertical_sync_refused_;
+    if (match_) {
+        const uint32_t extension = current_extension_state();
+        facts.shared_game = (extension & extension_state::shared_match) != 0;
+        facts.replay = (extension & extension_state::replay) != 0;
+    }
+    return facts;
+}
+
+AccelerationReport Runtime::acceleration_report() const {
+    return report_acceleration(acceleration_facts());
+}
+
+void Runtime::apply_vertical_sync() {
+    if (sdl_.renderer == nullptr || !engine_settings_)
+        return;
+    const bool wanted =
+        engine_settings_->current.vertical_sync && !acceleration_report().vertical_sync_unavailable;
+    // SDL makes every renderer without it, so while the setting stays Off
+    // the renderer is never asked.
+    if (wanted == vertical_sync_in_effect_)
+        return;
+    if (!SDL_SetRenderVSync(sdl_.renderer, wanted ? 1 : 0)) {
+        std::cerr << "open-annihilation: the renderer does not wait for the display: "
+                  << SDL_GetError() << '\n';
+        if (wanted)
+            vertical_sync_refused_ = true;
+    }
+    int vsync = 0;
+    vertical_sync_in_effect_ = SDL_GetRenderVSync(sdl_.renderer, &vsync) && vsync != 0;
+}
+
+float Runtime::display_refresh_rate() const {
+    if (sdl_.window == nullptr)
+        return 0.0F;
+    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdl_.window));
+    return mode != nullptr ? mode->refresh_rate : 0.0F;
 }
 
 std::optional<std::string> Runtime::save_engine_settings(
@@ -282,7 +355,8 @@ settings::Dialog& Runtime::open_engine_settings_dialog() {
         settings::default_settings(EngineSettingsState::inputs(*this)),
         engine_settings_locks(),
         kVersionText,
-        state.last_page
+        state.last_page,
+        acceleration_report().status
     );
     return dialog;
 }

@@ -361,26 +361,6 @@ void draw_list(
     }
 }
 
-/// Tells whether a switch setting is On.
-///
-/// @param settings the settings
-/// @param setting a switch setting
-/// @return true for On
-bool switch_on(const EngineSettings& settings, Setting setting) noexcept {
-    switch (setting) {
-    case Setting::wheel_zoom:
-        return settings.wheel_zoom;
-    case Setting::escape_opens_menu:
-        return settings.escape_opens_menu;
-    case Setting::switch_alt:
-        return settings.switch_alt;
-    case Setting::frame_stats:
-        return settings.frame_stats;
-    default:
-        return false;
-    }
-}
-
 /// Draws an Off/On switch.
 ///
 /// @param[in,out] target the surface
@@ -660,7 +640,7 @@ void draw_section(
                 target,
                 in_view,
                 fonts.small,
-                layout::hint_line(row.setting, dialog.chosen, line),
+                layout::hint_line(row.setting, dialog.chosen, dialog.acceleration, line),
                 row.hints[line],
                 Align::left,
                 kHintColor
@@ -694,7 +674,7 @@ void draw_section(
                 target,
                 in_view,
                 row.control_area,
-                switch_on(dialog.chosen, row.setting),
+                layout::switch_on(dialog.chosen, row.setting),
                 hovered,
                 locked,
                 fonts

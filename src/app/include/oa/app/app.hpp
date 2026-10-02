@@ -294,6 +294,15 @@ struct Options {
     // --max-fps was given: its rate holds for the run whatever the settings
     // say, and is never saved.
     bool max_frames_per_second_given = false;
+    // --hardware-acceleration (true) or --no-hardware-acceleration (false):
+    // decides the Hardware acceleration setting for the run whatever the
+    // settings say, and is never saved; empty when neither was given.
+    std::optional<bool> hardware_acceleration;
+    // --force-capable, which only --check-engine-settings takes: the
+    // renderer counts as one the graphics card could scale the frames on,
+    // and neither the environment's render driver nor SDL's software
+    // renderer locks Hardware acceleration or Vertical sync.
+    bool force_capable = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
     // advances a frame at a time, each frame between two ticks as the
@@ -365,6 +374,14 @@ struct Extension;
 ///     text the engine does not know
 /// @return the parsed options
 [[nodiscard]] Options parse_options(int argc, char** argv, const Extension& extension);
+
+/// Tells whether the run asks for hardware acceleration: either flag decides,
+/// else the Hardware acceleration setting does.
+///
+/// @param options the parsed command line (Options::hardware_acceleration)
+/// @param setting the setting is On
+/// @return true when acceleration is asked for
+[[nodiscard]] bool hardware_acceleration_asked(const Options& options, bool setting) noexcept;
 
 /// Parses a frame or tick count option's value.
 ///

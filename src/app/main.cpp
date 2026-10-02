@@ -125,9 +125,9 @@ struct HostDisplay {
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
-    /// (starting_screen_size), and its renderer, which it describes and logs
-    /// (report_game_renderer). A window of a set screen size takes the
-    /// display mode nearest it in full screen.
+    /// (start_settings, starting_screen_size), and its renderer, which it
+    /// describes and logs (report_game_renderer). A window of a set screen
+    /// size takes the display mode nearest it in full screen.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
     ///
@@ -146,7 +146,10 @@ struct HostDisplay {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         active = true;
-        const auto screen = starting_screen_size(options, desktop_size());
+        // The settings the window and its renderer start with, read before
+        // either exists.
+        const auto start = start_settings(options, desktop_size());
+        const auto screen = starting_screen_size(options, start);
         const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
         window = SDL_CreateWindow(
             "Open Annihilation",

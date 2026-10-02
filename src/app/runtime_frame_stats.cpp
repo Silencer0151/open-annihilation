@@ -34,6 +34,7 @@ namespace oa::app {
 namespace console = oa::ui::console;
 namespace panel = frame_stats_panel;
 using frame_pacing::begin_paced_frame;
+using frame_pacing::capped_frame_rate;
 using frame_pacing::end_paced_frame;
 using frame_pacing::FrameActivity;
 using frame_pacing::FrameMeasure;
@@ -49,6 +50,7 @@ using frame_pacing::note_frame_measure;
 using frame_pacing::paced_frame_rate;
 using frame_pacing::roll_frame_stats;
 using frame_pacing::TimeSeverity;
+using frame_pacing::vsync_frame_cap;
 
 namespace {
 
@@ -272,6 +274,11 @@ void Runtime::pace_next_frame(bool& running) {
                             SDL_GetMouseState(nullptr, nullptr) != 0;
     activity.unattended = options_.unattended;
     paced_frames_per_second_ = paced_frame_rate(options_.max_frames_per_second, activity);
+    // While the renderer waits for the display, the loop keeps just below
+    // the display's rate, so that each present finds the display ready.
+    if (vertical_sync_in_effect_)
+        paced_frames_per_second_ =
+            capped_frame_rate(paced_frames_per_second_, vsync_frame_cap(display_refresh_rate()));
     const bool idle = !activity.match_advancing && !activity.camera_moving &&
                       !activity.input_recent && !activity.unattended;
     frame_wait_ = idle && sdl_.window != nullptr ? FrameWait::idle : FrameWait::precise;

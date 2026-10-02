@@ -4,6 +4,8 @@
 // The settings dialog: where its parts lie, its sections and rows, switches,
 // sliders and their stops, the level strip, pointer and key events, OK,
 // Cancel and Restore defaults, the locks and their texts, and what it draws.
+// The Graphics page's five rows scroll: Hardware acceleration, whose hint
+// lines are its status, and Vertical sync, each locked in its own form.
 // A section of the test's own, taller than the view under the heading,
 // checks scrolling: the view and its limit, the wheel, the scroll bar, the
 // scroll keys, the focus brought into view, rows cut by the view, the
@@ -68,16 +70,38 @@ std::vector<settings::Locks> lock_states() {
                 for (const bool command_line : {false, true}) {
                     if (!in_game && (shared || replay))
                         continue;
-                    states.push_back(
-                        settings::settings_locks(
-                            settings::GameState{in_game, shared, replay, command_line}
-                        )
-                    );
+                    for (int32_t renderer = 0; renderer < 8; ++renderer) {
+                        settings::GameState state{in_game, shared, replay, command_line};
+                        state.renderer_from_command_line = (renderer & 1) != 0;
+                        state.acceleration_unavailable = (renderer & 2) != 0;
+                        state.vertical_sync_unavailable = (renderer & 4) != 0;
+                        states.push_back(settings::settings_locks(state));
+                    }
                 }
             }
         }
     }
     return states;
+}
+
+/// Every status Hardware acceleration's row shows: each state at each reach,
+/// and in a replay.
+std::vector<settings::AccelerationStatus> acceleration_statuses() {
+    std::vector<settings::AccelerationStatus> statuses;
+    for (int32_t state = 0; state <= static_cast<int32_t>(settings::AccelerationState::in_use);
+         ++state)
+        for (int32_t reach = 0;
+             reach <= static_cast<int32_t>(settings::AccelerationReach::nearest_none);
+             ++reach)
+            for (const bool replay : {false, true})
+                statuses.push_back(
+                    settings::AccelerationStatus{
+                        static_cast<settings::AccelerationState>(state),
+                        static_cast<settings::AccelerationReach>(reach),
+                        replay,
+                    }
+                );
+    return statuses;
 }
 
 settings::Dialog opened(Page page, const settings::Locks& locks = {}) {
@@ -180,14 +204,28 @@ void every_part_lies_inside_the_dialog_and_apart() {
                         }
                     }
                 }
-                // The open section stays within its columns, above the footer.
+                // The open section stays within its columns; at its end, above
+                // the footer.
                 const auto rows = geometry::place_rows(page, locks);
                 CHECK(rows.rows.size() == settings::page_settings(page).size());
-                CHECK(rows.bottom < geometry::footer_rule_row);
+                const auto open = geometry::open_rows(dialog);
+                CHECK(
+                    rows.bottom - geometry::scroll_limit(open.content_height) <
+                    geometry::footer_rule_row
+                );
+                // Each row in its columns, at the offset that shows it.
+                const auto in_columns = [&section](const renderer::SourceRect& rect) {
+                    return rect.x >= section.x && rect.x + rect.width <= section.x + section.width;
+                };
                 for (std::size_t index = 0; index < rows.rows.size(); ++index) {
                     const auto& row = rows.rows[index];
-                    CHECK(inside(row.label, section));
-                    CHECK(inside(row.control_area, section));
+                    CHECK(in_columns(row.label));
+                    // A locked row whose hint lines are its status has no control.
+                    if (row.control_area.width == 0) {
+                        CHECK(row.hint_is_status && row.lock != Lock::none);
+                        continue;
+                    }
+                    CHECK(in_columns(row.control_area));
                     // A focus outline two pixels out stays clear of the label and hints.
                     const renderer::SourceRect focus{
                         row.control_area.x - 2,
@@ -219,13 +257,15 @@ void each_section_shows_its_rows() {
     CHECK(settings::page_settings(Page::gameplay)[0] == settings::Setting::unit_limit);
     CHECK(settings::page_settings(Page::graphics)[0] == settings::Setting::max_frame_rate);
     CHECK(settings::page_settings(Page::graphics)[1] == settings::Setting::anti_aliasing);
-    CHECK(settings::page_settings(Page::graphics).size() == 3);
+    CHECK(settings::page_settings(Page::graphics).size() == 5);
     CHECK(settings::page_settings(Page::graphics)[2] == settings::Setting::screen_size);
+    CHECK(settings::page_settings(Page::graphics)[3] == settings::Setting::hardware_acceleration);
+    CHECK(settings::page_settings(Page::graphics)[4] == settings::Setting::vertical_sync);
     CHECK(settings::page_settings(Page::developer)[0] == settings::Setting::frame_stats);
-    // Graphics' three rows lie above the footer.
+    // Graphics' five rows are taller than the view, by 80 rows.
     const auto graphics = geometry::place_rows(Page::graphics, {});
-    CHECK(graphics.rows.size() == 3);
-    CHECK(graphics.bottom <= geometry::footer_rule_row);
+    CHECK(graphics.rows.size() == 5);
+    CHECK(geometry::scroll_limit(geometry::content_height(graphics, 0)) == 80);
 
     const auto parts = settings::dialog_layout(opened(Page::controls));
     for (const std::string_view text :
@@ -505,7 +545,11 @@ void the_footer_buttons_restore_cancel_and_keep() {
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
     CHECK(dialog.restored);
     CHECK(dialog.chosen == defaults);
-    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::redraw);
+    CHECK(dialog.forget_renderer_failures == 1);
+    // Every press asks the host to act, even when no setting moves.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen == defaults);
+    CHECK(dialog.forget_renderer_failures == 2);
     CHECK(click(dialog, centre(geometry::cancel_button)) == DialogAction::cancelled);
     CHECK(dialog.chosen == current);
     settings::open_dialog(dialog, current, defaults, {}, "v0.2.0", Page::controls);
@@ -743,9 +787,18 @@ void the_view_and_the_scroll_bar_keep_their_places() {
 
 void sections_that_fit_do_not_scroll() {
     // Each section's content: its rows, and the end gap under the last.
-    const std::array<int32_t, 5> content{74, 162, 86, 210, 56};
+    // Graphics' five rows are 316 and scroll.
+    const std::array<int32_t, 5> content{74, 162, 86, 316, 56};
     for (std::size_t index = 0; index < kPages.size(); ++index) {
         const Page page = kPages[index];
+        if (page == Page::graphics) {
+            for (const auto& locks : lock_states()) {
+                const auto at_top = geometry::place_rows(page, locks);
+                CHECK(geometry::content_height(at_top, 0) == content[index]);
+                CHECK(geometry::scroll_limit(content[index]) == 80);
+            }
+            continue;
+        }
         for (const auto& locks : lock_states()) {
             settings::Dialog dialog = opened(page, locks);
             const auto at_top = geometry::place_rows(page, locks);
@@ -894,18 +947,19 @@ void control_numbers_put_the_rows_after_every_fixed_control() {
     CHECK(dialog.chosen.frame_stats);
 }
 
-/// Checks the layout at one offset: every part inside the dialog and apart,
-/// every part over the view wholly in it, the scroll bar once and right of
-/// every focus outline, and every listed control pressed where it is drawn.
-void check_layout_at(Scrolling& scrolling, int32_t scroll) {
+/// Checks a dialog open on Graphics at one offset: every part inside the
+/// dialog and apart, every part over the view wholly in it, the scroll bar
+/// once and right of every focus outline, and every listed control pressed
+/// where it is drawn.
+void check_dialog_layout_at(settings::Dialog& dialog, int32_t scroll) {
     const renderer::SourceRect face{
         geometry::edge,
         geometry::edge,
         settings::dialog_width - 2 * geometry::edge,
         settings::dialog_height - 2 * geometry::edge,
     };
-    scrolling.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
-    const auto parts = settings::dialog_layout(scrolling.dialog);
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
+    const auto parts = settings::dialog_layout(dialog);
     int32_t bars = 0;
     for (std::size_t a = 0; a < parts.size(); ++a) {
         const auto& part = parts[a];
@@ -923,7 +977,7 @@ void check_layout_at(Scrolling& scrolling, int32_t scroll) {
         }
     }
     CHECK(bars == 1);
-    for (const auto& row : scrolling.rows().rows.rows)
+    for (const auto& row : geometry::open_rows(dialog).rows.rows)
         CHECK(
             row.control_area.x + row.control_area.width + geometry::focus_inset <
             geometry::scroll_well.x
@@ -932,10 +986,16 @@ void check_layout_at(Scrolling& scrolling, int32_t scroll) {
         if (part.control == settings::no_control)
             continue;
         const Point point = centre(part.rect);
-        static_cast<void>(settings::dialog_pointer_move(scrolling.dialog, point.x, point.y));
-        CHECK(scrolling.dialog.hovered == part.control);
+        static_cast<void>(settings::dialog_pointer_move(dialog, point.x, point.y));
+        CHECK(dialog.hovered == part.control);
     }
-    CHECK(scrolling.scroll() == scroll);
+    CHECK(dialog.scroll[static_cast<std::size_t>(Page::graphics)] == scroll);
+}
+
+/// Checks the layout of a section of the test's own at one offset
+/// (check_dialog_layout_at).
+void check_layout_at(Scrolling& scrolling, int32_t scroll) {
+    check_dialog_layout_at(scrolling.dialog, scroll);
 }
 
 void the_layout_lists_the_parts_wholly_in_the_view() {
@@ -953,7 +1013,11 @@ void the_layout_lists_the_parts_wholly_in_the_view() {
             CHECK(seen.contains(std::string(geometry::label_of(setting))));
             for (std::size_t line = 0; line < geometry::hint_line_count(setting); ++line)
                 CHECK(seen.contains(
-                    std::string(geometry::hint_line(setting, scrolling.dialog.chosen, line))
+                    std::string(
+                        geometry::hint_line(
+                            setting, scrolling.dialog.chosen, scrolling.dialog.acceleration, line
+                        )
+                    )
                 ));
         }
     }
@@ -1278,7 +1342,7 @@ void offsets_are_kept_for_each_section_until_the_dialog_opens_again() {
     CHECK(five.scroll() == 24);
     CHECK(geometry::open_rows(five.dialog).rows.rows[0].top == geometry::first_row_top - 24);
     // Restore defaults is no scroll: the offset stays.
-    CHECK(click(five.dialog, centre(geometry::restore_button)) == DialogAction::redraw);
+    CHECK(click(five.dialog, centre(geometry::restore_button)) == DialogAction::changed);
     CHECK(five.scroll() == 24);
     // Each opening starts every section at its top.
     five.open();
@@ -1388,6 +1452,426 @@ void locked_switch_rows_keep_their_value_in_sight() {
     CHECK(five.dialog.chosen.escape_opens_menu);
     CHECK(five.dialog.chosen.frame_stats);
     CHECK(five.dialog.chosen.unit_limit == settings::default_unit_limit);
+}
+
+/// Returns a dialog open on the Graphics page with its own rows.
+settings::Dialog graphics_page(
+    const settings::EngineSettings& current = {},
+    const settings::Locks& locks = {},
+    const settings::AccelerationStatus& acceleration = {}
+) {
+    settings::Dialog dialog;
+    settings::open_dialog(dialog, current, {}, locks, "v0.2.0", Page::graphics, acceleration);
+    return dialog;
+}
+
+/// Returns Graphics' stored offset.
+int32_t graphics_scroll(const settings::Dialog& dialog) {
+    return dialog.scroll[static_cast<std::size_t>(Page::graphics)];
+}
+
+void the_graphics_page_scrolls_its_five_rows() {
+    settings::Dialog dialog = graphics_page();
+    const auto open = geometry::open_rows(dialog);
+    CHECK(open.rows.rows.size() == 5);
+    const std::array<int32_t, 5> tops{54, 119, 178, 255, 314};
+    const std::array<int32_t, 5> heights{65, 59, 77, 59, 47};
+    for (std::size_t index = 0; index < open.rows.rows.size() && index < tops.size(); ++index) {
+        const auto& row = open.rows.rows[index];
+        CHECK(row.top == tops[index]);
+        CHECK(row.height == heights[index]);
+        CHECK(row.control == settings::first_row_control + static_cast<int32_t>(index));
+    }
+    CHECK(open.rows.bottom == 361);
+    CHECK(open.limit == 80);
+    // Hardware acceleration: a switch with two status lines; Vertical sync a
+    // switch with one hint line.
+    const auto& acceleration = open.rows.rows[3];
+    CHECK(acceleration.setting == Setting::hardware_acceleration);
+    CHECK(acceleration.hint_is_status);
+    CHECK(same_rect(acceleration.label, {158, 264, 249, 16}));
+    CHECK(same_rect(acceleration.control_area, {415, 264, 52, 16}));
+    CHECK(acceleration.hint_lines == 2);
+    CHECK(acceleration.hints[0].y == 282 && acceleration.hints[1].y == 294);
+    const auto& vsync = open.rows.rows[4];
+    CHECK(vsync.setting == Setting::vertical_sync);
+    CHECK(!vsync.hint_is_status);
+    CHECK(same_rect(vsync.label, {158, 323, 249, 16}));
+    CHECK(same_rect(vsync.control_area, {415, 323, 52, 16}));
+    CHECK(vsync.hint_lines == 1 && vsync.hints[0].y == 341);
+
+    // At the top the first three rows keep their places and Hardware
+    // acceleration's label and switch show whole; at the end the closing
+    // line is at 281.
+    const auto top = settings::dialog_layout(dialog);
+    CHECK(find_part(top, "Hardware acceleration", settings::no_control) != nullptr);
+    CHECK(find_part(top, "Vertical sync", settings::no_control) == nullptr);
+    CHECK(find_part(top, {}, settings::first_row_control + 3) != nullptr);
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 500;
+    const auto end = geometry::open_rows(dialog);
+    CHECK(end.scroll == 80);
+    CHECK(end.rows.bottom == 281);
+    CHECK(end.rows.rows[1].control_area.y == 48);
+    CHECK(end.rows.rows[3].label.y == 184);
+    CHECK(end.rows.rows[4].label.y == 243);
+    const auto at_end = settings::dialog_layout(dialog);
+    CHECK(find_part(at_end, "Vertical sync", settings::no_control) != nullptr);
+    CHECK(
+        find_part(at_end, "Each frame waits for the display: no tearing.", settings::no_control) !=
+        nullptr
+    );
+    CHECK(
+        find_part(at_end, "Off: the processor draws and scales the view.", settings::no_control) !=
+        nullptr
+    );
+
+    // Tab from no focus: the first three rows at 0, Hardware acceleration at
+    // 25, Vertical sync at the end; back up, Enhanced anti-aliasing at 65.
+    settings::Dialog keys = graphics_page();
+    const std::array<std::pair<int32_t, int32_t>, 5> forward{{
+        {settings::first_row_control, 0},
+        {settings::first_row_control + 1, 0},
+        {settings::first_row_control + 2, 0},
+        {settings::first_row_control + 3, 25},
+        {settings::first_row_control + 4, 80},
+    }};
+    for (const auto& [control, expected] : forward) {
+        CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
+        CHECK(keys.focused == control);
+        CHECK(graphics_scroll(keys) == expected);
+    }
+    const std::array<std::pair<int32_t, int32_t>, 4> back{{
+        {settings::first_row_control + 3, 80},
+        {settings::first_row_control + 2, 80},
+        {settings::first_row_control + 1, 65},
+        {settings::first_row_control, 0},
+    }};
+    for (const auto& [control, expected] : back) {
+        CHECK(settings::dialog_key(keys, DialogKey::back_tab) == DialogAction::redraw);
+        CHECK(keys.focused == control);
+        CHECK(graphics_scroll(keys) == expected);
+    }
+
+    // Every part apart and in its place at every offset, under every lock.
+    for (const auto& locks : lock_states()) {
+        settings::Dialog locked = graphics_page({}, locks);
+        for (int32_t scroll = 0; scroll <= 80; scroll += 5)
+            check_dialog_layout_at(locked, scroll);
+    }
+}
+
+void every_switch_reads_and_sets_through_one_table() {
+    int32_t switches = 0;
+    for (int32_t value = 0; value <= static_cast<int32_t>(Setting::vertical_sync); ++value) {
+        const auto setting = static_cast<Setting>(value);
+        const settings::EngineSettings before{};
+        settings::EngineSettings state = before;
+        if (!geometry::is_switch(setting)) {
+            // A slider or the level strip is no switch, and set_switch leaves it.
+            geometry::set_switch(state, setting, true);
+            CHECK(state == before);
+            CHECK(!geometry::switch_on(state, setting));
+            continue;
+        }
+        ++switches;
+        // Each switch reads and sets its own value, whichever its default.
+        const bool was = geometry::switch_on(state, setting);
+        geometry::set_switch(state, setting, !was);
+        CHECK(geometry::switch_on(state, setting) == !was);
+        CHECK(state != before);
+        geometry::set_switch(state, setting, was);
+        CHECK(geometry::switch_on(state, setting) == was);
+        CHECK(state == before);
+    }
+    CHECK(switches == 6);
+    settings::EngineSettings both{};
+    geometry::set_switch(both, Setting::hardware_acceleration, true);
+    geometry::set_switch(both, Setting::vertical_sync, true);
+    CHECK(both.hardware_acceleration && both.vertical_sync);
+
+    // Both new switches take a click on either half and the keys.
+    settings::Dialog dialog = graphics_page();
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto rows = geometry::open_rows(dialog).rows.rows;
+    const auto on_half = [](const renderer::SourceRect& area) {
+        return Point{area.x + area.width - 4, area.y + area.height / 2};
+    };
+    const auto off_half = [](const renderer::SourceRect& area) {
+        return Point{area.x + 4, area.y + area.height / 2};
+    };
+    CHECK(click(dialog, on_half(rows[4].control_area)) == DialogAction::changed);
+    CHECK(dialog.chosen.vertical_sync);
+    CHECK(click(dialog, off_half(rows[4].control_area)) == DialogAction::changed);
+    CHECK(!dialog.chosen.vertical_sync);
+    CHECK(dialog.forget_renderer_failures == 0);
+
+    // Hardware acceleration passing from Off to On asks for the graphics
+    // card to be tried afresh, once each time; Off again keeps the count.
+    CHECK(click(dialog, on_half(rows[3].control_area)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration);
+    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(click(dialog, on_half(rows[3].control_area)) == DialogAction::redraw);
+    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(click(dialog, off_half(rows[3].control_area)) == DialogAction::changed);
+    CHECK(dialog.forget_renderer_failures == 1);
+    // Through the keys: Tab to it, Right On, Left Off, Space On.
+    for (int32_t press = 0; press < 4; ++press)
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::tab));
+    CHECK(dialog.focused == settings::first_row_control + 3);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.forget_renderer_failures == 2);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration);
+    CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(dialog.chosen.vertical_sync);
+    CHECK(dialog.forget_renderer_failures == 3);
+    // Cancel puts both back.
+    CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
+    CHECK(!dialog.chosen.hardware_acceleration && !dialog.chosen.vertical_sync);
+
+    // Restore defaults with the player's own defaults, Hardware acceleration
+    // On: every press asks once more, and reports a change though none moved.
+    settings::EngineSettings own{};
+    own.hardware_acceleration = true;
+    settings::open_dialog(dialog, own, own, {}, "v0.2.0", Page::graphics);
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen == own);
+    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.forget_renderer_failures == 2);
+    // From Off to its default On, Restore defaults asks once.
+    settings::open_dialog(dialog, {}, own, {}, "v0.2.0", Page::graphics);
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration);
+    CHECK(dialog.forget_renderer_failures == 1);
+}
+
+void the_new_rows_lock_in_their_own_forms() {
+    // Either flag locks Hardware acceleration; nothing that could help locks
+    // it Not available here; a game never does.
+    settings::GameState state{};
+    state.renderer_from_command_line = true;
+    state.acceleration_unavailable = true;
+    CHECK(settings::settings_locks(state).hardware_acceleration == Lock::command_line);
+    state.renderer_from_command_line = false;
+    CHECK(settings::settings_locks(state).hardware_acceleration == Lock::unavailable);
+    for (const bool shared : {false, true})
+        for (const bool replay : {false, true}) {
+            const auto locks = settings::settings_locks(settings::GameState{true, shared, replay});
+            CHECK(locks.hardware_acceleration == Lock::none);
+            CHECK(locks.vertical_sync == (shared || replay ? Lock::in_game : Lock::none));
+        }
+    state = {};
+    state.vertical_sync_unavailable = true;
+    CHECK(settings::settings_locks(state).vertical_sync == Lock::unavailable);
+    state.in_game = true;
+    state.shared_game = true;
+    CHECK(settings::settings_locks(state).vertical_sync == Lock::unavailable);
+
+    // Hardware acceleration locked: its lock where the switch was, no switch,
+    // its label 153 wide. Vertical sync locked: its switch kept, the lock 8
+    // columns left of it and its label 93 wide.
+    settings::Locks locks{};
+    locks.hardware_acceleration = Lock::unavailable;
+    locks.vertical_sync = Lock::unavailable;
+    settings::EngineSettings current{};
+    current.hardware_acceleration = true;
+    current.vertical_sync = true;
+    settings::Dialog dialog =
+        graphics_page(current, locks, {settings::AccelerationState::no_usable_card, {}, false});
+    const auto rows = geometry::open_rows(dialog).rows.rows;
+    CHECK(same_rect(rows[3].lock_area, {319, 264, 148, 16}));
+    CHECK(same_rect(rows[3].label, {158, 264, 153, 16}));
+    CHECK(rows[3].control_area.width == 0);
+    CHECK(same_rect(rows[4].control_area, {415, 323, 52, 16}));
+    CHECK(same_rect(rows[4].lock_area, {259, 323, 148, 16}));
+    CHECK(same_rect(rows[4].label, {158, 323, 93, 16}));
+    CHECK(geometry::open_rows(dialog).limit == 80);
+
+    // At the end: both lock texts, the status, the kept switch's captions
+    // with no control, and no control for either row.
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto parts = settings::dialog_layout(dialog);
+    int32_t lock_texts = 0;
+    for (const auto& part : parts) {
+        lock_texts += part.text == "Not available here" ? 1 : 0;
+        CHECK(part.control != settings::first_row_control + 3);
+        CHECK(part.control != settings::first_row_control + 4);
+    }
+    CHECK(lock_texts == 2);
+    CHECK(
+        find_part(parts, "Not in use: no usable graphics card was found.", settings::no_control) !=
+        nullptr
+    );
+    // A press where either switch is, and every key, leaves them.
+    CHECK(click(dialog, {460, 190}) == DialogAction::none);
+    CHECK(click(dialog, {460, 250}) == DialogAction::none);
+    CHECK(dialog.chosen == current);
+    for (const int32_t expected :
+         {settings::first_row_control,
+          settings::first_row_control + 1,
+          settings::first_row_control + 2,
+          settings::restore_control}) {
+        CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
+        CHECK(dialog.focused == expected);
+    }
+    // Restore defaults keeps both locked values.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration && dialog.chosen.vertical_sync);
+
+    // Under a flag the lock says so, and in a shared game Vertical sync is
+    // locked during the game while Hardware acceleration can still be switched.
+    settings::GameState flagged{true, true, false, false};
+    flagged.renderer_from_command_line = true;
+    settings::Dialog under_flag = graphics_page({}, settings::settings_locks(flagged));
+    under_flag.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto flag_parts = settings::dialog_layout(under_flag);
+    CHECK(find_part(flag_parts, "Set on the command line", settings::no_control) != nullptr);
+    CHECK(find_part(flag_parts, "Locked during a game", settings::no_control) != nullptr);
+    settings::Dialog shared =
+        graphics_page({}, settings::settings_locks(settings::GameState{true, true, false, false}));
+    shared.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto shared_rows = geometry::open_rows(shared).rows.rows;
+    CHECK(shared_rows[3].lock == Lock::none);
+    CHECK(shared_rows[4].lock == Lock::in_game);
+    CHECK(
+        click(shared, {shared_rows[3].control_area.x + 48, shared_rows[3].control_area.y + 8}) ==
+        DialogAction::changed
+    );
+    CHECK(shared.chosen.hardware_acceleration);
+}
+
+void hardware_acceleration_shows_its_status() {
+    using settings::AccelerationReach;
+    using settings::AccelerationState;
+
+    struct Expected {
+        AccelerationState state;
+        std::string_view first;
+        std::string_view second;
+    };
+
+    constexpr std::string_view off = "Off: the processor draws and scales the view.";
+    constexpr std::string_view processor = "The processor draws and scales the view.";
+    constexpr std::string_view retry = "Switch it off and on, or restore defaults.";
+    constexpr std::string_view needs_memory = "Not in use: it needs at least 2 GB of memory.";
+    const std::array<Expected, 16> fixed{{
+        {AccelerationState::off_driver_skipped, off, "A failed graphics driver is skipped."},
+        {AccelerationState::needs_memory_driver_skipped,
+         needs_memory,
+         "A failed graphics driver is skipped."},
+        {AccelerationState::needs_memory, needs_memory, processor},
+        {AccelerationState::off_by_setting, off, "On lets the graphics card scale it evenly."},
+        {AccelerationState::off_by_command_line, off, "For this run only. The setting is kept."},
+        {AccelerationState::environment_driver,
+         "Not in use: the environment names a driver.",
+         processor},
+        {AccelerationState::too_little_memory,
+         "Not in use: there is too little memory.",
+         processor},
+        {AccelerationState::waiting_for_game_end,
+         "Off for this game: in a shared game, On",
+         "takes effect from the next game."},
+        {AccelerationState::engine_error, "Not in use: an error stopped it for this run.", retry},
+        {AccelerationState::driver_failed, "Not in use: the graphics driver failed.", retry},
+        {AccelerationState::game_stopped, "Not in use: the game stopped while using it.", retry},
+        {AccelerationState::no_usable_card,
+         "Not in use: no usable graphics card was found.",
+         processor},
+        {AccelerationState::lacks_feature,
+         "Not in use: the graphics card lacks a feature.",
+         processor},
+        {AccelerationState::cannot_save, "Not in use: the game cannot save its files.", processor},
+        {AccelerationState::slow_frames, "Not in use for this run: frames were slow.", processor},
+        {AccelerationState::next_start,
+         "Takes effect from the next start.",
+         "The processor draws and scales the view until then."},
+    }};
+    for (const auto& expected : fixed) {
+        for (const auto& status : acceleration_statuses()) {
+            if (status.state != expected.state || status.replay)
+                continue;
+            CHECK(geometry::status_line(status, 0) == expected.first);
+            CHECK(geometry::status_line(status, 1) == expected.second);
+            CHECK(geometry::status_line(status, 2).empty());
+        }
+    }
+    // In a replay the wait names it.
+    settings::AccelerationStatus replay{AccelerationState::waiting_for_game_end, {}, true};
+    CHECK(geometry::status_line(replay, 0) == "Off for this game: in a replay, On");
+    CHECK(geometry::status_line(replay, 1) == "takes effect from the next game.");
+    // While it is in use the second line says what it does here.
+    const std::array<std::pair<AccelerationState, std::string_view>, 4> in_use{{
+        {AccelerationState::in_use_on_another_driver, "In use, on another driver: one failed."},
+        {AccelerationState::in_use_less_smoothing,
+         "In use, with less smoothing: frames were slow."},
+        {AccelerationState::in_use_no_smoothing, "In use; no smoothing when zoomed out here."},
+        {AccelerationState::in_use, "In use."},
+    }};
+    const std::array<std::pair<AccelerationReach, std::string_view>, 5> reaches{{
+        {AccelerationReach::menus, "It scales the menus and the interface evenly."},
+        {AccelerationReach::zoomed_in, "It scales the interface and zoomed-in view evenly."},
+        {AccelerationReach::zoomed_out, "It scales evenly and smooths the zoomed-out view."},
+        {AccelerationReach::nearest_zoomed_out, "It smooths the zoomed-out view."},
+        {AccelerationReach::nearest_none, "Here the view is drawn as when it is off."},
+    }};
+    for (const auto& [state, first] : in_use)
+        for (const auto& [reach, second] : reaches) {
+            const settings::AccelerationStatus status{state, reach, false};
+            CHECK(geometry::status_line(status, 0) == first);
+            CHECK(geometry::status_line(status, 1) == second);
+        }
+    // Every status has two lines, none empty.
+    for (const auto& status : acceleration_statuses()) {
+        CHECK(!geometry::status_line(status, 0).empty());
+        CHECK(!geometry::status_line(status, 1).empty());
+        CHECK(
+            geometry::hint_line(Setting::hardware_acceleration, {}, status, 0) ==
+            geometry::status_line(status, 0)
+        );
+    }
+    CHECK(geometry::hint_line_count(Setting::hardware_acceleration) == 2);
+    CHECK(geometry::hint_line_count(Setting::vertical_sync) == 1);
+    CHECK(geometry::hint_is_status(Setting::hardware_acceleration));
+    CHECK(!geometry::hint_is_status(Setting::vertical_sync));
+    CHECK(geometry::lock_text(Lock::unavailable) == "Not available here");
+
+    // The host gives the status at opening and each frame after; only a
+    // change asks for a redraw, and the row shows it.
+    settings::Dialog dialog = graphics_page({}, {}, {AccelerationState::off_by_setting, {}, false});
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    CHECK(
+        settings::set_acceleration_status(
+            dialog, {AccelerationState::off_by_setting, AccelerationReach::menus, false}
+        ) == DialogAction::none
+    );
+    CHECK(
+        settings::set_acceleration_status(
+            dialog, {AccelerationState::in_use, AccelerationReach::zoomed_out, false}
+        ) == DialogAction::redraw
+    );
+    const auto parts = settings::dialog_layout(dialog);
+    CHECK(find_part(parts, "In use.", settings::no_control) != nullptr);
+    CHECK(
+        find_part(
+            parts, "It scales evenly and smooths the zoomed-out view.", settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        settings::set_acceleration_status(
+            dialog, {AccelerationState::waiting_for_game_end, AccelerationReach::zoomed_out, true}
+        ) == DialogAction::redraw
+    );
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "Off for this game: in a replay, On",
+            settings::no_control
+        ) != nullptr
+    );
 }
 
 struct Canvas {
@@ -1513,6 +1997,8 @@ void the_dialog_draws_the_scroll_bar_and_clips_the_rows() {
     const auto fonts = block_fonts();
     // Sections that fit draw no scroll bar, whatever offset they hold.
     for (const Page page : kPages) {
+        if (page == Page::graphics)
+            continue;
         Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
         settings::Dialog dialog = opened(page);
         settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, fonts);
@@ -1622,6 +2108,52 @@ void the_dialog_draws_the_scroll_bar_and_clips_the_rows() {
     CHECK(well.at(473, 200) == kSwitchIdle);
 }
 
+void the_graphics_page_draws_its_locked_rows() {
+    const auto fonts = block_fonts();
+    // At the top: the scroll bar, Hardware acceleration's switch whole and
+    // its status cut at 289.
+    settings::Dialog top =
+        graphics_page({}, {}, {settings::AccelerationState::off_by_setting, {}, false});
+    Canvas at_top = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(at_top.surface, {0, 0, 1}, top, fonts);
+    CHECK(at_top.at(473, 100) == kControlHover);
+    CHECK(at_top.at(418, 270) == kOffSelected);
+    CHECK(at_top.at(159, 284) == kHint);
+    CHECK(at_top.at(159, 291) != kHint);
+
+    // At the end, both locked Not available here: Hardware acceleration's
+    // label line faded and its status at full strength, no switch; Vertical
+    // sync faded whole, its switch kept and On without the accent.
+    settings::Locks locks{};
+    locks.hardware_acceleration = Lock::unavailable;
+    locks.vertical_sync = Lock::unavailable;
+    settings::EngineSettings current{};
+    current.hardware_acceleration = true;
+    current.vertical_sync = true;
+    settings::Dialog dialog =
+        graphics_page(current, locks, {settings::AccelerationState::no_usable_card, {}, false});
+    dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, fonts);
+    CHECK(canvas.at(159, 190) == faded(kText));          // its label
+    CHECK(canvas.at(159, 205) == kHint);                 // its first status line
+    CHECK(canvas.at(159, 217) == kHint);                 // its second
+    CHECK(canvas.at(445, 185) == kPanel);                // no switch: neither its well
+    CHECK(canvas.at(445, 199) == kPanel);                // nor its border
+    CHECK(canvas.at(159, 249) == faded(kText));          // Vertical sync's label
+    CHECK(canvas.at(159, 264) == faded(kHint));          // its hint
+    CHECK(canvas.at(444, 245) == faded(kControlHover));  // its On, without the accent
+    CHECK(canvas.at(415, 250) == faded(kControlBorder)); // its switch's border
+    // Unlocked and On, both switches show the accent.
+    settings::Dialog open =
+        graphics_page(current, {}, {settings::AccelerationState::in_use, {}, false});
+    open.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    Canvas unlocked = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(unlocked.surface, {0, 0, 1}, open, fonts);
+    CHECK(unlocked.at(444, 186) == kAccent);
+    CHECK(unlocked.at(444, 245) == kAccent);
+}
+
 void fonts_load_and_every_text_fits_its_place() {
     auto assets = oa::test::require_game_assets("the settings dialog's fonts");
     const auto fonts = settings::load_dialog_fonts(assets);
@@ -1676,7 +2208,75 @@ void fonts_load_and_every_text_fits_its_place() {
             CHECK(width <= part.rect.width);
         }
     }
-    for (const Lock lock : {Lock::in_game, Lock::set_by_host, Lock::command_line}) {
+    // Every status line, for every state, reach and replay, fits a hint
+    // line's 309 columns; Hardware acceleration's label fits the 153 beside
+    // its lock, and Vertical sync's the 93 beside its lock and kept switch.
+    const auto small_width = [&](std::string_view text) {
+        return static_cast<int32_t>(oa::formats::fnt::measure_text(fonts.small.font, text));
+    };
+    for (const auto& status : acceleration_statuses())
+        for (std::size_t line = 0; line < 2; ++line) {
+            const auto text = geometry::status_line(status, line);
+            if (small_width(text) > geometry::content_width) {
+                std::cerr << "'" << text << "' is " << small_width(text) << " wide\n";
+                CHECK(small_width(text) <= geometry::content_width);
+            }
+        }
+    CHECK(
+        static_cast<int32_t>(
+            oa::formats::fnt::measure_text(fonts.regular.font, "Hardware acceleration")
+        ) <= 153
+    );
+    CHECK(
+        static_cast<int32_t>(oa::formats::fnt::measure_text(fonts.regular.font, "Vertical sync")) <=
+        93
+    );
+    for (const std::string_view text :
+         {"Not in use: the game cannot save its files.",
+          "Not in use: it needs at least 2 GB of memory.",
+          "It smooths the zoomed-out view.",
+          "Here the view is drawn as when it is off.",
+          "Each frame waits for the display: no tearing.",
+          "Not available here"})
+        std::cout << "'" << text << "' is " << small_width(text) << " columns\n";
+    // The Graphics page at every offset, under every lock and with every
+    // status: every text it lists fits its place.
+    const auto fits = [&](const settings::Dialog& dialog) {
+        for (const auto& part : settings::dialog_layout(dialog)) {
+            if (part.text.empty())
+                continue;
+            const auto& font =
+                part.font == settings::DialogFont::regular ? fonts.regular.font : fonts.small.font;
+            const auto width =
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, part.text)) +
+                part.tracking * static_cast<int32_t>(part.text.size() - 1);
+            if (width > part.rect.width) {
+                std::cerr << "'" << part.text << "' is " << width << " wide in a box "
+                          << part.rect.width << " wide\n";
+                CHECK(width <= part.rect.width);
+            }
+        }
+    };
+    for (const auto& locks : lock_states()) {
+        settings::Dialog dialog = graphics_page({}, locks);
+        for (int32_t scroll = 0; scroll <= 80; ++scroll) {
+            dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
+            fits(dialog);
+        }
+    }
+    for (const auto& status : acceleration_statuses()) {
+        settings::GameState unavailable{};
+        unavailable.acceleration_unavailable = true;
+        unavailable.vertical_sync_unavailable = true;
+        for (const auto& locks : {settings::Locks{}, settings::settings_locks(unavailable)}) {
+            settings::Dialog dialog = graphics_page({}, locks, status);
+            dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+            fits(dialog);
+        }
+    }
+
+    for (const Lock lock :
+         {Lock::in_game, Lock::set_by_host, Lock::command_line, Lock::unavailable}) {
         Section section = five_rows();
         section.locks = {{Setting::escape_opens_menu, lock}, {Setting::frame_stats, lock}};
         section.status = {Setting::escape_opens_menu};
@@ -1728,8 +2328,13 @@ int main(int argc, char** argv) {
         offsets_are_kept_for_each_section_until_the_dialog_opens_again();
         the_hover_follows_the_rows_under_a_still_pointer();
         locked_switch_rows_keep_their_value_in_sight();
+        the_graphics_page_scrolls_its_five_rows();
+        every_switch_reads_and_sets_through_one_table();
+        the_new_rows_lock_in_their_own_forms();
+        hardware_acceleration_shows_its_status();
         the_dialog_draws_its_faces_and_accents(settings::DialogFonts{});
         the_dialog_draws_the_scroll_bar_and_clips_the_rows();
+        the_graphics_page_draws_its_locked_rows();
     }
     if (failures != 0)
         return 1;

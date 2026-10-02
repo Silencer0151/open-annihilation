@@ -7,8 +7,9 @@
 // shown whole; the match clock running 30 ticks a second at any frame rate;
 // the presentation fraction in [0, 1], rising evenly between ticks, holding
 // while the match waits or catches up; frames paced across the turn of the
-// clock's reading to 0 at 2^32 milliseconds; the camera's scroll for a
-// frame's real time; and the "+stats" overlay's figures, its frame
+// clock's reading to 0 at 2^32 milliseconds; the cap just below the
+// display's rate while Vertical sync is in effect; the camera's scroll for
+// a frame's real time; and the "+stats" overlay's figures, its frame
 // history, its grades of each time and its table.
 #include "oa/app/frame_pacing.hpp"
 
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -533,6 +535,56 @@ void test_frame_rate_choice() {
     CHECK(paced_frame_rate(0, FrameActivity{true, false, false, false}) == 0);
 }
 
+void test_vertical_sync_cap() {
+    using oa::app::frame_pacing::capped_frame_rate;
+    using oa::app::frame_pacing::FrameActivity;
+    using oa::app::frame_pacing::paced_frame_rate;
+    using oa::app::frame_pacing::vsync_frame_cap;
+    // The largest whole rate below the display's.
+    CHECK(vsync_frame_cap(60.0F) == 59);
+    CHECK(vsync_frame_cap(59.94F) == 59);
+    CHECK(vsync_frame_cap(75.0F) == 74);
+    CHECK(vsync_frame_cap(120.0F) == 119);
+    CHECK(vsync_frame_cap(144.0F) == 143);
+    CHECK(vsync_frame_cap(143.856F) == 143);
+    CHECK(vsync_frame_cap(240.0F) == 239);
+    // Never under the tick rate, so each tick is still drawn.
+    CHECK(vsync_frame_cap(30.0F) == oa::app::frame_pacing::kTicksPerSecond);
+    CHECK(vsync_frame_cap(31.0F) == 30);
+    CHECK(vsync_frame_cap(24.0F) == 30);
+    CHECK(vsync_frame_cap(0.5F) == 30);
+    // No rate reported: no cap; a rate past any limit is held to the highest.
+    CHECK(vsync_frame_cap(0.0F) == 0);
+    CHECK(vsync_frame_cap(-60.0F) == 0);
+    CHECK(vsync_frame_cap(std::numeric_limits<float>::quiet_NaN()) == 0);
+    CHECK(
+        vsync_frame_cap(std::numeric_limits<float>::infinity()) ==
+        oa::app::frame_pacing::kHighestVsyncCap
+    );
+    CHECK(vsync_frame_cap(5000.0F) == oa::app::frame_pacing::kHighestVsyncCap);
+
+    // The paced rate is the lowest of the maximum, the idle rate and the cap.
+    const uint32_t cap = vsync_frame_cap(60.0F);
+    CHECK(
+        capped_frame_rate(paced_frame_rate(120, FrameActivity{true, false, false, false}), cap) ==
+        59
+    );
+    CHECK(
+        capped_frame_rate(paced_frame_rate(40, FrameActivity{true, false, false, false}), cap) == 40
+    );
+    CHECK(
+        capped_frame_rate(paced_frame_rate(0, FrameActivity{true, false, false, false}), cap) == 59
+    );
+    CHECK(capped_frame_rate(paced_frame_rate(120, FrameActivity{}), cap) == 30);
+    // With no cap, Vertical sync Off or a display without a rate, the rate
+    // is as without it, no limit included.
+    for (const uint32_t rate : {0U, 30U, 60U, 120U, 1000U})
+        CHECK(capped_frame_rate(rate, 0) == rate);
+    // A display at the tick rate keeps frames at the tick rate, where each
+    // frame is due at the middle of a clock unit.
+    CHECK(capped_frame_rate(120, vsync_frame_cap(30.0F)) == oa::app::frame_pacing::kTicksPerSecond);
+}
+
 void test_presentation_holds() {
     const uint64_t now = kClockStart;
     Timing timing = started_timing(oa::base::game_loop::normal_game_speed, now);
@@ -1022,6 +1074,7 @@ int main() {
     test_late_frame_is_not_followed_by_a_burst();
     test_pacer_edges();
     test_frame_rate_choice();
+    test_vertical_sync_cap();
     test_presentation_holds();
     test_scroll_distance();
     test_frame_stats();

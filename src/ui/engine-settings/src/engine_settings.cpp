@@ -167,6 +167,9 @@ std::string switch_text(bool on) {
 EngineSettings default_settings(const Inputs& inputs) {
     EngineSettings settings{};
     settings.escape_opens_menu = inputs.macos && inputs.players_own_profile;
+    // On for the player's own file on every machine: whether the graphics
+    // card is used is decided apart, so the default never moves with it.
+    settings.hardware_acceleration = inputs.players_own_profile;
     if (inputs.players_own_profile)
         settings.unit_limit =
             installation_unit_limit(inputs.installation_ini).value_or(default_unit_limit);
@@ -221,6 +224,10 @@ EngineSettings read_settings(
         settings.frame_stats = *number > 0;
     if (const auto found = values.find(std::string{key::screen_size}); found != values.end())
         settings.screen_size = screen_size_from_text(found->second).value_or(settings.screen_size);
+    if (const auto number = stored_number(values, key::hardware_acceleration))
+        settings.hardware_acceleration = *number > 0;
+    if (const auto number = stored_number(values, key::vertical_sync))
+        settings.vertical_sync = *number > 0;
     return settings;
 }
 
@@ -295,6 +302,22 @@ void write_settings(
         chosen.screen_size == defaults.screen_size,
         restored
     );
+    store(
+        values,
+        key::hardware_acceleration,
+        switch_text(chosen.hardware_acceleration),
+        chosen.hardware_acceleration != opened.hardware_acceleration,
+        chosen.hardware_acceleration == defaults.hardware_acceleration,
+        restored
+    );
+    store(
+        values,
+        key::vertical_sync,
+        switch_text(chosen.vertical_sync),
+        chosen.vertical_sync != opened.vertical_sync,
+        chosen.vertical_sync == defaults.vertical_sync,
+        restored
+    );
 }
 
 std::optional<uint16_t> installation_unit_limit(std::string_view ini_text) {
@@ -351,6 +374,14 @@ Locks settings_locks(const GameState& state) noexcept {
     locks.unit_limit = game_lock;
     locks.max_frame_rate = state.frame_rate_from_command_line ? Lock::command_line : Lock::none;
     locks.shared_game = state.in_game && state.shared_game;
+    // A game never locks hardware acceleration: Off must stay possible in a
+    // shared game, where On waits for the match to end.
+    locks.hardware_acceleration = state.renderer_from_command_line ? Lock::command_line
+                                  : state.acceleration_unavailable ? Lock::unavailable
+                                                                   : Lock::none;
+    locks.vertical_sync = state.vertical_sync_unavailable                        ? Lock::unavailable
+                          : state.in_game && (state.shared_game || state.replay) ? Lock::in_game
+                                                                                 : Lock::none;
     return locks;
 }
 

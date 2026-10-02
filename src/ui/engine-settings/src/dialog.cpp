@@ -32,16 +32,141 @@ constexpr std::array<Setting, 3> kControlsRows{
 /// Gameplay's rows.
 constexpr std::array<Setting, 1> kGameplayRows{Setting::unit_limit};
 /// Graphics' rows.
-constexpr std::array<Setting, 3> kGraphicsRows{
+constexpr std::array<Setting, 5> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
+    Setting::hardware_acceleration,
+    Setting::vertical_sync,
 };
 /// Developer's rows.
 constexpr std::array<Setting, 1> kDeveloperRows{Setting::frame_stats};
 
 /// The lowest level that draws units finer and needs the warning hint.
 constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
+
+/// A switch setting and the member of EngineSettings it is.
+struct SwitchMember {
+    Setting setting{};               ///< the switch
+    bool EngineSettings::* member{}; ///< its value
+};
+
+/// Every switch and its value: the one table switch_on and set_switch read.
+constexpr std::array<SwitchMember, 6> kSwitches{{
+    {Setting::wheel_zoom, &EngineSettings::wheel_zoom},
+    {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu},
+    {Setting::switch_alt, &EngineSettings::switch_alt},
+    {Setting::frame_stats, &EngineSettings::frame_stats},
+    {Setting::hardware_acceleration, &EngineSettings::hardware_acceleration},
+    {Setting::vertical_sync, &EngineSettings::vertical_sync},
+}};
+
+/// Returns a switch's value in the settings.
+///
+/// @param setting the setting
+/// @return its member; null for a setting that is not a switch
+bool EngineSettings::* switch_member(Setting setting) noexcept {
+    for (const SwitchMember& entry : kSwitches)
+        if (entry.setting == setting)
+            return entry.member;
+    return nullptr;
+}
+
+/// The texts of Hardware acceleration's status, two lines for each state;
+/// an empty second line is the reach line, which says what the graphics
+/// card does on this machine.
+struct StatusText {
+    AccelerationState state{}; ///< the state
+    std::string_view first;    ///< what runs, or why not
+    std::string_view second;   ///< what draws the view or what to do; empty for the reach
+};
+
+/// The second line of a state the processor draws in.
+constexpr std::string_view kProcessorDraws = "The processor draws and scales the view.";
+/// The first line of the Off states.
+constexpr std::string_view kOff = "Off: the processor draws and scales the view.";
+/// The second line of a state that switching it Off and On, or Restore
+/// defaults, may lift.
+constexpr std::string_view kRetry = "Switch it off and on, or restore defaults.";
+/// The second line of a state at a start that passed over a failed driver.
+constexpr std::string_view kDriverSkipped = "A failed graphics driver is skipped.";
+/// The first line of a machine under 2 GiB.
+constexpr std::string_view kNeedsMemory = "Not in use: it needs at least 2 GB of memory.";
+
+/// Every state's status, in AccelerationState's order.
+constexpr std::array<StatusText, 20> kStatusTexts{{
+    {AccelerationState::off_driver_skipped, kOff, kDriverSkipped},
+    {AccelerationState::needs_memory_driver_skipped, kNeedsMemory, kDriverSkipped},
+    {AccelerationState::needs_memory, kNeedsMemory, kProcessorDraws},
+    {AccelerationState::off_by_setting, kOff, "On lets the graphics card scale it evenly."},
+    {AccelerationState::off_by_command_line, kOff, "For this run only. The setting is kept."},
+    {AccelerationState::environment_driver,
+     "Not in use: the environment names a driver.",
+     kProcessorDraws},
+    {AccelerationState::too_little_memory,
+     "Not in use: there is too little memory.",
+     kProcessorDraws},
+    {AccelerationState::waiting_for_game_end,
+     "Off for this game: in a shared game, On",
+     "takes effect from the next game."},
+    {AccelerationState::engine_error, "Not in use: an error stopped it for this run.", kRetry},
+    {AccelerationState::driver_failed, "Not in use: the graphics driver failed.", kRetry},
+    {AccelerationState::game_stopped, "Not in use: the game stopped while using it.", kRetry},
+    {AccelerationState::no_usable_card,
+     "Not in use: no usable graphics card was found.",
+     kProcessorDraws},
+    {AccelerationState::lacks_feature,
+     "Not in use: the graphics card lacks a feature.",
+     kProcessorDraws},
+    {AccelerationState::cannot_save,
+     "Not in use: the game cannot save its files.",
+     kProcessorDraws},
+    {AccelerationState::slow_frames, "Not in use for this run: frames were slow.", kProcessorDraws},
+    {AccelerationState::next_start,
+     "Takes effect from the next start.",
+     "The processor draws and scales the view until then."},
+    {AccelerationState::in_use_on_another_driver, "In use, on another driver: one failed.", {}},
+    {AccelerationState::in_use_less_smoothing,
+     "In use, with less smoothing: frames were slow.",
+     {}},
+    {AccelerationState::in_use_no_smoothing, "In use; no smoothing when zoomed out here.", {}},
+    {AccelerationState::in_use, "In use.", {}},
+}};
+
+/// Tells whether kStatusTexts holds every state once, in AccelerationState's order.
+///
+/// @return true when each entry's state is its index
+constexpr bool status_texts_in_order() noexcept {
+    for (std::size_t index = 0; index < kStatusTexts.size(); ++index)
+        if (static_cast<std::size_t>(kStatusTexts[index].state) != index)
+            return false;
+    return kStatusTexts.size() == static_cast<std::size_t>(AccelerationState::in_use) + 1;
+}
+
+static_assert(status_texts_in_order(), "every state of Hardware acceleration has its status");
+
+/// The first line of AccelerationState::waiting_for_game_end in a replay.
+constexpr std::string_view kWaitingInReplay = "Off for this game: in a replay, On";
+
+/// Returns the reach line: what the graphics card does on this machine.
+///
+/// @param reach the reach
+/// @return the line
+std::string_view reach_line(AccelerationReach reach) noexcept {
+    switch (reach) {
+    case AccelerationReach::menus:
+        return "It scales the menus and the interface evenly.";
+    case AccelerationReach::zoomed_in:
+        return "It scales the interface and zoomed-in view evenly.";
+    case AccelerationReach::zoomed_out:
+        return "It scales evenly and smooths the zoomed-out view.";
+    case AccelerationReach::nearest_zoomed_out:
+        return "It smooths the zoomed-out view.";
+    case AccelerationReach::nearest_none:
+        return "Here the view is drawn as when it is off.";
+    }
+    return {};
+}
 
 /// Returns a screen size's place among screen_sizes.
 ///
@@ -162,6 +287,20 @@ void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept 
     }
 }
 
+bool is_switch(Setting setting) noexcept {
+    return !is_slider(setting) && setting != Setting::anti_aliasing;
+}
+
+bool switch_on(const EngineSettings& settings, Setting setting) noexcept {
+    const auto member = switch_member(setting);
+    return member != nullptr && settings.*member;
+}
+
+void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept {
+    if (const auto member = switch_member(setting))
+        settings.*member = on;
+}
+
 Lock lock_of(const Locks& locks, Setting setting) noexcept {
     switch (setting) {
     case Setting::path_search:
@@ -170,13 +309,17 @@ Lock lock_of(const Locks& locks, Setting setting) noexcept {
         return locks.unit_limit;
     case Setting::max_frame_rate:
         return locks.max_frame_rate;
+    case Setting::hardware_acceleration:
+        return locks.hardware_acceleration;
+    case Setting::vertical_sync:
+        return locks.vertical_sync;
     default:
         return Lock::none;
     }
 }
 
-bool hint_is_status(Setting) noexcept {
-    return false;
+bool hint_is_status(Setting setting) noexcept {
+    return setting == Setting::hardware_acceleration;
 }
 
 std::span<const Setting> section_settings(Page page, const SectionHooks* section) {
@@ -447,12 +590,34 @@ std::string_view label_of(Setting setting) noexcept {
         return "Screen size";
     case Setting::frame_stats:
         return "Show performance statistics";
+    case Setting::hardware_acceleration:
+        return "Hardware acceleration";
+    case Setting::vertical_sync:
+        return "Vertical sync";
     }
     return {};
 }
 
-std::string_view
-hint_line(Setting setting, const EngineSettings& settings, std::size_t line) noexcept {
+std::string_view status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept {
+    const auto index = static_cast<std::size_t>(acceleration.state);
+    if (index >= kStatusTexts.size())
+        return {};
+    const StatusText& text = kStatusTexts[index];
+    if (line == 0)
+        return acceleration.state == AccelerationState::waiting_for_game_end && acceleration.replay
+                   ? kWaitingInReplay
+                   : text.first;
+    if (line == 1)
+        return text.second.empty() ? reach_line(acceleration.reach) : text.second;
+    return {};
+}
+
+std::string_view hint_line(
+    Setting setting,
+    const EngineSettings& settings,
+    const AccelerationStatus& acceleration,
+    std::size_t line
+) noexcept {
     // Each hint is broken where it reads best, so each line fits the
     // section's width in the small font.
     using Lines = std::array<std::string_view, most_hint_lines>;
@@ -492,6 +657,12 @@ hint_line(Setting setting, const EngineSettings& settings, std::size_t line) noe
     case Setting::frame_stats:
         lines = {"Frame and tick times over the battlefield.", {}};
         break;
+    case Setting::hardware_acceleration:
+        // Its hint is its status, which the host keeps up to date.
+        return status_line(acceleration, line);
+    case Setting::vertical_sync:
+        lines = {"Each frame waits for the display: no tearing.", {}};
+        break;
     }
     return line < lines.size() ? lines[line] : std::string_view{};
 }
@@ -502,6 +673,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::unit_limit:
     case Setting::anti_aliasing:
     case Setting::screen_size:
+    case Setting::hardware_acceleration:
         return 2;
     default:
         return 1;
@@ -536,6 +708,8 @@ std::string_view lock_text(Lock lock) noexcept {
         return "Set by the host";
     case Lock::command_line:
         return "Set on the command line";
+    case Lock::unavailable:
+        return "Not available here";
     }
     return {};
 }
@@ -749,37 +923,17 @@ DialogAction scroll_key(Dialog& dialog, layout::ScrolledRows& open, DialogKey ke
     return scroll_to(dialog, open, next);
 }
 
-/// Reports a change of the chosen settings, or only a look's.
+/// Reports a change of the chosen settings, or only a look's. Hardware
+/// acceleration passing from Off to On asks for the graphics card to be
+/// tried afresh.
 ///
+/// @param[in,out] dialog the dialog, its chosen settings after the event
 /// @param before the chosen settings before the event
-/// @param after the chosen settings after it
 /// @return DialogAction::changed when they differ, else DialogAction::redraw
-DialogAction changed_or_redraw(const EngineSettings& before, const EngineSettings& after) noexcept {
-    return before == after ? DialogAction::redraw : DialogAction::changed;
-}
-
-/// Sets a switch.
-///
-/// @param[in,out] settings the settings
-/// @param setting a switch setting
-/// @param on true for On
-void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept {
-    switch (setting) {
-    case Setting::wheel_zoom:
-        settings.wheel_zoom = on;
-        break;
-    case Setting::escape_opens_menu:
-        settings.escape_opens_menu = on;
-        break;
-    case Setting::switch_alt:
-        settings.switch_alt = on;
-        break;
-    case Setting::frame_stats:
-        settings.frame_stats = on;
-        break;
-    default:
-        break;
-    }
+DialogAction changed_or_redraw(Dialog& dialog, const EngineSettings& before) noexcept {
+    if (!before.hardware_acceleration && dialog.chosen.hardware_acceleration)
+        ++dialog.forget_renderer_failures;
+    return before == dialog.chosen ? DialogAction::redraw : DialogAction::changed;
 }
 
 /// Moves a row's control one step down or up: a switch to Off or On, a
@@ -801,7 +955,7 @@ void step(EngineSettings& settings, Setting setting, bool up) noexcept {
             settings.anti_aliasing = anti_aliasing_levels[index - 1];
         return;
     }
-    set_switch(settings, setting, up);
+    layout::set_switch(settings, setting, up);
 }
 
 /// Copies one setting's value.
@@ -838,14 +992,22 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
     case Setting::frame_stats:
         to.frame_stats = from.frame_stats;
         break;
+    case Setting::hardware_acceleration:
+        to.hardware_acceleration = from.hardware_acceleration;
+        break;
+    case Setting::vertical_sync:
+        to.vertical_sync = from.vertical_sync;
+        break;
     }
 }
 
 /// Resets every setting the dialog can change to its default. Each locked
 /// setting, found through its row's lock on every section, keeps its value.
+/// Each press also asks for the graphics card to be tried afresh, so it
+/// reports a change even when no setting moved.
 ///
 /// @param[in,out] dialog the dialog
-/// @return what the reset asks of the host
+/// @return DialogAction::changed
 DialogAction restore_defaults(Dialog& dialog) {
     const EngineSettings before = dialog.chosen;
     EngineSettings restored = dialog.defaults;
@@ -858,7 +1020,8 @@ DialogAction restore_defaults(Dialog& dialog) {
     }
     dialog.chosen = restored;
     dialog.restored = true;
-    return changed_or_redraw(before, dialog.chosen);
+    ++dialog.forget_renderer_failures;
+    return DialogAction::changed;
 }
 
 /// Closes the dialog keeping what it shows.
@@ -916,25 +1079,10 @@ DialogAction activate(Dialog& dialog, const layout::Rows& rows, int32_t control)
         row->setting == Setting::anti_aliasing)
         return DialogAction::none;
     const EngineSettings before = dialog.chosen;
-    bool on = false;
-    switch (row->setting) {
-    case Setting::wheel_zoom:
-        on = dialog.chosen.wheel_zoom;
-        break;
-    case Setting::escape_opens_menu:
-        on = dialog.chosen.escape_opens_menu;
-        break;
-    case Setting::switch_alt:
-        on = dialog.chosen.switch_alt;
-        break;
-    case Setting::frame_stats:
-        on = dialog.chosen.frame_stats;
-        break;
-    default:
-        break;
-    }
-    set_switch(dialog.chosen, row->setting, !on);
-    return changed_or_redraw(before, dialog.chosen);
+    layout::set_switch(
+        dialog.chosen, row->setting, !layout::switch_on(dialog.chosen, row->setting)
+    );
+    return changed_or_redraw(dialog, before);
 }
 
 /// Sets a slider to the stop under a column.
@@ -947,7 +1095,7 @@ DialogAction drag_to(Dialog& dialog, const layout::Row& row, int32_t column) noe
     const EngineSettings before = dialog.chosen;
     const int32_t stops = layout::slider_of(row.setting).stops;
     layout::set_stop(dialog.chosen, row.setting, layout::stop_at(row.control_area, column, stops));
-    return changed_or_redraw(before, dialog.chosen);
+    return changed_or_redraw(dialog, before);
 }
 
 } // namespace
@@ -974,15 +1122,25 @@ void open_dialog(
     const EngineSettings& defaults,
     const Locks& locks,
     std::string_view version,
-    Page page
+    Page page,
+    const AccelerationStatus& acceleration
 ) {
     dialog = Dialog{};
     dialog.opened = current;
     dialog.chosen = current;
     dialog.defaults = defaults;
     dialog.locks = locks;
+    dialog.acceleration = acceleration;
     dialog.version = std::string(version);
     dialog.page = page;
+}
+
+DialogAction
+set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) noexcept {
+    if (dialog.acceleration == acceleration)
+        return DialogAction::none;
+    dialog.acceleration = acceleration;
+    return DialogAction::redraw;
 }
 
 DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
@@ -1066,9 +1224,9 @@ DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
                 anti_aliasing_levels[layout::level_at(row->control_area, x)];
         } else {
             const bool on = x >= row->control_area.x + row->control_area.width / 2;
-            set_switch(dialog.chosen, row->setting, on);
+            layout::set_switch(dialog.chosen, row->setting, on);
         }
-        return changed_or_redraw(before, dialog.chosen);
+        return changed_or_redraw(dialog, before);
     }
     return activate(dialog, open.rows, control);
 }
@@ -1112,7 +1270,7 @@ DialogAction dialog_key(Dialog& dialog, DialogKey key) {
             return shown;
         const EngineSettings before = dialog.chosen;
         step(dialog.chosen, row->setting, up);
-        return changed_or_redraw(before, dialog.chosen);
+        return changed_or_redraw(dialog, before);
     }
     // Left and Right move along the footer's buttons.
     constexpr std::array<int32_t, 3> footer{restore_control, cancel_control, ok_control};
@@ -1263,7 +1421,7 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
         for (std::size_t line = 0; line < row.hint_lines; ++line)
             row_text(
                 row.hints[line],
-                layout::hint_line(row.setting, dialog.chosen, line),
+                layout::hint_line(row.setting, dialog.chosen, dialog.acceleration, line),
                 DialogFont::small
             );
         if (row.setting == Setting::anti_aliasing) {

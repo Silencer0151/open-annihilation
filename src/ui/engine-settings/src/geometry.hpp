@@ -245,6 +245,28 @@ struct ScrolledRows {
 /// @param stop the stop, clamped to the slider's
 void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept;
 
+/// Tells whether a setting is an Off/On switch.
+///
+/// @param setting the setting
+/// @return true for a switch, false for a slider or the level strip
+[[nodiscard]] bool is_switch(Setting setting) noexcept;
+
+/// Tells whether a switch setting is On. Every switch is read and set
+/// through one table from the setting to its value, so a new switch is
+/// added in one place.
+///
+/// @param settings the settings
+/// @param setting a switch setting
+/// @return true for On; false for a setting that is not a switch
+[[nodiscard]] bool switch_on(const EngineSettings& settings, Setting setting) noexcept;
+
+/// Sets a switch setting, through the same table as switch_on.
+///
+/// @param[in,out] settings the settings
+/// @param setting a switch setting; any other is left alone
+/// @param on true for On
+void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
+
 /// Returns the lock a setting has.
 ///
 /// @param locks the dialog's locks
@@ -256,7 +278,7 @@ void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept;
 /// shows its lock where its switch was, and only its label line fades.
 ///
 /// @param setting the setting
-/// @return true for a setting whose hint lines are its status; no setting's are yet
+/// @return true for Hardware acceleration, whose hint lines are its status
 [[nodiscard]] bool hint_is_status(Setting setting) noexcept;
 
 /// Returns the settings a section shows, a check's own section's when given.
@@ -404,10 +426,25 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 ///
 /// @param setting the setting
 /// @param settings the settings shown; the anti-aliasing hint depends on its level
+/// @param acceleration Hardware acceleration's status, which is its hint
 /// @param line the line, from 0
 /// @return the line; empty past the hint's last
+[[nodiscard]] std::string_view hint_line(
+    Setting setting,
+    const EngineSettings& settings,
+    const AccelerationStatus& acceleration,
+    std::size_t line
+) noexcept;
+
+/// Returns a line of Hardware acceleration's status: the first says what
+/// runs, or why not; the second what draws the view, what the player can
+/// do, or, while it is in use, what it does on this machine.
+///
+/// @param acceleration the status
+/// @param line the line, 0 or 1
+/// @return the line; empty past the second
 [[nodiscard]] std::string_view
-hint_line(Setting setting, const EngineSettings& settings, std::size_t line) noexcept;
+status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept;
 
 /// Returns the lines a setting's hint takes.
 ///

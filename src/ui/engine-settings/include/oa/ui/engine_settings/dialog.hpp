@@ -64,6 +64,9 @@ enum class Setting : uint8_t {
     anti_aliasing,     ///< Enhanced anti-aliasing: a strip of levels
     screen_size,       ///< Screen size: a slider
     frame_stats,       ///< Show performance statistics: a switch
+    /// Hardware acceleration: a switch whose two hint lines are its status
+    hardware_acceleration,
+    vertical_sync, ///< Vertical sync: a switch
 };
 
 /// Returns the settings a section shows, top to bottom.
@@ -127,11 +130,73 @@ enum class DialogKey : uint8_t {
     end,       ///< scrolls the open section to its end
 };
 
+/// What Hardware acceleration's status says: whether the graphics card
+/// scales the frames, and why not when it does not. The states keep the
+/// order the host tests them in; the first that applies is shown.
+enum class AccelerationState : uint8_t {
+    /// Off, by the setting or --no-hardware-acceleration, and a failed
+    /// graphics driver was passed over at this start.
+    off_driver_skipped,
+    /// On, but the machine has under 2 GiB of memory, or does not say, and a
+    /// failed graphics driver was passed over at this start.
+    needs_memory_driver_skipped,
+    /// Not in use: the machine has under 2 GiB of memory, or does not say,
+    /// whatever the setting or the flags.
+    needs_memory,
+    off_by_setting,      ///< Off, by the setting
+    off_by_command_line, ///< Off, by --no-hardware-acceleration
+    /// On, but the environment names a render driver, or the video driver
+    /// draws no window, so the processor scales the frames.
+    environment_driver,
+    /// On, but dropped in this run when the machine ran short of memory.
+    too_little_memory,
+    /// On, waiting for a shared game or a replay to end: in one, On takes
+    /// effect from the next game (AccelerationStatus::replay says which).
+    waiting_for_game_end,
+    engine_error,             ///< On, but an error stopped it for this run
+    driver_failed,            ///< On, but the graphics driver failed, in this run or before
+    game_stopped,             ///< On, but the game stopped while using it before
+    no_usable_card,           ///< On, but no usable graphics card was found
+    lacks_feature,            ///< On, but the graphics card lacks something it needs
+    cannot_save,              ///< On, but the game cannot save the files that guard trying it
+    slow_frames,              ///< On, but frames were too slow with it in this run
+    next_start,               ///< On, from the next start
+    in_use_on_another_driver, ///< In use, on another graphics driver: one failed
+    in_use_less_smoothing,    ///< In use, with less smoothing: frames were slow
+    in_use_no_smoothing,      ///< In use, with no smoothing when zoomed out on this machine
+    in_use,                   ///< In use
+};
+
+/// What the graphics card does on this machine while it is in use, which
+/// the status's second line says.
+enum class AccelerationReach : uint8_t {
+    menus,      ///< it scales the menus and the interface
+    zoomed_in,  ///< it scales the interface and the zoomed-in battlefield
+    zoomed_out, ///< it scales everything and smooths the zoomed-out battlefield
+    /// it scales nothing, and smooths the zoomed-out battlefield
+    nearest_zoomed_out,
+    nearest_none, ///< it scales nothing: the frames look as with it off
+};
+
+/// Hardware acceleration's status, as the host reports it. It names no
+/// graphics interface and no driver.
+struct AccelerationStatus {
+    AccelerationState state{AccelerationState::off_by_setting}; ///< what runs, or why not
+    AccelerationReach reach{AccelerationReach::menus};          ///< what it does while in use
+    /// The match AccelerationState::waiting_for_game_end waits for replays a
+    /// recording rather than being played with other machines.
+    bool replay{};
+
+    friend bool operator==(const AccelerationStatus&, const AccelerationStatus&) = default;
+};
+
 /// What an event asks of the host.
 enum class DialogAction : uint8_t {
-    none,      ///< nothing
-    redraw,    ///< only its look changed: a hover, the focus, a press, a scroll or the section
-    changed,   ///< Dialog::chosen changed: put it in effect and redraw
+    none,   ///< nothing
+    redraw, ///< only its look changed: a hover, the focus, a press, a scroll or the section
+    /// Dialog::chosen changed, or Restore defaults was pressed, which asks
+    /// for this even when no setting moved: put it in effect and redraw
+    changed,
     accepted,  ///< OK: keep Dialog::chosen in effect, save it and close the dialog
     cancelled, ///< Cancel: put Dialog::opened back in effect and close the dialog
 };
@@ -162,19 +227,26 @@ struct SectionHooks {
     bool (*hint_is_status)(void* context, Setting setting){};
 };
 
-/// One open dialog. A host reads opened, chosen, defaults, restored and
-/// page; section_hooks is set only by tests and checks; the other members
-/// after them are the dialog's own.
+/// One open dialog. A host reads opened, chosen, defaults, restored, page
+/// and forget_renderer_failures, and sets acceleration;
+/// section_hooks is set only by tests and checks; the other members after
+/// them are the dialog's own.
 struct Dialog {
-    EngineSettings opened{};      ///< in effect as it opened; Cancel puts them back
-    EngineSettings chosen{};      ///< what it shows; in effect as they change
-    EngineSettings defaults{};    ///< what Restore defaults sets
-    Locks locks{};                ///< what cannot be changed now
-    std::string version;          ///< the header's version text
-    Page page{Page::path_search}; ///< the section shown
-    bool restored{};              ///< Restore defaults was pressed
-    int32_t hovered{no_control};  ///< the control under the pointer
-    int32_t pressed{no_control};  ///< the control a held press is on
+    EngineSettings opened{};           ///< in effect as it opened; Cancel puts them back
+    EngineSettings chosen{};           ///< what it shows; in effect as they change
+    EngineSettings defaults{};         ///< what Restore defaults sets
+    Locks locks{};                     ///< what cannot be changed now
+    AccelerationStatus acceleration{}; ///< Hardware acceleration's status
+    std::string version;               ///< the header's version text
+    Page page{Page::path_search};      ///< the section shown
+    bool restored{};                   ///< Restore defaults was pressed
+    /// The times the player asked, since the dialog opened, for the graphics
+    /// card to be tried afresh: each press of Restore defaults, and each
+    /// time Hardware acceleration passed from Off to On. The count stays if
+    /// the switch goes back Off.
+    uint32_t forget_renderer_failures{};
+    int32_t hovered{no_control}; ///< the control under the pointer
+    int32_t pressed{no_control}; ///< the control a held press is on
     int32_t focused{no_control}; ///< the control with the keyboard focus; shown once a key moves it
     bool dragging{};             ///< the held press drags a slider's knob or the scroll bar's thumb
     /// Each section's scroll offset, in source pixels from its top; clamped
@@ -247,14 +319,25 @@ struct DialogFonts {
 /// @param locks what cannot be changed now
 /// @param version the header's version text
 /// @param page the section to show
+/// @param acceleration Hardware acceleration's status
 void open_dialog(
     Dialog& dialog,
     const EngineSettings& current,
     const EngineSettings& defaults,
     const Locks& locks,
     std::string_view version,
-    Page page
+    Page page,
+    const AccelerationStatus& acceleration = {}
 );
+
+/// Gives the dialog Hardware acceleration's status as it is now; a host
+/// calls it each frame while the dialog is open.
+///
+/// @param[in,out] dialog the dialog
+/// @param acceleration the status
+/// @return DialogAction::redraw when the status changed, else DialogAction::none
+[[nodiscard]] DialogAction
+set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) noexcept;
 
 /// Moves the pointer: hovers a control, or drags what a held press holds. A
 /// slider's knob follows the pointer's column only; the scroll bar's thumb

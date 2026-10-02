@@ -118,12 +118,34 @@ they are open; a multiplayer game keeps running.
   size, from the next start: Desktop, the default, leaves the screen at the
   desktop's size; 640×480, 800×600, 1024×768 or 1280×1024 switches the
   screen to that size in full screen, and opens the window at that size.
+  Hardware acceleration (on by default): the graphics card may scale the
+  picture, only where it is able to and the computer has at least 2 GB of
+  memory; its two status lines say whether it is in use, and why not. This
+  build does not use the graphics card yet: the processor draws and scales
+  every frame, as before. Vertical sync (off by default): each frame waits
+  for the display, so that none tears, and the frame rate keeps just below
+  the display's; SDL's software renderer does not offer it, and neither,
+  for now, does SDL's `direct3d` renderer, whose graphics device each
+  change would reset. The Graphics section is taller than the dialog and
+  scrolls, with the mouse wheel, its scroll bar, Page Up, Page Down, Home
+  and End.
 - **Developer:** Show performance statistics: frame and tick times over the
   battlefield, as the `+stats` console command shows them.
 
 Pathfinding cycles and Unit limit cannot change during a game; in a
-multiplayer game the host's settings apply. `--max-fps N` on the command
-line sets the frame rate for that run without changing the setting.
+multiplayer game the host's settings apply. Vertical sync keeps its value
+for the length of a multiplayer game or a replay. Hardware acceleration is
+each player's own: turned off during such a game it applies at once, and
+turned on it takes effect from the next game. `--max-fps N` on the command
+line sets the frame rate for that run without changing the setting, and
+`--hardware-acceleration` or `--no-hardware-acceleration` sets Hardware
+acceleration for that run. To turn Hardware acceleration off for good
+outside the game, set the key `open-annihilation.hardware-acceleration` to
+`0` in the preferences file
+([src/platform/preferences](src/platform/preferences/README.md)): only a
+number is read, so `off` leaves the default.
+`SDL_RENDER_DRIVER=software` in the environment draws and presents every
+frame without the graphics card.
 
 On a light computer, one with a single processor, a processor without SSE2
 (a Pentium III or an Athlon XP) or less than 512 MB of memory, the game

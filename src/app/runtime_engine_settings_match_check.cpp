@@ -432,6 +432,31 @@ void Runtime::check_engine_settings_in_match() {
             ),
             "a game played alone says it is shared" + on
         );
+        // Graphics at its end in a game played alone: Hardware acceleration
+        // and Vertical sync, neither locked by the game.
+        show_page(settings::Page::graphics, on);
+        tap_key(SDLK_END, SDL_KMOD_NONE);
+        {
+            const auto* graphics = engine_settings_dialog();
+            require(
+                graphics != nullptr &&
+                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 80,
+                "End did not scroll Graphics to its end" + on
+            );
+            const auto parts = settings::dialog_layout(*graphics);
+            require(
+                shows_text(parts, "Hardware acceleration") && shows_text(parts, "Vertical sync"),
+                "Graphics at its end does not show its last two rows" + on
+            );
+            require(
+                graphics->locks.hardware_acceleration != settings::Lock::in_game &&
+                    graphics->locks.vertical_sync != settings::Lock::in_game,
+                "a game played alone locks Hardware acceleration or Vertical sync" + on
+            );
+        }
+        // No snapshot here: a frame drawn while the game is paused would move
+        // the later shared game's clock, and with it the snapshots taken there.
+        tap_key(SDLK_HOME, SDL_KMOD_NONE);
 
         // The wheel over the dialog reaches it and not the battlefield: given
         // a section taller than its view, a notch scrolls it, the zoom stays
@@ -564,7 +589,59 @@ void Runtime::check_engine_settings_in_match() {
             "the dialog does not say the shared game is still running" + on
         );
         expect_locks("Set by the host", "match-dialog-shared", size, on);
+        // Graphics in a shared game: Vertical sync is locked during the game,
+        // its value set before the game kept in effect; Hardware acceleration
+        // can still be switched, and On waits for the game to end, so the
+        // processor keeps drawing. Escape then puts Off back.
+        show_page(settings::Page::graphics, on);
+        tap_key(SDLK_END, SDL_KMOD_NONE);
+        dialog = engine_settings_dialog();
+        require(
+            dialog->locks.vertical_sync ==
+                (options_.force_capable ? settings::Lock::in_game : settings::Lock::unavailable),
+            "a shared game does not lock Vertical sync" + on
+        );
+        require(
+            dialog->locks.hardware_acceleration == settings::Lock::none ||
+                dialog->locks.hardware_acceleration == settings::Lock::unavailable,
+            "a shared game locks Hardware acceleration" + on
+        );
+        require(
+            shows_text(settings::dialog_layout(*dialog), "Locked during a game") ||
+                !options_.force_capable,
+            "Vertical sync does not say it is locked during the game" + on
+        );
+        if (dialog->locks.hardware_acceleration == settings::Lock::none) {
+            const settings::LayoutPart* on_half = nullptr;
+            for (const auto& part : settings::dialog_layout(*dialog))
+                if (part.control == settings::first_row_control + 3 && part.text == "ON")
+                    on_half = &part;
+            require(on_half != nullptr, "Hardware acceleration's On does not show" + on);
+            const auto on_rect = on_half->rect;
+            click_dialog(on_rect);
+            tick_screen_packages();
+            dialog = engine_settings_dialog();
+            require(
+                dialog != nullptr && engine_settings().hardware_acceleration,
+                "Hardware acceleration did not switch On in a shared game" + on
+            );
+            require(
+                dialog->acceleration.state == settings::AccelerationState::waiting_for_game_end,
+                "Hardware acceleration On in a shared game does not wait for its end" + on
+            );
+            require(
+                shows_text(
+                    settings::dialog_layout(*dialog), "Off for this game: in a shared game, On"
+                ),
+                "the status does not say On waits for the next game" + on
+            );
+            snapshot("match-dialog-shared-graphics", size);
+        }
         tap_key(SDLK_ESCAPE, SDL_KMOD_NONE);
+        require(
+            !engine_settings().hardware_acceleration,
+            "Escape did not put Hardware acceleration back Off" + on
+        );
         require(engine_settings_dialog() == nullptr, "Escape did not close the dialog" + on);
         extension_ = saved_extension;
         resume_match_pause();

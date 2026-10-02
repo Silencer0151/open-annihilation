@@ -50,6 +50,7 @@
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/ui/engine_settings.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
+#include "oa/app/acceleration_status.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
@@ -2229,6 +2230,36 @@ class Runtime final : public menu::Host,
     ///
     /// @return the locks
     [[nodiscard]] oa::ui::engine_settings::Locks engine_settings_locks() const;
+
+    /// Returns what the run knows now of whether the graphics card could
+    /// scale its frames: the setting and the flags, the environment's
+    /// driver, the machine's memory, the renderer and the match. Nothing
+    /// looks at the renderer yet, so whether it is able stays unknown, but
+    /// for SDL's software renderer, which never is.
+    ///
+    /// @return the facts
+    [[nodiscard]] AccelerationFacts acceleration_facts() const;
+
+    /// Returns what the settings dialog says of the renderer now: Hardware
+    /// acceleration's status, and whether nothing could help the run or
+    /// Vertical sync is out of reach (acceleration_status.hpp), from
+    /// acceleration_facts. The graphics card does not scale the frames yet,
+    /// so every run draws on the processor.
+    ///
+    /// @return the report
+    [[nodiscard]] AccelerationReport acceleration_report() const;
+
+    /// Has the renderer wait for the display, or stop waiting, as the
+    /// Vertical sync setting in effect says: SDL_SetRenderVSync only when
+    /// that changes, and never while the setting stays Off or Vertical sync
+    /// is out of reach. A renderer that refuses keeps the frames as they
+    /// were and puts Vertical sync out of reach for the run.
+    void apply_vertical_sync();
+
+    /// Returns the refresh rate of the display the window is on.
+    ///
+    /// @return hertz; 0 without a window or when the display reports none
+    [[nodiscard]] float display_refresh_rate() const;
 
     /// Draws the match's settings layer, the OA button and the dialog with the
     /// column darkened, over a composed match frame at the display gamma.
@@ -8560,6 +8591,11 @@ class Runtime final : public menu::Host,
     uint64_t last_input_ns_{};           ///< when the last input event came, on the steady clock
     bool camera_moved_ = false;          ///< the camera scrolled or the zoom eased this frame
     uint32_t paced_frames_per_second_{}; ///< the rate the loop keeps now; 0 for no limit
+    /// The renderer waits for the display (apply_vertical_sync), and the
+    /// loop keeps just below the display's rate (vsync_frame_cap).
+    bool vertical_sync_in_effect_ = false;
+    /// The renderer refused to wait for the display in this run.
+    bool vertical_sync_refused_ = false;
     /// How the loop waits for the next frame to be due (pace_next_frame).
     frame_pacing::FrameWait frame_wait_{};
     /// A --frame-rate run's clock, nanoseconds; empty for the steady clock.

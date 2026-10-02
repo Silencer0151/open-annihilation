@@ -268,6 +268,13 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 add_library(oa-app-render-policy src/app/render_policy.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
+# What the settings dialog says of the renderer (acceleration_status.hpp):
+# Hardware acceleration's status and locks and Vertical sync's lock, from
+# what the run knows of its renderer, its machine and the match.
+add_library(oa-app-acceleration-status src/app/acceleration_status.cpp)
+add_library(oa::app::acceleration_status ALIAS oa-app-acceleration-status)
+target_link_libraries(oa-app-acceleration-status PUBLIC oa-app-headers oa-ui-engine-settings
+  PRIVATE oa-options)
 # The developer's video capture (--capture-video): presented frames and the
 # mix SDL plays, encoded by the ffmpeg program (docs/capture.md).
 if(OA_BUILD_PLATFORM)
@@ -352,6 +359,15 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-presentation-interpolation-test PRIVATE oa-app-headers
     oa-present-model oa-sim-effect-particles oa-options)
   add_test(NAME app-presentation-interpolation COMMAND oa-app-presentation-interpolation-test)
+  # The settings dialog's word on the renderer: Hardware acceleration's
+  # status for the machine's memory against the 2 GiB threshold, the
+  # setting, the flags, the environment's driver, a shared game or a replay
+  # and the renderer, looked at or not; its lock; and Vertical sync's lock
+  # on SDL's software renderer and on a renderer whose device it resets.
+  add_executable(oa-app-acceleration-status-test src/app/acceleration_status_test.cpp)
+  target_link_libraries(oa-app-acceleration-status-test PRIVATE oa-app-acceleration-status
+    oa-test-support oa-options)
+  add_test(NAME app-acceleration-status COMMAND oa-app-acceleration-status-test)
   # When the match clock steps: menus, the outcome, the pause bit, a frame
   # behind the last step and frames across the turn of the clock's reading.
   add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
@@ -373,7 +389,8 @@ if(BUILD_TESTING)
   add_test(NAME app-world-scaling COMMAND oa-app-world-scaling-test)
   # The application loop's pacing over a fake clock: frames evenly spaced
   # at the rate asked for, 30 ticks a second at any frame rate, the fraction
-  # of a tick each frame shows, the camera's scroll for a frame's real time,
+  # of a tick each frame shows, the cap just below the display's rate while
+  # Vertical sync is in effect, the camera's scroll for a frame's real time,
   # and the +stats overlay's figures, frame history, grades and table.
   add_executable(oa-app-frame-pacing-test src/app/frame_pacing_test.cpp src/app/frame_pacing.cpp)
   target_link_libraries(oa-app-frame-pacing-test PRIVATE oa-app-headers oa-base-game-loop oa-ui-hud
@@ -488,7 +505,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
-  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision)
+  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -620,13 +637,17 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The Open Annihilation settings through the SDL presenter: the OA
       # button on the main menu and under Resume in the in-game menu, the
-      # dialog over each, its sections, controls and keys, OK, Cancel and
-      # Restore defaults, the preferences it writes, the locks a game puts on
-      # it, and each setting taking effect.
+      # dialog over each, its sections, controls and keys, its scrolling,
+      # OK, Cancel and Restore defaults, the preferences it writes, the locks
+      # a game, the command line and the renderer put on it, and each setting
+      # taking effect. --force-capable lifts the software renderer's lock on
+      # Vertical sync, which the dialog turns On and reads back from the
+      # renderer; Hardware acceleration stays Off, so every frame compared is
+      # drawn on the processor.
       set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
       file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
       add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"
-        --skip-intro --mute --check-engine-settings
+        --skip-intro --mute --check-engine-settings --force-capable
         --preferences-file "${oa_engine_settings_dir}/engine-settings.conf")
       set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_engine_settings_dir}"

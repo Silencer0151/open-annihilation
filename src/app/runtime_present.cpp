@@ -190,6 +190,8 @@ void Runtime::initialize_sdl() {
     if (cursors_loaded_)
         SDL_HideCursor();
     install_engine_settings_menu_item();
+    // A renderer made here starts without Vertical sync, as every renderer does.
+    apply_vertical_sync();
 }
 
 bool Runtime::take_full_screen_event(const SDL_Event& event) {

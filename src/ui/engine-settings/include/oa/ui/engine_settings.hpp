@@ -38,6 +38,11 @@ inline constexpr std::string_view frame_stats = "open-annihilation.frame-stats";
 /// "desktop", or the width and height in decimal joined by an "x", as
 /// "800x600" (EngineSettings::screen_size).
 inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
+/// 1 or 0 (EngineSettings::hardware_acceleration). Only a number reads:
+/// a word such as "off" gives the default.
+inline constexpr std::string_view hardware_acceleration = "open-annihilation.hardware-acceleration";
+/// 1 or 0 (EngineSettings::vertical_sync).
+inline constexpr std::string_view vertical_sync = "open-annihilation.vertical-sync";
 } // namespace key
 
 /// Path nodes the path search may visit in a game tick, all players
@@ -140,6 +145,12 @@ struct EngineSettings {
     bool frame_stats{}; ///< the frame and tick times over the battlefield (+stats)
     /// The window's size, and the screen's in full screen, from the next start.
     ScreenSize screen_size{desktop_screen_size};
+    /// The graphics card may scale and compose the frames, where it is able
+    /// to; the processor still draws every pixel the game decides.
+    bool hardware_acceleration{};
+    /// Each frame waits for the display to be ready for it, so that no frame
+    /// tears, and the frame rate keeps just below the display's.
+    bool vertical_sync{};
 
     friend bool operator==(const EngineSettings&, const EngineSettings&) = default;
 };
@@ -173,6 +184,9 @@ struct Inputs {
 /// maximum frame rate is light_machine_frame_rate, enhanced anti-aliasing is
 /// off and the screen size is light_machine_screen_size, or
 /// small_desktop_screen_size on a known desktop narrower or shorter than it.
+/// Hardware acceleration is On with the player's own file, on every
+/// machine, and Off with a named one; whether the graphics card is used is
+/// decided apart from the setting. Vertical sync is Off everywhere.
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults
@@ -265,10 +279,13 @@ match_path_search_nodes(const EngineSettings& settings, bool shared_or_replay) n
 
 /// Why a setting cannot be changed now.
 enum class Lock : uint8_t {
-    none,         ///< it can be changed
-    in_game,      ///< a game is running; it applies from the next game
-    set_by_host,  ///< a shared game or a replay decides it
-    command_line, ///< --max-fps decides the frame rate for this run
+    none,        ///< it can be changed
+    in_game,     ///< a game is running; it applies from the next game
+    set_by_host, ///< a shared game or a replay decides it
+    /// --max-fps decides the frame rate, or --hardware-acceleration or
+    /// --no-hardware-acceleration decides hardware acceleration, for this run
+    command_line,
+    unavailable, ///< nothing in the game could make the setting help this run
 };
 
 /// The game the dialog opens over.
@@ -277,21 +294,37 @@ struct GameState {
     bool shared_game{};                  ///< the match is played with other machines
     bool replay{};                       ///< the match replays a recording
     bool frame_rate_from_command_line{}; ///< --max-fps was given
+    /// --hardware-acceleration or --no-hardware-acceleration was given.
+    bool renderer_from_command_line{};
+    /// Nothing in the game could have the graphics card scale this run's
+    /// frames: the environment names a render driver, the renderer cannot,
+    /// or the machine has under 2 GiB of memory.
+    bool acceleration_unavailable{};
+    /// The renderer cannot wait for the display, as far as the game can tell,
+    /// or cannot change it without resetting its device.
+    bool vertical_sync_unavailable{};
 };
 
 /// What the dialog cannot change, and what its header says of the game.
 struct Locks {
-    Lock path_search{};    ///< Pathfinding cycles
-    Lock unit_limit{};     ///< Unit limit
-    Lock max_frame_rate{}; ///< Maximum frame rate
-    bool shared_game{};    ///< the header says the shared game is still running
+    Lock path_search{};           ///< Pathfinding cycles
+    Lock unit_limit{};            ///< Unit limit
+    Lock max_frame_rate{};        ///< Maximum frame rate
+    bool shared_game{};           ///< the header says the shared game is still running
+    Lock hardware_acceleration{}; ///< Hardware acceleration
+    Lock vertical_sync{};         ///< Vertical sync
 };
 
 /// Returns the locks a game state puts on the settings.
 ///
 /// Pathfinding cycles and Unit limit are locked during any game, as
 /// set_by_host in a shared game or a replay; the maximum frame rate is
-/// locked while --max-fps decides it.
+/// locked while --max-fps decides it. Hardware acceleration is locked
+/// command_line while a flag decides it, else unavailable when nothing in
+/// the game could help, and never by a game, so that it can always be
+/// switched Off. Vertical sync is locked unavailable where the renderer
+/// cannot wait for the display, else in_game in a shared game or a replay,
+/// where its value holds until the match ends.
 ///
 /// @param state the game the dialog opens over
 /// @return the locks

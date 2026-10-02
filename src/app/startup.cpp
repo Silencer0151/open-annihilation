@@ -287,10 +287,17 @@ void check_director_options(Options& options) {
     return value;
 }
 
+bool hardware_acceleration_asked(const Options& options, bool setting) noexcept {
+    return options.hardware_acceleration.value_or(setting);
+}
+
 [[nodiscard]] Options parse_options(int argc, char** argv, const Extension& extension) {
     Options result;
     std::string joined_line;
     uint32_t extension_effects = 0;
+    // Both acceleration flags are refused once the line is read, wherever they stand.
+    bool acceleration_on = false;
+    bool acceleration_off = false;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         auto value = [&](std::string_view name) -> std::string_view {
@@ -323,7 +330,15 @@ void check_director_options(Options& options) {
                 "--max-fps expects 0 for no limit, or frames a second from 30 through 1000"
             );
             result.max_frames_per_second_given = true;
-        } else if (argument == "--frame-rate")
+        } else if (argument == "--hardware-acceleration") {
+            result.hardware_acceleration = true;
+            acceleration_on = true;
+        } else if (argument == "--no-hardware-acceleration") {
+            result.hardware_acceleration = false;
+            acceleration_off = true;
+        } else if (argument == "--force-capable")
+            result.force_capable = true;
+        else if (argument == "--frame-rate")
             result.frame_rate = parse_frame_rate(
                 value(argument),
                 1,
@@ -483,6 +498,8 @@ void check_director_options(Options& options) {
                 << extension_text(extension, ExtensionText::usage_checks, "")
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
+                   "[--hardware-acceleration | --no-hardware-acceleration] "
+                   "[--force-capable] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -556,6 +573,12 @@ void check_director_options(Options& options) {
             std::string("-") + result.launch.unavailable_switch + " is not handled by this build"
         );
     }
+    if (acceleration_on && acceleration_off)
+        throw std::runtime_error(
+            "--hardware-acceleration and --no-hardware-acceleration cannot be used together"
+        );
+    if (result.force_capable && !result.check_engine_settings)
+        throw std::runtime_error("--force-capable needs --check-engine-settings");
     if (result.campaign_mission.has_value() != !result.campaign.empty())
         throw std::runtime_error("--campaign and --mission are used together");
     if (result.campaign_restart_tick && !result.campaign_mission)

@@ -141,6 +141,32 @@ struct FrameActivity {
 [[nodiscard]] uint32_t
 paced_frame_rate(uint32_t max_frames_per_second, const FrameActivity& activity) noexcept;
 
+/// The highest cap vsync_frame_cap gives, in frames a second: the highest
+/// rate the loop keeps under any limit.
+inline constexpr uint32_t kHighestVsyncCap = 1000;
+
+/// Returns the most frames a second the loop keeps while Vertical sync is in
+/// effect: the largest whole rate below the display's refresh rate, so that
+/// each present finds the display ready, frames keep their even spacing and
+/// none queue up. It is never under kTicksPerSecond, so each tick is still
+/// drawn, nor over kHighestVsyncCap.
+///
+/// @param display_hz the display's refresh rate, in hertz; 0 when the
+///     display reports none
+/// @return frames a second: 59 at 60 Hz and at 59.94 Hz, 119 at 120 Hz, 143
+///     at 144 Hz, kTicksPerSecond at 30 Hz or less; 0, for no cap, when the
+///     display reports no rate
+[[nodiscard]] uint32_t vsync_frame_cap(float display_hz) noexcept;
+
+/// Returns the frames a second the loop keeps under a cap: the lower of the
+/// two, where 0 stands for no limit and no cap.
+///
+/// @param frames_per_second the rate the loop would keep (paced_frame_rate);
+///     0 for no limit
+/// @param cap the cap (vsync_frame_cap); 0 for none
+/// @return frames a second; 0 for no limit
+[[nodiscard]] uint32_t capped_frame_rate(uint32_t frames_per_second, uint32_t cap) noexcept;
+
 /// The presentation fraction from frame to frame: how far between the
 /// previous tick's state and the current tick's the last frame was drawn,
 /// and whether frames hold the current state whole until more ticks run.

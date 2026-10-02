@@ -3,10 +3,12 @@
 
 // The settings' defaults on each platform and preferences file, what they
 // read from the preferences and an installation's totala.ini, what they
-// write back, and the locks a game puts on them.
+// write back, and the locks a game, the command line and the renderer put
+// on them.
 
 #include "oa/ui/engine_settings.hpp"
 
+#include <array>
 #include <iostream>
 #include <string>
 
@@ -60,7 +62,73 @@ void defaults_play_as_without_the_settings() {
     CHECK(defaults.max_frame_rate == settings::highest_frame_rate);
     CHECK(defaults.anti_aliasing == settings::AntiAliasing::off);
     CHECK(!defaults.frame_stats);
+    CHECK(!defaults.hardware_acceleration);
+    CHECK(!defaults.vertical_sync);
     CHECK(defaults == settings::EngineSettings{});
+}
+
+void hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine() {
+    // The player's own file: On on every platform and machine, a light
+    // machine and a Raspberry Pi included; Vertical sync Off everywhere.
+    const std::array<settings::Inputs, 5> own{{
+        players_own_on_linux,
+        {true, true, {}},
+        {true, false, {}, true},
+        {true, false, {}, false, true, {1024, 768}},
+        {true, false, {}, true, true, {640, 480}},
+    }};
+    for (const auto& inputs : own) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.hardware_acceleration);
+        CHECK(!defaults.vertical_sync);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    // A named file: Off, as the game plays without the setting, on every machine.
+    for (auto inputs : own) {
+        inputs.players_own_profile = false;
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(!defaults.hardware_acceleration);
+        CHECK(!defaults.vertical_sync);
+    }
+}
+
+void the_renderer_settings_read_only_numbers() {
+    // 0 is Off and any number above it On, on either file.
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux}) {
+        const auto read = [&](std::string_view key, const char* text) {
+            return settings::read_settings(one_key(key, text), inputs, false);
+        };
+        CHECK(!read(settings::key::hardware_acceleration, "0").hardware_acceleration);
+        CHECK(read(settings::key::hardware_acceleration, "1").hardware_acceleration);
+        CHECK(read(settings::key::hardware_acceleration, "7").hardware_acceleration);
+        CHECK(!read(settings::key::hardware_acceleration, "-1").hardware_acceleration);
+        CHECK(!read(settings::key::vertical_sync, "0").vertical_sync);
+        CHECK(read(settings::key::vertical_sync, "1").vertical_sync);
+        // A word, or anything that is not a whole number, gives the default.
+        const auto defaults = settings::default_settings(inputs);
+        for (const char* text : {"off", "false", "no", "on", "", " 0", "0 ", "1.0"}) {
+            CHECK(read(settings::key::hardware_acceleration, text) == defaults);
+            CHECK(read(settings::key::vertical_sync, text) == defaults);
+        }
+    }
+    // Written as 1 or 0 only when changed; Restore defaults erases each at
+    // its default, the player's own file's On included.
+    const auto own = settings::default_settings(players_own_on_linux);
+    auto off = own;
+    off.hardware_acceleration = false;
+    off.vertical_sync = true;
+    Values values;
+    settings::write_settings(values, own, off, own, false);
+    CHECK(values.size() == 2);
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "0");
+    CHECK(values.at(std::string{settings::key::vertical_sync}) == "1");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == off);
+    settings::write_settings(values, off, own, own, true);
+    CHECK(values.empty());
+    // Back On by hand, on the player's own file, writes 1.
+    values = one_key(settings::key::hardware_acceleration, "0");
+    settings::write_settings(values, off, own, own, false);
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "1");
 }
 
 void escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file() {
@@ -344,6 +412,8 @@ settings::EngineSettings changed_settings() {
     chosen.anti_aliasing = settings::AntiAliasing::x16;
     chosen.frame_stats = true;
     chosen.screen_size = {1024, 768};
+    chosen.hardware_acceleration = true;
+    chosen.vertical_sync = true;
     return chosen;
 }
 
@@ -356,7 +426,7 @@ void only_changed_settings_are_written() {
 
     const auto chosen = changed_settings();
     settings::write_settings(values, defaults, chosen, defaults, false);
-    CHECK(values.size() == 9);
+    CHECK(values.size() == 11);
     CHECK(values.at(std::string{settings::key::path_search_nodes}) == "5332");
     CHECK(values.at(std::string{settings::key::wheel_zoom}) == "0");
     CHECK(values.at(std::string{settings::key::escape_opens_menu}) == "1");
@@ -365,6 +435,8 @@ void only_changed_settings_are_written() {
     CHECK(values.at(std::string{settings::key::anti_aliasing}) == "16");
     CHECK(values.at(std::string{settings::key::frame_stats}) == "1");
     CHECK(values.at(std::string{settings::key::screen_size}) == "1024x768");
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "1");
+    CHECK(values.at(std::string{settings::key::vertical_sync}) == "1");
     CHECK(values.at("Total Annihilation|SwitchAlt") == "1");
     CHECK(settings::read_settings(values, {}, false) == chosen);
 
@@ -429,6 +501,16 @@ void the_round_trip_keeps_every_value() {
         Values values;
         settings::write_settings(values, {}, chosen, {}, false);
         CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        // Hardware acceleration Off, against the player's own file's On.
+        const auto own = settings::default_settings(players_own_on_linux);
+        chosen.hardware_acceleration = false;
+        chosen.vertical_sync = false;
+        Values off;
+        settings::write_settings(off, own, chosen, own, false);
+        CHECK(
+            settings::read_settings(off, players_own_on_linux, false).hardware_acceleration == false
+        );
+        CHECK(!settings::read_settings(off, players_own_on_linux, false).vertical_sync);
     }
 }
 
@@ -488,6 +570,49 @@ void a_game_locks_the_next_game_settings() {
     const auto command_line = settings::settings_locks({false, false, false, true});
     CHECK(command_line.max_frame_rate == settings::Lock::command_line);
     CHECK(command_line.path_search == settings::Lock::none);
+    // --max-fps locks only its own row.
+    CHECK(command_line.hardware_acceleration == settings::Lock::none);
+    CHECK(command_line.vertical_sync == settings::Lock::none);
+}
+
+void the_renderer_settings_lock_by_the_flags_and_the_renderer() {
+    using settings::Lock;
+    // Hardware acceleration: either flag, then nothing in the game that
+    // could help; never a game, shared or not, so Off stays possible.
+    for (const bool in_game : {false, true})
+        for (const bool shared : {false, true})
+            for (const bool replay : {false, true}) {
+                settings::GameState state{in_game, shared, replay, false};
+                CHECK(settings::settings_locks(state).hardware_acceleration == Lock::none);
+                state.acceleration_unavailable = true;
+                CHECK(settings::settings_locks(state).hardware_acceleration == Lock::unavailable);
+                state.renderer_from_command_line = true;
+                CHECK(settings::settings_locks(state).hardware_acceleration == Lock::command_line);
+                state.acceleration_unavailable = false;
+                CHECK(settings::settings_locks(state).hardware_acceleration == Lock::command_line);
+                // Neither touches Vertical sync or the other rows.
+                const auto locks = settings::settings_locks(state);
+                const auto plain =
+                    settings::settings_locks(settings::GameState{in_game, shared, replay, false});
+                CHECK(locks.vertical_sync == plain.vertical_sync);
+                CHECK(locks.path_search == plain.path_search);
+                CHECK(locks.max_frame_rate == Lock::none);
+            }
+    // Vertical sync: during a shared game or a replay, not in a game played
+    // alone; a renderer that cannot wait for the display wins over the game.
+    CHECK(settings::settings_locks({}).vertical_sync == Lock::none);
+    CHECK(settings::settings_locks({true, false, false, false}).vertical_sync == Lock::none);
+    CHECK(settings::settings_locks({true, true, false, false}).vertical_sync == Lock::in_game);
+    CHECK(settings::settings_locks({true, false, true, false}).vertical_sync == Lock::in_game);
+    // A shared or replay flag outside a game locks nothing.
+    CHECK(settings::settings_locks({false, true, true, false}).vertical_sync == Lock::none);
+    for (const bool in_game : {false, true})
+        for (const bool shared : {false, true}) {
+            settings::GameState state{in_game, shared, false, false};
+            state.vertical_sync_unavailable = true;
+            CHECK(settings::settings_locks(state).vertical_sync == Lock::unavailable);
+            CHECK(settings::settings_locks(state).hardware_acceleration == Lock::none);
+        }
 }
 
 } // namespace
@@ -510,6 +635,9 @@ int main() {
     the_path_credit_shows_as_whole_cycles();
     shared_games_and_replays_search_at_one_cycle();
     a_game_locks_the_next_game_settings();
+    hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine();
+    the_renderer_settings_read_only_numbers();
+    the_renderer_settings_lock_by_the_flags_and_the_renderer();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

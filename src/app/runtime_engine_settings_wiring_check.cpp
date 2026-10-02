@@ -6,6 +6,7 @@
 
 #include "engine_settings_state.hpp"
 
+#include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -161,6 +162,92 @@ void Runtime::check_engine_settings_wiring() {
     }
     chosen.anti_aliasing = settings::AntiAliasing::off;
     apply_engine_settings(chosen);
+
+    // Vertical sync: the renderer waits for the display while it is On,
+    // read back from SDL, and stops when it is Off. While it is in effect the
+    // loop keeps below the display's rate; Off, the rate is the setting's.
+    // On SDL's software renderer it is out of reach unless --force-capable
+    // lifts that, and then the renderer is never asked.
+    const auto renderer_waits = [this] {
+        int vsync = 0;
+        return SDL_GetRenderVSync(sdl_.renderer, &vsync) && vsync == 1;
+    };
+    require(!renderer_waits(), "the renderer waits for the display with Vertical sync Off");
+    const bool vertical_sync_reachable = !acceleration_report().vertical_sync_unavailable;
+    require(
+        vertical_sync_reachable == options_.force_capable,
+        "Vertical sync is out of reach otherwise than on the software renderer"
+    );
+    chosen.vertical_sync = true;
+    apply_engine_settings(chosen);
+    require(
+        renderer_waits() == vertical_sync_reachable &&
+            vertical_sync_in_effect_ == vertical_sync_reachable,
+        "Vertical sync On did not reach the renderer as its lock allows"
+    );
+    chosen.vertical_sync = false;
+    apply_engine_settings(chosen);
+    require(
+        !renderer_waits() && !vertical_sync_in_effect_,
+        "Vertical sync Off did not stop the renderer waiting"
+    );
+    {
+        // Out of reach, On asks the renderer nothing.
+        const bool kept_force = options_.force_capable;
+        options_.force_capable = false;
+        chosen.vertical_sync = true;
+        apply_engine_settings(chosen);
+        const bool waited = renderer_waits();
+        const auto locks = engine_settings_locks();
+        chosen.vertical_sync = false;
+        apply_engine_settings(chosen);
+        options_.force_capable = kept_force;
+        require(!waited, "Vertical sync reached SDL's software renderer");
+        require(
+            locks.vertical_sync == settings::Lock::unavailable &&
+                locks.hardware_acceleration == settings::Lock::unavailable,
+            "SDL's software renderer under the dummy video driver does not lock both rows"
+        );
+    }
+
+    // Hardware acceleration: either flag locks it for the run and says so;
+    // the processor draws whatever it says. Without a flag it is locked
+    // under 2 GiB, and on SDL's software renderer or the environment's
+    // driver unless --force-capable lifts them; a renderer nothing has
+    // looked at leaves it unlocked.
+    {
+        const auto kept_flag = options_.hardware_acceleration;
+        options_.hardware_acceleration = false;
+        const auto off = engine_settings_locks();
+        const auto off_report = acceleration_report();
+        options_.hardware_acceleration = true;
+        const auto on = engine_settings_locks();
+        options_.hardware_acceleration = kept_flag;
+        require(
+            off.hardware_acceleration == settings::Lock::command_line &&
+                on.hardware_acceleration == settings::Lock::command_line,
+            "an acceleration flag does not lock Hardware acceleration"
+        );
+        // Under 2 GiB the status says the machine needs more memory first,
+        // whatever the flags.
+        const auto facts = acceleration_facts();
+        const bool memory = enough_memory_for_acceleration(facts.physical_memory);
+        require(
+            off_report.status.state == (memory ? settings::AccelerationState::off_by_command_line
+                                               : settings::AccelerationState::needs_memory),
+            "--no-hardware-acceleration does not say it turned acceleration off, or why "
+            "not under 2 GiB"
+        );
+        const bool ruled_out = !memory || (!facts.force_capable &&
+                                           (facts.software_renderer || facts.environment_driver));
+        require(
+            engine_settings_locks().hardware_acceleration ==
+                (options_.hardware_acceleration ? settings::Lock::command_line
+                 : ruled_out                    ? settings::Lock::unavailable
+                                                : settings::Lock::none),
+            "Hardware acceleration's lock did not go back"
+        );
+    }
 
     // Show performance statistics is the +stats panel.
     chosen.frame_stats = true;
@@ -402,9 +489,10 @@ void Runtime::check_engine_settings_wiring() {
         "the skirmish did not go back to the settings"
     );
     std::cout << "engine settings check: the maximum frame rate (and --max-fps over it), "
-                 "enhanced anti-aliasing, the performance statistics, SwitchAlt, the wheel zoom "
-                 "with Cancel, Escape's order, a failed save, and the path credit and unit "
-                 "limit of the next game take effect\n";
+                 "enhanced anti-aliasing, Vertical sync, the acceleration flags' lock, the "
+                 "performance statistics, SwitchAlt, the wheel zoom with Cancel, Escape's order, "
+                 "a failed save, and the path credit and unit limit of the next game take "
+                 "effect\n";
 }
 
 } // namespace oa::app

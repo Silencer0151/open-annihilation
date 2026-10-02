@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // oa-game command-line parsing of the trace stream, seed, drawing threads,
-// game directory, data folder, window size, frame rate, video capture and
-// showcase options (arm-first-mission and skirmish-battle), and of the
-// options and switches an extension takes.
+// game directory, data folder, window size, frame rate, hardware
+// acceleration, video capture and showcase options (arm-first-mission and
+// skirmish-battle), and of the options and switches an extension takes.
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
@@ -132,6 +132,54 @@ int main() {
         "--max-fps at the default rate is given all the same"
     );
     expect(parse({"--max-fps", "0"}).max_frames_per_second == 0, "--max-fps 0 is no limit");
+
+    // Hardware acceleration's flags decide the setting for the run.
+    expect(!plain.hardware_acceleration, "neither acceleration flag, none given");
+    expect(
+        parse({"--hardware-acceleration"}).hardware_acceleration == true,
+        "--hardware-acceleration asks for acceleration"
+    );
+    expect(
+        parse({"--no-hardware-acceleration"}).hardware_acceleration == false,
+        "--no-hardware-acceleration turns it off"
+    );
+    expect(
+        rejection({"--hardware-acceleration", "--no-hardware-acceleration"}) ==
+                "--hardware-acceleration and --no-hardware-acceleration cannot be used together" &&
+            rejection({"--no-hardware-acceleration", "--skip-intro", "--hardware-acceleration"}) ==
+                "--hardware-acceleration and --no-hardware-acceleration cannot be used together",
+        "both acceleration flags are refused, in either order"
+    );
+    expect(
+        parse({"--hardware-acceleration", "--hardware-acceleration"}).hardware_acceleration == true,
+        "a flag given twice is taken"
+    );
+    expect(
+        parse({"--headless-check", "--no-hardware-acceleration"}).hardware_acceleration == false &&
+            parse({"--headless-check", "--hardware-acceleration"}).headless_check,
+        "a headless run takes either flag"
+    );
+    expect(
+        oa::app::hardware_acceleration_asked(plain, true) &&
+            !oa::app::hardware_acceleration_asked(plain, false),
+        "without a flag the setting decides"
+    );
+    expect(
+        oa::app::hardware_acceleration_asked(parse({"--hardware-acceleration"}), false) &&
+            !oa::app::hardware_acceleration_asked(parse({"--no-hardware-acceleration"}), true),
+        "either flag decides over the setting"
+    );
+    expect(!plain.force_capable, "no --force-capable, none given");
+    expect(
+        parse({"--check-engine-settings", "--force-capable"}).force_capable,
+        "--force-capable goes with --check-engine-settings"
+    );
+    expect(
+        rejection({"--force-capable"}) == "--force-capable needs --check-engine-settings" &&
+            rejection({"--force-capable", "--check-navigation"}) ==
+                "--force-capable needs --check-engine-settings",
+        "--force-capable is refused without --check-engine-settings"
+    );
     expect(
         rejection({"--max-fps", "1001"}) ==
             "--max-fps expects 0 for no limit, or frames a second from 30 through 1000",

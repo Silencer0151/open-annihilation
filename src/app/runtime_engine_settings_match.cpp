@@ -121,6 +121,10 @@ settings::Locks Runtime::engine_settings_locks() const {
     state.shared_game = (extension & extension_state::shared_match) != 0;
     state.replay = (extension & extension_state::replay) != 0;
     state.frame_rate_from_command_line = options_.max_frames_per_second_given;
+    state.renderer_from_command_line = options_.hardware_acceleration.has_value();
+    const auto report = acceleration_report();
+    state.acceleration_unavailable = report.acceleration_unavailable;
+    state.vertical_sync_unavailable = report.vertical_sync_unavailable;
     return settings::settings_locks(state);
 }
 
@@ -308,7 +312,16 @@ int Runtime::EngineSettingsMatchHost::overlay_event(ScreenContext* context, void
 }
 
 void Runtime::EngineSettingsMatchHost::overlay_tick(ScreenContext*, void* state) {
-    close_when_column_hidden(*static_cast<Runtime*>(state));
+    auto& runtime = *static_cast<Runtime*>(state);
+    close_when_column_hidden(runtime);
+    // Hardware acceleration's status follows the renderer while the dialog
+    // is open; the layer is drawn again only when it changes.
+    auto& host = runtime.engine_settings_match_host();
+    if (auto* dialog = host.dialog_open ? runtime.engine_settings_dialog() : nullptr;
+        dialog != nullptr &&
+        settings::set_acceleration_status(*dialog, runtime.acceleration_report().status) ==
+            settings::DialogAction::redraw)
+        ++host.revision;
 }
 
 void Runtime::EngineSettingsMatchHost::stamp(

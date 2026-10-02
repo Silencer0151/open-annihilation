@@ -30,6 +30,9 @@ struct Runtime::EngineSettingsState {
     bool light_machine{};
     /// The desktop's size, as read once at start; zero by zero when unknown.
     oa::ui::engine_settings::ScreenSize desktop{};
+    /// The machine's physical memory in bytes, as read once at start; 0 when
+    /// the system does not say.
+    uint64_t physical_memory{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
     /// The section the dialog showed when it last closed; it opens there.
     oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};

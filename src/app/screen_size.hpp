@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The Screen size setting at start: the size the game's window opens at and
-// the display mode full screen takes, from the setting the run reads and the
-// defaults of the machine the game runs on.
+// The settings read before the window opens: the size the game's window
+// opens at and the display mode full screen takes, from the Screen size
+// setting the run reads and the defaults of the machine the game runs on,
+// and Hardware acceleration, which the renderer's creation reads.
 #pragma once
 
 #include "oa/app/app.hpp"
@@ -30,15 +31,27 @@ namespace oa::app {
 [[nodiscard]] oa::ui::engine_settings::Inputs
 start_inputs(const Options& options, oa::ui::engine_settings::ScreenSize desktop);
 
+/// Returns the settings the run's preferences file holds before the window
+/// opens, each at its default on this machine where the file has none. A
+/// file that cannot be read gives every default, and says so on stderr; the
+/// runtime reads it again and reports what is wrong with it.
+///
+/// @param options the parsed command line (Options::preferences_file)
+/// @param desktop the desktop's size (desktop_size)
+/// @return the settings
+[[nodiscard]] oa::ui::engine_settings::EngineSettings
+start_settings(const Options& options, oa::ui::engine_settings::ScreenSize desktop);
+
 /// Returns the screen size the game starts at: the Screen size setting the
 /// run's preferences file holds, or its default on this machine.
 ///
 /// @param options the parsed command line; with --resolution the window
 ///     takes that size and the setting is not read
-/// @param desktop the desktop's size (desktop_size)
+/// @param start the settings read before the window opens (start_settings)
 /// @return the size; desktop_screen_size for the desktop's own
-[[nodiscard]] oa::ui::engine_settings::ScreenSize
-starting_screen_size(const Options& options, oa::ui::engine_settings::ScreenSize desktop);
+[[nodiscard]] oa::ui::engine_settings::ScreenSize starting_screen_size(
+    const Options& options, const oa::ui::engine_settings::EngineSettings& start
+) noexcept;
 
 /// Sets the display mode a window takes in full screen to the one nearest a
 /// screen size, and puts the window in full screen when asked.

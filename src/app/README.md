@@ -224,7 +224,10 @@ logs it.
   its units over. While nothing
   moves on its own (no stepping match, no camera motion, no input for half
   a second), a paused multiplayer match among them, it draws 30 a second,
-  and an event ends the wait at once. The match clock steps to each
+  and an event ends the wait at once. While Vertical sync is in effect the
+  rate is also held to the largest whole rate below the display's, read
+  each frame from the window's display (`vsync_frame_cap`), and never under
+  30. The match clock steps to each
   frame's time, and the frame is drawn the fraction of the way between the
   state before the last batch of ticks and the state after it that its time
   stands for (`presentation_alpha()`, `next_presentation_alpha`): never
@@ -425,6 +428,26 @@ logs it.
   Cancel does. `engine_settings_match_host.hpp` and
   `runtime_engine_settings_match.cpp` are the in-game menu's host, and
   `runtime_engine_settings_app_menu.cpp` the application menu's item.
+  `acceleration_status.hpp` and `acceleration_status.cpp`
+  (`app-acceleration-status`) say what the dialog shows of the renderer:
+  Hardware acceleration's status, first reason first, and whether nothing
+  could help the run, which locks the row "Not available here". The
+  machine's memory comes first, whatever the setting or the flags: it needs
+  the render policy's 2 GiB threshold, `smallest_accelerated_memory`,
+  1.75 GiB as the system reports it, so that a machine sold with 2 GB
+  counts. Then come the setting and the flags, `SDL_RENDER_DRIVER` or a
+  video driver with no window, a shared game or a replay, and whether the
+  renderer is able.
+  Nothing looks at the renderer yet: only SDL's software renderer is known
+  unable, any other leaves the row unlocked with On taking effect from the
+  next start, and the processor draws every frame. Vertical sync is locked
+  on SDL's software renderer; on SDL's `direct3d` renderer, where each
+  change resets the graphics device and the game cannot yet recover one
+  the reset leaves lost; and once the renderer refused it.
+  `Runtime::acceleration_facts` gathers those facts, both hosts refresh
+  the status each frame while the dialog is open, and
+  `Runtime::apply_vertical_sync` asks the renderer to wait for the display
+  only when the setting in effect changes it, never while it stays Off.
   `--check-engine-settings` (`native-engine-settings`) drives them through
   the SDL presenter over a preferences file it empties first:
   `runtime_engine_settings_check.cpp` holds the main menu's part, with each
@@ -432,17 +455,22 @@ logs it.
   for pixel with what they should draw;
   `runtime_engine_settings_dialog_check.cpp` the dialog driven by the
   pointer, the wheel and the keys (every section, scrolling, each setting in
-  effect at once, OK, Cancel, Restore defaults and the keys they save) and
-  the main menu with the button and the dialog as 640x480, 1280x720,
-  1920x1080 and 2560x1080 windows show them;
+  effect at once, Vertical sync read back from the renderer, OK, Cancel,
+  Restore defaults and the keys they save) and the main menu with the
+  button and the dialog as 640x480, 1280x720, 1920x1080 and 2560x1080
+  windows show them, Graphics at its top and its end;
   `runtime_engine_settings_match_check.cpp` the in-game menu's button and
   dialog at those sizes, with the locks of a game played alone and of a
-  shared game, and the wheel scrolling the dialog, not the battlefield; and
-  `runtime_engine_settings_wiring_check.cpp` each setting taking effect in a
-  match, Escape's order among them. Both dialog steps scroll a section
-  taller than the dialog's view, `engine_settings_tall_section.hpp`, shown
-  in place of the open section's rows, since every section of the dialog
-  fits its view; the wheel events are the check host's
+  shared game, Hardware acceleration switched On in a shared game, where it
+  waits for the game's end, and the wheel scrolling the dialog, not the
+  battlefield; and `runtime_engine_settings_wiring_check.cpp` each setting
+  taking effect in a match, Escape's order, Vertical sync and the lock
+  either acceleration flag puts on Hardware acceleration among them. The
+  check runs with `--force-capable`, which lifts the software renderer's
+  lock on both rows; Hardware acceleration stays Off, so every frame it
+  compares is drawn on the processor. Both dialog steps also scroll a
+  section of nine rows, `engine_settings_tall_section.hpp`, shown in place
+  of the open section's rows; the wheel events are the check host's
   (`check_host_input.hpp`). With `--snapshot`, the check writes each of
   those frames beside the named file.
   `native-engine-settings-determinism`
@@ -509,10 +537,12 @@ logs it.
   describes both. Benchmarks, `--frame-rate` runs, headless saved-game runs
   and the battle end with the memory report, its peaks the largest the
   system saw (`oa/platform/memory_status.hpp`).
-- `screen_size.hpp`, `screen_size.cpp`: the Screen size setting read before
-  the window opens, with the defaults of a light machine
-  (`oa/platform/machine.hpp`), the window opened at that size and full
-  screen given the display mode nearest it.
+- `screen_size.hpp`, `screen_size.cpp`: the settings read before the window
+  opens (`start_settings`), with the defaults of a light machine
+  (`oa/platform/machine.hpp`): the Screen size, the window opened at that
+  size and full screen given the display mode nearest it, and Hardware
+  acceleration, which either flag decides over
+  (`hardware_acceleration_asked`).
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
   no SDL, no files and no clock, of which the game uses only the texture

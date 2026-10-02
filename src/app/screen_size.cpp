@@ -34,9 +34,7 @@ settings::Inputs start_inputs(const Options& options, settings::ScreenSize deskt
     return inputs;
 }
 
-settings::ScreenSize starting_screen_size(const Options& options, settings::ScreenSize desktop) {
-    if (options.window_resolution)
-        return settings::desktop_screen_size;
+settings::EngineSettings start_settings(const Options& options, settings::ScreenSize desktop) {
     oa::platform::preferences::Values values;
     try {
         const auto file = preference_file(options.preferences_file);
@@ -44,10 +42,17 @@ settings::ScreenSize starting_screen_size(const Options& options, settings::Scre
             values = oa::platform::preferences::load(file);
     } catch (const std::exception& error) {
         // The runtime reads the file again and reports what is wrong with it.
-        std::cerr << "open-annihilation: the screen size starts at its default: " << error.what()
+        std::cerr << "open-annihilation: the settings start at their defaults: " << error.what()
                   << '\n';
     }
-    return settings::read_settings(values, start_inputs(options, desktop), false).screen_size;
+    return settings::read_settings(values, start_inputs(options, desktop), false);
+}
+
+settings::ScreenSize
+starting_screen_size(const Options& options, const settings::EngineSettings& start) noexcept {
+    if (options.window_resolution)
+        return settings::desktop_screen_size;
+    return start.screen_size;
 }
 
 void take_screen_size(SDL_Window* window, settings::ScreenSize size, bool full_screen) {

@@ -76,7 +76,12 @@ setting writes the setting's key into its file first
 `native-engine-settings-determinism` holds this in place: with every key at
 its default, the seeded skirmish writes the same trace stream and draws the
 same frame as with no file, and the director render keeps its pinned frames
-and sound.
+and sound. With a named file Hardware acceleration and Vertical sync are
+Off, and the windowed checks' `SDL_RENDER_DRIVER=software` locks both, so no
+check draws through the graphics card or waits for the display. Only
+`native-engine-settings` passes `--force-capable`, which lifts those locks
+so that it can turn Vertical sync On and read it back; it leaves Hardware
+acceleration Off.
 
 ### Threads
 

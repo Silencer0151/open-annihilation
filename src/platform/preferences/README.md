@@ -60,8 +60,10 @@ once the game starts from the folder.
 
 The Open Annihilation settings (`oa/ui/engine_settings.hpp`) keep these keys,
 written when the player changes a setting and erased again by the settings
-dialog's Restore defaults. Values are decimal; a key that is absent or
-not a whole number gives the default, and a value out of range is clamped.
+dialog's Restore defaults. Values are decimal, but for the screen size's; a
+key that is absent or not a whole number gives the default, and a value out
+of range is clamped. A switch is On for any number above 0: a word such as
+`off` is not a number, so it gives the default; write `0` to turn one off.
 
 | Key | Values | Absent means |
 | --- | --- | --- |
@@ -72,12 +74,17 @@ not a whole number gives the default, and a value out of range is clamped.
 | `open-annihilation.max-fps` | frames a second, 30 to 120 | 120 |
 | `open-annihilation.anti-aliasing` | 1 (off), 2, 3, 4, 8 or 16 | 1 |
 | `open-annihilation.frame-stats` | 0 or 1 | 0 |
+| `open-annihilation.screen-size` | `desktop`, or `640x480`, `800x600`, `1024x768` or `1280x1024` | `desktop`; with the player's own file on a light machine, `800x600`, or `640x480` on a smaller desktop |
+| `open-annihilation.hardware-acceleration` | 0 or 1 | 1 with the player's own file, else 0 |
+| `open-annihilation.vertical-sync` | 0 or 1 | 0 |
 
 The settings dialog's Select groups without Alt is the game's own
 `Total Annihilation|SwitchAlt`, which `+switchalt` also sets. `+stats`
 without an argument shows or hides the performance statistics and writes
 `open-annihilation.frame-stats`; `+stats 1` and `+stats 0` write nothing.
-`--max-fps` sets the frame rate for its run and writes nothing. With
+`--max-fps` sets the frame rate for its run and writes nothing, and so do
+`--hardware-acceleration` and `--no-hardware-acceleration` for Hardware
+acceleration. With
 `--preferences-file` every default is the game's own behaviour on every
 platform and `totala.ini` is not read.
 
