@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -320,6 +321,83 @@ void test_memory_status() {
         check(host.working_set != 0, "host reports a working set");
 }
 
+// A process status text as Linux writes it, cut to the lines around the
+// fields the memory guard reads.
+constexpr std::string_view sample_proc_status = "Name:\tgame\n"
+                                                "VmPeak:\t 4194304 kB\n"
+                                                "VmSize:\t 4194304 kB\n"
+                                                "VmRSS:\t  262144 kB\n"
+                                                "RssAnon:\t  196608 kB\n"
+                                                "RssFile:\t   65536 kB\n"
+                                                "RssShmem:\t       0 kB\n"
+                                                "VmSwap:\t    8192 kB\n"
+                                                "Threads:\t8\n";
+
+// A memory information text as Linux writes it, cut to its first lines.
+constexpr std::string_view sample_proc_meminfo = "MemTotal:        8045756 kB\n"
+                                                 "MemFree:          512000 kB\n"
+                                                 "MemAvailable:    4022878 kB\n"
+                                                 "Buffers:          102400 kB\n"
+                                                 "HugePages_Total:       0\n";
+
+void test_proc_memory_fields() {
+    using namespace oa::platform;
+    constexpr uint64_t kib = 1024;
+    check(proc_memory_field(sample_proc_meminfo, "MemTotal") == 8045756 * kib, "total memory read");
+    check(
+        proc_memory_field(sample_proc_meminfo, "MemAvailable") == 4022878 * kib,
+        "available memory read"
+    );
+    check(
+        !proc_memory_field(sample_proc_meminfo, "Mem").has_value(),
+        "a field's name must be followed by its colon"
+    );
+    check(
+        !proc_memory_field(sample_proc_meminfo, "HugePages_Total").has_value(),
+        "a count without kB is not a memory figure"
+    );
+    check(!proc_memory_field(sample_proc_meminfo, "SwapTotal").has_value(), "missing field");
+    check(!proc_memory_field(sample_proc_meminfo, "").has_value(), "empty field name");
+    check(!proc_memory_field("", "MemTotal").has_value(), "empty text");
+    check(proc_memory_field("RssAnon:\t12 kB\r\n", "RssAnon") == 12 * kib, "line ended by CR LF");
+    check(proc_memory_field("RssAnon:\t12 kB", "RssAnon") == 12 * kib, "last line without LF");
+    check(!proc_memory_field("RssAnon:\t kB\n", "RssAnon").has_value(), "no digits");
+    check(!proc_memory_field("RssAnon:\t12 MB\n", "RssAnon").has_value(), "another unit");
+    check(!proc_memory_field("RssAnon:\t-12 kB\n", "RssAnon").has_value(), "a negative count");
+    check(
+        proc_memory_field("RssAnon:\t18014398509481983 kB\n", "RssAnon") ==
+            uint64_t{18014398509481983} * kib,
+        "largest count that fits 64 bits as bytes"
+    );
+    check(
+        !proc_memory_field("RssAnon:\t18014398509481984 kB\n", "RssAnon").has_value(),
+        "count too large as bytes"
+    );
+    check(
+        !proc_memory_field("RssAnon:\t99999999999999999999 kB\n", "RssAnon").has_value(),
+        "count too large for 64 bits"
+    );
+
+    // Private committed memory: resident anonymous memory plus swap, never
+    // the address space (VmSize) or the resident file pages.
+    check(
+        committed_from_proc_status(sample_proc_status) == (196608 + 8192) * kib,
+        "committed memory is RssAnon plus VmSwap"
+    );
+    check(
+        committed_from_proc_status("RssAnon:\t 4096 kB\n") == 4096 * kib,
+        "missing VmSwap counts as none"
+    );
+    check(
+        !committed_from_proc_status("VmSize:\t 4096 kB\nVmSwap:\t 0 kB\n").has_value(),
+        "no committed memory without RssAnon"
+    );
+    check(
+        !committed_from_proc_status("RssAnon:\t18014398509481983 kB\nVmSwap:\t1 kB\n").has_value(),
+        "a sum too large for 64 bits"
+    );
+}
+
 void test_app_loop() {
     using namespace oa::platform;
     check(!finished_stream_sweep_due(1099, 1000), "99 ms is not enough");
@@ -425,6 +503,7 @@ int main() {
     test_environment_value();
     test_grouped_decimal();
     test_memory_status();
+    test_proc_memory_fields();
     test_app_loop();
     test_error_log();
     if (failures != 0) {

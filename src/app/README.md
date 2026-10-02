@@ -163,6 +163,26 @@ logs it.
   after it step as before, as in 3.1c. `app-match-clock` tests all of
   these, with frames across the turn from a clock just before 2^32
   milliseconds.
+- `memory_guard.hpp`, `memory_guard.cpp` (`oa-app-memory-guard`): the
+  memory guard of the accelerated tier, as a pure state machine with no
+  clock, which the game does not use yet. Handed a sample of the system's
+  memory about once a second (`oa::platform::sample_system_memory`), it
+  asks the tier to drop acceleration for the rest of the run when the
+  process's private committed memory rises above half of physical memory,
+  or when free physical memory stays under a sixteenth of it for 3 s;
+  where the system reports no free memory, its memory pressure at the
+  critical level stands in for it, or else more than 128 hard page faults
+  a second. These are conservative placeholders until a run on period
+  hardware measures them. Before the tier makes a buffer of its own,
+  `memory_guard_allows` tells whether free memory would stay at or above
+  its threshold and committed memory at or under its own.
+  `app-memory-guard` tests it by table, and `platform-system-memory`
+  samples the system it runs on and prints what it reports. The library,
+  its header and its test stand apart from the render policy
+  (`render_policy.hpp`, `oa-app-render-policy`) only until the code that
+  uses the guard lands: the guard then moves into the render policy's
+  files, under the `oa::app::render_policy` namespace it already uses, and
+  its cases into `app-render-policy`.
 - `frame_pacing.hpp`, `frame_pacing.cpp`, `frame_stats_panel.hpp`,
   `frame_stats_panel.cpp`, `runtime_frame_stats.cpp`: the
   application loop's frames, apart from the simulation's 30 ticks a second.

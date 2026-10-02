@@ -225,6 +225,14 @@ add_library(oa-app-game-directory src/app/game_directory.cpp src/app/demo_instal
 add_library(oa::app::game_directory ALIAS oa-app-game-directory)
 target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256 oa-platform-preferences
   PRIVATE oa-formats-hpi oa-formats-pe oa-options)
+# The memory guard of the accelerated tier (memory_guard.hpp): the samples
+# of the system's memory judged against thresholds scaled to physical
+# memory, as a pure state machine with no clock. The game does not use it
+# yet. A library of its own only until the code that uses it lands, when
+# it joins the render policy's files.
+add_library(oa-app-memory-guard src/app/memory_guard.cpp)
+add_library(oa::app::memory_guard ALIAS oa-app-memory-guard)
+target_link_libraries(oa-app-memory-guard PUBLIC oa-app-headers oa-platform-shims PRIVATE oa-options)
 # The game's window icon: the Open Annihilation icon at 256 by 256 pixels
 # (branding/, made by tools/make_icons.py), embedded as a PNG file and
 # decoded when the window opens.
@@ -324,6 +332,12 @@ if(BUILD_TESTING)
   add_executable(oa-app-match-clock-test src/app/match_clock_test.cpp src/app/match_clock.cpp)
   target_link_libraries(oa-app-match-clock-test PRIVATE oa-base-game-loop oa-ui-console oa-options)
   add_test(NAME app-match-clock COMMAND oa-app-match-clock-test)
+  # The memory guard by table: its thresholds, its once-a-second samples,
+  # committed memory, free memory held low for 3 s, the memory pressure and
+  # hard page faults standing in for it, and the check before a new buffer.
+  add_executable(oa-app-memory-guard-test src/app/memory_guard_test.cpp)
+  target_link_libraries(oa-app-memory-guard-test PRIVATE oa-app-memory-guard oa-test-support oa-options)
+  add_test(NAME app-memory-guard COMMAND oa-app-memory-guard-test)
   # The application loop's pacing over a fake clock: frames evenly spaced
   # at the rate asked for, 30 ticks a second at any frame rate, the fraction
   # of a tick each frame shows, the camera's scroll for a frame's real time,
