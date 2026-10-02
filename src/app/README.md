@@ -468,6 +468,38 @@ logs it.
   check host, through which a check an extension runs drives the running
   game (see [Extensions](#extensions)); `app-check-host` tests its table and
   the parts that need no running game.
+- `renderer_records.hpp`, `renderer_records.cpp` (`oa-app-renderer-records`)
+  and `renderer_state.hpp`, `renderer_state.cpp` (`oa-app-renderer-state`):
+  the renderer records, which the game does not use yet. What the engine has
+  seen of each render driver on this machine is kept in `renderer-state.conf`
+  beside the preferences file: a strike against a driver for a stage the game
+  died in, or a failure seen while running, which becomes a record only when
+  the same is seen at the next start or in the next run (`failed-driver`,
+  which the walk of SDL's drivers skips, never for `software`;
+  `accelerated-unusable`, which keeps the driver on the standard tier), or at
+  the first left-over trial on Windows before Vista and on Linux
+  (`crash_evidence`); the adapter they were written under, the remembered
+  step-down rung, the `native-density` key, the trial of a stage under way and
+  the told mark of the main menu's notice. On a machine under 2 GiB
+  (`RecordRules`) no trial is written and nothing of the accelerated tier is
+  struck or recorded, and what a run with more memory left of it stays for a
+  start from 2 GiB to judge. Strikes and records of another adapter or engine
+  version are dropped, and `clear_failures` gives every driver a fresh try, as
+  Off then On and Restore defaults do. The sentinel of the stage a start has
+  reached is kept apart in `renderer-sentinel.conf`; `sentinel_step` moves it
+  and the trial through a run, from `create` to `running` and each path's
+  first frames, with none under `SDL_RENDER_DRIVER`. Their text and rules are
+  pure (`renderer_records.hpp`, tested by table in `app-renderer-records`);
+  `RendererState` reads and writes the files: every write best effort, logged
+  once on failure with the records kept in memory, except the trial's, whose
+  failure the caller is told of; the records written only when one changes,
+  flushed with the folder synced, and not while a match runs; a trial written
+  with the strike the last run left; the sentinel rewritten in place
+  unflushed; a clean exit erasing the run's trial, writing the records left
+  and deleting the sentinel; a missing or garbled file read as empty. With a
+  named `--preferences-file` they live in memory, and under
+  `SDL_RENDER_DRIVER` nothing is read or written. `app-renderer-state` tests
+  the files in scratch folders, read-only and garbled ones among them.
 - `video_capture.hpp`, `video_capture.cpp`: `--capture-video`, the
   developer's capture of the window's frames and the game's sound as an MP4
   video through the `ffmpeg` program; `runtime_showcase.cpp`: the scripted
@@ -486,7 +518,8 @@ logs it.
   no SDL, no files and no clock, of which the game uses only the texture
   limit so far, in the line it logs at start. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
-  failed but never `software`, with the framebuffer hint set before
+  failed (`failed_driver_list` of the renderer records) but never
+  `software`, with the framebuffer hint set before
   `software` and never empty, a second walk with the records ignored
   whenever they would leave nothing able to present, and SDL's own call
   under `SDL_RENDER_DRIVER` (`start_creation`, `start_rebuild`,
@@ -499,16 +532,7 @@ logs it.
   (`smallest_accelerated_memory`) counts as having 2 GiB; when the
   start-up function test may run, never under 2 GiB; and the gate that
   keeps a shared game or a replay from starting anything until it ends;
-  what a left-over sentinel or trial, or a failure while running, counts
-  for: a strike, and a record only the second time in a row, or at the
-  first left-over trial on Windows before Vista and on Linux, and never
-  twice from one run (`note_leftover`, `note_running_failure`); the values
-  of `renderer-state.conf`, read with corrupt ones ignored and written
-  back unchanged (`parse_records`, `format_records`), and cleared of what
-  another engine version or adapter recorded (`clear_on_machine_change`);
-  the sentinel of `renderer-sentinel.conf` and the trial through a run,
-  from `create` to `running` and each path's first frames, with none under
-  `SDL_RENDER_DRIVER` (`parse_sentinel`, `sentinel_step`); present stalls;
+  present stalls;
   the rung a machine starts at on the step-down ladder from 2 GiB, its
   budget sized from its processors and kind and never from its memory
   (`start_budget`), magnify off before Vista and at budget none, and the
@@ -519,11 +543,12 @@ logs it.
   prescale budget; and the tiles of a texture beyond the renderer's limit
   (`plan_tiles`). The names of the drivers' graphics interfaces stay with
   the platform: the policy takes each driver's traits (`DriverTraits`).
-  `app-render-policy` tests them all by table. The memory guard, the
-  world's scaling (`world_scaling`), the native-density rule, which needs
-  2 GiB as the accelerated tier does, and the probe's report join the
-  policy with the code that uses them; reading and writing the two files
-  is the host's.
+  `app-render-policy` tests them all by table. What a left-over sentinel
+  or trial, or a failure while running, counts for, and the sentinel and
+  the trial through a run, are the renderer records' (above). The memory
+  guard, the world's scaling (`world_scaling`), the native-density rule,
+  which needs 2 GiB as the accelerated tier does, and the probe's report
+  join the policy with the code that uses them.
 - Director scripts ([docs/director.md](../../docs/director.md)):
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and

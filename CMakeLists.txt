@@ -233,6 +233,18 @@ target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256
 add_library(oa-app-memory-guard src/app/memory_guard.cpp)
 add_library(oa::app::memory_guard ALIAS oa-app-memory-guard)
 target_link_libraries(oa-app-memory-guard PUBLIC oa-app-headers oa-platform-shims PRIVATE oa-options)
+# The renderer records: what the engine has seen of each render driver on
+# this machine, and the sentinel of the stage a start has reached. Their text
+# and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
+# their two files beside the preferences file. The game does not use them
+# yet.
+add_library(oa-app-renderer-records src/app/renderer_records.cpp)
+add_library(oa::app::renderer_records ALIAS oa-app-renderer-records)
+target_link_libraries(oa-app-renderer-records PUBLIC oa-app-headers PRIVATE oa-options)
+add_library(oa-app-renderer-state src/app/renderer_state.cpp)
+add_library(oa::app::renderer_state ALIAS oa-app-renderer-state)
+target_link_libraries(oa-app-renderer-state PUBLIC oa-app-renderer-records
+  PRIVATE oa-platform-preferences oa-options)
 # The game's window icon: the Open Annihilation icon at 256 by 256 pixels
 # (branding/, made by tools/make_icons.py), embedded as a PNG file and
 # decoded when the window opens.
@@ -314,6 +326,19 @@ if(BUILD_TESTING)
   add_test(NAME demo-installer-data COMMAND oa-demo-installer-test --data)
   set_tests_properties(demo-installer-data PROPERTIES TIMEOUT 300)
   oa_demo_installer_tests(demo-installer-data)
+  # The renderer records by table: the text of every key and value, values
+  # that cannot be read, strikes that become records and what clears them.
+  add_executable(oa-app-renderer-records-test src/app/renderer_records_test.cpp)
+  target_link_libraries(oa-app-renderer-records-test PRIVATE oa-app-renderer-records oa-test-support
+    oa-options)
+  add_test(NAME app-renderer-records COMMAND oa-app-renderer-records-test)
+  # The renderer records' two files in scratch folders: missing, garbled
+  # and read-only ones, writes made only on a change, the trial and the
+  # sentinel.
+  add_executable(oa-app-renderer-state-test src/app/renderer_state_test.cpp)
+  target_link_libraries(oa-app-renderer-state-test PRIVATE oa-app-renderer-state oa-platform-preferences
+    oa-test-support oa-options)
+  add_test(NAME app-renderer-state COMMAND oa-app-renderer-state-test)
   # The draw states the match renderer keeps per unit slot and per 3D feature.
   add_executable(oa-match-model-draws-test src/app/match_model_draws_test.cpp)
   target_link_libraries(oa-match-model-draws-test PRIVATE oa-app-headers oa-present-model oa-sim-feature-runtime

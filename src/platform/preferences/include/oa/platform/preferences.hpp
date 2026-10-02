@@ -52,16 +52,42 @@ std::filesystem::path apple_data_directory(const std::filesystem::path& applicat
 /// @param file preferences file
 /// @return the key/value map; empty when the file is missing
 Values load(const std::filesystem::path& file);
+/// Whether save() also makes the replacement of the file last through a
+/// system crash.
+enum class SyncFolder : uint8_t {
+    no,  ///< the file's bytes are flushed before the replace; the folder is left to the system
+    yes, ///< the folder is synced after the replace as well, so a system crash leaves the old file or the new one
+};
 /// Writes a preferences file, replacing it from a temporary file in the same directory.
 ///
 /// The file's folder is made when it is missing; a file named without a
-/// folder is written in the current directory. A failed write preserves the
-/// last complete file. Throws std::runtime_error on failure or when the
+/// folder is written in the current directory. The temporary file is flushed
+/// to the disk before it replaces the file, and a failed write preserves the
+/// last complete file. On Windows the replace itself is written through to
+/// the disk either way; elsewhere SyncFolder::yes also syncs the folder after
+/// the rename, and a folder that cannot be synced is left as the system keeps
+/// it, the file replaced. Throws std::runtime_error on failure or when the
 /// values exceed the size limits.
 ///
 /// @param file preferences file
 /// @param values key/value map to store
-void save(const std::filesystem::path& file, const Values& values);
+/// @param sync whether the folder is synced after the replace
+void save(
+    const std::filesystem::path& file, const Values& values, SyncFolder sync = SyncFolder::no
+);
+/// Rewrites a preferences file in place, for a small file that is rewritten often.
+///
+/// Writes the same format as save(), but straight into the file: no
+/// temporary file, no rename and no flush, so the system writes it to the
+/// disk when it chooses. A crash or a full disk during the write can leave
+/// the file cut short, which load() then rejects. The file's folder is made
+/// when it is missing; a file named without a folder is written in the
+/// current directory. Throws std::runtime_error on failure or when the
+/// values exceed the size limits.
+///
+/// @param file preferences file
+/// @param values key/value map to store
+void overwrite(const std::filesystem::path& file, const Values& values);
 
 inline constexpr uint32_t default_music_volume = 0x20; // musicvol after RESTORE
 inline constexpr uint8_t default_cd_mode = 4;          // cdmode after RESTORE

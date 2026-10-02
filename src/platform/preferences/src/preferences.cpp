@@ -169,7 +169,14 @@ Values load(const std::filesystem::path& file) {
     return result;
 }
 
-void save(const std::filesystem::path& file, const Values& values) {
+namespace {
+/// Encodes the values in the preferences format, checking the size limits.
+///
+/// Throws std::runtime_error when the values exceed them.
+///
+/// @param values key/value map to store
+/// @return the file's bytes
+std::string encode(const Values& values) {
     validate(values);
     // Check the encoded size before constructing it: individually valid
     // entries can otherwise expand to hundreds of MiB before the file cap is
@@ -192,13 +199,26 @@ void save(const std::filesystem::path& file, const Values& values) {
     stream << format_header << '\n';
     for (const auto& [key, value] : values)
         stream << std::quoted(key) << ' ' << std::quoted(value) << '\n';
-    const auto bytes = stream.str();
+    auto bytes = stream.str();
     if (bytes.size() > maximum_file_bytes)
         throw std::runtime_error("game preferences file exceeds size limit");
+    return bytes;
+}
+
+/// Makes the folder that holds a file when it is missing.
+///
+/// @param file the file
+void make_folder(const std::filesystem::path& file) {
     // A file named without a folder is written in the current directory:
     // there is no folder to make, and making an empty path fails.
     if (file.has_parent_path())
         std::filesystem::create_directories(file.parent_path());
+}
+} // namespace
+
+void save(const std::filesystem::path& file, const Values& values, SyncFolder sync) {
+    const auto bytes = encode(values);
+    make_folder(file);
 #ifdef _WIN32
     const auto process = GetCurrentProcessId();
 #else
@@ -232,6 +252,9 @@ void save(const std::filesystem::path& file, const Values& values) {
     const bool closed = CloseHandle(handle);
     if (!complete || !closed)
         throw io_error("cannot write preferences", temporary);
+    // The replace is written through to the disk, so the folder needs no
+    // sync of its own whatever `sync` asks.
+    (void)sync;
     if (!MoveFileExW(
             temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
         ))
@@ -259,7 +282,33 @@ void save(const std::filesystem::path& file, const Values& values) {
     if (!complete || !closed)
         throw io_error("cannot write preferences", temporary);
     std::filesystem::rename(temporary, file);
+    if (sync == SyncFolder::yes) {
+        // The rename is a change to the folder, which reaches the disk only
+        // when the folder is synced. A folder that cannot be opened or synced
+        // keeps the replaced file all the same.
+        const auto folder =
+            file.has_parent_path() ? file.parent_path() : std::filesystem::path(".");
+        const int folder_descriptor = ::open(folder.c_str(), O_RDONLY | O_DIRECTORY);
+        if (folder_descriptor >= 0) {
+            (void)::fsync(folder_descriptor);
+            (void)::close(folder_descriptor);
+        }
+    }
 #endif
     cleanup.owned = false;
+}
+
+void overwrite(const std::filesystem::path& file, const Values& values) {
+    const auto bytes = encode(values);
+    make_folder(file);
+    // Truncating and writing the open file keeps it where it is: no
+    // temporary file and no rename, and nothing waits for the disk.
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    if (!output)
+        throw io_error("cannot open preferences for rewriting", file);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output)
+        throw io_error("cannot rewrite preferences", file);
 }
 } // namespace oa::platform::preferences

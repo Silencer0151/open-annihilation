@@ -84,6 +84,51 @@ int main() {
             oa::platform::preferences::load(file) == changed
         ); // Escaping counts toward file cap.
         {
+            // A save that also syncs the folder writes the same file.
+            const auto synced = temporary / "synced" / "state.conf";
+            oa::platform::preferences::save(
+                synced, values, oa::platform::preferences::SyncFolder::yes
+            );
+            require(oa::platform::preferences::load(synced) == values);
+            oa::platform::preferences::save(
+                synced, changed, oa::platform::preferences::SyncFolder::yes
+            );
+            require(oa::platform::preferences::load(synced) == changed);
+            std::size_t entries = 0;
+            for ([[maybe_unused]] const auto& entry :
+                 std::filesystem::directory_iterator(synced.parent_path()))
+                ++entries;
+            require(entries == 1); // no temporary file is left behind
+        }
+        {
+            // overwrite() makes a missing folder and writes the same format
+            // as save().
+            const auto rewritten = temporary / "rewritten" / "sentinel.conf";
+            oa::platform::preferences::overwrite(rewritten, values);
+            require(oa::platform::preferences::load(rewritten) == values);
+            // It rewrites the file in place: a second name for the same file
+            // sees the new values, which a replace by rename would not give.
+            const auto second_name = temporary / "rewritten" / "second-name.conf";
+            std::filesystem::create_hard_link(rewritten, second_name);
+            oa::platform::preferences::overwrite(rewritten, changed);
+            require(oa::platform::preferences::load(rewritten) == changed);
+            require(oa::platform::preferences::load(second_name) == changed);
+            const oa::platform::preferences::Values shorter{{"starting", "running"}};
+            oa::platform::preferences::overwrite(rewritten, shorter);
+            require(oa::platform::preferences::load(second_name) == shorter);
+            std::size_t entries = 0;
+            for ([[maybe_unused]] const auto& entry :
+                 std::filesystem::directory_iterator(rewritten.parent_path()))
+                ++entries;
+            require(entries == 2); // the file and its second name, no temporary file
+            // Values beyond the limits are refused before the file is touched.
+            rejects([&] { oa::platform::preferences::overwrite(rewritten, excessive); });
+            require(oa::platform::preferences::load(rewritten) == shorter);
+            // A folder that cannot be made is an error.
+            const auto blocked = temporary / "rewritten" / "sentinel.conf" / "inside.conf";
+            rejects([&] { oa::platform::preferences::overwrite(blocked, shorter); });
+        }
+        {
             // A file named without a folder, as `--preferences-file
             // prefs.conf` names one, is written in the current directory.
             const auto working = std::filesystem::current_path();

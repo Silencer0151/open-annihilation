@@ -41,6 +41,12 @@ values. Reads are bounded and reject corrupt files and duplicate keys. Saves
 write a complete temporary file beside the destination, flush it, and replace
 the destination. A failed write preserves the last complete settings file;
 concurrent game instances use last-writer-wins replacement, not merging.
+`save(..., SyncFolder::yes)` also syncs the folder after the replace on
+POSIX systems, so that a system crash leaves the old file or the new one;
+Windows writes the replace through to the disk either way. `overwrite()`
+writes the same format straight into the file, with no temporary file,
+rename or flush, for a small file rewritten often whose loss in a crash is
+acceptable: a write cut short leaves a file `load()` rejects.
 
 The native application imports the earlier `open-annihilation.ini` from the game
 directory only when the new preference file is absent. That migration reads the
