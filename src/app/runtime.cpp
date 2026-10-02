@@ -8,6 +8,7 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
 #include "match_clock.hpp"
+#include "oa/base/float_precision.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/platform/app_loop.hpp"
 #include "oa/platform/job_pool.hpp"
@@ -607,6 +608,8 @@ void unit_motion(void* context, uint32_t slot, oa::present::unit_playout::Motion
 } // namespace
 
 void Runtime::advance_match_clock(uint32_t now_ms) {
+    // Every tick rounds with the settings the game started with.
+    oa::base::float_precision::restore_program_float_control();
     match_timing_.flags =
         clock_flags_with_pause(match_timing_.flags, match_->state().game.sim_run_flags);
     // A clock state the loop refuses runs no step this frame.

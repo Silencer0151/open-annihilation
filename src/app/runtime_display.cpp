@@ -4,6 +4,7 @@
 // The session display: its start, the lookup tables, and the sinks that
 // receive each finished 8-bit frame (SDL texture or headless capture).
 #include "oa/app/runtime.hpp"
+#include "oa/base/float_precision.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/pcx.hpp"
 #include <SDL3/SDL.h>
@@ -205,6 +206,7 @@ void Runtime::present_indexed_frame(
     capture_render_target();
     if (!SDL_RenderPresent(sdl_.renderer))
         throw std::runtime_error(std::string("SDL_RenderPresent: ") + SDL_GetError());
+    oa::base::float_precision::restore_program_float_control();
 }
 
 } // namespace oa::app

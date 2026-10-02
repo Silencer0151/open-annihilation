@@ -9,6 +9,7 @@
 #include "oa/app/match_model_draws.hpp"
 #include "presentation_interpolation.hpp"
 #include "world_draws.hpp"
+#include "oa/base/float_precision.hpp"
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/present/blit.hpp"
@@ -667,6 +668,9 @@ Runtime::greyed_picture_frame(const oa::ui::gui_layout::Gadget& gadget) const {
 void Runtime::render_match_surface() {
     if (!match_ || !selected_tnt_)
         throw std::logic_error("match renderer requires an initialized offline match");
+    // The drawing rebuilds piece placements the match reads, so it rounds as
+    // the ticks do.
+    oa::base::float_precision::restore_program_float_control();
     mark_profile(OA_PROFILE_MISC);
     sync_match_wrecks();
     // Director mode draws from the director's camera, which it keeps on the

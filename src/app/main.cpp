@@ -9,11 +9,13 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
+#include "oa/base/float_precision.hpp"
 #include "oa/media/intro_player.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/platform/system.hpp"
 #include <SDL3/SDL.h>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -53,6 +55,33 @@ std::string error_log_folder;
         SDL_MESSAGEBOX_ERROR, "Open Annihilation", oa::platform::out_of_memory_message, nullptr
     );
     std::_Exit(kOutOfMemoryExitStatus);
+}
+
+/// Logs that the floating-point settings had changed and have been put back.
+///
+/// The settings decide how the simulation's arithmetic rounds, so the game
+/// puts back any that changed while it ran (a graphics driver may change
+/// them); this reports the first such change of the run.
+///
+/// @param found the settings found
+/// @param saved the settings the game started with, now set again
+void report_float_control_change(
+    void*,
+    const oa::base::float_precision::FloatControl& found,
+    const oa::base::float_precision::FloatControl& saved
+) {
+    std::fprintf(
+        stderr,
+        "open-annihilation: the floating-point settings had changed and have been put back "
+        "(found %" PRIx32 " %" PRIx32 " %" PRIx64 ", started with %" PRIx32 " %" PRIx32 " %" PRIx64
+        ")\n",
+        found.older_unit,
+        found.vector_unit,
+        found.arm_unit,
+        saved.older_unit,
+        saved.vector_unit,
+        saved.arm_unit
+    );
 }
 
 /// Gives the window the game's icon (window_icon.hpp).
@@ -133,6 +162,7 @@ struct HostDisplay {
         renderer = SDL_CreateRenderer(window, nullptr);
         if (renderer == nullptr)
             throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
+        oa::base::float_precision::restore_program_float_control();
     }
 
     ~HostDisplay() {
@@ -237,6 +267,7 @@ using namespace oa::app;
 int main(int argc, char** argv) {
     error_log_folder = oa::platform::error_log_directory(SDL_GetBasePath());
     std::set_new_handler(handle_out_of_memory);
+    oa::base::float_precision::program_float_control().hooks.changed = report_float_control_change;
     try {
         // Every registered extension fills its table before the command
         // line is parsed; the runtime gets the table that combines them.
@@ -267,6 +298,8 @@ int main(int argc, char** argv) {
         if (!options.headless_check)
             display.initialize(options);
         play_intro(options, options.headless_check ? nullptr : &display);
+        // The movies present on the game's renderer.
+        oa::base::float_precision::restore_program_float_control();
         oa::AssetStore assets(options.game_dir);
         auto archives = options.archives;
         if (archives.empty())

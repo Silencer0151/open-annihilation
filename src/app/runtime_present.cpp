@@ -4,6 +4,7 @@
 // SDL output textures, viewport sizing and frame presentation.
 #include "oa/app/runtime.hpp"
 #include "xrgb_conversion.hpp"
+#include "oa/base/float_precision.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -169,6 +170,7 @@ void Runtime::initialize_sdl() {
         sdl_.renderer = SDL_CreateRenderer(sdl_.window, nullptr);
         if (sdl_.renderer == nullptr)
             throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
+        oa::base::float_precision::restore_program_float_control();
     }
     apply_output_mode();
     load_game_cursors();
@@ -493,6 +495,7 @@ void Runtime::present_match_layers() {
     capture_render_target();
     if (!SDL_RenderPresent(sdl_.renderer))
         throw std::runtime_error(std::string("SDL_RenderPresent: ") + SDL_GetError());
+    oa::base::float_precision::restore_program_float_control();
     phase_times_.present += elapsed_since(present_start);
     frame_pacing::note_frame_measure(
         frame_stats_,
@@ -627,6 +630,7 @@ void Runtime::render() {
     capture_render_target();
     if (!SDL_RenderPresent(sdl_.renderer))
         throw std::runtime_error(std::string("SDL render: ") + SDL_GetError());
+    oa::base::float_precision::restore_program_float_control();
     frame_pacing::note_frame_measure(
         frame_stats_,
         frame_pacing::FrameMeasure::present,

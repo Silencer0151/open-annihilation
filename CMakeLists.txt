@@ -407,7 +407,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
-  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-ui-decoded oa-base-bytes)
+  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-ui-decoded oa-base-bytes
+  oa-base-float-precision)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
