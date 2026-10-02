@@ -30,7 +30,11 @@ producing a `512x416` battlefield on the `640x480` surface.
 `unit_projection_for_viewport`, `map_pixel_to_screen`, and
 `screen_to_map_pixel` use the same origin and camera values. A zero-height
 unit projects to `(map_x-camera_x+128, map_y-camera_y+32)`; unit height alone
-supplies the additional `-height/2` vertical displacement.
+supplies the additional `-height/2` vertical displacement. A view drawn
+between map pixels, as the accelerated tier draws it while it scrolls, lies
+a `ViewOffset` past the camera's map pixel, from 0 to 1 along each axis;
+`screen_to_map_pixel` given that offset maps a screen point to the whole map
+pixel drawn there, and with no offset to the one it always has.
 
 The viewport-derived unit projection also carries the battlefield raster clip.
 Solid and textured primitives are clipped to that rectangle, matching the
@@ -106,9 +110,16 @@ units point-sampled.
   split of the rows gives the same bytes. `area_filter_rgb24` filters bands
   of `area_band_rows` (32) rows on an optional job pool;
   `area_filter_rgb24_rows` filters any range of rows.
+- **A view between map pixels.** A plan may start the picture part of a
+  scene pixel into the scene, a phase along each axis in 16.16 screen
+  pixels from 0 to the scale: picture column `x` then covers scene columns
+  `[(x + p) / m, (x + 1 + p) / m)`. The weights stay exact, the scene it
+  reads grows by the phase, and a phase of one whole scene pixel gives the
+  picture of the scene without its first column or row. The accelerated
+  presentation plans again whenever a scrolling view moves the phase.
 - **Bounds.** A plan takes pictures of 1 to `area_picture_edge_limit` (8192)
-  pixels a side; a frame is refused, with nothing written, when it has no
-  plan, when the picture's size is not the plan's, when the scene is smaller
+  pixels a side, and a phase of at most one scene pixel; a frame is refused,
+  with nothing written, when it has no plan, when the picture's size is not the plan's, when the scene is smaller
   than the plan reads, when a stride is below its width or above
   `area_stride_limit`, or when storage is missing. The pass reads only the
   scene's covered corner and writes only the picture's rows, never the
@@ -161,8 +172,11 @@ the rounding of the two pixels it touches, at 40 places and six scales from
 0.5 to 0.9; that bands of 1, 7, 33 and 350 rows and pools of 1 to 8 threads
 give the same bytes and write nothing outside their rows; that malformed
 plans and frames are refused, a plan moved from among them; that rebuilding
-a plan no larger allocates nothing; and a pinned FNV-1a digest of seeded
-scenes. It logs the time of a 1664x952 picture, the battlefield of a
+a plan no larger allocates nothing; a pinned FNV-1a digest of seeded
+scenes; and, for a picture started part of a scene pixel in, exact weights,
+the bytes of the straightforward implementation started there, the picture
+of the scene moved on a pixel for a whole pixel's phase, and a thin line's
+intensity kept as the phase moves through a pixel in sixteenths. It logs the time of a 1664x952 picture, the battlefield of a
 1920x1080 window, from a scene twice its size at one half, just above one
 half and at two thirds, the last two with footprints of three scene pixels
 a side, for information.

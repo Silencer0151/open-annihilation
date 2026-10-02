@@ -779,29 +779,27 @@ void draw_scaled_world(
     uint32_t scene_height,
     uint32_t width,
     uint32_t height,
-    const SDL_Rect& destination,
+    const SDL_FRect& destination,
     const SDL_Rect& clip,
     const CardScale& scale,
     PrescaleTarget& prescale,
     ScaledWorldCounts& counts
 ) {
-    const SDL_FRect landed{
-        static_cast<float>(destination.x),
-        static_cast<float>(destination.y),
-        static_cast<float>(destination.w),
-        static_cast<float>(destination.h)
-    };
+    const SDL_FRect& landed = destination;
     if (scale.filter == policy::ScaleFilter::sharp_bilinear && scale.factor > 1) {
-        // The corner and the column and row past it, for LINEAR to read.
-        const uint32_t region_width = std::min(width + 1, scene_width);
-        const uint32_t region_height = std::min(height + 1, scene_height);
         const uint32_t factor = scale.factor;
-        if (!prescale.made() || prescale.width() < region_width * factor ||
-            prescale.height() < region_height * factor)
+        if (!prescale.made() || prescale.width() < width * factor ||
+            prescale.height() < height * factor)
             throw AccelerationError(
                 "the prescale target is smaller than the scene it is to hold",
                 AccelerationFault::engine
             );
+        // The corner and the column and row past it, for LINEAR to read,
+        // where the target holds them: a view between map pixels draws one
+        // more column and row than the target was sized for at a zoom.
+        const uint32_t region_width = std::min({width + 1, scene_width, prescale.width() / factor});
+        const uint32_t region_height =
+            std::min({height + 1, scene_height, prescale.height() / factor});
         if (!scene.set_scale_mode(SDL_SCALEMODE_NEAREST))
             fail(renderer, final_target, "SDL_SetTextureScaleMode");
         const auto& grid = scene.grid();

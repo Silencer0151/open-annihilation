@@ -301,8 +301,9 @@ std::optional<oa::sim::ground_orders::Point> Runtime::match_world_point(float x,
     const auto viewport = live_viewport(
         static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
     );
+    // The map pixel drawn under the point, a whole one as orders take.
     const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}
+        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return std::nullopt;

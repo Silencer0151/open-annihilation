@@ -229,9 +229,19 @@ logs it.
   as always; above it the scene is drawn at 1 and magnified, unless magnify
   is off. `area_scale` gives the area pass's 16.16 scale, and
   `largest_magnified_scene` the scene a magnified frame's texture is made
-  at. `app-world-scaling` checks these by table, and that over the zoom
-  range and every window's battlefield the scene holds every pixel the
-  nearest resample and the area pass read.
+  at. For a view drawn between map pixels (below), `area_phase` gives the
+  area pass's start in the scene, `magnified_span` the corner a magnified
+  frame draws and where it lands, one more column and row at the same
+  scale, `most_view_offset` how far past its camera the view may lie
+  before the camera's farthest place, and `scrolled_view_offset` and
+  `view_offset_at` the offset a scroll and a zoom's anchor leave.
+  `app-world-scaling` checks these by table, that over the zoom range and
+  every window's battlefield the scene holds every pixel the nearest
+  resample and the area pass read, and, frame by frame, that a scroll
+  toward the map's end draws the view at its exact place while the camera
+  steps whole map pixels, toward its start or held at the edge never
+  jumps or turns back, and on an axis joining a scroll under way catches
+  up with the carry both axes step on by that axis's first step.
 - The accelerated presentation (`runtime_accelerated.cpp`,
   `scaled_world.hpp`, `scaled_world.cpp`): a component switched on at a
   rung of the step-down ladder (`switch_accelerated_presentation`) when
@@ -260,7 +270,28 @@ logs it.
   or held it last (`convert_rgb24_overlay_argb`), laid over the magnified
   scene 1:1. A change of the window's size remakes the card's textures and
   the overlay but keeps the base the frame being presented drew, so that
-  frame is magnified as every other. The HUD strips, the front end and the
+  frame is magnified as every other.
+  Smooth panning: while a frame is magnified or reduced by the area pass,
+  the view may lie between map pixels (`smooth_view_`, `view_offset`). The
+  camera, and Game's, steps whole map pixels exactly as in the standard
+  tier (`scroll_match_view`, `apply_zoom_anchor`), so nothing reaches the
+  simulation, saves, digests or the wire; the view follows the scroll's
+  exact travel within the camera's map pixel, an axis joining a scroll
+  under way catching up with the carry both axes step on over the frames
+  before its camera steps, or the exact point under a zoom's anchor, the
+  anchor's whole map pixel the camera's own, held from 0 to one map pixel
+  and before the camera's farthest place, and a camera moved any other way
+  starts it on its own map pixel. The card draws the scene that far before the battlefield's
+  edge (`magnified_span`), the area pass starts its picture that far into
+  the scene, and the painters after the fog move by it to the nearest
+  screen pixel. Hover, picking, the drag box, the build site and orders'
+  map pixels take the same offset (`game_screen_point`,
+  `match_world_point`, `screen_to_map_pixel` with a `ViewOffset`), so the
+  pointer is over what is drawn under it, and orders stay whole map
+  pixels; the offset never carries the pointer past Game's view
+  (`Game.battlefield_rect`) at the battlefield's edges. Every other frame (`settle_view_offset`) draws the view on the
+  camera's map pixel and forgets the offset; the picture kept for a
+  reader is the standard tier's, on the camera's map pixel. The HUD strips, the front end and the
   loading screen are drawn by `sharp_draw`: NEAREST at a whole-number
   scale, else PIXELART or sharp-bilinear, their prescale targets drawn
   again when the layer's revision moved. Whatever paints a layer moves its
@@ -281,7 +312,8 @@ logs it.
   `app-scaled-world-software` checks the drawing on SDL's software
   renderer against nearest replication and that renderer's own LINEAR,
   modelled on the processor (`software_linear_rgb24`), within 2 levels,
-  scenes and prescale targets in tiles among it; `app-world-draws` checks
+  scenes and prescale targets in tiles and a view between map pixels
+  among it; `app-world-draws` checks
   the thick lines band by band; and
   `--check-render-tiers` (`runtime_render_tiers_check.cpp`,
   `native-render-tiers`, with `--hardware-acceleration` and
@@ -293,9 +325,19 @@ logs it.
   tier off and on as the flags would; that a frame depends on none before
   it, the first after the tier is switched on or the window resized among
   them; that the picture kept for a reader is the standard tier's and eases
-  nothing; that a zoom ease makes no texture; and that prescale targets are
-  drawn once a painted frame; it writes pictures of one moment at zoom
-  0.5, 1 and 2.5 in both tiers. The records are wired (below).
+  nothing; that a slow scroll at zoom 2.5 and 0.5 moves the battlefield
+  read back by at most a pixel a frame, the view drawn at the scroll's
+  exact place while the camera steps whole map pixels, where at 2.5 the
+  standard tier jumps two or three pixels, and a second axis joining the
+  scroll moves at most a pixel a frame too; that at zoom 4 the pointer
+  finds a unit three pixels further left with the view three quarters of
+  a map pixel on, as it is drawn, and the game view up to the
+  battlefield's edges; and that a zoom to the zoom it is at, by the wheel
+  or about the centre, keeps the point drawn under its anchor
+  (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that a zoom
+  ease makes no texture; and that prescale targets are drawn once a
+  painted frame; it writes pictures of one moment at zoom 0.5, 1 and 2.5
+  in both tiers. The records are wired (below).
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,

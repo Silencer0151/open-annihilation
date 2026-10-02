@@ -86,6 +86,7 @@ enum class AreaError {
     stride_out_of_range, ///< a stride below its width or above area_stride_limit
     missing_pixels,      ///< a scene or picture with no storage
     rows_out_of_range,   ///< a band's rows are not within the picture
+    phase_out_of_range,  ///< a phase above the scale: more than one scene pixel
 };
 
 /// Says what an error of the area pass or the nearest resample means, for messages.
@@ -96,30 +97,48 @@ enum class AreaError {
 
 class AreaPlan;
 
-/// Builds the weights of the area pass for a scale and a picture size.
+/// Builds the weights of the area pass for a scale, a picture size and the
+/// place the picture starts in the scene.
 ///
 /// Each weight is the length of the scene pixel the footprint covers, in
-/// screen pixels, which at a 16.16 scale is a whole number of 16.16 units,
-/// so the weights of every footprint sum to exactly area_fixed_one with no
-/// rounding. The plan's vectors keep their storage between builds, so
-/// rebuilding at a size no larger allocates nothing.
+/// screen pixels, which at a 16.16 scale and a 16.16 phase is a whole number
+/// of 16.16 units, so the weights of every footprint sum to exactly
+/// area_fixed_one with no rounding. The plan's vectors keep their storage
+/// between builds, so rebuilding at a size no larger allocates nothing.
+///
+/// A phase starts the picture that far into the scene, for a view drawn
+/// between map pixels. A phase equal to the scale starts it one whole scene
+/// pixel in: the picture is the one a phase of 0 gives of the scene without
+/// its first column (or row).
 ///
 /// @param[out] plan the weights; on failure, emptied, so that a frame refuses it
 /// @param scale screen pixels per scene pixel, 16.16, within [area_scale_min, area_scale_max]
 /// @param picture_width columns of the picture, 1 to area_picture_edge_limit
 /// @param picture_height rows of the picture, 1 to area_picture_edge_limit
-/// @return AreaError::none, or why the scale or size was refused
-[[nodiscard]] AreaError
-plan_area_filter(AreaPlan& plan, uint32_t scale, uint32_t picture_width, uint32_t picture_height);
+/// @param phase_x screen pixels the picture's first column starts past the
+///        scene's left edge, 16.16, from 0 to the scale
+/// @param phase_y screen pixels the picture's first row starts below the
+///        scene's top edge, 16.16, from 0 to the scale
+/// @return AreaError::none, or why the scale, size or phase was refused
+[[nodiscard]] AreaError plan_area_filter(
+    AreaPlan& plan,
+    uint32_t scale,
+    uint32_t picture_width,
+    uint32_t picture_height,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
+);
 
-/// The weights of the area pass for one scale and picture size, built once
-/// and used for every frame drawn at that scale and size.
+/// The weights of the area pass for one scale, picture size and phase,
+/// built once and used for every frame drawn at them.
 ///
-/// The scene starts at the picture's top-left corner: screen column x covers
-/// scene columns [x / m, (x + 1) / m), where m = scale / area_fixed_one, and
-/// rows alike. Only plan_area_filter fills a plan, so every tap of one lies
-/// inside the scene it names; a plan never built, or whose build failed, is
-/// no plan, and a frame refuses it.
+/// With no phase the scene starts at the picture's top-left corner: screen
+/// column x covers scene columns [x / m, (x + 1) / m), where m = scale /
+/// area_fixed_one, and rows alike. A phase p, in 16.16 screen pixels, moves
+/// the picture into the scene: column x covers [(x + p) / m, (x + 1 + p) /
+/// m). Only plan_area_filter fills a plan, so every tap of one lies inside
+/// the scene it names; a plan never built, or whose build failed, is no
+/// plan, and a frame refuses it.
 class AreaPlan {
   public:
 
@@ -138,14 +157,26 @@ class AreaPlan {
     /// @return 1 to area_picture_edge_limit; 0 for no plan
     [[nodiscard]] uint32_t picture_height() const noexcept { return picture_height_; }
 
+    /// Returns how far the picture's first column starts past the scene's left edge.
+    ///
+    /// @return 16.16 screen pixels, from 0 to the scale; 0 for no plan
+    [[nodiscard]] uint32_t phase_x() const noexcept { return phase_x_; }
+
+    /// Returns how far the picture's first row starts below the scene's top edge.
+    ///
+    /// @return 16.16 screen pixels, from 0 to the scale; 0 for no plan
+    [[nodiscard]] uint32_t phase_y() const noexcept { return phase_y_; }
+
     /// Returns the scene columns the picture's footprints cover.
     ///
-    /// @return area_scene_extent of the scale and the picture's width; 0 for no plan
+    /// @return area_scene_extent of the scale, the picture's width and the
+    ///         column phase; 0 for no plan
     [[nodiscard]] uint32_t scene_width() const noexcept { return scene_width_; }
 
     /// Returns the scene rows the picture's footprints cover.
     ///
-    /// @return area_scene_extent of the scale and the picture's height; 0 for no plan
+    /// @return area_scene_extent of the scale, the picture's height and the
+    ///         row phase; 0 for no plan
     [[nodiscard]] uint32_t scene_height() const noexcept { return scene_height_; }
 
     /// Returns the entries of every column tap: the most any column's footprint covers.
@@ -176,14 +207,23 @@ class AreaPlan {
     /// @param scale screen pixels per scene pixel, 16.16
     /// @param picture_width columns of the picture
     /// @param picture_height rows of the picture
-    /// @return AreaError::none, or why the scale or size was refused
+    /// @param phase_x screen pixels the first column starts into the scene, 16.16
+    /// @param phase_y screen pixels the first row starts into the scene, 16.16
+    /// @return AreaError::none, or why the scale, size or phase was refused
     friend AreaError plan_area_filter(
-        AreaPlan& plan, uint32_t scale, uint32_t picture_width, uint32_t picture_height
+        AreaPlan& plan,
+        uint32_t scale,
+        uint32_t picture_width,
+        uint32_t picture_height,
+        uint32_t phase_x,
+        uint32_t phase_y
     );
 
     uint32_t scale_{};             ///< screen pixels per scene pixel, 16.16; 0 for no plan
     uint32_t picture_width_{};     ///< columns of the picture
     uint32_t picture_height_{};    ///< rows of the picture
+    uint32_t phase_x_{};           ///< 16.16 screen pixels the first column starts into the scene
+    uint32_t phase_y_{};           ///< 16.16 screen pixels the first row starts into the scene
     uint32_t scene_width_{};       ///< scene columns the picture's footprints cover
     uint32_t scene_height_{};      ///< scene rows the picture's footprints cover
     uint32_t column_taps_{};       ///< entries of every column tap
@@ -212,8 +252,11 @@ struct RgbTarget {
 ///
 /// @param scale screen pixels per scene pixel, 16.16, within [area_scale_min, area_scale_max]
 /// @param picture_extent columns (or rows) of the picture, at most area_picture_edge_limit
-/// @return picture_extent x area_fixed_one / scale, rounded up; 0 for an argument out of range
-[[nodiscard]] uint32_t area_scene_extent(uint32_t scale, uint32_t picture_extent) noexcept;
+/// @param phase screen pixels the picture starts into the scene, 16.16, from 0 to the scale
+/// @return (picture_extent x area_fixed_one + phase) / scale, rounded up; 0 for an
+///         argument out of range
+[[nodiscard]] uint32_t
+area_scene_extent(uint32_t scale, uint32_t picture_extent, uint32_t phase = 0) noexcept;
 
 /// Filters rows [row_begin, row_end) of the picture from the scene.
 ///

@@ -25,6 +25,13 @@ namespace {
 // last frame.
 constexpr float kLongestZoomStep = 0.05F;
 
+// The range of the map pixels a zoom's exact anchor lies past its whole map
+// pixel: half a pixel either side of the point on the camera's map pixel,
+// which the whole one is rounded from, and the view's offset, up to a map
+// pixel, past that.
+constexpr double kLeastAnchorFraction = -0.5;
+constexpr double kMostAnchorFraction = 1.5;
+
 } // namespace
 
 bool Runtime::radar_contains(float x, float y) const {
@@ -235,6 +242,83 @@ void Runtime::apply_zoom_anchor() {
     match_camera_z_ = static_cast<int32_t>(std::llround(
         static_cast<double>(zoom_anchor_map_y_) - static_cast<double>(zoom_anchor_sy_) / zoom
     ));
+    // A view drawn between map pixels keeps the exact point under the
+    // anchor, where the camera's rounding allows: the camera stays where
+    // the anchor rounds it to.
+    if (!smooth_view_.on || !selected_tnt_)
+        return;
+    const auto camera = view_camera();
+    const auto most = most_view_offsets(camera[0], camera[1]);
+    smooth_view_.camera_x = camera[0];
+    smooth_view_.camera_z = camera[1];
+    smooth_view_.offset.x = view_offset_at(
+        static_cast<double>(zoom_anchor_map_x_) + zoom_anchor_fraction_x_ -
+            static_cast<double>(zoom_anchor_sx_) / zoom,
+        camera[0],
+        most.x
+    );
+    smooth_view_.offset.y = view_offset_at(
+        static_cast<double>(zoom_anchor_map_y_) + zoom_anchor_fraction_y_ -
+            static_cast<double>(zoom_anchor_sy_) / zoom,
+        camera[1],
+        most.y
+    );
+}
+
+std::array<int32_t, 2> Runtime::view_camera() const {
+    if (!selected_tnt_)
+        return {match_camera_x_, match_camera_z_};
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    return {
+        std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width())),
+        std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()))
+    };
+}
+
+oa::present::world_renderer::ViewOffset
+Runtime::most_view_offsets(int32_t camera_x, int32_t camera_z) const {
+    if (!selected_tnt_)
+        return {};
+    // The camera's farthest places, as view_camera holds it.
+    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    return {
+        most_view_offset(camera_x, std::max(0, map_width - visible_map_width())),
+        most_view_offset(camera_z, std::max(0, map_height - visible_map_height()))
+    };
+}
+
+oa::present::world_renderer::ViewOffset Runtime::view_offset() const {
+    if (!smooth_view_.on || screen_ != Screen::match)
+        return {};
+    const auto camera = view_camera();
+    if (camera[0] != smooth_view_.camera_x || camera[1] != smooth_view_.camera_z)
+        return {};
+    return smooth_view_.offset;
+}
+
+oa::present::world_renderer::ViewOffset
+Runtime::settle_view_offset(uint32_t camera_x, uint32_t camera_y, bool between) {
+    // A reader's draw of the standard tier's picture leaves the view alone.
+    if (accelerated_.suspended)
+        return {};
+    if (!between) {
+        smooth_view_ = {};
+        return {};
+    }
+    const auto x = static_cast<int32_t>(camera_x);
+    const auto z = static_cast<int32_t>(camera_y);
+    if (!smooth_view_.on || smooth_view_.camera_x != x || smooth_view_.camera_z != z)
+        smooth_view_.offset = {};
+    smooth_view_.on = true;
+    smooth_view_.camera_x = x;
+    smooth_view_.camera_z = z;
+    // A zoom that changed since the offset was found may leave the view less room.
+    const auto most = most_view_offsets(x, z);
+    smooth_view_.offset.x = std::clamp(smooth_view_.offset.x, 0.0, most.x);
+    smooth_view_.offset.y = std::clamp(smooth_view_.offset.y, 0.0, most.y);
+    return smooth_view_.offset;
 }
 
 void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, float target) {
@@ -257,6 +341,22 @@ void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, floa
             static_cast<double>(runtime.match_camera_z_) + static_cast<double>(centre_y) / zoom
         )
     ));
+    // The exact point at the centre, which a view drawn between map pixels
+    // shows there and keeps there: the whole map pixel above is the
+    // camera's, as the camera rounds it, and the offset lies in the fraction.
+    const auto offset = runtime.view_offset();
+    runtime.zoom_anchor_fraction_x_ = std::clamp(
+        static_cast<double>(runtime.match_camera_x_) + offset.x +
+            static_cast<double>(centre_x) / zoom - static_cast<double>(runtime.zoom_anchor_map_x_),
+        kLeastAnchorFraction,
+        kMostAnchorFraction
+    );
+    runtime.zoom_anchor_fraction_y_ = std::clamp(
+        static_cast<double>(runtime.match_camera_z_) + offset.y +
+            static_cast<double>(centre_y) / zoom - static_cast<double>(runtime.zoom_anchor_map_y_),
+        kLeastAnchorFraction,
+        kMostAnchorFraction
+    );
     runtime.zoom_anchor_sx_ = centre_x;
     runtime.zoom_anchor_sy_ = centre_y;
     runtime.zoom_anchored_ = true;
@@ -312,12 +412,30 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
         static_cast<uint32_t>(std::max(0, match_camera_x_)),
         static_cast<uint32_t>(std::max(0, match_camera_z_))
     );
+    // The map pixel under the pointer on the camera's map pixel, which the
+    // camera rounds about as it always has, and the exact point a view
+    // drawn between map pixels shows under the pointer and keeps there,
+    // the offset lying in the fraction.
     const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
     if (before) {
         zoom_anchor_map_x_ = before->x;
         zoom_anchor_map_y_ = before->y;
         zoom_anchor_sx_ = px - match_layout_.left;
         zoom_anchor_sy_ = py - match_layout_.top;
+        const auto offset = view_offset();
+        const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
+        zoom_anchor_fraction_x_ = std::clamp(
+            static_cast<double>(viewport.source_x) + offset.x +
+                static_cast<double>(zoom_anchor_sx_) / zoom - static_cast<double>(before->x),
+            kLeastAnchorFraction,
+            kMostAnchorFraction
+        );
+        zoom_anchor_fraction_y_ = std::clamp(
+            static_cast<double>(viewport.source_y) + offset.y +
+                static_cast<double>(zoom_anchor_sy_) / zoom - static_cast<double>(before->y),
+            kLeastAnchorFraction,
+            kMostAnchorFraction
+        );
         zoom_anchored_ = true;
     }
     match_zoom_target_ = std::clamp(
@@ -381,19 +499,54 @@ void Runtime::pan_match_camera() {
         scroll_zoom_carry_ = 0.0;
         return;
     }
+    scroll_match_view(dx, dz, step);
+}
+
+void Runtime::scroll_match_view(int32_t way_x, int32_t way_z, double step) {
+    way_x = std::clamp(way_x, -1, 1);
+    way_z = std::clamp(way_z, -1, 1);
+    // The view the last frame drew, before the camera moves.
+    const auto camera_before = view_camera();
+    const auto offset_before = view_offset();
     // Zoom keeps the on-screen rate constant; the carried fraction keeps the
     // world rate exact rather than rounding it every frame.
     const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    scroll_zoom_carry_ += step / zoom;
+    const double travel = step / zoom;
+    const double carry_before = scroll_zoom_carry_;
+    scroll_zoom_carry_ += travel;
     const auto move = static_cast<int32_t>(std::floor(scroll_zoom_carry_));
     scroll_zoom_carry_ -= static_cast<double>(move);
-    if (move == 0)
+    if (move != 0) {
+        stop_match_tracking();
+        zoom_anchored_ = false;
+        match_camera_x_ += way_x * move;
+        match_camera_z_ += way_z * move;
+        camera_moved_ = true;
+    }
+    // A view drawn between map pixels follows the scroll's exact travel
+    // within the camera's map pixel, and an axis that trails the carry both
+    // axes step on, as one joining a scroll under way does, catches up
+    // with it before its camera steps; a zoom easing about its anchor
+    // places it instead. The camera above moved as it always has.
+    if (!smooth_view_.on || zoom_anchored_ || !selected_tnt_)
         return;
-    stop_match_tracking();
-    zoom_anchored_ = false;
-    match_camera_x_ += std::clamp(dx, -1, 1) * move;
-    match_camera_z_ += std::clamp(dz, -1, 1) * move;
-    camera_moved_ = true;
+    const auto camera = view_camera();
+    const auto most = most_view_offsets(camera[0], camera[1]);
+    const oa::present::world_renderer::ViewOffset offset{
+        scrolled_view_offset(
+            offset_before.x, way_x * travel, carry_before, camera[0] - camera_before[0], most.x
+        ),
+        scrolled_view_offset(
+            offset_before.y, way_z * travel, carry_before, camera[1] - camera_before[1], most.y
+        )
+    };
+    // The picture moves with the view, whether or not the camera stepped.
+    if (offset.x != smooth_view_.offset.x || offset.y != smooth_view_.offset.y ||
+        camera[0] != smooth_view_.camera_x || camera[1] != smooth_view_.camera_z)
+        camera_moved_ = true;
+    smooth_view_.camera_x = camera[0];
+    smooth_view_.camera_z = camera[1];
+    smooth_view_.offset = offset;
 }
 
 void Runtime::issue_resume_or_repair(uint16_t id) {
@@ -426,8 +579,9 @@ void Runtime::issue_match_move(float x, float y, bool queue) {
         static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
     );
 
+    // The map pixel drawn under the point, a whole one as orders take.
     const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}
+        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return;
@@ -461,8 +615,9 @@ void Runtime::issue_match_patrol(float x, float y, bool queue) {
         static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
     );
 
+    // The map pixel drawn under the point, a whole one as orders take.
     const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}
+        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return;

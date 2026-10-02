@@ -190,6 +190,31 @@ map_pixel_to_screen(const BattlefieldViewport& viewport, MapPixel map_pixel) noe
 [[nodiscard]] std::optional<MapPixel>
 screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noexcept;
 
+/// How far past its camera's map pixel (BattlefieldViewport::source_x and
+/// source_y) a view drawn between map pixels lies, in map pixels. A view
+/// with no offset is drawn on the camera's map pixel, as the game always
+/// draws it.
+struct ViewOffset {
+    double x = 0.0; ///< map pixels past the camera's column, from 0 to 1
+    double y = 0.0; ///< map pixels past the camera's row, from 0 to 1
+};
+
+/// Converts a screen point inside the battlefield rectangle to the map pixel
+/// a view drawn between map pixels shows there.
+///
+/// Screen column x shows map column source_x + offset.x + (x - destination_x)
+/// / scale, and rows alike; that is rounded to the nearest whole map pixel,
+/// halves away from zero, as screen_to_map_pixel rounds. With no offset the
+/// map pixel is the one screen_to_map_pixel gives.
+///
+/// @param viewport battlefield rectangle, camera and scale
+/// @param screen screen point
+/// @param offset how far past the camera's map pixel the view is drawn, each from 0 to 1
+/// @return the map pixel, or nullopt outside the battlefield rectangle or past 32 bits
+[[nodiscard]] std::optional<MapPixel> screen_to_map_pixel(
+    const BattlefieldViewport& viewport, ScreenPoint screen, ViewOffset offset
+) noexcept;
+
 /// Returns how many screen pixels a run of map pixels spans at the viewport's scale.
 ///
 /// Something drawn a fixed number of battlefield pixels wide, such as the

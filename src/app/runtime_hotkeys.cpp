@@ -836,7 +836,9 @@ std::optional<std::array<int32_t, 3>> Runtime::match_pointer_ground(float x, flo
             match_layout_.top + match_layout_.battlefield_height() - 1
         )
     };
-    const auto map = oa::present::world_renderer::screen_to_map_pixel(viewport, pointer);
+    // The map pixel drawn under the pointer.
+    const auto map =
+        oa::present::world_renderer::screen_to_map_pixel(viewport, pointer, view_offset());
     if (!map)
         return std::nullopt;
     const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);

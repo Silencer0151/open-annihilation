@@ -515,13 +515,19 @@ void draw_one_to_one(
 ///
 /// NEAREST at a whole-number scale; PIXELART; plain LINEAR; or
 /// sharp-bilinear: the corner, with one more column and row where the scene
-/// has them, drawn NEAREST into the prescale target at its factor, each of
-/// the scene's tiles into each of the target's, then that LINEAR into the
-/// destination, each of the target's tiles with its gutters left out. The
-/// scene's tiles keep the scale mode the draw sets.
+/// has them and the prescale target holds them, drawn NEAREST into the
+/// prescale target at its factor, each of the scene's tiles into each of the
+/// target's, then that LINEAR into the destination, each of the target's
+/// tiles with its gutters left out. The scene's tiles keep the scale mode
+/// the draw sets.
+///
+/// A destination that starts between pixels draws a view between map
+/// pixels: the card places the corner there, and SDL's software renderer
+/// at the whole pixel its own rounding gives.
 ///
 /// Throws AccelerationError, after setting the render target back to
-/// `final_target`, when a call fails.
+/// `final_target`, when a call fails or the prescale target cannot hold the
+/// corner at the factor.
 ///
 /// @param renderer the renderer
 /// @param final_target the target frames are drawn into; null for the window
@@ -530,7 +536,7 @@ void draw_one_to_one(
 /// @param scene_height rows of the scene uploaded, at least `height`
 /// @param width columns of the corner drawn
 /// @param height rows of the corner drawn
-/// @param destination where the corner lands, in whole pixels of the final target
+/// @param destination where the corner lands, in pixels of the final target
 /// @param clip the battlefield, in whole pixels of the final target
 /// @param scale the filter and the prescale factor
 /// @param[in,out] prescale the prescale target, made at least as large as the factor needs
@@ -543,7 +549,7 @@ void draw_scaled_world(
     uint32_t scene_height,
     uint32_t width,
     uint32_t height,
-    const SDL_Rect& destination,
+    const SDL_FRect& destination,
     const SDL_Rect& clip,
     const CardScale& scale,
     PrescaleTarget& prescale,

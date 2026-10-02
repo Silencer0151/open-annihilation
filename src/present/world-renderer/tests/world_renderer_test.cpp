@@ -106,6 +106,39 @@ int main() {
     OA_CHECK(zoomed_screen.x == 6 && zoomed_screen.y == 4);
     const auto zoomed_map = oa::present::world_renderer::screen_to_map_pixel(zoomed, {6, 4});
     OA_CHECK(zoomed_map && zoomed_map->x == 32 && zoomed_map->y == 32);
+    // A view drawn between map pixels maps a point to the map pixel drawn
+    // there: with no offset as before, and with one, the point's place in
+    // map pixels moved on by it, rounded to the nearest.
+    const oa::present::world_renderer::BattlefieldViewport wide{31, 31, 4, 2, 20, 20, 40, 40, 2.0F};
+    for (int32_t x = 0; x < 30; ++x)
+        for (int32_t y = 0; y < 30; ++y) {
+            const auto before = oa::present::world_renderer::screen_to_map_pixel(wide, {x, y});
+            const auto none =
+                oa::present::world_renderer::screen_to_map_pixel(wide, {x, y}, {0.0, 0.0});
+            OA_CHECK(before.has_value() == none.has_value());
+            OA_CHECK(!before || (before->x == none->x && before->y == none->y));
+        }
+    // At zoom 2, screen point (6, 4) shows map point (31 + 1, 31 + 1); three
+    // quarters and a quarter of a map pixel on, (31 + 1.75, 31 + 1.25),
+    // whose nearest map pixel is (33, 32).
+    const auto on_pixel = oa::present::world_renderer::screen_to_map_pixel(wide, {6, 4});
+    OA_CHECK(on_pixel && on_pixel->x == 32 && on_pixel->y == 32);
+    const auto between =
+        oa::present::world_renderer::screen_to_map_pixel(wide, {6, 4}, {0.75, 0.25});
+    OA_CHECK(between && between->x == 33 && between->y == 32);
+    // A whole map pixel on is the camera a map pixel on.
+    oa::present::world_renderer::BattlefieldViewport stepped = wide;
+    ++stepped.source_x;
+    ++stepped.source_y;
+    for (int32_t x = 4; x < 24; ++x) {
+        const auto whole =
+            oa::present::world_renderer::screen_to_map_pixel(wide, {x, 9}, {1.0, 1.0});
+        const auto moved = oa::present::world_renderer::screen_to_map_pixel(stepped, {x, 9});
+        OA_CHECK(whole && moved && whole->x == moved->x && whole->y == moved->y);
+    }
+    // Outside the battlefield there is no map pixel, whatever the offset.
+    OA_CHECK(!oa::present::world_renderer::screen_to_map_pixel(wide, {3, 3}, {0.5, 0.5}));
+    OA_CHECK(!oa::present::world_renderer::screen_to_map_pixel(wide, {24, 9}, {0.5, 0.5}));
     const auto scaled_one =
         oa::present::world_renderer::render_scaled_viewport(map, palette, 31, 31, 3, 3, 1.0F);
     OA_CHECK(scaled_one.ok());

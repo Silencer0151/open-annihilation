@@ -137,4 +137,64 @@ uint32_t area_scale(float zoom, float draw_scale) noexcept {
     ));
 }
 
+uint32_t area_phase(double offset, float draw_scale, uint32_t scale) noexcept {
+    if (!(offset > 0.0) || !(draw_scale > 0.0F))
+        return 0;
+    const double phase = std::round(offset * static_cast<double>(draw_scale) * scale);
+    return static_cast<uint32_t>(std::min(phase, static_cast<double>(scale)));
+}
+
+MagnifiedSpan
+magnified_span(uint32_t battlefield, float zoom, uint32_t scene, double offset) noexcept {
+    MagnifiedSpan span;
+    if (!(zoom > 0.0F) || battlefield == 0 || scene == 0)
+        return span;
+    const auto z = static_cast<double>(zoom);
+    const uint32_t whole =
+        std::min(static_cast<uint32_t>(std::ceil(static_cast<double>(battlefield) / z)), scene);
+    const auto landed = static_cast<double>(std::lround(static_cast<double>(whole) * z));
+    const double moved = std::clamp(offset, 0.0, 1.0);
+    span.corner = moved > 0.0 ? std::min(whole + 1, scene) : whole;
+    // The landed pixels over the whole corner's columns: the scale a view on
+    // its camera's map pixel lands at, which a view between map pixels keeps,
+    // moving by the offset at it, so that the corner still reaches past the
+    // battlefield's far edge.
+    span.start = moved > 0.0 ? -moved * landed / static_cast<double>(whole) : 0.0;
+    span.extent = static_cast<double>(span.corner) * landed / static_cast<double>(whole);
+    return span;
+}
+
+double most_view_offset(int32_t camera, int32_t farthest) noexcept {
+    return std::clamp(static_cast<double>(farthest) - static_cast<double>(camera), 0.0, 1.0);
+}
+
+double scrolled_view_offset(
+    double offset, double travel, double carry, int32_t camera_step, double most
+) noexcept {
+    double moved = offset + travel - static_cast<double>(camera_step);
+    const double distance = std::abs(travel);
+    if (distance > 0.0) {
+        const double carried = std::clamp(carry, 0.0, 1.0);
+        const bool toward_end = travel > 0.0;
+        // How far the view trails the scroll's place within the camera's map pixel.
+        const double trail = toward_end ? carried - offset : offset - (1.0 - carried);
+        if (trail > 0.0) {
+            // The frames left before the camera's next step, this one among
+            // them: this one alone when its travel reaches the step, by the
+            // same sum the carry steps on, and otherwise this one and at
+            // least the next.
+            const double frames = carried + distance >= 1.0
+                                      ? 1.0
+                                      : std::max(2.0, std::ceil((1.0 - carried) / distance));
+            const double share = trail / frames;
+            moved += toward_end ? share : -share;
+        }
+    }
+    return std::clamp(moved, 0.0, std::clamp(most, 0.0, 1.0));
+}
+
+double view_offset_at(double exact, int32_t camera, double most) noexcept {
+    return std::clamp(exact - static_cast<double>(camera), 0.0, std::clamp(most, 0.0, 1.0));
+}
+
 } // namespace oa::app

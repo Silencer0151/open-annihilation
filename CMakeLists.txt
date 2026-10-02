@@ -546,7 +546,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
   src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp src/app/runtime_tier_watch.cpp
-  src/app/runtime_render_tiers_check.cpp
+  src/app/runtime_render_tiers_check.cpp src/app/runtime_smooth_pan_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
@@ -684,11 +684,15 @@ if(OA_BUILD_PLATFORM)
       # processor's composition or keep within that renderer's own filters;
       # a frame must not depend on those before it, the first after the tier
       # is switched on or the window resized among them; the picture kept for
-      # screenshots must be the standard tier's and ease nothing; a zoom ease
-      # must make no texture; prescale targets are drawn once a painted
-      # frame; switched off, every frame is the standard tier's. Pictures of
-      # one moment at zoom 0.5, 1 and 2.5 in both tiers go to local/reports.
-      # Skips under 2 GiB of memory.
+      # screenshots must be the standard tier's and ease nothing; a slow
+      # scroll at zoom 2.5 and 0.5 must move the battlefield read back by at
+      # most a pixel a frame, at the scroll's rate, while the camera steps
+      # whole map pixels, where at 2.5 the standard tier jumps them, and the
+      # pointer must pick the unit drawn under it with the view between map
+      # pixels at zoom 4; a zoom ease must make no texture; prescale targets
+      # are drawn once a painted frame; switched off, every frame is the
+      # standard tier's. Pictures of one moment at zoom 0.5, 1 and 2.5 in
+      # both tiers go to local/reports. Skips under 2 GiB of memory.
       set(oa_render_tiers_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers")
       file(MAKE_DIRECTORY "${oa_render_tiers_check_dir}")
       add_test(NAME native-render-tiers COMMAND oa-game --game-dir "${OA_GAME_DIR}"

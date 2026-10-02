@@ -18,7 +18,10 @@
 // draw_scaled_world at 1.37 by sharp-bilinear and by LINEAR, and seeded
 // sources drawn by sharp_draw at 0.5, 0.6, 0.75 and 1.37, keep within 2
 // levels of it, and 0.5 on average; at 2 and 4 both draw NEAREST, equal to
-// nearest replication. PIXELART is the renderer's NEAREST, as SDL's software
+// nearest replication. A view drawn between map pixels, one column and row
+// wider and landing before the battlefield's edge, through a prescale
+// target made for the view on its camera's map pixel, keeps within them
+// too, placed where that renderer places it. PIXELART is the renderer's NEAREST, as SDL's software
 // renderer gives it, and the probe finds it missing. A scene split into
 // tiles holds each neighbour's texels in its gutters and draws as the whole
 // texture does. A prescale target split into tiles holds the enlarged
@@ -517,6 +520,18 @@ struct Corner {
     uint32_t width{};
     uint32_t height{};
     SDL_Rect destination{};
+
+    /// Returns where the corner lands as the card is given it.
+    ///
+    /// @return the destination in the final target's coordinates
+    [[nodiscard]] SDL_FRect landed() const {
+        return {
+            static_cast<float>(destination.x),
+            static_cast<float>(destination.y),
+            static_cast<float>(destination.w),
+            static_cast<float>(destination.h)
+        };
+    }
 };
 
 /// Returns the corner a zoom shows: the battlefield's map pixels rounded up,
@@ -650,7 +665,7 @@ void test_draw_scaled_world_matches_the_references() {
             scene.height,
             corner.width,
             corner.height,
-            corner.destination,
+            corner.landed(),
             battlefield,
             item.scale,
             prescale,
@@ -675,6 +690,93 @@ void test_draw_scaled_world_matches_the_references() {
         OA_CHECK(
             counts.prescale_draws == (item.scale.filter == ScaleFilter::sharp_bilinear ? 1U : 0U)
         );
+    }
+}
+
+/// Magnifies the corner of a view drawn between map pixels: one more column
+/// and row than the view on its camera's map pixel shows, landing its
+/// offset times the zoom before the battlefield's edge, through a prescale
+/// target made only for that view's corner; and compares the read-back with
+/// the references placed where SDL's software renderer places the corner,
+/// at the whole pixel it truncates the destination to.
+void test_view_between_map_pixels() {
+    const Picture scene = seeded(seed_scene, 240, 160);
+
+    struct Case {
+        double zoom{};
+        double offset{}; ///< map pixels past the camera's
+        CardScale scale{};
+    };
+
+    const Case cases[] = {
+        {1.37, 0.5, {ScaleFilter::sharp_bilinear, 2}},
+        {1.37, 0.9, {ScaleFilter::linear, 1}},
+        {2.0, 0.5, {ScaleFilter::nearest, 1}},
+        {4.0, 0.75, {ScaleFilter::nearest, 1}},
+    };
+    for (const auto& item : cases) {
+        Canvas canvas;
+        oa::app::ScaledWorldCounts counts;
+        oa::app::TiledTexture texture;
+        oa::app::PrescaleTarget prescale;
+        upload_scene(canvas, scene, 0, counts, texture);
+        const Corner whole = corner_at(item.zoom);
+        if (item.scale.filter == ScaleFilter::sharp_bilinear)
+            prescale.ensure(
+                canvas.renderer,
+                nullptr,
+                (whole.width + 1) * item.scale.factor,
+                (whole.height + 1) * item.scale.factor,
+                0,
+                counts
+            );
+        Corner corner;
+        corner.width = static_cast<uint32_t>(std::ceil(battlefield.w / item.zoom + item.offset));
+        corner.height = static_cast<uint32_t>(std::ceil(battlefield.h / item.zoom + item.offset));
+        OA_CHECK(corner.width == whole.width + 1 || corner.width == whole.width);
+        const SDL_FRect landed{
+            static_cast<float>(battlefield.x - item.offset * item.zoom),
+            static_cast<float>(battlefield.y - item.offset * item.zoom),
+            static_cast<float>(std::lround(corner.width * item.zoom)),
+            static_cast<float>(std::lround(corner.height * item.zoom))
+        };
+        corner.destination = {
+            static_cast<int>(landed.x),
+            static_cast<int>(landed.y),
+            static_cast<int>(landed.w),
+            static_cast<int>(landed.h)
+        };
+        canvas.clear();
+        oa::app::draw_scaled_world(
+            canvas.renderer,
+            nullptr,
+            texture,
+            scene.width,
+            scene.height,
+            corner.width,
+            corner.height,
+            landed,
+            battlefield,
+            item.scale,
+            prescale,
+            counts
+        );
+        const Picture read = canvas.read();
+        const Picture reference = reference_of(scene, corner, item.scale.filter, item.scale.factor);
+        const SDL_Rect surface{0, 0, surface_width, surface_height};
+        const auto difference = compare(read, reference, surface);
+        std::printf(
+            "a view %.2f map pixels on at %.2f by filter %d: most %d, mean %.3f\n",
+            item.offset,
+            item.zoom,
+            static_cast<int>(item.scale.filter),
+            difference.most,
+            difference.mean
+        );
+        if (item.scale.filter == ScaleFilter::nearest)
+            OA_CHECK(difference.most == 0);
+        OA_CHECK(difference.most <= most_difference);
+        OA_CHECK(difference.mean <= most_mean_difference);
     }
 }
 
@@ -828,7 +930,7 @@ void test_pixelart_is_nearest_here() {
             scene.height,
             corner.width,
             corner.height,
-            corner.destination,
+            corner.landed(),
             battlefield,
             {filter, 1},
             prescale,
@@ -898,7 +1000,7 @@ void test_tiles_hold_their_gutters() {
                 scene.height,
                 corner.width,
                 corner.height,
-                corner.destination,
+                corner.landed(),
                 battlefield,
                 {ScaleFilter::nearest, 1},
                 prescale,
@@ -1034,7 +1136,7 @@ void test_prescale_tiles_draw_as_one_target() {
                 scene.height,
                 corner.width,
                 corner.height,
-                corner.destination,
+                corner.landed(),
                 battlefield,
                 {ScaleFilter::sharp_bilinear, factor},
                 prescale,
@@ -1201,6 +1303,7 @@ int main() {
         return EXIT_FAILURE;
     }
     card::test_draw_scaled_world_matches_the_references();
+    card::test_view_between_map_pixels();
     card::test_sharp_draw_matches_the_references();
     card::test_sharp_draw_redraws_only_a_new_revision();
     card::test_pixelart_is_nearest_here();

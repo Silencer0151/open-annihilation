@@ -221,12 +221,24 @@ oa::ui::display_layout::Point Runtime::game_screen_point(float x, float y) const
         return layout::canvas_to_source(match_layout_, column, row);
     const auto zoom = match_zoom() == 0.0F ? 1.0 : static_cast<double>(match_zoom());
     // As the battlefield maps a canvas pixel to its map pixel
-    // (world_renderer::screen_to_map_pixel).
+    // (world_renderer::screen_to_map_pixel), from the view as it is drawn:
+    // between map pixels in the accelerated tier, so that the pointer picks
+    // what is drawn under it. The offset never carries a point past the
+    // last map pixel of Game's battlefield (Game.battlefield_rect), where
+    // hover and picking would refuse it; a point the view on its camera's
+    // map pixel maps past it maps as it always has.
+    const auto mapped = [zoom](int32_t from_edge, double offset, int32_t visible) {
+        const double on_camera = static_cast<double>(from_edge) / zoom;
+        const auto whole = std::llround(on_camera);
+        const auto drawn = std::llround(on_camera + offset);
+        return static_cast<int>(
+            std::min(drawn, std::max(whole, static_cast<long long>(visible) - 1))
+        );
+    };
+    const auto offset = view_offset();
     return {
-        layout::kSourceLeft +
-            static_cast<int>(std::llround(static_cast<double>(column - match_layout_.left) / zoom)),
-        layout::kSourceTop +
-            static_cast<int>(std::llround(static_cast<double>(row - match_layout_.top) / zoom))
+        layout::kSourceLeft + mapped(column - match_layout_.left, offset.x, visible_map_width()),
+        layout::kSourceTop + mapped(row - match_layout_.top, offset.y, visible_map_height())
     };
 }
 
@@ -238,11 +250,15 @@ oa::ui::display_layout::Point Runtime::game_screen_canvas(int32_t x, int32_t y) 
     if (screen_ != Screen::match || !in_view)
         return layout::source_to_canvas(match_layout_, x, y);
     const auto zoom = match_zoom() == 0.0F ? 1.0 : static_cast<double>(match_zoom());
+    // Where the view as it is drawn shows the point.
+    const auto offset = view_offset();
     return {
-        match_layout_.left +
-            static_cast<int>(std::lround(static_cast<double>(x - layout::kSourceLeft) * zoom)),
-        match_layout_.top +
-            static_cast<int>(std::lround(static_cast<double>(y - layout::kSourceTop) * zoom))
+        match_layout_.left + static_cast<int>(std::lround(
+                                 (static_cast<double>(x - layout::kSourceLeft) - offset.x) * zoom
+                             )),
+        match_layout_.top + static_cast<int>(std::lround(
+                                (static_cast<double>(y - layout::kSourceTop) - offset.y) * zoom
+                            ))
     };
 }
 

@@ -868,6 +868,14 @@ void Runtime::render_match_surface() {
     // What the presentation and the picture-keeping readers learn of the frame.
     accelerated_.frame = scaling;
     accelerated_.frame_alpha = presentation_alpha();
+    // How far between map pixels the frame draws the view: an accelerated
+    // frame the card magnifies or the area pass reduces may; every other
+    // frame draws it on the camera's map pixel, as the game always has.
+    const bool between_pixels =
+        !directed && accelerated_presentation() &&
+        (scaling.method == SceneMethod::magnify || scaling.method == SceneMethod::area);
+    const auto drawn_offset = settle_view_offset(camera_x, camera_y, between_pixels);
+    accelerated_.frame_offset = drawn_offset;
     ++accelerated_.hud_revision;
     const int32_t scene_w = scaling.scene_width;
     const int32_t scene_h = scaling.scene_height;
@@ -1754,6 +1762,14 @@ void Runtime::render_match_surface() {
         };
         world_pixel_clip_ = {0, 0, bf_w, bf_h};
     }
+    // What the painters after the fog draw at places on the map goes where
+    // the view shows those places: a view drawn between map pixels moves it
+    // by the view's offset, to the nearest screen pixel.
+    auto painted = viewport;
+    painted.destination_x -=
+        static_cast<int32_t>(std::lround(drawn_offset.x * static_cast<double>(match_zoom())));
+    painted.destination_y -=
+        static_cast<int32_t>(std::lround(drawn_offset.y * static_cast<double>(match_zoom())));
     // Over the fog tiles: the local player's order overlays while Shift is
     // held (asked of the keyboard, not the pointer word), so that orders
     // queued onto never-mapped or unseen ground stay in view (in 3.1c the
@@ -1763,9 +1779,9 @@ void Runtime::render_match_surface() {
     if (!bare) {
         if (control_key_down(oa::ui::gui_input::ControlKey::shift))
             // What the pass drew is for the checks alone.
-            std::ignore = draw_order_overlays(world_surface, viewport);
-        draw_build_ghost(world_surface, viewport);
-        draw_selection_band(world_surface, viewport);
+            std::ignore = draw_order_overlays(world_surface, painted);
+        draw_build_ghost(world_surface, painted);
+        draw_selection_band(world_surface, painted);
     }
     mark_profile(OA_PROFILE_RENDER_FOG);
     match_world_cpu_ = {world_surface.width, world_surface.height, std::move(world_surface.rgb)};
@@ -1803,12 +1819,12 @@ void Runtime::render_match_surface() {
             mirrored_pose(models, world_record, slot.unit_index, moment).has_value();
         const auto screen = shown_elsewhere
                                 ? project_match_point(
-                                      viewport,
+                                      painted,
                                       oa::sim::match_runtime::fixed_words(
                                           shown_unit_position(models, world_record, slot.unit_index)
                                       )
                                   )
-                                : project_match_point(viewport, slot.unit->position);
+                                : project_match_point(painted, slot.unit->position);
         const int bar_x = screen.x;
         const int bar_y = screen.y + 10;
         if (const auto& world = match_->state();

@@ -12,7 +12,12 @@
 // with nothing written, and rebuilding a plan no larger allocates nothing. A
 // pinned FNV-1a digest of seeded scenes holds the bytes on every platform and
 // build type: it moves only with a deliberate change to the pass, said in
-// the commit that moves it. The nearest resample shows, for each picture
+// the commit that moves it. A picture started part of a scene pixel into the
+// scene, for a view drawn between map pixels, has exact weights too and
+// equals the straightforward implementation; started a whole scene pixel
+// in, it is the picture of the scene without its first column and row; and
+// a thin line keeps its intensity as the start moves through a pixel. A
+// start beyond one scene pixel is refused. The nearest resample shows, for each picture
 // pixel, the scene pixel the terrain fill's 16.16 step names: a scene of the
 // map filled at one pixel per map pixel and resampled at a scale is the
 // terrain filled at that scale, on every pool, and a scene smaller than the
@@ -254,13 +259,22 @@ overlap(uint64_t first_begin, uint64_t first_end, uint64_t second_begin, uint64_
 /// @param scale screen pixels per scene pixel, 16.16
 /// @param width picture columns
 /// @param height picture rows
+/// @param phase_x 16.16 screen pixels the picture's columns start into the scene
+/// @param phase_y 16.16 screen pixels the picture's rows start into the scene
 /// @return the picture, rows width pixels apart
-Picture slow_area_filter(const Picture& scene, uint32_t scale, uint32_t width, uint32_t height) {
+Picture slow_area_filter(
+    const Picture& scene,
+    uint32_t scale,
+    uint32_t width,
+    uint32_t height,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
+) {
     Picture picture = blank(width, height, width, 0);
     for (uint32_t y = 0; y < height; ++y) {
-        const uint64_t top = uint64_t{y} * wr::area_fixed_one;
+        const uint64_t top = uint64_t{y} * wr::area_fixed_one + phase_y;
         for (uint32_t x = 0; x < width; ++x) {
-            const uint64_t left = uint64_t{x} * wr::area_fixed_one;
+            const uint64_t left = uint64_t{x} * wr::area_fixed_one + phase_x;
             for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel) {
                 uint64_t total = 0;
                 for (uint32_t row = 0; row < scene.height; ++row) {
@@ -298,10 +312,21 @@ Picture slow_area_filter(const Picture& scene, uint32_t scale, uint32_t width, u
 /// @param scale screen pixels per scene pixel, 16.16
 /// @param width picture columns
 /// @param height picture rows
+/// @param phase_x 16.16 screen pixels the picture's columns start into the scene
+/// @param phase_y 16.16 screen pixels the picture's rows start into the scene
 /// @return the picture, rows width pixels apart
-Picture area_filter(const Picture& scene, uint32_t scale, uint32_t width, uint32_t height) {
+Picture area_filter(
+    const Picture& scene,
+    uint32_t scale,
+    uint32_t width,
+    uint32_t height,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
+) {
     wr::AreaPlan plan;
-    OA_CHECK(wr::plan_area_filter(plan, scale, width, height) == wr::AreaError::none);
+    OA_CHECK(
+        wr::plan_area_filter(plan, scale, width, height, phase_x, phase_y) == wr::AreaError::none
+    );
     Picture picture = blank(width, height, width, 0);
     OA_CHECK(wr::area_filter_rgb24(plan, scene.source(), picture.target()) == wr::AreaError::none);
     return picture;
@@ -538,6 +563,175 @@ void test_thin_line_keeps_its_intensity() {
     }
 }
 
+/// Phases of the tests, as fractions of a scale: none, the least, a third,
+/// a half, all but the least, and a whole scene pixel.
+enum class PhaseShare { none, least, third, half, nearly_whole, whole };
+
+/// Returns a phase of a scale.
+///
+/// @param scale screen pixels per scene pixel, 16.16
+/// @param share how much of a scene pixel the phase is
+/// @return the phase, 16.16 screen pixels
+uint32_t phase_of(uint32_t scale, PhaseShare share) {
+    switch (share) {
+    case PhaseShare::none:
+        return 0;
+    case PhaseShare::least:
+        return 1;
+    case PhaseShare::third:
+        return scale / 3U;
+    case PhaseShare::half:
+        return scale / 2U;
+    case PhaseShare::nearly_whole:
+        return scale - 1U;
+    case PhaseShare::whole:
+        return scale;
+    }
+    return 0;
+}
+
+constexpr PhaseShare phase_shares[] = {
+    PhaseShare::none,
+    PhaseShare::least,
+    PhaseShare::third,
+    PhaseShare::half,
+    PhaseShare::nearly_whole,
+    PhaseShare::whole,
+};
+
+/// Checks that a picture started part of a scene pixel into the scene has
+/// weights that sum to one and lie inside the scene its plan names, which
+/// grows by the start, and that each scene pixel the picture covers whole
+/// counts for exactly its length.
+void test_phase_weights_are_exact() {
+    for (uint32_t scale = wr::area_scale_min; scale <= wr::area_scale_max;
+         scale += weights_sweep_step) {
+        for (const PhaseShare share : phase_shares) {
+            const uint32_t phase = phase_of(scale, share);
+            for (const uint32_t extent : {1U, 2U, 7U, 64U}) {
+                wr::AreaPlan plan;
+                OA_CHECK(
+                    wr::plan_area_filter(plan, scale, extent, extent, phase, phase) ==
+                    wr::AreaError::none
+                );
+                OA_CHECK(plan.phase_x() == phase && plan.phase_y() == phase);
+                const uint32_t scene_columns = wr::area_scene_extent(scale, extent, phase);
+                OA_CHECK(
+                    plan.scene_width() == scene_columns && plan.scene_height() == scene_columns
+                );
+                OA_CHECK(plan.column_taps() >= 1 && plan.column_taps() <= wr::area_taps_max);
+                std::vector<uint64_t> received(scene_columns, 0);
+                for (const wr::AreaTap& tap : plan.columns()) {
+                    OA_CHECK(tap.first + plan.column_taps() <= scene_columns);
+                    uint64_t sum = 0;
+                    for (uint32_t entry = 0; entry < plan.column_taps(); ++entry) {
+                        sum += tap.weights[entry];
+                        if (tap.first + entry < scene_columns)
+                            received[tap.first + entry] += tap.weights[entry];
+                    }
+                    OA_CHECK(sum == wr::area_fixed_one);
+                }
+                // Scene pixel i covers [i x scale, (i + 1) x scale), the
+                // picture [phase, extent x 65536 + phase).
+                for (uint32_t column = 0; column < scene_columns; ++column)
+                    if (uint64_t{column} * scale >= phase &&
+                        uint64_t{column + 1U} * scale <=
+                            uint64_t{extent} * wr::area_fixed_one + phase)
+                        OA_CHECK(received[column] == scale);
+            }
+        }
+    }
+}
+
+/// Checks that a picture started part of a scene pixel into the scene gives
+/// the bytes of the straightforward implementation started there.
+void test_phase_matches_slow_implementation() {
+    Random random{seed_slow ^ seed_digest};
+    for (uint32_t scale = wr::area_scale_min; scale <= wr::area_scale_max;
+         scale += slow_sweep_step) {
+        const uint32_t width = 3U + random.next() % 21U;
+        const uint32_t height = 2U + random.next() % 17U;
+        const uint32_t phase_x = random.next() % (scale + 1U);
+        const uint32_t phase_y = random.next() % (scale + 1U);
+        const uint32_t scene_width =
+            wr::area_scene_extent(scale, width, phase_x) + random.next() % 3U;
+        const uint32_t scene_height =
+            wr::area_scene_extent(scale, height, phase_y) + random.next() % 3U;
+        const Picture scene =
+            random_scene(random, scene_width, scene_height, scene_width + random.next() % 5U);
+        const Picture fast = area_filter(scene, scale, width, height, phase_x, phase_y);
+        const Picture slow = slow_area_filter(scene, scale, width, height, phase_x, phase_y);
+        OA_CHECK(fast.rgb == slow.rgb);
+        if (fast.rgb != slow.rgb)
+            std::fprintf(
+                stderr,
+                "differs from the slow pass at scale %u, phase %u, %u\n",
+                scale,
+                phase_x,
+                phase_y
+            );
+    }
+}
+
+/// Checks that a picture started a whole scene pixel into the scene is the
+/// picture started at its edge of the scene without its first column and row.
+void test_whole_pixel_phase_moves_the_scene_on() {
+    Random random{seed_slow ^ seed_reference};
+    constexpr uint32_t width = 29;
+    constexpr uint32_t height = 17;
+    for (const uint32_t scale : digest_scales) {
+        const uint32_t scene_width = wr::area_scene_extent(scale, width, scale);
+        const uint32_t scene_height = wr::area_scene_extent(scale, height, scale);
+        const Picture scene = random_scene(random, scene_width, scene_height, scene_width);
+        Picture moved_on = blank(scene_width - 1U, scene_height - 1U, scene_width - 1U, 0);
+        for (uint32_t y = 0; y + 1U < scene_height; ++y)
+            std::memcpy(
+                moved_on.rgb.data() + std::size_t{y} * moved_on.stride * wr::area_pixel_bytes,
+                scene.rgb.data() +
+                    ((std::size_t{y} + 1U) * scene.stride + 1U) * wr::area_pixel_bytes,
+                std::size_t{moved_on.width} * wr::area_pixel_bytes
+            );
+        OA_CHECK(
+            area_filter(scene, scale, width, height, scale, scale).rgb ==
+            area_filter(moved_on, scale, width, height).rgb
+        );
+    }
+}
+
+/// Checks that a line one scene pixel wide keeps its intensity as the
+/// picture's start moves through a scene pixel in sixteenths, as a view
+/// drawn between map pixels moves it: each picture row it crosses sums to
+/// the level times the scale, give or take one level for the rounding of
+/// the at most two pixels it touches.
+void test_thin_line_keeps_its_intensity_between_pixels() {
+    constexpr uint32_t width = 48;
+    constexpr uint32_t height = 6;
+    constexpr uint32_t sixteenths = 16;
+    constexpr uint32_t line_column = 20;
+    constexpr uint8_t level = 255;
+    constexpr double tolerance = 1.0 + 1.0 / 128.0;
+    for (const uint32_t scale : line_scales) {
+        const double ideal = level * static_cast<double>(scale) / wr::area_fixed_one;
+        const uint32_t scene_width = wr::area_scene_extent(scale, width, scale);
+        const uint32_t scene_height = wr::area_scene_extent(scale, height, scale);
+        Picture down = blank(scene_width, scene_height, scene_width, 0);
+        for (uint32_t row = 0; row < scene_height; ++row)
+            for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel)
+                down.rgb[(row * scene_width + line_column) * wr::area_pixel_bytes + channel] =
+                    level;
+        for (uint32_t step = 0; step <= sixteenths; ++step) {
+            const uint32_t phase = scale * step / sixteenths;
+            const Picture picture = area_filter(down, scale, width, height, phase, 0);
+            for (uint32_t row = 0; row < height; ++row) {
+                uint32_t sum = 0;
+                for (uint32_t column = 0; column < width; ++column)
+                    sum += picture.at(column, row, 0);
+                OA_CHECK(std::fabs(sum - ideal) <= tolerance);
+            }
+        }
+    }
+}
+
 /// Returns whether rows [begin, end) of two pictures of one size hold the same bytes, padding included.
 ///
 /// @param first one picture
@@ -688,6 +882,21 @@ void test_malformed_plans() {
     OA_CHECK(wr::area_scene_extent(scale_three_fifths, 10) == 17);
     OA_CHECK(wr::area_scene_extent(wr::area_scale_min - 1U, 10) == 0);
     OA_CHECK(wr::area_scene_extent(scale_half, wr::area_picture_edge_limit + 1U) == 0);
+    // A start more than one scene pixel into the scene is refused.
+    OA_CHECK(
+        wr::plan_area_filter(plan, scale_three_fifths, 10, 10, scale_three_fifths + 1U, 0) ==
+        wr::AreaError::phase_out_of_range
+    );
+    OA_CHECK(plan.scale() == 0 && plan.columns().empty() && plan.phase_x() == 0);
+    OA_CHECK(
+        wr::plan_area_filter(plan, scale_three_fifths, 10, 10, 0, scale_three_fifths + 1U) ==
+        wr::AreaError::phase_out_of_range
+    );
+    OA_CHECK(wr::area_scene_extent(scale_three_fifths, 10, scale_three_fifths + 1U) == 0);
+    // One scene pixel in reads one scene pixel more.
+    OA_CHECK(wr::area_scene_extent(scale_half, 10, scale_half) == 21);
+    OA_CHECK(wr::area_scene_extent(scale_half, 10, 1) == 21);
+    OA_CHECK(wr::area_scene_extent(scale_half, 10, 0) == 20);
 }
 
 /// Checks that rebuilding a plan at a size no larger, at another scale or
@@ -1067,6 +1276,7 @@ void test_error_texts() {
         wr::AreaError::stride_out_of_range,
         wr::AreaError::missing_pixels,
         wr::AreaError::rows_out_of_range,
+        wr::AreaError::phase_out_of_range,
     };
     OA_CHECK(std::strcmp(wr::area_error_text(wr::AreaError::none), "none") == 0);
     for (std::size_t first = 0; first < std::size(errors); ++first) {
@@ -1268,6 +1478,10 @@ int main() {
     test_within_reference();
     test_half_and_whole_scales();
     test_thin_line_keeps_its_intensity();
+    test_phase_weights_are_exact();
+    test_phase_matches_slow_implementation();
+    test_whole_pixel_phase_moves_the_scene_on();
+    test_thin_line_keeps_its_intensity_between_pixels();
     test_bands_and_pools_agree();
     test_band_writes_only_its_rows();
     test_malformed_plans();

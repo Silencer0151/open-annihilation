@@ -4457,6 +4457,9 @@ class Runtime final : public menu::Host,
         uint32_t texture_limit{}; ///< the renderer host's texture limit in texels; 0 for none
         WorldScaling frame{};     ///< how the last match frame drew the battlefield
         float frame_alpha{1.0F};  ///< the presentation fraction the last match frame drew
+        /// How far past the camera's map pixel the last match frame drew
+        /// the view; none unless it drew the view between map pixels.
+        oa::present::world_renderer::ViewOffset frame_offset{};
         /// The last match frame presented had its scene magnified by the card.
         bool magnified{};
         /// The area pass's weights, kept while the zoom and the battlefield do not change.
@@ -4860,8 +4863,13 @@ class Runtime final : public menu::Host,
     ///
     /// Over the battlefield it is the game view (Game.battlefield_rect): map
     /// pixels from the view's corner, which sits at (128, 32) as on the
-    /// unzoomed 640x480 screen, however large the window or the zoom; elsewhere
-    /// it is the 640x480 HUD space (display_layout::canvas_to_source).
+    /// unzoomed 640x480 screen, however large the window or the zoom, counted
+    /// from the view as it is drawn, between map pixels where the accelerated
+    /// tier draws it so (view_offset), so that the pointer picks what is drawn
+    /// under it; the offset never carries a point past the game view's last
+    /// map pixel, so the pointer finds the game view up to the battlefield's
+    /// edge as it does on the camera's map pixel. Elsewhere it is the
+    /// 640x480 HUD space (display_layout::canvas_to_source).
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -6062,18 +6070,61 @@ class Runtime final : public menu::Host,
     /// back no scene, overlay or prescale target is made or destroyed and
     /// none is drawn at zoom 2. Pictures of one moment at zoom 0.5, 1 and 2.5
     /// in both tiers go to the report directory as native-render-tiers-*.png.
-    /// Switched off again, every frame equals the standard tier's. With
-    /// --native-density, whose window opened at the display's own density,
-    /// the main menu and the loading screen are checked as above and then
-    /// the density case alone: the match is laid out in window points, the
-    /// read-back has the display's size, at zoom 1 and a whole-number
-    /// density it equals compose_match_frame enlarged by nearest
-    /// replication in the battlefield, and in the HUD too at a whole-number
-    /// chrome scale, and a pointer at a unit's place picks that unit. Throws
-    /// std::runtime_error on a failure.
+    /// Smooth panning follows (check_smooth_panning). Switched off again,
+    /// every frame equals the standard tier's. With --native-density, whose
+    /// window opened at the display's own density, the main menu and the
+    /// loading screen are checked as above and then the density case alone:
+    /// the match is laid out in window points, the read-back has the
+    /// display's size, at zoom 1 and a whole-number density it equals
+    /// compose_match_frame enlarged by nearest replication in the
+    /// battlefield, and in the HUD too at a whole-number chrome scale, and a
+    /// pointer at a unit's place picks that unit. Throws std::runtime_error
+    /// on a failure.
     ///
     /// @return 0 when it passed; 77 when it skipped
     [[nodiscard]] int check_render_tiers();
+
+    /// Checks the view the accelerated tier draws between map pixels, for
+    /// --check-render-tiers, over its match and at its rung, with the tier
+    /// switched on.
+    ///
+    /// A slow scroll, a fraction of a screen pixel a frame, at zoom 2.5,
+    /// where the card magnifies the scene, and at 0.5, where the area pass
+    /// reduces it: each frame draws the view at the scroll's exact place,
+    /// toward the map's end, or never back and never further, toward its
+    /// start; the battlefield read back moves by at most one screen pixel
+    /// from one frame to the next, at 0.5 by the same amount every frame to
+    /// within a quarter of a pixel as measured, and by the scroll's travel
+    /// over the run; and the camera steps whole map pixels as it always has.
+    /// At 2.5 the same scroll in the standard tier jumps whole map pixels,
+    /// two or three screen pixels at a time; and a second axis joining the
+    /// scroll two frames in, down the map, moves at most a screen pixel a
+    /// frame, follows the scroll's exact place from its camera's first
+    /// step, and steps its camera with the first axis's. At zoom 4 a view
+    /// three quarters of a map pixel past the camera is drawn three screen
+    /// pixels before the view on the camera's map pixel, and the pointer
+    /// picks the unit drawn under it there: the column where the pointer
+    /// first finds the unit moves by as much; the pointer finds the game
+    /// view over as many of the battlefield's columns and rows as on the
+    /// camera's map pixel; and the game's screen and the canvas still map
+    /// back to each other, as mouse-look needs. At zoom 4, with the view
+    /// between map pixels, the wheel at the nearest zoom and the menu's ease
+    /// about the centre to the zoom it is at move the point drawn under
+    /// their anchor by at most a screen pixel, the camera staying where its
+    /// rounding about the anchor puts it. A map with no room to scroll at a
+    /// zoom skips that zoom's scroll, saying so. Throws std::runtime_error
+    /// on a failure.
+    ///
+    /// @param switch_tier switches the tier on (true) or off as the flags would
+    /// @param at_zoom sets a zoom and centres the camera on the check's unit
+    /// @param unit the unit the camera centres on, which the pointer picks;
+    ///        once it has left the match, the pointer picks the local
+    ///        player's first unit still in it, the camera centred on that
+    void check_smooth_panning(
+        const std::function<void(bool)>& switch_tier,
+        const std::function<void(float)>& at_zoom,
+        uint16_t unit
+    );
 
     /// Checks the match presented through SDL layers: every presented frame must equal
     /// compose_match_frame outside the software cursor.
@@ -7285,8 +7336,70 @@ class Runtime final : public menu::Host,
     /// each frame instead of a whole step each clock unit. Zoom keeps the
     /// on-screen rate constant; the carried fraction keeps the world rate
     /// exact. A --frame-rate run's held scroll (frame_run_scroll_) counts as
-    /// an arrow key.
+    /// an arrow key. The scroll itself is scroll_match_view's.
     void pan_match_camera();
+
+    /// Scrolls the camera one frame's distance: the map pixels the frame
+    /// moves are the screen pixels over the zoom, with the fraction carried
+    /// to the next frame (scroll_zoom_carry_), so the camera steps whole map
+    /// pixels at the scroll's exact rate; a step stops tracking a unit and
+    /// drops the zoom's anchor. While the accelerated tier draws the view
+    /// between map pixels (view_offset), the view follows the scroll's exact
+    /// travel within the camera's map pixel (scrolled_view_offset), unless a
+    /// zoom eased about its anchor places it; both axes step on the one
+    /// carry, and an axis joining a scroll already under way catches up
+    /// with it over the frames before its camera's first step. The camera,
+    /// and so Game's, moves exactly as in the standard tier.
+    ///
+    /// @param way_x -1 left, 1 right, 0 neither; held to that range
+    /// @param way_z -1 up, 1 down, 0 neither; held to that range
+    /// @param step screen pixels the frame scrolls, at or above 0
+    void scroll_match_view(int32_t way_x, int32_t way_z, double step);
+
+    /// Returns the camera as a frame draws it: held on the map, at most the
+    /// map's pixels less those the battlefield shows.
+    ///
+    /// @return the camera's column and row in map pixels; the camera as it
+    ///         is without a map
+    [[nodiscard]] std::array<int32_t, 2> view_camera() const;
+
+    /// Returns the most a view drawn between map pixels may lie past a
+    /// camera (most_view_offset), before the camera's farthest place at the
+    /// live zoom and layout.
+    ///
+    /// @param camera_x the camera's column, on the map
+    /// @param camera_z the camera's row, on the map
+    /// @return map pixels along each axis, from 0 to 1; none without a map
+    [[nodiscard]] oa::present::world_renderer::ViewOffset
+    most_view_offsets(int32_t camera_x, int32_t camera_z) const;
+
+    /// Returns how far past the camera's map pixel the view is drawn, which
+    /// hover, picking, orders' map pixels and the painters after the fog
+    /// take, so that what the pointer is over is what is drawn under it.
+    ///
+    /// The view lies between map pixels only while the accelerated tier's
+    /// match frames draw it so (smooth_view_) and the camera is the one the
+    /// offset lies past; otherwise, and always in the standard tier, it is
+    /// drawn on the camera's map pixel and the offset is none.
+    ///
+    /// @return map pixels along each axis, from 0 to 1
+    [[nodiscard]] oa::present::world_renderer::ViewOffset view_offset() const;
+
+    /// Settles how far between map pixels a match frame draws the view: an
+    /// accelerated frame whose card magnifies the scene or whose area pass
+    /// reduces it keeps the offset the scroll or the zoom left, past the
+    /// camera it lies past, held within what the map allows; a new camera
+    /// starts it at none. Every other frame, the standard tier's, the
+    /// director's and those at a method of neither, draws the view on the
+    /// camera's map pixel and forgets the offset. A frame drawn for a reader
+    /// that keeps a picture leaves it as the frame before left it.
+    ///
+    /// @param camera_x the frame's camera column, held on the map
+    /// @param camera_y the frame's camera row, held on the map
+    /// @param between the frame may draw the view between map pixels
+    /// @return the offset the frame draws the view at
+    oa::present::world_renderer::ViewOffset
+    settle_view_offset(uint32_t camera_x, uint32_t camera_y, bool between);
 
     /// Sends the primary selected unit to resume building or repair a unit.
     ///
@@ -8243,7 +8356,7 @@ class Runtime final : public menu::Host,
     /// @param index missing start position index
     void report_missing_start_position(int32_t index) override;
 
-    /// Moves the local camera.
+    /// Moves the local camera, whose view is then drawn on its own map pixel.
     ///
     /// @param x camera left edge, whole world units
     /// @param z camera top edge, whole world units
@@ -8939,6 +9052,27 @@ class Runtime final : public menu::Host,
     bool zoom_clock_valid_ = false;
     uint64_t scroll_clock_{}; ///< the frame time the camera last scrolled at; 0 before
     double scroll_zoom_carry_ = 0.0;
+    /// The map pixels the zoom's anchor lies past its whole map pixel
+    /// (zoom_anchor_map_x_, zoom_anchor_map_y_), the one under the anchor
+    /// on the camera's map pixel: a view drawn between map pixels keeps the
+    /// exact point under the anchor; from -0.5 to 1.5, its offset among it.
+    double zoom_anchor_fraction_x_{};
+    double zoom_anchor_fraction_y_{};
+
+    /// The view the accelerated tier draws between map pixels as it scrolls
+    /// and zooms, while the camera and Game's stay on whole map pixels.
+    /// Presentation only: never in Game, saves, digests or the wire.
+    struct SmoothView {
+        /// The last match frame drew the view between map pixels
+        /// (settle_view_offset), so the scroll and the zoom move the offset.
+        bool on{};
+        int32_t camera_x{}; ///< the camera column the offset lies past
+        int32_t camera_z{}; ///< the camera row the offset lies past
+        /// Map pixels past that camera's map pixel, each from 0 to 1.
+        oa::present::world_renderer::ViewOffset offset{};
+    };
+
+    SmoothView smooth_view_{};
 
     // The drag box kept while the left button is held on the
     // battlefield (Game.drag_start and drag_end): whole map pixels x,

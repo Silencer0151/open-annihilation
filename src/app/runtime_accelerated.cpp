@@ -56,20 +56,6 @@ constexpr uint64_t bytes_per_texel = 4;
         .count();
 }
 
-/// Returns the scene corner a magnified battlefield shows at a zoom: its map
-/// pixels rounded up, within the scene.
-///
-/// @param battlefield the battlefield's columns or rows
-/// @param zoom screen pixels per map pixel, above 1
-/// @param scene the scene's columns or rows
-/// @return the corner's columns or rows
-[[nodiscard]] uint32_t magnified_corner(uint32_t battlefield, float zoom, uint32_t scene) {
-    const auto shown = static_cast<uint32_t>(
-        std::ceil(static_cast<double>(battlefield) / static_cast<double>(zoom))
-    );
-    return std::min(shown, scene);
-}
-
 } // namespace
 
 void Runtime::switch_accelerated_presentation(bool on, const policy::LadderState& rung) {
@@ -181,10 +167,18 @@ void Runtime::free_accelerated_scene_buffers() noexcept {
 void Runtime::area_filter_scene(const wr::Surface& scene) {
     const uint32_t width = match_world_cpu_.width;
     const uint32_t height = match_world_cpu_.height;
-    const uint32_t scale = area_scale(match_zoom(), accelerated_.frame.draw_scale);
+    const float draw_scale = accelerated_.frame.draw_scale;
+    const uint32_t scale = area_scale(match_zoom(), draw_scale);
+    // A view drawn between map pixels starts the picture that far into the
+    // scene; its weights are built again whenever that moves.
+    const auto& offset = accelerated_.frame_offset;
+    const uint32_t phase_x = area_phase(offset.x, draw_scale, scale);
+    const uint32_t phase_y = area_phase(offset.y, draw_scale, scale);
     auto& plan = accelerated_.area_plan;
-    if (plan.scale() != scale || plan.picture_width() != width || plan.picture_height() != height)
-        if (wr::plan_area_filter(plan, scale, width, height) != wr::AreaError::none)
+    if (plan.scale() != scale || plan.picture_width() != width || plan.picture_height() != height ||
+        plan.phase_x() != phase_x || plan.phase_y() != phase_y)
+        if (wr::plan_area_filter(plan, scale, width, height, phase_x, phase_y) !=
+            wr::AreaError::none)
             throw std::runtime_error("cannot weigh the area pass of the battlefield's scene");
     const wr::RgbSource source{scene.rgb.data(), scene.width, scene.height, scene.width};
     const wr::RgbTarget picture{match_world_cpu_.rgb.data(), width, height, width};
@@ -314,8 +308,8 @@ void Runtime::ensure_accelerated_match_textures() {
 
     const auto corner_at = [&](float zoom, double scale) {
         Corner corner;
-        corner.width = std::min(magnified_corner(bf_w, zoom, scene_w) + 1, scene_w);
-        corner.height = std::min(magnified_corner(bf_h, zoom, scene_h) + 1, scene_h);
+        corner.width = std::min(magnified_span(bf_w, zoom, scene_w, 0.0).corner + 1, scene_w);
+        corner.height = std::min(magnified_span(bf_h, zoom, scene_h, 0.0).corner + 1, scene_h);
         corner.factor = accelerated_prescale_factor(
             scale, corner.width, corner.height, state.hud_prescale.pixels()
         );
@@ -504,21 +498,28 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         const float zoom = match_zoom();
         const uint32_t scene_w = match_scene_cpu_.width;
         const uint32_t scene_h = match_scene_cpu_.height;
-        const uint32_t width = magnified_corner(bf_w, zoom, scene_w);
-        const uint32_t height = magnified_corner(bf_h, zoom, scene_h);
-        const SDL_Rect destination{
-            battlefield.x,
-            battlefield.y,
-            static_cast<int>(std::lround(static_cast<double>(width) * zoom)),
-            static_cast<int>(std::lround(static_cast<double>(height) * zoom))
+        // A view drawn between map pixels shows one more column and row,
+        // and lands its offset before the battlefield's edge, which the clip
+        // cuts off. The card's filter is the one a view on its camera's map
+        // pixel has, so the picture keeps its filter as the view moves.
+        const auto& offset = state.frame_offset;
+        const auto across = magnified_span(bf_w, zoom, scene_w, offset.x);
+        const auto down = magnified_span(bf_h, zoom, scene_h, offset.y);
+        const uint32_t whole_width = magnified_span(bf_w, zoom, scene_w, 0.0).corner;
+        const uint32_t whole_height = magnified_span(bf_h, zoom, scene_h, 0.0).corner;
+        const SDL_FRect destination{
+            static_cast<float>(battlefield.x + across.start),
+            static_cast<float>(battlefield.y + down.start),
+            static_cast<float>(across.extent),
+            static_cast<float>(down.extent)
         };
         // The magnified scene's filter, chosen on its scale at the display.
         const double scene_scale = world_display_scale(frame, zoom, density);
         const CardScale world_scale = accelerated_card_scale(
             policy::world_filter(state.rung, scene_scale),
             scene_scale,
-            std::min(width + 1, scene_w),
-            std::min(height + 1, scene_h),
+            std::min(whole_width + 1, scene_w),
+            std::min(whole_height + 1, scene_h),
             state.world_prescale
         );
         note_card_scale_drawn(world_scale);
@@ -532,8 +533,8 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             state.scene,
             scene_w,
             scene_h,
-            width,
-            height,
+            across.corner,
+            down.corner,
             destination,
             battlefield,
             world_scale,

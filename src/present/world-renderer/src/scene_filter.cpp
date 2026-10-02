@@ -52,8 +52,11 @@ static_assert(
 static_assert(
     (uint64_t{area_fixed_one} * 255U + row_average_half) >> row_average_shift <= UINT16_MAX
 );
-// The footprint bounds of every picture column fit 32 bits.
-static_assert(uint64_t{area_picture_edge_limit} * area_fixed_one <= UINT32_MAX);
+// The footprint bounds of every picture column, a phase of up to one scene
+// pixel added, fit 32 bits.
+static_assert(
+    (uint64_t{area_picture_edge_limit} + 1U) * area_fixed_one + area_scale_max <= UINT32_MAX
+);
 // Every byte offset into a scene of the largest size fits 31 bits.
 static_assert(
     uint64_t{area_picture_edge_limit} * 2U * area_stride_limit * area_pixel_bytes <= INT32_MAX
@@ -69,16 +72,17 @@ struct Footprint {
 
 /// Returns the footprint of picture column (or row) `index`.
 ///
-/// Positions are counted in 16.16 screen units: the picture pixel covers
-/// [index x 65536, (index + 1) x 65536) and scene pixel i covers
-/// [i x scale, (i + 1) x scale).
+/// Positions are counted in 16.16 screen units from the scene's edge: the
+/// picture pixel covers [index x 65536 + phase, (index + 1) x 65536 + phase)
+/// and scene pixel i covers [i x scale, (i + 1) x scale).
 ///
 /// @param scale screen pixels per scene pixel, 16.16, from area_scale_min to area_scale_max
 /// @param index picture column or row, below area_picture_edge_limit
+/// @param phase 16.16 screen units the picture starts into the scene, at most the scale
 /// @return the footprint's bounds and the scene pixels it covers
-Footprint footprint_of(uint32_t scale, uint32_t index) noexcept {
+Footprint footprint_of(uint32_t scale, uint32_t index, uint32_t phase) noexcept {
     Footprint footprint;
-    footprint.start = index * area_fixed_one;
+    footprint.start = index * area_fixed_one + phase;
     footprint.end = footprint.start + area_fixed_one;
     footprint.first = footprint.start / scale;
     footprint.last = (footprint.end - 1U) / scale;
@@ -89,11 +93,12 @@ Footprint footprint_of(uint32_t scale, uint32_t index) noexcept {
 ///
 /// @param scale screen pixels per scene pixel, 16.16, from area_scale_min to area_scale_max
 /// @param extent picture columns (or rows), 1 to area_picture_edge_limit
+/// @param phase 16.16 screen units the picture starts into the scene, at most the scale
 /// @return from 1 to area_taps_max
-uint32_t taps_of_axis(uint32_t scale, uint32_t extent) noexcept {
+uint32_t taps_of_axis(uint32_t scale, uint32_t extent, uint32_t phase) noexcept {
     uint32_t taps = 1;
     for (uint32_t index = 0; index < extent; ++index) {
-        const Footprint footprint = footprint_of(scale, index);
+        const Footprint footprint = footprint_of(scale, index, phase);
         taps = std::max(taps, footprint.last - footprint.first + 1U);
     }
     return taps;
@@ -104,12 +109,15 @@ uint32_t taps_of_axis(uint32_t scale, uint32_t extent) noexcept {
 /// @param[out] axis one tap per picture column (or row)
 /// @param scale screen pixels per scene pixel, 16.16, from area_scale_min to area_scale_max
 /// @param extent picture columns (or rows), 1 to area_picture_edge_limit
+/// @param phase 16.16 screen units the picture starts into the scene, at most the scale
 /// @param taps entries of every tap, from taps_of_axis
-void fill_axis(std::vector<AreaTap>& axis, uint32_t scale, uint32_t extent, uint32_t taps) {
-    const uint32_t scene_extent = area_scene_extent(scale, extent);
+void fill_axis(
+    std::vector<AreaTap>& axis, uint32_t scale, uint32_t extent, uint32_t phase, uint32_t taps
+) {
+    const uint32_t scene_extent = area_scene_extent(scale, extent, phase);
     axis.resize(extent);
     for (uint32_t index = 0; index < extent; ++index) {
-        const Footprint footprint = footprint_of(scale, index);
+        const Footprint footprint = footprint_of(scale, index, phase);
         AreaTap tap;
         // A footprint whose entries would run past the scene starts earlier,
         // with zero weights in front: never further back than its uncovered
@@ -355,23 +363,33 @@ const char* area_error_text(AreaError error) noexcept {
         return "the scene or the picture has no storage";
     case AreaError::rows_out_of_range:
         return "the band's rows are not within the picture";
+    case AreaError::phase_out_of_range:
+        return "the phase is more than one scene pixel";
     }
     return "unknown area pass error";
 }
 
-uint32_t area_scene_extent(uint32_t scale, uint32_t picture_extent) noexcept {
+uint32_t area_scene_extent(uint32_t scale, uint32_t picture_extent, uint32_t phase) noexcept {
     if (scale < area_scale_min || scale > area_scale_max ||
-        picture_extent > area_picture_edge_limit)
+        picture_extent > area_picture_edge_limit || phase > scale)
         return 0;
-    const uint32_t span = picture_extent * area_fixed_one;
+    const uint32_t span = picture_extent * area_fixed_one + phase;
     return span / scale + (span % scale != 0 ? 1U : 0U);
 }
 
-AreaError
-plan_area_filter(AreaPlan& plan, uint32_t scale, uint32_t picture_width, uint32_t picture_height) {
+AreaError plan_area_filter(
+    AreaPlan& plan,
+    uint32_t scale,
+    uint32_t picture_width,
+    uint32_t picture_height,
+    uint32_t phase_x,
+    uint32_t phase_y
+) {
     plan.scale_ = 0;
     plan.picture_width_ = 0;
     plan.picture_height_ = 0;
+    plan.phase_x_ = 0;
+    plan.phase_y_ = 0;
     plan.scene_width_ = 0;
     plan.scene_height_ = 0;
     plan.column_taps_ = 0;
@@ -384,14 +402,18 @@ plan_area_filter(AreaPlan& plan, uint32_t scale, uint32_t picture_width, uint32_
         return AreaError::empty_picture;
     if (picture_width > area_picture_edge_limit || picture_height > area_picture_edge_limit)
         return AreaError::picture_too_large;
-    const uint32_t column_taps = taps_of_axis(scale, picture_width);
-    const uint32_t row_taps = taps_of_axis(scale, picture_height);
-    fill_axis(plan.columns_, scale, picture_width, column_taps);
-    fill_axis(plan.rows_, scale, picture_height, row_taps);
+    if (phase_x > scale || phase_y > scale)
+        return AreaError::phase_out_of_range;
+    const uint32_t column_taps = taps_of_axis(scale, picture_width, phase_x);
+    const uint32_t row_taps = taps_of_axis(scale, picture_height, phase_y);
+    fill_axis(plan.columns_, scale, picture_width, phase_x, column_taps);
+    fill_axis(plan.rows_, scale, picture_height, phase_y, row_taps);
     plan.picture_width_ = picture_width;
     plan.picture_height_ = picture_height;
-    plan.scene_width_ = area_scene_extent(scale, picture_width);
-    plan.scene_height_ = area_scene_extent(scale, picture_height);
+    plan.phase_x_ = phase_x;
+    plan.phase_y_ = phase_y;
+    plan.scene_width_ = area_scene_extent(scale, picture_width, phase_x);
+    plan.scene_height_ = area_scene_extent(scale, picture_height, phase_y);
     plan.column_taps_ = column_taps;
     plan.row_taps_ = row_taps;
     plan.scale_ = scale;

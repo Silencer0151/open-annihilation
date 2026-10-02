@@ -9,7 +9,15 @@
 // The accelerated tier's draw scale within each scene budget, its method at
 // each zoom, the area pass's scale and the scene it reads, the largest
 // magnified scene, and the scale the card draws the battlefield at on a
-// window at native density.
+// window at native density. The view that tier draws between map pixels:
+// the area pass's start for it, the magnified corner, which on the camera's
+// map pixel is the one drawn before and between map pixels the same picture
+// moved; how far the map lets the view lie past the camera; and the view a
+// scroll moves, which toward the map's end follows the scroll's exact place
+// and toward its start never jumps or turns back, while the camera steps
+// whole map pixels, which on an axis joining a scroll under way catches up
+// with the carry the camera steps on by that axis's first step, and which
+// held against the map's edge stays still.
 #include "oa/app/world_scaling.hpp"
 
 #include "oa/present/world_renderer.hpp"
@@ -19,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -273,6 +282,18 @@ void the_accelerated_method_follows_the_zoom() {
                         wr::area_scene_extent(scale, static_cast<uint32_t>(battlefield.height)) <=
                         static_cast<uint32_t>(scaling.scene_height)
                     );
+                    // And for a view a whole map pixel past the camera's.
+                    const uint32_t phase = oa::app::area_phase(1.0, scaling.draw_scale, scale);
+                    OA_CHECK(
+                        wr::area_scene_extent(
+                            scale, static_cast<uint32_t>(battlefield.width), phase
+                        ) <= static_cast<uint32_t>(scaling.scene_width)
+                    );
+                    OA_CHECK(
+                        wr::area_scene_extent(
+                            scale, static_cast<uint32_t>(battlefield.height), phase
+                        ) <= static_cast<uint32_t>(scaling.scene_height)
+                    );
                 }
 }
 
@@ -357,6 +378,294 @@ void the_display_scale_is_the_zoom_times_the_density() {
     OA_CHECK(filter(1.0F, 1.5) == policy::ScaleFilter::pixelart);
 }
 
+void the_area_phase_is_the_offset_in_scene_pixels() {
+    namespace wr = oa::present::world_renderer;
+    constexpr uint32_t half = wr::area_fixed_one / 2;
+    OA_CHECK(oa::app::area_phase(0.0, 1.0F, half) == 0);
+    OA_CHECK(oa::app::area_phase(0.5, 1.0F, half) == half / 2);
+    OA_CHECK(oa::app::area_phase(1.0, 1.0F, half) == half);
+    // A quarter of a map pixel at a draw scale of 0.8 is a fifth of a scene
+    // pixel: 0.2 x 39322 = 7864.4, rounded.
+    OA_CHECK(oa::app::area_phase(0.25, 0.8F, 39322) == 7864);
+    // Never more than one scene pixel, nor below none.
+    OA_CHECK(oa::app::area_phase(1.0, 1.0F, 39322) == 39322);
+    OA_CHECK(oa::app::area_phase(-0.25, 1.0F, half) == 0);
+    OA_CHECK(oa::app::area_phase(0.5, 0.0F, half) == 0);
+}
+
+void a_view_on_the_camera_pixel_draws_the_corner_it_always_has() {
+    for (const auto& battlefield : battlefields) {
+        const auto width = static_cast<uint32_t>(battlefield.width);
+        const auto largest =
+            oa::app::largest_magnified_scene(battlefield.width, battlefield.height);
+        for (int step = 1; step <= zoom_steps; ++step) {
+            const float zoom = 1.0F + (highest_zoom - 1.0F) * static_cast<float>(step) /
+                                          static_cast<float>(zoom_steps);
+            const auto scene = static_cast<uint32_t>(largest.width);
+            const auto span = oa::app::magnified_span(width, zoom, scene, 0.0);
+            const auto corner = std::min(
+                static_cast<uint32_t>(std::ceil(static_cast<double>(width) / zoom)), scene
+            );
+            OA_CHECK(span.corner == corner);
+            OA_CHECK(span.start == 0.0);
+            OA_CHECK(
+                span.extent == static_cast<double>(std::lround(static_cast<double>(corner) * zoom))
+            );
+        }
+    }
+}
+
+void a_view_between_map_pixels_is_the_same_picture_moved() {
+    for (const auto& battlefield : battlefields) {
+        const auto width = static_cast<uint32_t>(battlefield.width);
+        for (int step = 1; step <= zoom_steps; ++step) {
+            const float zoom = 1.0F + (highest_zoom - 1.0F) * static_cast<float>(step) /
+                                          static_cast<float>(zoom_steps);
+            // The scene the magnified frame draws at the zoom.
+            const auto scene = static_cast<uint32_t>(
+                oa::app::accelerated_world_scaling(
+                    zoom, battlefield.width, battlefield.height, SceneBudget::full, true
+                )
+                    .scene_width
+            );
+            const auto whole = oa::app::magnified_span(width, zoom, scene, 0.0);
+            for (const double offset : {0.001, 0.25, 0.5, 0.999, 1.0}) {
+                const auto span = oa::app::magnified_span(width, zoom, scene, offset);
+                // One more scene column, within the scene, at the same
+                // screen pixels per scene pixel, landing the offset before
+                // the edge and still covering the battlefield.
+                const double scale = whole.extent / whole.corner;
+                OA_CHECK(span.corner == whole.corner + 1U && span.corner < scene);
+                OA_CHECK(std::fabs(span.extent / span.corner - scale) < 1.0e-9);
+                OA_CHECK(std::fabs(span.start + offset * scale) < 1.0e-9);
+                // That scale is the zoom, to half a screen pixel over the corner.
+                OA_CHECK(std::fabs(scale - zoom) * whole.corner <= 0.5 + 1.0e-9);
+                OA_CHECK(span.start + span.extent >= static_cast<double>(width) - 1.0e-9);
+            }
+        }
+    }
+}
+
+void the_map_bounds_how_far_the_view_lies_past_the_camera() {
+    // Far from the camera's farthest place, a whole map pixel.
+    OA_CHECK(oa::app::most_view_offset(0, 524) == 1.0);
+    OA_CHECK(oa::app::most_view_offset(523, 524) == 1.0);
+    // At it, none; past it, none.
+    OA_CHECK(oa::app::most_view_offset(524, 524) == 0.0);
+    OA_CHECK(oa::app::most_view_offset(600, 524) == 0.0);
+}
+
+void a_view_found_from_its_exact_place_lies_on_or_past_its_camera() {
+    OA_CHECK(std::fabs(oa::app::view_offset_at(10.3, 10, 1.0) - 0.3) < 1.0e-9);
+    OA_CHECK(oa::app::view_offset_at(9.7, 10, 1.0) == 0.0);
+    OA_CHECK(oa::app::view_offset_at(10.9, 10, 0.4) == 0.4);
+    OA_CHECK(oa::app::view_offset_at(12.0, 10, 1.0) == 1.0);
+}
+
+/// A scroll as the game moves it, each frame: the camera steps the whole
+/// map pixels its carry holds, held on the map, and the view follows within
+/// the camera's map pixel.
+struct Scroll {
+    int32_t map{};      ///< the map's pixels along the axis
+    double visible{};   ///< map pixels the battlefield shows along it
+    int32_t camera{};   ///< the camera, on the map
+    double offset{};    ///< map pixels the view lies past it
+    double carry{};     ///< the scroll's fraction of a map pixel not yet stepped
+    int32_t steps{};    ///< whole map pixels the camera stepped in all
+    double travelled{}; ///< map pixels the scroll's exact travel adds up to
+
+    /// Returns the camera's farthest place.
+    ///
+    /// @return the map's pixels less those the battlefield shows, rounded
+    [[nodiscard]] int32_t farthest() const {
+        return std::max(0, map - static_cast<int32_t>(std::lround(visible)));
+    }
+
+    /// Scrolls one frame.
+    ///
+    /// @param way 1 toward the map's end, -1 toward its start
+    /// @param travel map pixels the frame scrolls
+    void frame(int32_t way, double travel) {
+        const int32_t before = camera;
+        const double carried = carry;
+        carry += travel;
+        const auto move = static_cast<int32_t>(std::floor(carry));
+        carry -= move;
+        camera = std::clamp(camera + way * move, 0, farthest());
+        steps += way * move;
+        travelled += way * travel;
+        offset = oa::app::scrolled_view_offset(
+            offset,
+            way * travel,
+            carried,
+            camera - before,
+            oa::app::most_view_offset(camera, farthest())
+        );
+    }
+
+    /// Returns where the view is drawn.
+    ///
+    /// @return the camera's map pixel and the offset
+    [[nodiscard]] double view() const { return camera + offset; }
+};
+
+void a_scroll_toward_the_end_follows_its_exact_place() {
+    for (const double travel : {0.05, 0.23, 0.4, 0.5, 0.77, 1.0, 1.6, 2.3}) {
+        Scroll scroll{4096, 500.4, 1000};
+        for (int frame = 0; frame < 400; ++frame) {
+            scroll.frame(1, travel);
+            // The camera steps whole map pixels at the scroll's rate, as
+            // it always has; the view is at the scroll's exact place.
+            OA_CHECK(scroll.camera == 1000 + scroll.steps);
+            OA_CHECK(std::fabs(scroll.view() - (1000.0 + scroll.travelled)) < 1.0e-6);
+        }
+    }
+}
+
+void a_scroll_toward_the_start_never_jumps_or_turns_back() {
+    for (const double travel : {0.05, 0.23, 0.31, 0.5, 0.77, 1.0, 1.6, 2.3}) {
+        Scroll scroll{4096, 500.4, 3000};
+        double view = scroll.view();
+        for (int frame = 0; frame < 400; ++frame) {
+            scroll.frame(-1, travel);
+            const double moved = view - scroll.view();
+            // It moves toward the start by at most the frame's travel, never
+            // back, and lags the scroll's exact place by at most a map pixel.
+            OA_CHECK(moved >= -1.0e-9 && moved <= travel + 1.0e-9);
+            OA_CHECK(std::fabs(scroll.view() - (3000.0 + scroll.travelled)) <= 1.0 + 1.0e-9);
+            OA_CHECK(scroll.camera == 3000 + scroll.steps);
+            view = scroll.view();
+        }
+    }
+}
+
+/// Returns the frames a scroll takes to carry a whole map pixel, the frame
+/// it does so among them.
+///
+/// @param carry the fraction of a map pixel carried before the first frame
+/// @param travel map pixels each frame scrolls, above 0
+/// @return frames, at least 1
+[[nodiscard]] int frames_to_step(double carry, double travel) {
+    int frames = 1;
+    for (double carried = carry + travel; carried < 1.0; carried += travel)
+        ++frames;
+    return frames;
+}
+
+// The carries a second axis joins a scroll at, the other axis having moved
+// the camera's carry that far, and the travels it joins at, none of which
+// carries a whole map pixel in a whole number of frames from them.
+constexpr std::array<double, 5> joining_carries{0.1, 0.46, 0.69, 0.9, 0.99};
+constexpr std::array<double, 5> joining_travels{0.07, 0.23, 0.4, 0.77, 1.6};
+// Frames each joining scroll is followed for.
+constexpr int joining_frames = 200;
+
+void an_axis_joining_toward_the_end_catches_up_before_its_camera_steps() {
+    for (const double travel : joining_travels)
+        for (const double carry : joining_carries) {
+            // Its view lies on its camera's map pixel, the carry before it.
+            Scroll scroll{4096, 500.4, 1000};
+            scroll.carry = carry;
+            const int frames = frames_to_step(carry, travel);
+            double view = scroll.view();
+            for (int frame = 0; frame < joining_frames; ++frame) {
+                scroll.frame(1, travel);
+                const double moved = scroll.view() - view;
+                view = scroll.view();
+                // The camera steps on the carry as it always has.
+                OA_CHECK(scroll.camera == 1000 + scroll.steps);
+                if (frame < frames) {
+                    // Up to the camera's first step each frame moves by the
+                    // travel and an even share of the carry it trailed.
+                    OA_CHECK(std::fabs(moved - (travel + carry / frames)) < 1.0e-9);
+                } else {
+                    // Then by the travel alone.
+                    OA_CHECK(std::fabs(moved - travel) < 1.0e-9);
+                }
+                // From that step on it lies the carry past the camera.
+                if (frame >= frames - 1)
+                    OA_CHECK(std::fabs(scroll.offset - scroll.carry) < 1.0e-9);
+            }
+        }
+    // Frames of uneven travel share what is left over the frames left at
+    // each one's travel, never move less than their travel, and reach the
+    // carry by the step all the same.
+    constexpr std::array<double, 3> uneven{0.11, 0.3, 0.19};
+    Scroll scroll{4096, 500.4, 1000};
+    scroll.carry = 0.69;
+    double view = scroll.view();
+    bool stepped = false;
+    for (int frame = 0; frame < joining_frames; ++frame) {
+        const double travel = uneven[static_cast<std::size_t>(frame) % uneven.size()];
+        scroll.frame(1, travel);
+        const double moved = scroll.view() - view;
+        view = scroll.view();
+        OA_CHECK(moved >= travel - 1.0e-9);
+        if (stepped)
+            OA_CHECK(std::fabs(moved - travel) < 1.0e-9);
+        stepped = stepped || scroll.steps != 0;
+        if (stepped)
+            OA_CHECK(std::fabs(scroll.offset - scroll.carry) < 1.0e-9);
+    }
+}
+
+void an_axis_joining_toward_the_start_catches_up_before_its_camera_steps() {
+    for (const double travel : joining_travels)
+        for (const double carry : joining_carries) {
+            // Its view lies a whole map pixel past its camera, the carry
+            // behind the scroll's place toward the start.
+            Scroll scroll{4096, 500.4, 3000};
+            scroll.carry = carry;
+            scroll.offset = 1.0;
+            const int frames = frames_to_step(carry, travel);
+            double view = scroll.view();
+            for (int frame = 0; frame < joining_frames; ++frame) {
+                scroll.frame(-1, travel);
+                const double moved = view - scroll.view();
+                view = scroll.view();
+                OA_CHECK(scroll.camera == 3000 + scroll.steps);
+                if (frame < frames)
+                    OA_CHECK(std::fabs(moved - (travel + carry / frames)) < 1.0e-9);
+                else
+                    OA_CHECK(std::fabs(moved - travel) < 1.0e-9);
+                if (frame >= frames - 1)
+                    OA_CHECK(std::fabs(scroll.offset - (1.0 - scroll.carry)) < 1.0e-9);
+            }
+        }
+}
+
+void a_scroll_held_at_the_edge_stays_still() {
+    constexpr double travel = 0.23;
+    for (const double visible : {500.4, 499.6}) {
+        Scroll scroll{1024, visible, 0};
+        scroll.camera = scroll.farthest() - 3;
+        double view = scroll.view();
+        for (int frame = 0; frame < 200; ++frame) {
+            scroll.frame(1, travel);
+            // Toward the edge it moves by at most the frame's travel and
+            // never turns back, and it never lies past the camera's
+            // farthest place, so it shows no more past the map's edge than
+            // the camera alone does there.
+            const double moved = scroll.view() - view;
+            OA_CHECK(moved >= -1.0e-9 && moved <= travel + 1.0e-9);
+            OA_CHECK(scroll.view() <= scroll.farthest() + 1.0e-9);
+            view = scroll.view();
+        }
+        OA_CHECK(scroll.camera == scroll.farthest() && scroll.offset == 0.0);
+        scroll.camera = 3;
+        scroll.offset = 0.0;
+        scroll.carry = 0.0;
+        view = scroll.view();
+        for (int frame = 0; frame < 200; ++frame) {
+            scroll.frame(-1, travel);
+            const double moved = view - scroll.view();
+            OA_CHECK(moved >= -1.0e-9 && moved <= travel + 1.0e-9 && scroll.view() >= 0.0);
+            view = scroll.view();
+        }
+        OA_CHECK(scroll.camera == 0 && scroll.offset == 0.0);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -370,5 +679,15 @@ int main() {
     the_largest_magnified_scene_is_the_battlefield_with_its_margin();
     the_area_scale_is_the_zoom_over_the_draw_scale();
     the_display_scale_is_the_zoom_times_the_density();
+    the_area_phase_is_the_offset_in_scene_pixels();
+    a_view_on_the_camera_pixel_draws_the_corner_it_always_has();
+    a_view_between_map_pixels_is_the_same_picture_moved();
+    the_map_bounds_how_far_the_view_lies_past_the_camera();
+    a_view_found_from_its_exact_place_lies_on_or_past_its_camera();
+    a_scroll_toward_the_end_follows_its_exact_place();
+    a_scroll_toward_the_start_never_jumps_or_turns_back();
+    an_axis_joining_toward_the_end_catches_up_before_its_camera_steps();
+    an_axis_joining_toward_the_start_catches_up_before_its_camera_steps();
+    a_scroll_held_at_the_edge_stays_still();
     return oa::test::check_exit_status();
 }

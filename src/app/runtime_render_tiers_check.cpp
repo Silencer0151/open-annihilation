@@ -6,8 +6,10 @@
 // back and compared with what the processor composes or with the card's
 // references applied to the scene; frames that depend on none before them,
 // the first after the tier is switched on or the window resized among them;
-// the standard tier's picture for the readers that keep one; and the card's
-// textures made once and its prescale targets drawn once a painted frame.
+// the standard tier's picture for the readers that keep one; the view drawn
+// between map pixels as a slow scroll moves it, and the pointer picking what
+// is drawn (runtime_smooth_pan_check.cpp); and the card's textures made once
+// and its prescale targets drawn once a painted frame.
 // The tier comes from the game's own decision: --hardware-acceleration
 // switches it on after the start-up function test passed, and the check
 // switches it off and on again as --no-hardware-acceleration and
@@ -917,6 +919,12 @@ int Runtime::check_render_tiers() {
         std::cout << "render tiers check: a zoom ease of " << ease.size()
                   << " frames made and destroyed no texture\n";
     }
+    // Smooth panning: the view drawn between map pixels as a slow scroll
+    // moves it, at zoom 2.5 and 0.5, and the pointer picking what is drawn.
+    // It runs after the zoom ease: it switches the tier off and on, which
+    // drops the prescale targets the frames before made, and the ease
+    // counts on finding them made.
+    check_smooth_panning(switch_tier, at_zoom, anchor);
     // At a chrome scale of 1.6 the HUD is drawn into its prescale target
     // once on each frame that paints the layer, which every frame the loop
     // presents does, and on none presented again without a paint.

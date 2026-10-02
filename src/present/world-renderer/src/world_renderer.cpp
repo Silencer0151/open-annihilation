@@ -343,16 +343,29 @@ ScreenPoint map_pixel_to_screen(const BattlefieldViewport& viewport, MapPixel ma
 
 std::optional<MapPixel>
 screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noexcept {
+    return screen_to_map_pixel(viewport, screen, ViewOffset{});
+}
+
+std::optional<MapPixel> screen_to_map_pixel(
+    const BattlefieldViewport& viewport, ScreenPoint screen, ViewOffset offset
+) noexcept {
     const auto relative_x = static_cast<int64_t>(screen.x) - viewport.destination_x;
     const auto relative_y = static_cast<int64_t>(screen.y) - viewport.destination_y;
     if (relative_x < 0 || relative_y < 0 || relative_x >= viewport.width ||
         relative_y >= viewport.height)
         return std::nullopt;
     const auto scale = viewport.scale == 0.0F ? 1.0 : static_cast<double>(viewport.scale);
-    const auto map_x = static_cast<uint64_t>(viewport.source_x) +
-                       static_cast<uint64_t>(std::llround(static_cast<double>(relative_x) / scale));
-    const auto map_y = static_cast<uint64_t>(viewport.source_y) +
-                       static_cast<uint64_t>(std::llround(static_cast<double>(relative_y) / scale));
+    // Adding no offset leaves the quotient as it is, so a view on its
+    // camera's map pixel maps as screen_to_map_pixel always has; an offset
+    // outside 0 to 1 is held to it.
+    const double offset_x = std::clamp(offset.x, 0.0, 1.0);
+    const double offset_y = std::clamp(offset.y, 0.0, 1.0);
+    const auto map_x =
+        static_cast<uint64_t>(viewport.source_x) +
+        static_cast<uint64_t>(std::llround(static_cast<double>(relative_x) / scale + offset_x));
+    const auto map_y =
+        static_cast<uint64_t>(viewport.source_y) +
+        static_cast<uint64_t>(std::llround(static_cast<double>(relative_y) / scale + offset_y));
     if (map_x > std::numeric_limits<uint32_t>::max() ||
         map_y > std::numeric_limits<uint32_t>::max())
         return std::nullopt;

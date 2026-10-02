@@ -62,8 +62,9 @@ std::optional<Runtime::PendingBuildSite> Runtime::build_site_under(float x, floa
     const auto viewport = live_viewport(
         static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
     );
+    // The map pixel drawn under the point.
     const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}
+        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return std::nullopt;
