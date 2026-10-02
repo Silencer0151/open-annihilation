@@ -25,8 +25,11 @@ target_link_libraries(oa-netgame PRIVATE oa-base-game-math)
 target_include_directories(oa-netgame PUBLIC include)
 target_link_libraries(oa-netgame PUBLIC oa-base-bytes oa-formats-sqsh oa-options oa-core-types
   PRIVATE oa-base-game-loop)
-# The sockets, with the system libraries they link.
+# The sockets, and the system library they need on Windows.
 add_subdirectory(socket)
+if(WIN32)
+  target_link_libraries(oa-netgame PUBLIC ws2_32)
+endif()
 
 # The frame commands: condenser frames decoded, re-encoded, stored and
 # encoded.

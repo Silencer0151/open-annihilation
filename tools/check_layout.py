@@ -13,7 +13,11 @@ defined (--targets, written by cmake/OaLayout.cmake), and fails on:
   reach        a build file that names a directory outside its own with ..
                (add_subdirectory, an include directory or a source), or a
                target's include directory or source in another module
-  foreign      a target linked from another directory's CMakeLists.txt
+  foreign      a target linked from another directory's CMakeLists.txt,
+               whether the configuration made the link or a build file
+               under src/ names it in a branch this platform does not take
+               (target_link_libraries of a target another directory's
+               build file adds)
   include      an #include that leaves its module by a relative path, a
                public header's relative #include of a file outside its
                module's include/ (which the targets that export the header
@@ -70,6 +74,8 @@ INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*(["<])([^">\n]+)[">]', re.M
 COMMAND_RE = re.compile(r"(?m)^[ \t]*(add_subdirectory|target_include_directories|add_library|add_executable|"
                         r"target_sources)[ \t]*\(([^)]*)\)")
 ALIAS_RE = re.compile(r"add_library\(\s*(\S+)\s+ALIAS\s+(\S+)\s*\)")
+DEFINE_RE = re.compile(r"(?m)^[ \t]*(?:add_library|add_executable)[ \t]*\(\s*([^\s)]+)")
+LINK_RE = re.compile(r"(?m)^[ \t]*target_link_libraries[ \t]*\(\s*([^\s)]+)")
 # The largest baseline or targets file read; the tree's are a few kilobytes
 # and a few megabytes.
 MAX_BASELINE_BYTES = 1 << 20
@@ -297,17 +303,36 @@ class Checker:
     # -- rules ----------------------------------------------------------------
 
     def check_build_files(self):
-        """Report build files under src/ that name directories outside their own with .."""
+        """Report build files under src/ that name directories outside their own with .., or that
+        link a target another directory's build file adds.
+
+        The links are read from the text, every branch included, so a link made only on another
+        platform is found on this one too.
+        """
+        texts = {}
         for path in self.files:
             if Path(path).name != "CMakeLists.txt" and not path.endswith(".cmake"):
                 continue
             text = re.sub(r"#[^\n]*", "", (self.root / path).read_text(encoding="utf-8", errors="replace"))
+            texts[path] = text
             for match in COMMAND_RE.finditer(text):
                 for argument in match.group(2).split():
                     value = re.sub(r"^\$\{CMAKE_CURRENT_(?:SOURCE|LIST)_DIR\}/?", "", argument.strip('"'))
                     if ".." in value.split("/"):
                         line = text[:match.start()].count("\n") + 1
                         self.report("reach", f"{path}:{line}", f"{match.group(1)} names {argument}")
+        adders = defaultdict(set)
+        for path, text in texts.items():
+            for match in DEFINE_RE.finditer(text):
+                adders[match.group(1)].add(path)
+        for path, text in texts.items():
+            folder = posixpath.dirname(path)
+            for match in LINK_RE.finditer(text):
+                name = match.group(1)
+                where = sorted(adders.get(name, ()))
+                if where and all(posixpath.dirname(adder) != folder for adder in where):
+                    line = text[:match.start()].count("\n") + 1
+                    self.report("foreign", f"{path}:{line}", f"links {name}, which {', '.join(where)} adds")
 
     def check_targets(self):
         """Report foreign links and include directories or sources of other modules."""
@@ -537,6 +562,9 @@ SELF_TEST_FILES = {
     "src/sim/unit/include/oa/sim/unit.hpp": '#pragma once\n#include "oa/base/game_math.hpp"\n',
     "src/sim/unit/include/oa/misplaced.hpp": "#pragma once\n",
     "src/sim/unit/src/unit.cpp": '#include "oa/sim/unit.hpp"\n#include "../../../base/game-math/src/table.inc"\n',
+    "src/sim/unit/socket/CMakeLists.txt":
+        "target_sources(oa-sim-unit PRIVATE socket.cpp)\nif(WIN32)\n  target_link_libraries(oa-sim-unit PUBLIC ws2_32)\n"
+        "endif()\n",
     "src/platform/CMakeLists.txt": "add_library(oa-platform-shims src/files.cpp)\n",
     "src/platform/include/oa/platform/files.hpp": '#pragma once\n#include "../../../src/detail.hpp"\n',
     "src/platform/src/detail.hpp": "#pragma once\n",
@@ -549,6 +577,7 @@ SELF_TEST_FILES = {
 SELF_TEST_EXPECTED = [
     ("reach", "src/sim/unit/CMakeLists.txt:3"),  # add_subdirectory(../..)
     ("foreign", "hud"),  # linked from another directory
+    ("foreign", "src/sim/unit/socket/CMakeLists.txt:3"),  # linked from a subdirectory, on Windows only
     ("reach", "oa-sim-unit"),  # platform's include directory
     ("include", "src/sim/unit/src/unit.cpp:2"),  # a relative path into game-math
     ("include", "src/sim/unit/include/oa/sim/unit.hpp:2"),  # game-math without a link
