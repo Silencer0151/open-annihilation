@@ -16,6 +16,8 @@
 
 namespace oa::app {
 
+/// What every line the game logs about its graphics begins with.
+inline constexpr std::string_view graphics_log_prefix = "open-annihilation: graphics: ";
 /// The name of the tier every frame is drawn in.
 inline constexpr std::string_view standard_tier_name = "standard";
 /// What the start-up line says the standard tier does.

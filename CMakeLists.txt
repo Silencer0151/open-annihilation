@@ -263,8 +263,9 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 # the tier each frame is drawn in, what a crash or a failure counts for at
 # the next start and the records that keep it, the step-down ladder, the
 # chrome's filter and the tiles of a texture larger than the renderer
-# allows, as pure functions with no SDL and no files. The game uses only its
-# texture limit so far, in the line it logs at start.
+# allows, as pure functions with no SDL and no files. The game uses its walk
+# of the render drivers and its texture limit, in the line it logs at start;
+# the rest waits for the code that acts on it.
 add_library(oa-app-render-policy src/app/render_policy.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
@@ -281,10 +282,39 @@ if(OA_BUILD_PLATFORM)
   add_library(oa-app-video-capture src/app/video_capture.cpp)
   add_library(oa::app::video_capture ALIAS oa-app-video-capture)
   target_link_libraries(oa-app-video-capture PUBLIC oa-app-headers SDL3::SDL3 PRIVATE oa-options)
+  # The game's renderer (render_host.hpp): made by walking SDL's render
+  # drivers in SDL's own order, logging each refusal, with the framebuffer
+  # hint set before SDL's software renderer, or by SDL's own call under
+  # SDL_RENDER_DRIVER; then described and logged (graphics_report.hpp).
+  add_library(oa-app-render-host src/app/render_host.cpp src/app/graphics_report.cpp)
+  add_library(oa::app::render_host ALIAS oa-app-render-host)
+  target_link_libraries(oa-app-render-host PUBLIC oa-app-headers oa-app-render-policy
+    oa-platform-render-probe PRIVATE oa-base-float-precision SDL3::SDL3 oa-options)
   if(BUILD_TESTING)
     add_executable(oa-app-video-capture-test src/app/video_capture_test.cpp)
     target_link_libraries(oa-app-video-capture-test PRIVATE oa-app-video-capture oa-options)
     add_test(NAME app-video-capture COMMAND oa-app-video-capture-test)
+    # The walk of the render drivers through stand-in hooks: SDL's order,
+    # one driver at a time, every refusal logged, the first driver that
+    # starts kept, recorded drivers skipped but never software, the
+    # framebuffer hint before software, a hint not taken logged, a second
+    # walk when nothing could present, and SDL's own call alone under
+    # SDL_RENDER_DRIVER. Then on the dummy video driver: the walk ends on
+    # the renderer SDL's own choice makes, with the hint set; a named
+    # driver that does not exist ends the start with one attempt and no
+    # hint; software named is made with no hint. app-render-host-env names
+    # the missing driver through the environment variable itself.
+    add_executable(oa-app-render-host-test src/app/render_host_test.cpp)
+    target_link_libraries(oa-app-render-host-test PRIVATE oa-app-render-host SDL3::SDL3
+      oa-test-support oa-options)
+    add_test(NAME app-render-host COMMAND oa-app-render-host-test)
+    set_tests_properties(app-render-host PROPERTIES TIMEOUT 60
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+      ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:;SDL_FRAMEBUFFER_ACCELERATION=unset:")
+    add_test(NAME app-render-host-env COMMAND oa-app-render-host-test --case named-missing)
+    set_tests_properties(app-render-host-env PROPERTIES TIMEOUT 60
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=missing"
+      ENVIRONMENT_MODIFICATION "SDL_FRAMEBUFFER_ACCELERATION=unset:")
     # The check host's table (check_host.hpp) and the parts of it that need
     # no running game: the pointer events it makes, the gadgets it finds and
     # the text it hands back.
@@ -449,7 +479,6 @@ if(BUILD_TESTING)
   endif()
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
-  src/app/graphics_report.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
   src/app/runtime_builtin_screens.cpp
   src/app/runtime_camera.cpp src/app/runtime_campaign.cpp src/app/runtime_checks.cpp
@@ -498,7 +527,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
 set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
-  oa-app-video-capture
+  oa-app-video-capture oa-app-render-host
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
   oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
@@ -867,6 +896,17 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-renderer-report PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The walk of SDL's render drivers in the game's log, on the dummy
+        # video driver: with no render driver named, every driver before
+        # SDL's software renderer refuses, each logged once with its reason
+        # before the start-up line, and the start ends on software; with
+        # SDL_RENDER_DRIVER=software no driver is walked; with a driver
+        # named that does not exist the start fails as it always has.
+        add_test(NAME native-renderer-walk COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_renderer_walk.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-renderer-walk PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The headless menu, match, composed-frame, message log, speed and
         # build placement checks, from fresh preferences each run.
         add_test(NAME native-navigation COMMAND ${Python3_EXECUTABLE}

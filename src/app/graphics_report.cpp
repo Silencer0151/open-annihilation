@@ -31,7 +31,7 @@ uint32_t corrected_texture_limit(const render_probe::AdapterFacts& facts) noexce
 }
 
 std::string graphics_log_line(const render_probe::AdapterFacts& facts) {
-    std::string line = "open-annihilation: graphics: ";
+    std::string line(graphics_log_prefix);
     line += facts.renderer;
     if (!facts.video_driver.empty()) {
         line += " on ";

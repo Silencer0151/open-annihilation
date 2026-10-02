@@ -3,7 +3,7 @@
 
 // oa-game entry point: display setup, intro playback and runtime launch.
 #include "oa/app/runtime.hpp"
-#include "graphics_report.hpp"
+#include "render_host.hpp"
 #include "screen_size.hpp"
 #include "oa/app/extension_list.hpp"
 #include "oa/app/full_screen.hpp"
@@ -116,18 +116,18 @@ void set_window_icon(SDL_Window* window) {
 
 struct HostDisplay {
     SDL_Window* window = nullptr;
-    SDL_Renderer* renderer = nullptr;
+    // The window's renderer, made by walking SDL's render drivers, and what
+    // the probe found of it.
+    RendererHost renderer_host{};
     bool active = false;
     // The mode Alt+Enter last asked for while the intro movies play.
     FullScreenSwitch full_screen{};
-    // What the probe found of the renderer, logged once it was made.
-    oa::platform::render_probe::AdapterFacts renderer_facts{};
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
-    /// (start_settings, starting_screen_size), and its renderer, which it
-    /// describes and logs (report_game_renderer). A window of a set screen
-    /// size takes the display mode nearest it in full screen.
+    /// (start_settings, starting_screen_size), and its renderer
+    /// (RendererHost::create), which it describes and logs. A window of a
+    /// set screen size takes the display mode nearest it in full screen.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
     ///
@@ -166,20 +166,14 @@ struct HostDisplay {
         if (sized)
             take_screen_size(window, screen, options.start_full_screen);
         set_window_icon(window);
-        renderer = SDL_CreateRenderer(window, nullptr);
-        if (renderer == nullptr)
-            throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
-        renderer_facts = report_game_renderer(renderer);
-        oa::base::float_precision::restore_program_float_control();
+        renderer_host.create(window);
     }
 
     ~HostDisplay() {
         release_pointer(window);
-        if (renderer != nullptr)
-            SDL_DestroyRenderer(renderer);
+        renderer_host.destroy();
         if (window != nullptr)
             SDL_DestroyWindow(window);
-        renderer = nullptr;
         window = nullptr;
         if (active)
             SDL_Quit();
@@ -204,7 +198,7 @@ void play_intro_file(
     playback.play_audio = !options.headless_check && !options.mute;
     if (host != nullptr) {
         playback.window = host->window;
-        playback.renderer = host->renderer;
+        playback.renderer = host->renderer_host.renderer();
         // Alt+Enter switches full screen during the movies as it does in the
         // game.
         playback.hooks.context = host;
@@ -333,14 +327,15 @@ int main(int argc, char** argv) {
         // The runtime holds hundreds of kilobytes of game state, so it lives
         // on the heap: the main thread's stack is 1 MiB on Windows.
         const auto runtime = std::make_unique<Runtime>(
-            std::move(options), assets, extension, display.window, display.renderer
+            std::move(options),
+            assets,
+            extension,
+            display.window,
+            display.renderer_host.renderer(),
+            &display.renderer_host
         );
         runtime->take_video_capture(std::move(capture));
         runtime->take_full_screen_switch(display.full_screen);
-        if (display.renderer != nullptr)
-            runtime->take_renderer_names(
-                display.renderer_facts.renderer, stats_adapter_name(display.renderer_facts)
-            );
         return runtime->run();
     } catch (const std::exception& error) {
         report_fatal(error.what());

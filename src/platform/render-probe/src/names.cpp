@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The probe's pure tables: the names of software and virtual rasterisers
-// and the drivers that report a fixed texture limit. Built on every system.
+// The probe's pure tables: the names of software and virtual rasterisers,
+// the drivers that report a fixed texture limit and the video drivers whose
+// windows have a framebuffer of their own. Built on every system.
 #include "oa/platform/render_probe.hpp"
 
 #include <algorithm>
@@ -43,6 +44,15 @@ constexpr std::array<std::string_view, 4> kVirtualAdapters{
 /// The OpenGL vendor string, in lower case, of VirtualBox's older OpenGL
 /// pass-through.
 constexpr std::string_view kVirtualVendor = "humper";
+
+/// SDL's names, in lower case, of the video drivers whose windows have a
+/// framebuffer of their own.
+constexpr std::array<std::string_view, 4> window_framebuffer_video_drivers{
+    "windows",
+    "x11",
+    "dummy",
+    "offscreen",
+};
 
 /// The top two bits of a UTF-8 byte, which tell a continuation byte.
 constexpr unsigned kUtf8LeadMask = 0xC0;
@@ -106,6 +116,18 @@ bool names_processor_rasteriser(std::string_view name, uint32_t vendor, uint32_t
            (vendor == kBasicRenderVendor && device == kBasicRenderDevice);
 }
 
+/// Says whether a name equals a lower-case name in any letter case.
+///
+/// @param name the name
+/// @param lower the other name, in lower case
+/// @return true where they are the same name
+bool same_name(std::string_view name, std::string_view lower) noexcept {
+    return name.size() == lower.size() &&
+           std::equal(name.begin(), name.end(), lower.begin(), [](char left, char right) {
+               return lower_ascii(left) == right;
+           });
+}
+
 } // namespace
 
 bool names_software_rasteriser(std::string_view name, uint32_t vendor, uint32_t device) noexcept {
@@ -152,6 +174,14 @@ std::string clean_name(std::string_view name) {
         return {};
     const auto last = cleaned.find_last_not_of(' ');
     return cleaned.substr(first, last - first + 1);
+}
+
+bool native_window_framebuffer(std::string_view video_driver) noexcept {
+    return std::any_of(
+        window_framebuffer_video_drivers.begin(),
+        window_framebuffer_video_drivers.end(),
+        [video_driver](std::string_view driver) { return same_name(video_driver, driver); }
+    );
 }
 
 } // namespace oa::platform::render_probe

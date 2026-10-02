@@ -34,6 +34,26 @@ reported, and the game starts without it. The branding is not under the
 project's licence (`COPYRIGHT`). `branding-icons` checks the icons' sizes,
 and `app-window-icon` that the embedded one decodes.
 
+Start-up makes the window's renderer by walking SDL's render drivers one
+at a time, in SDL's own order (`render_host.hpp`): the first that starts is
+kept, which with every driver working is the one SDL's own choice makes,
+and each driver that refuses is logged with SDL's reason, as on the dummy
+video driver: `open-annihilation: graphics: renderer vulkan refused: No
+dynamic Vulkan support in current SDL video driver (dummy)`. Before SDL's
+software renderer, the last of the walk, the framebuffer hint is set when
+a driver before it refused: `0` where the window has a framebuffer of its
+own (the windows, x11, dummy and offscreen video drivers), so that
+software presents through it with no graphics driver, and otherwise the
+hardware drivers of SDL's order for software to present through, or the
+first of them alone before SDL 3.4. A hint that is not taken, as when the
+player's own `SDL_FRAMEBUFFER_ACCELERATION` takes priority, is logged and
+the walk goes on. Under `SDL_RENDER_DRIVER` the start is SDL's own call,
+which tries only the drivers the variable names, with no walk and no hint,
+and a failure ends the run as it always has. When nothing starts, the run
+ends with `SDL_CreateRenderer:` and the last refusal's reason.
+`app-render-host` checks the walk, and `native-renderer-walk` its log on
+the dummy video driver.
+
 Once the renderer is made, start-up describes it with the
 [render probe](../platform/render-probe/README.md) and logs one line
 (`graphics_report.hpp`): the render driver on the video driver, the
@@ -543,10 +563,25 @@ logs it.
   size and full screen given the display mode nearest it, and Hardware
   acceleration, which either flag decides over
   (`hardware_acceleration_asked`).
+- `render_host.hpp`, `render_host.cpp` (`oa-app-render-host`, with
+  `graphics_report.cpp`): the game's renderer. `walk_render_drivers` acts
+  on the render policy's walk through hooks (`CreationHooks`): it sets the
+  framebuffer hint, tries each driver, logs each refusal and, when the
+  records would leave nothing able to present, that the walk starts again
+  from the top. `RendererHost` gives it SDL's calls, keeps the renderer,
+  what the probe found of it and the walk's attempts, and puts back the
+  floating-point settings the game started with once the renderer is made
+  and described. `HostDisplay` (`main.cpp`) owns one, and the runtime
+  borrows it with the renderer: `render_run.hpp`'s `Runtime::RenderRun` is
+  the runtime's own renderer state, made only when it is handed a window,
+  a renderer and its host, so a headless run, a window the runtime made
+  itself and a loopback check's second runtime have none. No driver is
+  recorded as failed yet, so the walk skips none.
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
-  no SDL, no files and no clock, of which the game uses only the texture
-  limit so far, in the line it logs at start. The walk
+  no SDL, no files and no clock, of which the game uses only the walk of
+  the render drivers (`render_host.hpp`) and the texture limit, in the
+  line it logs at start, so far. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed (`failed_driver_list` of the renderer records) but never
   `software`, with the framebuffer hint set before

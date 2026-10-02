@@ -47,6 +47,12 @@ only declares `SDL_Renderer`.
   renderer draws through Wine's own translation.
 - `clean_name(name)` turns control characters into spaces, trims the ends
   and cuts a name at 255 bytes without splitting a character.
+- `native_window_framebuffer(video_driver)`: true for the `windows`, `x11`,
+  `dummy` and `offscreen` video drivers, in any letter case, whose windows
+  have a framebuffer of their own that SDL's software renderer presents
+  through with no graphics driver; elsewhere, as on `cocoa`, `wayland` and
+  `kmsdrm`, SDL presents it through a texture of a hardware render driver,
+  which the framebuffer hint names.
 
 ## How each interface is read
 
@@ -75,7 +81,9 @@ source. Wine is found by `GetProcAddress` of `wine_get_version` in
 
 Start-up describes the renderer it made and logs one line, with the
 texture limit the render policy corrects, and the +stats overlay names the
-driver and adapter ([src/app](../../app/README.md)).
+driver and adapter ([src/app](../../app/README.md)). The walk of the render
+drivers that makes it asks `native_window_framebuffer` what to set the
+framebuffer hint to before SDL's software renderer.
 Every frame is still drawn as before: the probe only reports.
 
 ## Tests
@@ -83,10 +91,11 @@ Every frame is still drawn as before: the probe only reports.
 `platform-render-probe` checks the name tables over names real drivers
 give, in any letter case, and real cards' names against them; WARP's
 identifiers; the drivers that report a fixed texture limit; the
-classification and the cleaning of names; what `describe_reported` reads through a stand-in
-reader, for SDL's software renderer and for others, with the adapter read
-or skipped, named, failing or blank; and SDL's software renderer on the
-dummy video driver described.
+classification and the cleaning of names; what `describe_reported` reads
+through a stand-in reader, for SDL's software renderer and for others,
+with the adapter read or skipped, named, failing or blank; the video
+drivers whose windows have a framebuffer of their own; and SDL's software
+renderer on the dummy video driver described.
 
 The readers of the graphics interfaces themselves have no automated test:
 the checks run on the dummy video driver, where SDL makes only its software

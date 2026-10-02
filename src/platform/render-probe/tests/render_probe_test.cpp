@@ -5,10 +5,10 @@
 // matched in any letter case as parts of the names drivers give; the
 // Microsoft Basic Render Driver's identifiers; the drivers that report a
 // fixed texture limit; the classification and cleaning of what a driver
-// reports;
-// and what describe reads, through a stand-in reader, for each renderer
-// and each choice of reading. Then SDL's software renderer on the dummy
-// video driver, described as the game describes it.
+// reports; what describe reads, through a stand-in reader, for each
+// renderer and each choice of reading; and the video drivers whose windows
+// have a framebuffer of their own. Then SDL's software renderer on the
+// dummy video driver, described as the game describes it.
 #include "oa/platform/render_probe.hpp"
 
 #include "oa/test/check.hpp"
@@ -317,6 +317,24 @@ void test_clean_name() {
     OA_CHECK(clean_name(split).size() == adapter_name_limit - 1);
 }
 
+/// The video drivers whose windows have a framebuffer of their own, in any
+/// letter case, and those that present the software renderer through a
+/// hardware render driver.
+void test_native_window_framebuffer() {
+    OA_CHECK(native_window_framebuffer("windows"));
+    OA_CHECK(native_window_framebuffer("x11"));
+    OA_CHECK(native_window_framebuffer("dummy"));
+    OA_CHECK(native_window_framebuffer("offscreen"));
+    OA_CHECK(native_window_framebuffer("X11"));
+    OA_CHECK(native_window_framebuffer("Windows"));
+    OA_CHECK(!native_window_framebuffer("cocoa"));
+    OA_CHECK(!native_window_framebuffer("wayland"));
+    OA_CHECK(!native_window_framebuffer("kmsdrm"));
+    OA_CHECK(!native_window_framebuffer(""));
+    OA_CHECK(!native_window_framebuffer("x1"));
+    OA_CHECK(!native_window_framebuffer("dummy2"));
+}
+
 /// SDL's software renderer on the dummy video driver: its name, no adapter
 /// to read, no texture limit, and a software rasteriser; asked to skip the
 /// adapter, the same. A null renderer gives empty facts.
@@ -365,6 +383,7 @@ int main() {
     test_describe_reported();
     test_classify();
     test_clean_name();
+    test_native_window_framebuffer();
     test_software_renderer();
     return oa::test::check_exit_status();
 }

@@ -5,9 +5,10 @@
 """Check the line the game logs once its renderer is made.
 
 The game starts with --skip-intro --mute --frames 1 on the dummy SDL drivers,
-with SDL_RENDER_DRIVER unset, so SDL's walk of its render drivers ends on its
-software renderer, which has no adapter and no texture limit. The start must
-end with status 0 and log, once and as a whole line, exactly:
+with SDL_RENDER_DRIVER unset, so the game walks SDL's render drivers in SDL's
+order and ends on SDL's software renderer, which has no adapter and no texture
+limit (native-renderer-walk checks the refusals logged before it). The start
+must end with status 0 and log, once and as a whole line, exactly:
 
   open-annihilation: graphics: software on dummy, textures of any size;
   standard tier: the processor draws everything

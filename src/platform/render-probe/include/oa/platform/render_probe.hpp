@@ -176,4 +176,15 @@ void classify(AdapterFacts& facts) noexcept;
 /// @return the cleaned name
 [[nodiscard]] std::string clean_name(std::string_view name);
 
+/// Says whether a video driver gives each window a framebuffer of its own
+/// that SDL's software renderer can present through with no graphics
+/// driver: windows, x11, dummy and offscreen, in any letter case.
+/// Elsewhere, as on cocoa, wayland and kmsdrm, SDL presents the software
+/// renderer through a texture of one of its hardware render drivers, which
+/// the framebuffer hint names.
+///
+/// @param video_driver SDL's name for the video driver
+/// @return true where the window has a framebuffer of its own
+[[nodiscard]] bool native_window_framebuffer(std::string_view video_driver) noexcept;
+
 } // namespace oa::platform::render_probe

@@ -8,6 +8,9 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
 #include "match_clock.hpp"
+#include "graphics_report.hpp"
+#include "render_host.hpp"
+#include "render_run.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/platform/app_loop.hpp"
@@ -33,6 +36,10 @@
 #include <vector>
 
 namespace oa::app {
+
+void Runtime::destroy_render_run(RenderRun* run) noexcept {
+    delete run;
+}
 
 namespace {
 
@@ -130,7 +137,8 @@ Runtime::Runtime(
     oa::AssetStore& assets,
     const Extension& extension,
     SDL_Window* window,
-    SDL_Renderer* renderer
+    SDL_Renderer* renderer,
+    RendererHost* renderer_host
 )
     : options_(std::move(options)), assets_(assets), extension_(extension),
       unit_sound_catalog_(oa::audio::game_audio::UnitSoundCatalog::load(assets)),
@@ -146,6 +154,12 @@ Runtime::Runtime(
         sdl_.window = window;
         sdl_.renderer = renderer;
         sdl_.borrowed = true;
+        if (renderer_host != nullptr) {
+            render_run_.reset(new RenderRun{renderer_host});
+            take_renderer_names(
+                renderer_host->facts().renderer, stats_adapter_name(renderer_host->facts())
+            );
+        }
     }
     start_session_display();
     choose_web_links();

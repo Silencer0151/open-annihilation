@@ -126,6 +126,7 @@ PaletteBytes load_active_palette(const AssetStore& assets);
 struct MatchConsole;
 struct MatchModels;
 struct WorldDrawList;
+class RendererHost;
 
 // The named-background cache and the bitmaps its handles name (index + 1).
 struct NamedBackgrounds {
@@ -242,12 +243,17 @@ class Runtime final : public menu::Host,
     ///        the runtime
     /// @param window SDL window to borrow instead of creating one; null for none
     /// @param renderer SDL renderer of `window` to borrow; null for none
+    /// @param renderer_host what made `renderer` and keeps it (render_host.hpp),
+    ///        to borrow with it; null for none. With a window and a renderer
+    ///        it gives the runtime its renderer state (RenderRun), and the
+    ///        names of the renderer the "+stats" overlay shows
     Runtime(
         Options options,
         oa::AssetStore& assets,
         const Extension& extension,
         SDL_Window* window = nullptr,
-        SDL_Renderer* renderer = nullptr
+        SDL_Renderer* renderer = nullptr,
+        RendererHost* renderer_host = nullptr
     );
 
     /// Runs the application: the headless check or run the options ask for, or the application
@@ -2204,6 +2210,14 @@ class Runtime final : public menu::Host,
     /// sections, as windows of several sizes show them (part of
     /// --check-engine-settings).
     void check_engine_settings_window_sizes();
+
+    /// The state of the renderer the runtime borrows (render_run.hpp).
+    struct RenderRun;
+
+    /// Frees the renderer state.
+    ///
+    /// @param run state to free; null is allowed
+    static void destroy_render_run(RenderRun* run) noexcept;
 
     /// The in-game menu's OA button and dialog (engine_settings_match_host.hpp).
     struct EngineSettingsMatchHost;
@@ -8684,6 +8698,12 @@ class Runtime final : public menu::Host,
     // The in-game menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMatchHost, void (*)(EngineSettingsMatchHost*) noexcept>
         engine_settings_match_{nullptr, destroy_engine_settings_match_host};
+    // The state of the renderer borrowed with its host; null without one,
+    // as in a headless run, on a window of the runtime's own or in the
+    // second runtime of a loopback check.
+    std::unique_ptr<RenderRun, void (*)(RenderRun*) noexcept> render_run_{
+        nullptr, destroy_render_run
+    };
     // The SDL event type the macOS Settings… item posts; 0 while none is registered.
     uint32_t engine_settings_menu_event_{};
     // Whether the Settings… item was last enabled; empty before the first sync.
