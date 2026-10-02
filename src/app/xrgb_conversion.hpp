@@ -55,6 +55,31 @@ void convert_rgb24_xrgb(
     platform::job_pool::Pool* pool
 ) noexcept;
 
+/// Converts a rectangle of an RGB24 frame into XRGB8888 rows, in bands of
+/// xrgb_band_rows rows, exactly as convert_rgb24_xrgb converts the same rows
+/// and columns of the whole frame.
+///
+/// Every row is the same whichever thread converts it.
+///
+/// @param rgb the rectangle's first pixel, 3 bytes a pixel
+/// @param rgb_pitch bytes from one row of the frame to the next, at least `width` * 3
+/// @param width pixels in a row of the rectangle
+/// @param height rows of the rectangle
+/// @param[out] pixels the converted rows, each at least `width` * 4 bytes, 4-byte aligned
+/// @param pitch bytes from one row of `pixels` to the next
+/// @param gamma the display gamma's table; null when the gamma is 1
+/// @param pool threads to convert the bands on; null converts them on the calling thread
+void convert_rgb24_xrgb_rect(
+    const uint8_t* rgb,
+    std::size_t rgb_pitch,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept;
+
 /// Packs one RGB24 row into RGB565 words: red's top 5 bits, green's top 6 and
 /// blue's top 5, from the top bit down, each channel through the gamma table
 /// first when there is one; the 16-bit pixels a window of that format shows
@@ -82,6 +107,32 @@ void pack_rgb24_rgb565_row(
 /// @param pool threads to convert the bands on; null converts them on the calling thread
 void convert_rgb24_rgb565(
     const uint8_t* rgb,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept;
+
+/// Converts a rectangle of an RGB24 frame into RGB565 rows
+/// (pack_rgb24_rgb565_row), in bands of xrgb_band_rows rows, exactly as
+/// convert_rgb24_rgb565 converts the same rows and columns of the whole
+/// frame.
+///
+/// Every row is the same whichever thread converts it.
+///
+/// @param rgb the rectangle's first pixel, 3 bytes a pixel
+/// @param rgb_pitch bytes from one row of the frame to the next, at least `width` * 3
+/// @param width pixels in a row of the rectangle
+/// @param height rows of the rectangle
+/// @param[out] pixels the converted rows, each at least `width` * 2 bytes, 2-byte aligned
+/// @param pitch bytes from one row of `pixels` to the next
+/// @param gamma the display gamma's table; null when the gamma is 1
+/// @param pool threads to convert the bands on; null converts them on the calling thread
+void convert_rgb24_rgb565_rect(
+    const uint8_t* rgb,
+    std::size_t rgb_pitch,
     uint32_t width,
     uint32_t height,
     uint8_t* pixels,

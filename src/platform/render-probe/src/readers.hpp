@@ -21,6 +21,12 @@ namespace oa::platform::render_probe::readers {
 /// @return true when the adapter was read
 bool read_direct3d_adapter(SDL_Renderer* renderer, AdapterFacts& facts);
 
+/// Asks SDL's Direct3D 9 device whether it can draw (TestCooperativeLevel).
+///
+/// @param renderer the renderer, SDL's Direct3D 9 renderer
+/// @return the device's state; unknown when SDL gives no device
+DeviceState direct3d9_device_state(SDL_Renderer* renderer) noexcept;
+
 /// Says whether the game runs under Wine, which provides Windows'
 /// interfaces on another system: ntdll.dll then exports wine_get_version.
 ///

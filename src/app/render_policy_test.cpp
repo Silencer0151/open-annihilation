@@ -11,12 +11,12 @@
 // ones but never software, with a framebuffer hint that is never empty, a
 // second walk with the records ignored whenever they would leave nothing
 // able to present, and SDL's own call under SDL_RENDER_DRIVER; present
-// stalls; the starting budget, the same at any memory, and the starting
-// rung of every kind of machine, with the blend only above 4 GiB; the
-// remembered rung and the step-down fed synthetic frames; the chrome's
-// filter; the prescale budget; and the tiles of textures beyond the
-// renderer's limit. The driver names here are made up: the policy reads
-// them only as names.
+// stalls; device resets; the layers' texture formats; the starting budget,
+// the same at any memory, and the starting rung of every kind of machine,
+// with the blend only above 4 GiB; the remembered rung and the step-down
+// fed synthetic frames; the chrome's filter; the prescale budget; and the
+// tiles of textures beyond the renderer's limit. The driver names here are
+// made up: the policy reads them only as names.
 #include "oa/app/render_policy.hpp"
 
 #include "oa/test/check.hpp"
@@ -2013,6 +2013,65 @@ void test_tiles_cover_every_texel() {
     OA_CHECK(grids == 7 * 18 * 3);
 }
 
+// ---------------------------------------------------------------------------
+// Device resets and the layers' formats
+
+void test_device_resets() {
+    constexpr uint64_t second = 1000;
+    // The third reset within 60 s rebuilds, and the count then starts again.
+    ResetWatch watch;
+    OA_CHECK(!note_device_reset(watch, 0));
+    OA_CHECK(!note_device_reset(watch, 20 * second));
+    OA_CHECK(note_device_reset(watch, 59 * second));
+    OA_CHECK(!note_device_reset(watch, 60 * second));
+    OA_CHECK(!note_device_reset(watch, 61 * second));
+    OA_CHECK(note_device_reset(watch, 62 * second));
+    // Three spread over 61 s do not; the first falls out of the window.
+    ResetWatch spread;
+    OA_CHECK(!note_device_reset(spread, 0));
+    OA_CHECK(!note_device_reset(spread, 30 * second));
+    OA_CHECK(!note_device_reset(spread, 61 * second));
+    OA_CHECK(note_device_reset(spread, 62 * second));
+    // A reset exactly 60 s after the first is outside its window.
+    ResetWatch edge;
+    OA_CHECK(!note_device_reset(edge, 0));
+    OA_CHECK(!note_device_reset(edge, 1));
+    OA_CHECK(!note_device_reset(edge, reset_window_ms));
+    OA_CHECK(!note_device_reset(edge, reset_window_ms + 1));
+    OA_CHECK(note_device_reset(edge, reset_window_ms + 2));
+}
+
+void test_layer_formats() {
+    struct Case {
+        bool software;
+        bool rgb565_window;
+        bool named;
+        LayerFormat opaque;
+        LayerFormat loading;
+        LayerFormat front_end;
+    };
+
+    const Case cases[] = {
+        // SDL's software renderer keeps today's formats, named or not.
+        {true, false, false, LayerFormat::xrgb8888, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        {true, true, false, LayerFormat::rgb565, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        {true, false, true, LayerFormat::xrgb8888, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        {true, true, true, LayerFormat::rgb565, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        // Any driver SDL_RENDER_DRIVER names keeps them too, RGB565 aside.
+        {false, false, true, LayerFormat::xrgb8888, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        {false, true, true, LayerFormat::xrgb8888, LayerFormat::xrgb8888, LayerFormat::rgb24},
+        // A hardware driver of the walk gets ARGB8888 for every opaque layer.
+        {false, false, false, LayerFormat::argb8888, LayerFormat::argb8888, LayerFormat::argb8888},
+        {false, true, false, LayerFormat::argb8888, LayerFormat::argb8888, LayerFormat::argb8888},
+    };
+    for (const auto& c : cases) {
+        const LayerFormats formats = layer_formats(c.software, c.rgb565_window, c.named);
+        OA_CHECK(formats.opaque == c.opaque);
+        OA_CHECK(formats.loading == c.loading);
+        OA_CHECK(formats.front_end == c.front_end);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -2026,6 +2085,8 @@ int main() {
     test_environment_and_rebuilds();
     test_creation_walk_never_fails_for_records();
     test_stalls();
+    test_device_resets();
+    test_layer_formats();
     test_start_budget();
     test_start_rung();
     test_step_down_rungs();

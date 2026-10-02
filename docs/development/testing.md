@@ -199,6 +199,34 @@ names, these run the game headless:
 the path a watching machine receives a match on; with `--headless-check`
 and `--match-ticks N` it replays without a window.
 
+### The renderer
+
+The game makes its renderer by walking SDL's render drivers and makes it
+again when one fails while the game runs ([src/app](../../src/app/README.md)).
+On the dummy video driver every hardware driver refuses, so these run on
+SDL's software renderer, with `SDL_RENDER_DRIVER` left unset so that the
+walk runs:
+
+- `app-render-host` walks made-up drivers through stand-in hooks, at start
+  and in a rebuild, then makes, rebuilds and loses a renderer on the dummy
+  video driver; `app-render-host-env` names a driver that does not exist
+  through `SDL_RENDER_DRIVER` itself;
+- `app-scaled-world-software` draws textures beyond a texture limit of
+  1024 as tiles on SDL's software renderer and reads them back as one
+  texture with no limit draws them;
+- `native-renderer-ladder` (`--check-renderer-ladder`) forces each failure
+  the game handles while it runs and checks that it presents on through
+  it, each frame after a failure equal to the frame composed on the
+  processor: the walk, a present that fails in a match and on a loading
+  frame, a texture SDL cannot make, a device reset in a match, during a
+  load, in a drain of input and through a movie's hook, a lost device, a
+  device that waits to be reset, present stalls on steady frames and on
+  frames that are not, a changed floating-point setting, and window-size
+  layers in tiles past a texture limit of 2048.
+  `--render-fault POINT[@FRAME]` forces one failure alone, at a presented
+  frame of its case; `native-renderer-ladder-create` makes every driver but
+  software refuse at start.
+
 ### Other builds
 
 - **Core only**, without SDL or game data: configure with

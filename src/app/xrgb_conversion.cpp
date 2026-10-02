@@ -48,6 +48,21 @@ void convert_rgb24_xrgb(
     const std::array<uint8_t, 256>* gamma,
     platform::job_pool::Pool* pool
 ) noexcept {
+    convert_rgb24_xrgb_rect(
+        rgb, static_cast<std::size_t>(width) * 3U, width, height, pixels, pitch, gamma, pool
+    );
+}
+
+void convert_rgb24_xrgb_rect(
+    const uint8_t* rgb,
+    std::size_t rgb_pitch,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept {
     const auto row_pixels = static_cast<int>(width);
     platform::job_pool::run_bands(
         pool, platform::job_pool::bands_of_rows(height, xrgb_band_rows), [&](uint32_t band) {
@@ -56,7 +71,7 @@ void convert_rgb24_xrgb(
             for (uint32_t y = first_row; y < end_row; ++y) {
                 auto* row =
                     reinterpret_cast<uint32_t*>(pixels + static_cast<std::size_t>(y) * pitch);
-                pack_rgb24_row(row, rgb + static_cast<std::size_t>(y) * width * 3U, row_pixels);
+                pack_rgb24_row(row, rgb + static_cast<std::size_t>(y) * rgb_pitch, row_pixels);
                 if (gamma != nullptr)
                     gamma_xrgb_row(row, row_pixels, *gamma);
             }
@@ -95,6 +110,21 @@ void convert_rgb24_rgb565(
     const std::array<uint8_t, 256>* gamma,
     platform::job_pool::Pool* pool
 ) noexcept {
+    convert_rgb24_rgb565_rect(
+        rgb, static_cast<std::size_t>(width) * 3U, width, height, pixels, pitch, gamma, pool
+    );
+}
+
+void convert_rgb24_rgb565_rect(
+    const uint8_t* rgb,
+    std::size_t rgb_pitch,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept {
     const auto row_pixels = static_cast<int>(width);
     platform::job_pool::run_bands(
         pool, platform::job_pool::bands_of_rows(height, xrgb_band_rows), [&](uint32_t band) {
@@ -103,7 +133,7 @@ void convert_rgb24_rgb565(
             for (uint32_t y = first_row; y < end_row; ++y)
                 pack_rgb24_rgb565_row(
                     reinterpret_cast<uint16_t*>(pixels + static_cast<std::size_t>(y) * pitch),
-                    rgb + static_cast<std::size_t>(y) * width * 3U,
+                    rgb + static_cast<std::size_t>(y) * rgb_pitch,
                     row_pixels,
                     gamma
                 );

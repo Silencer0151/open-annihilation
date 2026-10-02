@@ -54,6 +54,50 @@ ends with `SDL_CreateRenderer:` and the last refusal's reason.
 `app-render-host` checks the walk, and `native-renderer-walk` its log on
 the dummy video driver.
 
+While the game runs, a failed SDL call of the standard tier's presenting
+throws `PresentError` (`scaled_world.hpp`), which `Runtime::render` catches
+by its type alone, so that an error from a hook it reaches keeps its own
+path; the display sink and `apply_output_mode`'s SDL calls catch it too,
+while the layout and the pointer's known place change at once. The
+renderer is then made again (`Runtime::rebuild_renderer`,
+`RendererHost::rebuild`): every texture the game made is forgotten, the
+drivers after the one that failed in SDL's order are tried, under
+`SDL_RENDER_DRIVER` only those its list names after it, then SDL's
+software renderer, with the framebuffer hint set before it; the screen is
+laid out again, the pointer kept on the window as before, and a match's
+message log says so. A rebuild waits for the next `render()`, never a hook
+or a drain of events, and the failed frame is not shown. The run ends only
+when no driver starts, or when SDL's software renderer that a rebuild made
+fails before it presents a frame. The render events reach the event
+dispatch, the loading pump, the movies' hook and `drain_input`
+(`take_render_event`; before the runtime exists, `RendererHost::take_event`
+and `service`): a reset device forgets every texture, each made again from
+its buffer at the next frame, and the third reset within a minute, or a
+lost device, makes the renderer again. A device that says it is lost, as
+one does on some renderers while another program holds the screen
+(`render_probe::device_state`), is waited for: until its render targets
+are reset nothing it fails makes a rebuild and nothing is read back. A
+present SDL refuses is the game's own fault: the render target goes back
+to the window and it is logged once. Presents over 2 s three times within
+10 s of steady frames are logged once and the game carries on. Nothing is
+recorded yet. Window-size textures beyond the renderer's texture limit
+(the world, the match dialog layer, the OA settings layer and the front
+end's) are made as tiles with gutters (`TiledTexture`), and a match makes
+no front-end texture beyond it, since it never draws one; within the limit
+each stays one texture, as on SDL's software renderer, which has none. On
+a hardware driver the walk chose the opaque layers (the match's, the
+loading screen's and the front end's) are ARGB8888, drawn with no
+blending; SDL's software renderer, and every driver under
+`SDL_RENDER_DRIVER`, keep XRGB8888, RGB565 on a 16-bit window, and RGB24
+for the front end. SDL's software renderer asks the window for its pixels
+at each frame, since a display mode of another depth or another display
+can change them while the game runs. `--check-renderer-ladder`
+(`native-renderer-ladder`) forces each of these failures on the dummy
+video driver and checks that the game presents on through it;
+`--render-fault POINT[@FRAME]` narrows it to one
+(`native-renderer-ladder-create` makes every driver but software refuse at
+start).
+
 Once the renderer is made, start-up describes it with the
 [render probe](../platform/render-probe/README.md) and logs one line
 (`graphics_report.hpp`): the render driver on the video driver, the
@@ -576,12 +620,25 @@ logs it.
   the runtime's own renderer state, made only when it is handed a window,
   a renderer and its host, so a headless run, a window the runtime made
   itself and a loopback check's second runtime have none. No driver is
-  recorded as failed yet, so the walk skips none.
+  recorded as failed yet, so the walk skips none. `walk_rebuild_drivers`
+  and `RendererHost::rebuild` make the renderer again after a failure;
+  `RenderFaultHooks` are what `--check-renderer-ladder` forces.
+  `runtime_renderer.cpp` holds the runtime's side: the render events,
+  present errors and rebuilds, a lost device's wait and the stall rule;
+  `runtime_renderer_ladder_check.cpp` the ladder check.
+- `scaled_world.hpp`, `scaled_world.cpp`: `TiledTexture`, a window-size
+  texture made as one texture within the renderer's limit and as tiles
+  with one-texel gutters beyond it, and `PresentError`;
+  `app-scaled-world-software` checks that tiles read back as one texture
+  does on SDL's software renderer.
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
-  no SDL, no files and no clock, of which the game uses only the walk of
-  the render drivers (`render_host.hpp`) and the texture limit, in the
-  line it logs at start, so far. The walk
+  no SDL, no files and no clock, of which the game uses so far the walk of
+  the render drivers and its rebuilds (`render_host.hpp`), the texture
+  limit, in the line it logs at start and for the tiles, the stall rule,
+  the count of device resets (`note_device_reset`), the layers' texture
+  formats (`layer_formats`) and the tiles of a texture beyond the
+  renderer's limit. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed (`failed_driver_list` of the renderer records) but never
   `software`, with the framebuffer hint set before

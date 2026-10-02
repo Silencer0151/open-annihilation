@@ -187,4 +187,36 @@ void classify(AdapterFacts& facts) noexcept;
 /// @return true where the window has a framebuffer of its own
 [[nodiscard]] bool native_window_framebuffer(std::string_view video_driver) noexcept;
 
+/// Whether a renderer's device can draw, as a Direct3D 9 device answers
+/// TestCooperativeLevel. Such a device is lost when its exclusive full screen
+/// loses the focus, and on Windows XP also when the screen is locked or the
+/// display mode changes; SDL resets it once it can be reset.
+enum class DeviceState : uint8_t {
+    ok,        ///< the device draws
+    lost,      ///< the device is lost and cannot be reset yet
+    not_reset, ///< the device is lost and can be reset now
+    unknown,   ///< no Direct3D 9 device, or it gave another answer
+};
+
+/// What a Direct3D 9 device answers while it is lost (D3DERR_DEVICELOST).
+inline constexpr int32_t device_lost_result = static_cast<int32_t>(0x88760868);
+/// What a Direct3D 9 device answers while it is lost and can be reset
+/// (D3DERR_DEVICENOTRESET).
+inline constexpr int32_t device_not_reset_result = static_cast<int32_t>(0x88760869);
+
+/// Reads a Direct3D 9 device's answer to TestCooperativeLevel.
+///
+/// @param result the answer: 0 (D3D_OK), device_lost_result,
+///     device_not_reset_result or another
+/// @return ok, lost, not_reset, or unknown for any other answer
+[[nodiscard]] DeviceState device_state_from_result(int32_t result) noexcept;
+
+/// Asks a renderer's device whether it can draw: SDL's Direct3D 9 device,
+/// through the device SDL made, with TestCooperativeLevel. Every other
+/// renderer, and every system but Windows, answers unknown.
+///
+/// @param renderer the renderer; null answers unknown
+/// @return the device's state
+[[nodiscard]] DeviceState device_state(SDL_Renderer* renderer) noexcept;
+
 } // namespace oa::platform::render_probe

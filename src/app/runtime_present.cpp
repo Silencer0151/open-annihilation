@@ -4,6 +4,8 @@
 // SDL output textures, viewport sizing and frame presentation.
 #include "oa/app/runtime.hpp"
 #include "graphics_report.hpp"
+#include "render_host.hpp"
+#include "render_run.hpp"
 #include "xrgb_conversion.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -11,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cfenv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,21 +38,18 @@ namespace {
 } // namespace
 
 void Runtime::ensure_texture(int width, int height) {
-    if (sdl_.texture != nullptr && output_texture_w_ == width && output_texture_h_ == height)
-        return;
-    if (sdl_.texture != nullptr) {
-        SDL_DestroyTexture(sdl_.texture);
-        sdl_.texture = nullptr;
+    if (frontend_texture_.ensure(
+            sdl_.renderer,
+            front_end_layer_format(),
+            width,
+            height,
+            render_texture_limit(),
+            SDL_BLENDMODE_NONE
+        ) ||
+        output_texture_w_ != width || output_texture_h_ != height) {
+        output_texture_w_ = width;
+        output_texture_h_ = height;
     }
-    sdl_.texture = SDL_CreateTexture(
-        sdl_.renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, width, height
-    );
-    if (sdl_.texture == nullptr)
-        throw std::runtime_error(std::string("SDL_CreateTexture: ") + SDL_GetError());
-    if (!SDL_SetTextureScaleMode(sdl_.texture, SDL_SCALEMODE_NEAREST))
-        throw std::runtime_error(std::string("SDL texture scale: ") + SDL_GetError());
-    output_texture_w_ = width;
-    output_texture_h_ = height;
 }
 
 void Runtime::apply_output_mode() {
@@ -65,14 +65,28 @@ void Runtime::apply_output_mode() {
         // only once SDL reports it.
         if (match_layout_.width != laid_out.width || match_layout_.height != laid_out.height)
             match_pointer_known_ = false;
-        if (!SDL_SetRenderLogicalPresentation(
-                sdl_.renderer,
-                match_layout_.width,
-                match_layout_.height,
-                SDL_LOGICAL_PRESENTATION_DISABLED
-            ))
-            throw std::runtime_error(std::string("SDL logical presentation: ") + SDL_GetError());
-        ensure_texture(match_layout_.width, match_layout_.height);
+        try {
+            if (!SDL_SetRenderLogicalPresentation(
+                    sdl_.renderer,
+                    match_layout_.width,
+                    match_layout_.height,
+                    SDL_LOGICAL_PRESENTATION_DISABLED
+                ))
+                throw_present_error("SDL logical presentation");
+            // A match never draws the front end's texture: beyond the
+            // renderer's limit it is not made at the window's size at all.
+            const auto limit = render_texture_limit();
+            if (limit != 0 && (static_cast<uint32_t>(match_layout_.width) > limit ||
+                               static_cast<uint32_t>(match_layout_.height) > limit)) {
+                frontend_texture_.reset();
+                output_texture_w_ = 0;
+                output_texture_h_ = 0;
+            } else {
+                ensure_texture(match_layout_.width, match_layout_.height);
+            }
+        } catch (const PresentError& error) {
+            note_present_error(error.what(), false);
+        }
         // A build page laid out for a column of another height, or one that
         // no longer fits, is laid out again for this one.
         if (match_hud_ && match_build_page_ > 0 && selected_match_unit_ != 0 &&
@@ -103,11 +117,15 @@ void Runtime::apply_output_mode() {
             width = battlefield->width;
             height = battlefield->height;
         }
-        if (!SDL_SetRenderLogicalPresentation(
-                sdl_.renderer, width, height, SDL_LOGICAL_PRESENTATION_LETTERBOX
-            ))
-            throw std::runtime_error(std::string("SDL logical presentation: ") + SDL_GetError());
-        ensure_texture(width, height);
+        try {
+            if (!SDL_SetRenderLogicalPresentation(
+                    sdl_.renderer, width, height, SDL_LOGICAL_PRESENTATION_LETTERBOX
+                ))
+                throw_present_error("SDL logical presentation");
+            ensure_texture(width, height);
+        } catch (const PresentError& error) {
+            note_present_error(error.what(), false);
+        }
     }
 }
 
@@ -207,31 +225,67 @@ void Runtime::take_renderer_names(std::string driver, std::string adapter) {
     renderer_adapter_ = std::move(adapter);
 }
 
-SDL_Texture* Runtime::ensure_streaming_texture(
-    SDL_Texture* existing,
+void Runtime::ensure_streaming_texture(
+    SDL_Texture*& texture,
     SDL_PixelFormat format,
     int width,
     int height,
     int& stored_w,
     int& stored_h
 ) {
-    if (existing != nullptr && existing->format == format && stored_w == width &&
-        stored_h == height)
-        return existing;
-    if (existing != nullptr)
-        SDL_DestroyTexture(existing);
-    auto* texture =
+    if (texture != nullptr && texture->format == format && stored_w == width && stored_h == height)
+        return;
+    // The old texture is forgotten before the new one is made, so that a
+    // failure leaves none to draw, upload into or destroy again.
+    if (texture != nullptr)
+        SDL_DestroyTexture(texture);
+    texture = nullptr;
+    stored_w = 0;
+    stored_h = 0;
+    auto* made =
         SDL_CreateTexture(sdl_.renderer, format, SDL_TEXTUREACCESS_STREAMING, width, height);
-    if (texture == nullptr)
-        throw std::runtime_error(std::string("SDL_CreateTexture: ") + SDL_GetError());
-    if (!SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST))
-        throw std::runtime_error(std::string("SDL texture scale: ") + SDL_GetError());
+    if (made == nullptr)
+        throw_present_error("SDL_CreateTexture");
+    // An opaque layer in an alpha format is drawn with no blending, which
+    // SDL turns on for alpha formats.
+    if (SDL_ISPIXELFORMAT_ALPHA(format) && !SDL_SetTextureBlendMode(made, SDL_BLENDMODE_NONE)) {
+        SDL_DestroyTexture(made);
+        throw_present_error("SDL texture blend");
+    }
+    if (!SDL_SetTextureScaleMode(made, SDL_SCALEMODE_NEAREST)) {
+        SDL_DestroyTexture(made);
+        throw_present_error("SDL texture scale");
+    }
+    texture = made;
     stored_w = width;
     stored_h = height;
-    return texture;
 }
 
-SDL_PixelFormat Runtime::frame_texture_format() const {
+namespace {
+
+/// Returns SDL's pixel format for a layer's format.
+///
+/// @param format the layer's format
+/// @return SDL's format
+SDL_PixelFormat sdl_format(render_policy::LayerFormat format) noexcept {
+    switch (format) {
+    case render_policy::LayerFormat::rgb24:
+        return SDL_PIXELFORMAT_RGB24;
+    case render_policy::LayerFormat::xrgb8888:
+        return SDL_PIXELFORMAT_XRGB8888;
+    case render_policy::LayerFormat::rgb565:
+        return SDL_PIXELFORMAT_RGB565;
+    case render_policy::LayerFormat::argb8888:
+        return SDL_PIXELFORMAT_ARGB8888;
+    }
+    return SDL_PIXELFORMAT_XRGB8888;
+}
+
+} // namespace
+
+SDL_PixelFormat Runtime::opaque_layer_format() const {
+    if (render_run_)
+        return sdl_format(render_run_->host->opaque_format());
     if (sdl_.renderer == nullptr || sdl_.window == nullptr)
         return SDL_PIXELFORMAT_XRGB8888;
     const char* name = SDL_GetRendererName(sdl_.renderer);
@@ -241,13 +295,28 @@ SDL_PixelFormat Runtime::frame_texture_format() const {
                : SDL_PIXELFORMAT_XRGB8888;
 }
 
+SDL_PixelFormat Runtime::loading_layer_format() const {
+    return render_run_ ? sdl_format(render_run_->host->layer_formats().loading)
+                       : SDL_PIXELFORMAT_XRGB8888;
+}
+
+SDL_PixelFormat Runtime::front_end_layer_format() const {
+    return render_run_ ? sdl_format(render_run_->host->layer_formats().front_end)
+                       : SDL_PIXELFORMAT_RGB24;
+}
+
+uint32_t Runtime::render_texture_limit() const {
+    return render_run_ ? render_run_->host->texture_limit() : 0;
+}
+
 void Runtime::upload_rgb24_frame(SDL_Texture* texture, const renderer::Surface& source) {
     if (texture == nullptr || source.rgb.empty())
         return;
     void* pixels = nullptr;
     int pitch = 0;
     if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch))
-        throw std::runtime_error(std::string("SDL_LockTexture: ") + SDL_GetError());
+        throw_present_error("SDL_LockTexture");
+    // XRGB8888 and ARGB8888 take the same opaque words.
     const auto convert =
         texture->format == SDL_PIXELFORMAT_RGB565 ? convert_rgb24_rgb565 : convert_rgb24_xrgb;
     convert(
@@ -262,32 +331,48 @@ void Runtime::upload_rgb24_frame(SDL_Texture* texture, const renderer::Surface& 
     SDL_UnlockTexture(texture);
 }
 
+void Runtime::upload_rgb24_tiles(
+    TiledTexture& texture, const renderer::Surface& source, const std::array<uint8_t, 256>* gamma
+) {
+    if (source.rgb.empty() || static_cast<int>(source.width) != texture.width() ||
+        static_cast<int>(source.height) != texture.height())
+        return;
+    const auto convert = texture.format() == SDL_PIXELFORMAT_RGB565 ? convert_rgb24_rgb565_rect
+                                                                    : convert_rgb24_xrgb_rect;
+    const auto rgb_pitch = static_cast<std::size_t>(source.width) * 3U;
+    texture.upload([&](const SDL_Rect& part, uint8_t* pixels, int pitch) {
+        convert(
+            source.rgb.data() + static_cast<std::size_t>(part.y) * rgb_pitch +
+                static_cast<std::size_t>(part.x) * 3U,
+            rgb_pitch,
+            static_cast<uint32_t>(part.w),
+            static_cast<uint32_t>(part.h),
+            pixels,
+            static_cast<std::size_t>(pitch),
+            gamma,
+            draw_pool_.get()
+        );
+    });
+}
+
 void Runtime::destroy_match_layer_textures() {
     if (match_hud_tex_ != nullptr) {
         SDL_DestroyTexture(match_hud_tex_);
         match_hud_tex_ = nullptr;
     }
-    if (match_world_tex_ != nullptr) {
-        SDL_DestroyTexture(match_world_tex_);
-        match_world_tex_ = nullptr;
-    }
+    match_world_tex_.reset();
     if (match_cursor_tex_ != nullptr) {
         SDL_DestroyTexture(match_cursor_tex_);
         match_cursor_tex_ = nullptr;
     }
-    if (match_dialog_tex_ != nullptr) {
-        SDL_DestroyTexture(match_dialog_tex_);
-        match_dialog_tex_ = nullptr;
-    }
+    match_dialog_tex_.reset();
     if (match_dialog_side_tex_ != nullptr) {
         SDL_DestroyTexture(match_dialog_side_tex_);
         match_dialog_side_tex_ = nullptr;
     }
     destroy_engine_settings_textures();
-    match_dialog_tex_w_ = match_dialog_tex_h_ = 0;
     match_dialog_side_tex_w_ = match_dialog_side_tex_h_ = 0;
     match_hud_tex_w_ = match_hud_tex_h_ = 0;
-    match_world_tex_w_ = match_world_tex_h_ = 0;
     match_cursor_tex_w_ = match_cursor_tex_h_ = 0;
 }
 
@@ -404,24 +489,14 @@ bool Runtime::compose_match_dialog_layer() {
         static_cast<uint32_t>(match_layout_.height),
         match_dialog_rgba_
     );
-    if (match_dialog_tex_ == nullptr || match_dialog_tex_w_ != match_layout_.width ||
-        match_dialog_tex_h_ != match_layout_.height) {
-        if (match_dialog_tex_ != nullptr)
-            SDL_DestroyTexture(match_dialog_tex_);
-        match_dialog_tex_ = SDL_CreateTexture(
-            sdl_.renderer,
-            SDL_PIXELFORMAT_RGBA32,
-            SDL_TEXTUREACCESS_STREAMING,
-            match_layout_.width,
-            match_layout_.height
-        );
-        if (match_dialog_tex_ == nullptr ||
-            !SDL_SetTextureBlendMode(match_dialog_tex_, SDL_BLENDMODE_BLEND) ||
-            !SDL_SetTextureScaleMode(match_dialog_tex_, SDL_SCALEMODE_NEAREST))
-            throw std::runtime_error(std::string("SDL dialog layer: ") + SDL_GetError());
-        match_dialog_tex_w_ = match_layout_.width;
-        match_dialog_tex_h_ = match_layout_.height;
-    }
+    match_dialog_tex_.ensure(
+        sdl_.renderer,
+        SDL_PIXELFORMAT_RGBA32,
+        match_layout_.width,
+        match_layout_.height,
+        render_texture_limit(),
+        SDL_BLENDMODE_BLEND
+    );
     const uint8_t* dialog_pixels = match_dialog_rgba_.data();
     std::vector<uint8_t> corrected;
     if (!gamma_identity_) {
@@ -429,8 +504,7 @@ bool Runtime::compose_match_dialog_layer() {
         apply_gamma_rgb(corrected.data(), corrected.size() / 4U, 4);
         dialog_pixels = corrected.data();
     }
-    if (!SDL_UpdateTexture(match_dialog_tex_, nullptr, dialog_pixels, match_layout_.width * 4))
-        throw std::runtime_error(std::string("SDL dialog layer upload: ") + SDL_GetError());
+    match_dialog_tex_.update(dialog_pixels, match_layout_.width * 4, 4);
     return true;
 }
 
@@ -438,8 +512,8 @@ void Runtime::present_match_layers() {
     if (match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
     const bool dialogs = compose_match_dialog_layer();
-    const auto frame_format = frame_texture_format();
-    match_hud_tex_ = ensure_streaming_texture(
+    const auto frame_format = opaque_layer_format();
+    ensure_streaming_texture(
         match_hud_tex_,
         frame_format,
         static_cast<int>(match_hud_cpu_.width),
@@ -447,23 +521,25 @@ void Runtime::present_match_layers() {
         match_hud_tex_w_,
         match_hud_tex_h_
     );
-    match_world_tex_ = ensure_streaming_texture(
-        match_world_tex_,
+    match_world_tex_.ensure(
+        sdl_.renderer,
         frame_format,
         static_cast<int>(match_world_cpu_.width),
         static_cast<int>(match_world_cpu_.height),
-        match_world_tex_w_,
-        match_world_tex_h_
+        render_texture_limit(),
+        SDL_BLENDMODE_NONE
     );
     const auto upload_start = std::chrono::steady_clock::now();
     upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
-    upload_rgb24_frame(match_world_tex_, match_world_cpu_);
+    upload_rgb24_tiles(
+        match_world_tex_, match_world_cpu_, gamma_identity_ ? nullptr : &gamma_table_
+    );
     const auto present_start = std::chrono::steady_clock::now();
     phase_times_.upload += elapsed_since(upload_start);
     // The clear is the blank fill for strip area beyond the chrome's largest
     // (1280x1024) size: right of the bars and under the side column.
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
-        throw std::runtime_error(std::string("SDL_RenderClear: ") + SDL_GetError());
+        throw_present_error("SDL_RenderClear");
     for (const auto& strip : match_hud_strips()) {
         const SDL_FRect source{
             static_cast<float>(strip.source_x),
@@ -478,7 +554,7 @@ void Runtime::present_match_layers() {
             static_cast<float>(strip.h)
         };
         if (!SDL_RenderTexture(sdl_.renderer, match_hud_tex_, &source, &destination))
-            throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+            throw_present_error("SDL_RenderTexture");
     }
     const SDL_FRect world{
         static_cast<float>(match_layout_.left),
@@ -486,11 +562,10 @@ void Runtime::present_match_layers() {
         static_cast<float>(match_world_cpu_.width),
         static_cast<float>(match_world_cpu_.height)
     };
-    if (!SDL_RenderTexture(sdl_.renderer, match_world_tex_, nullptr, &world))
-        throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+    match_world_tex_.draw(sdl_.renderer, nullptr, &world);
     // A placed dialog's part over the side column goes over the HUD layer.
     if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
-        match_dialog_side_tex_ = ensure_streaming_texture(
+        ensure_streaming_texture(
             match_dialog_side_tex_,
             frame_format,
             static_cast<int>(match_dialog_side_.width),
@@ -506,25 +581,30 @@ void Runtime::present_match_layers() {
             static_cast<float>(match_dialog_side_.height)
         };
         if (!SDL_RenderTexture(sdl_.renderer, match_dialog_side_tex_, nullptr, &side))
-            throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+            throw_present_error("SDL_RenderTexture");
     }
     present_engine_settings_layer();
-    if (dialogs && !SDL_RenderTexture(sdl_.renderer, match_dialog_tex_, nullptr, nullptr))
-        throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+    if (dialogs)
+        match_dialog_tex_.draw(sdl_.renderer, nullptr, nullptr);
     present_software_cursor();
     capture_render_target();
+    if (render_fault_due(RenderFaultPoint::present))
+        throw PresentError("injected present error");
+    if (render_fault_due(RenderFaultPoint::float_state))
+        std::fesetround(FE_TOWARDZERO);
     if (!SDL_RenderPresent(sdl_.renderer))
-        throw std::runtime_error(std::string("SDL_RenderPresent: ") + SDL_GetError());
+        note_present_refused("SDL_RenderPresent");
     oa::base::float_precision::restore_program_float_control();
     phase_times_.present += elapsed_since(present_start);
-    frame_pacing::note_frame_measure(
-        frame_stats_,
-        frame_pacing::FrameMeasure::present,
-        static_cast<uint64_t>(elapsed_since(upload_start))
-    );
+    const auto present_ns = static_cast<uint64_t>(elapsed_since(upload_start));
+    frame_pacing::note_frame_measure(frame_stats_, frame_pacing::FrameMeasure::present, present_ns);
+    note_present_time(present_ns);
 }
 
 void Runtime::capture_render_target() {
+    // A lost device has no picture to read.
+    if (render_run_ && render_run_->device_lost)
+        return;
     if (video_capture_)
         video_capture_->add_frame(sdl_.renderer);
     if (capture_frame_ == nullptr)
@@ -534,7 +614,7 @@ void Runtime::capture_render_target() {
         target != nullptr ? SDL_ConvertSurface(target, SDL_PIXELFORMAT_RGB24) : nullptr;
     SDL_DestroySurface(target);
     if (rgb == nullptr)
-        throw std::runtime_error(std::string("SDL_RenderReadPixels: ") + SDL_GetError());
+        throw_present_error("SDL_RenderReadPixels");
     const auto width = static_cast<std::size_t>(rgb->w);
     capture_frame_->width = static_cast<uint32_t>(rgb->w);
     capture_frame_->height = static_cast<uint32_t>(rgb->h);
@@ -620,6 +700,12 @@ void Runtime::present_software_cursor() {
 }
 
 void Runtime::render() {
+    if (render_run_ && !render_run_->pending_rebuild.empty() && !render_run_->device_lost)
+        rebuild_renderer(render_run_->pending_rebuild);
+    // A reset device took the front end's texture with it.
+    if (sdl_.renderer != nullptr && frontend_texture_.tile_count() == 0 &&
+        screen_ != Screen::match && screen_ != Screen::loading)
+        apply_output_mode();
     const auto compose_start = std::chrono::steady_clock::now();
     rebuild_surface();
     const auto composed = elapsed_since(compose_start);
@@ -627,35 +713,58 @@ void Runtime::render() {
     frame_pacing::note_frame_measure(
         frame_stats_, frame_pacing::FrameMeasure::draw, static_cast<uint64_t>(composed)
     );
+    if (render_run_ && render_run_->last_screen != screen_) {
+        render_run_->last_screen = screen_;
+        render_run_->screen_since_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch()
+            )
+                                      .count());
+    }
     // The loading screen went out through the display sink as it was drawn.
     if (screen_ == Screen::loading)
         return;
-    if (screen_ == Screen::match && match_use_layers_) {
-        present_match_layers();
-        return;
+    try {
+        if (screen_ == Screen::match && match_use_layers_) {
+            present_match_layers();
+            return;
+        }
+        present_front_end();
+    } catch (const PresentError& error) {
+        note_present_error(error.what(), true);
     }
+}
+
+void Runtime::present_front_end() {
     // A match's surface_ is composed at the display gamma already.
     const auto present_start = std::chrono::steady_clock::now();
-    const uint8_t* frame = surface_.rgb.data();
-    std::vector<uint8_t> corrected;
-    if (!gamma_identity_ && screen_ != Screen::match) {
-        corrected = surface_.rgb;
-        apply_gamma_rgb(corrected.data(), corrected.size() / 3U, 3);
-        frame = corrected.data();
+    const bool gamma = !gamma_identity_ && screen_ != Screen::match;
+    if (frontend_texture_.format() == SDL_PIXELFORMAT_RGB24) {
+        const uint8_t* frame = surface_.rgb.data();
+        std::vector<uint8_t> corrected;
+        if (gamma) {
+            corrected = surface_.rgb;
+            apply_gamma_rgb(corrected.data(), corrected.size() / 3U, 3);
+            frame = corrected.data();
+        }
+        frontend_texture_.update(frame, static_cast<int>(surface_.width * 3U), 3);
+    } else {
+        upload_rgb24_tiles(frontend_texture_, surface_, gamma ? &gamma_table_ : nullptr);
     }
-    if (!SDL_UpdateTexture(sdl_.texture, nullptr, frame, static_cast<int>(surface_.width * 3U)) ||
-        !SDL_RenderClear(sdl_.renderer) ||
-        !SDL_RenderTexture(sdl_.renderer, sdl_.texture, nullptr, nullptr))
-        throw std::runtime_error(std::string("SDL render: ") + SDL_GetError());
+    if (!SDL_RenderClear(sdl_.renderer))
+        throw_present_error("SDL render");
+    frontend_texture_.draw(sdl_.renderer, nullptr, nullptr);
     capture_render_target();
+    if (render_fault_due(RenderFaultPoint::present))
+        throw PresentError("injected present error");
+    if (render_fault_due(RenderFaultPoint::float_state))
+        std::fesetround(FE_TOWARDZERO);
     if (!SDL_RenderPresent(sdl_.renderer))
-        throw std::runtime_error(std::string("SDL render: ") + SDL_GetError());
+        note_present_refused("SDL render");
     oa::base::float_precision::restore_program_float_control();
-    frame_pacing::note_frame_measure(
-        frame_stats_,
-        frame_pacing::FrameMeasure::present,
-        static_cast<uint64_t>(elapsed_since(present_start))
-    );
+    const auto present_ns = static_cast<uint64_t>(elapsed_since(present_start));
+    frame_pacing::note_frame_measure(frame_stats_, frame_pacing::FrameMeasure::present, present_ns);
+    note_present_time(present_ns);
 }
 
 [[nodiscard]] oa::ui::gui_input::MenuObject Runtime::input_menu() const {

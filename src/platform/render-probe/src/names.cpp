@@ -184,4 +184,14 @@ bool native_window_framebuffer(std::string_view video_driver) noexcept {
     );
 }
 
+DeviceState device_state_from_result(int32_t result) noexcept {
+    if (result == 0)
+        return DeviceState::ok;
+    if (result == device_lost_result)
+        return DeviceState::lost;
+    if (result == device_not_reset_result)
+        return DeviceState::not_reset;
+    return DeviceState::unknown;
+}
+
 } // namespace oa::platform::render_probe

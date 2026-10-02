@@ -107,9 +107,69 @@ oa::app::Extension test_extension(TestExtension& state) {
     return table;
 }
 
+// --check-renderer-ladder and the failure --render-fault narrows it to.
+void renderer_ladder_options() {
+    const auto ladder = parse({"--check-renderer-ladder"});
+    expect(
+        ladder.check_renderer_ladder && ladder.fixed_clock && ladder.unattended &&
+            !ladder.render_fault,
+        "--check-renderer-ladder is a fixed-clock, unattended run of every case"
+    );
+    expect(!parse({}).check_renderer_ladder, "no renderer ladder check unasked");
+    const std::pair<const char*, oa::app::RenderFaultPoint> points[] = {
+        {"create", oa::app::RenderFaultPoint::create},
+        {"present", oa::app::RenderFaultPoint::present},
+        {"reset", oa::app::RenderFaultPoint::reset},
+        {"lost", oa::app::RenderFaultPoint::lost},
+        {"stall", oa::app::RenderFaultPoint::stall},
+        {"float", oa::app::RenderFaultPoint::float_state},
+    };
+    for (const auto& [name, point] : points) {
+        const auto faulted = parse({"--check-renderer-ladder", "--render-fault", name});
+        expect(
+            faulted.render_fault && faulted.render_fault->point == point &&
+                !faulted.render_fault->frame,
+            name
+        );
+        if (point == oa::app::RenderFaultPoint::create)
+            continue;
+        const std::string at_frame = std::string(name) + "@120";
+        const auto framed = parse({"--check-renderer-ladder", "--render-fault", at_frame.c_str()});
+        expect(
+            framed.render_fault && framed.render_fault->point == point &&
+                framed.render_fault->frame == 120U,
+            at_frame.c_str()
+        );
+    }
+    const std::string usage =
+        "--render-fault takes create, present, reset, lost, stall or float, optionally @FRAME";
+    for (const char* refused : {"present@0", "present@x", "present@", "reset@-1", "melt", "@5"})
+        expect(rejection({"--check-renderer-ladder", "--render-fault", refused}) == usage, refused);
+    expect(
+        rejection({"--check-renderer-ladder", "--render-fault"}) ==
+            "--render-fault requires a value",
+        "--render-fault takes a value"
+    );
+    expect(
+        rejection({"--check-renderer-ladder", "--render-fault", "create@5"}) ==
+            "--render-fault create acts at start-up and takes no frame",
+        "create takes no frame"
+    );
+    expect(
+        rejection({"--render-fault", "present"}) == "--render-fault needs --check-renderer-ladder",
+        "--render-fault without the check is refused"
+    );
+    expect(
+        rejection({"--render-script", "film.oascript", "--check-renderer-ladder"}) ==
+            "--render-script cannot be used with --check-renderer-ladder",
+        "the director does not run the renderer ladder check"
+    );
+}
+
 } // namespace
 
 int main() {
+    renderer_ladder_options();
     const auto plain = parse({"--headless-check"});
     expect(plain.trace_digest.empty() && plain.trace_units.empty(), "no trace without the flag");
     expect(!plain.seed, "no fixed seed without the flag");
@@ -441,6 +501,7 @@ int main() {
         {"--check-frontend-controls"},
         {"--check-scroll-bars"},
         {"--check-engine-settings"},
+        {"--check-renderer-ladder"},
         {"--check-briefing-narration"},
         {"--benchmark", "60"},
         {"--frames", "120"},

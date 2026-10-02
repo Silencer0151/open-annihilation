@@ -13,6 +13,7 @@
 #include "oa/platform/system.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -456,6 +458,23 @@ int16_t Runtime::shift_key_state() {
 }
 
 void Runtime::drain_input() {
+    // The renderer's events are handled, not dropped: a texture that a
+    // reset took must be made again.
+    constexpr int render_event_batch = 8;
+    std::array<SDL_Event, render_event_batch> render_events{};
+    for (;;) {
+        const int taken = SDL_PeepEvents(
+            render_events.data(),
+            render_event_batch,
+            SDL_GETEVENT,
+            SDL_EVENT_RENDER_TARGETS_RESET,
+            SDL_EVENT_RENDER_DEVICE_LOST
+        );
+        for (int index = 0; index < taken; ++index)
+            std::ignore = take_render_event(render_events[static_cast<std::size_t>(index)]);
+        if (taken < render_event_batch)
+            break;
+    }
     SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
     // The window events dropped here may have changed whether the pointer is
     // kept on the screen; the window's own state settles it.

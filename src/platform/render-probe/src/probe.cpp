@@ -113,4 +113,14 @@ AdapterFacts describe(SDL_Renderer* renderer, AdapterRead read) {
     return facts;
 }
 
+DeviceState device_state(SDL_Renderer* renderer) noexcept {
+#if defined(_WIN32)
+    if (renderer != nullptr && sdl_text(SDL_GetRendererName(renderer)) == kDirect3d9Renderer)
+        return readers::direct3d9_device_state(renderer);
+#else
+    static_cast<void>(renderer);
+#endif
+    return DeviceState::unknown;
+}
+
 } // namespace oa::platform::render_probe

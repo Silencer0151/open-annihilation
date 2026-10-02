@@ -468,6 +468,64 @@ enum class StallAction : uint8_t {
 note_present(StallWatch& watch, uint64_t steady_ns, uint64_t present_ns, RenderTier tier) noexcept;
 
 // ---------------------------------------------------------------------------
+// Device resets
+
+/// The device resets within reset_window_ms that make a rebuild.
+inline constexpr uint32_t resets_that_rebuild = 3;
+/// The span the device resets are counted over, in milliseconds.
+inline constexpr uint64_t reset_window_ms = 60'000;
+
+/// The device resets seen lately.
+struct ResetWatch {
+    /// The latest resets' times, in milliseconds, oldest first.
+    std::array<uint64_t, resets_that_rebuild> reset_times_ms{};
+    uint32_t resets{}; ///< how many of reset_times_ms hold one
+};
+
+/// Notes a device reset. Every reset forgets the engine's textures; the
+/// third within reset_window_ms makes a rebuild, and the count then starts
+/// again.
+///
+/// @param[in,out] watch the run's resets
+/// @param now_ms when the reset came, in milliseconds on a steady clock
+/// @return true at the third reset within reset_window_ms
+[[nodiscard]] bool note_device_reset(ResetWatch& watch, uint64_t now_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// Texture formats of the layers
+
+/// The pixel format of a layer's texture.
+enum class LayerFormat : uint8_t {
+    rgb24,    ///< 3 bytes a pixel, red first
+    xrgb8888, ///< 0xXXRRGGBB words
+    rgb565,   ///< 16-bit words, for a 16-bit window
+    argb8888, ///< 0xAARRGGBB words, opaque and drawn with no blending
+};
+
+/// The texture formats of the standard tier's opaque layers.
+struct LayerFormats {
+    LayerFormat opaque{LayerFormat::xrgb8888};  ///< the match's world, HUD and side textures
+    LayerFormat loading{LayerFormat::xrgb8888}; ///< the loading screen and the palette movies
+    LayerFormat front_end{LayerFormat::rgb24};  ///< the front end's screens
+};
+
+/// Chooses the texture formats of the opaque layers.
+///
+/// SDL's software renderer keeps today's: XRGB8888, RGB565 for the match's
+/// layers on a 16-bit window, and RGB24 for the front end; so does every
+/// driver under SDL_RENDER_DRIVER, with XRGB8888 for the match's layers.
+/// Every other renderer gets ARGB8888, which hardware drivers upload without
+/// converting it; the layers are opaque and drawn with no blending, so no
+/// pixel changes.
+///
+/// @param software the renderer is SDL's software renderer
+/// @param rgb565_window the window's pixels are RGB565
+/// @param render_driver_named SDL_RENDER_DRIVER is set
+/// @return the formats
+[[nodiscard]] LayerFormats
+layer_formats(bool software, bool rgb565_window, bool render_driver_named) noexcept;
+
+// ---------------------------------------------------------------------------
 // The step-down ladder
 
 /// The zoomed-out view's method.

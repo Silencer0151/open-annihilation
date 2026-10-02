@@ -109,6 +109,32 @@ enum class Showcase {
     skirmish_battle
 };
 
+/// A renderer failure --render-fault forces in --check-renderer-ladder.
+enum class RenderFaultPoint : uint8_t {
+    /// every render driver but software refuses at start-up
+    create,
+    /// a present fails, on a menu frame, a match frame or a loading frame;
+    /// a texture cannot be made
+    present,
+    /// the device is reset, as the event dispatch, the loading pump, a drain
+    /// of input or a movie's hook takes it
+    reset,
+    /// the device is lost, or says it is lost and is then reset
+    lost,
+    /// presents take over 2 s, on steady frames and on frames that are not
+    stall,
+    /// the floating-point settings change before a present
+    float_state,
+};
+
+/// The failure --render-fault forces and when.
+struct RenderFault {
+    RenderFaultPoint point{};
+    /// The presented frame of its case the failure comes at, from 1; unset
+    /// for the case's own.
+    std::optional<uint32_t> frame{};
+};
+
 enum class MatchCommand {
     none,
     move,
@@ -270,6 +296,16 @@ struct Options {
     // its sections, controls, keys, OK, Cancel and Restore defaults, the
     // preferences it writes, and each setting taking effect.
     bool check_engine_settings = false;
+    // Forces each renderer failure the game handles while it runs, on the
+    // renderer the start made, and checks that it goes on presenting: the
+    // walk of the render drivers, a present error on a menu, match or
+    // loading frame, a device reset or loss, present stalls, a device that
+    // waits to be reset, a changed floating-point setting, and textures
+    // beyond the renderer's limit.
+    bool check_renderer_ladder = false;
+    // --render-fault POINT[@FRAME]: --check-renderer-ladder forces only that
+    // failure, at that presented frame of its case; unset for every case.
+    std::optional<RenderFault> render_fault;
     // --generate-script RECORDING: the recording a director script is
     // generated from; empty for none. Implies --headless-check and
     // --skip-intro.

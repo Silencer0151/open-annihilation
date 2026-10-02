@@ -148,6 +148,10 @@ void Runtime::pump_loading_screen() {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             throw std::runtime_error("loading cancelled");
+        // A reset or lost device during the load is handled as in the
+        // game, so that the match's first frame finds working textures.
+        if (take_render_event(event))
+            continue;
         // Alt+Enter switches full screen while a match loads too. The
         // loading screen takes no other input, so whether it was Alt+Enter
         // does not matter.

@@ -6,9 +6,10 @@
 // Microsoft Basic Render Driver's identifiers; the drivers that report a
 // fixed texture limit; the classification and cleaning of what a driver
 // reports; what describe reads, through a stand-in reader, for each
-// renderer and each choice of reading; and the video drivers whose windows
-// have a framebuffer of their own. Then SDL's software renderer on the
-// dummy video driver, described as the game describes it.
+// renderer and each choice of reading; the video drivers whose windows have
+// a framebuffer of their own; and a Direct3D 9 device's answers read as its
+// states. Then SDL's software renderer on the dummy video driver, described
+// as the game describes it, and its device state, unknown.
 #include "oa/platform/render_probe.hpp"
 
 #include "oa/test/check.hpp"
@@ -27,6 +28,10 @@ using namespace oa::platform::render_probe;
 /// The Microsoft Basic Render Driver's PCI vendor and device identifiers.
 constexpr uint32_t kBasicRenderVendor = 0x1414;
 constexpr uint32_t kBasicRenderDevice = 0x008C;
+/// A Direct3D 9 failure that is not a lost device (D3DERR_DRIVERINTERNALERROR).
+constexpr int32_t kOtherDeviceFailure = static_cast<int32_t>(0x88760827);
+/// A success code other than D3D_OK.
+constexpr int32_t kOtherSuccess = 1;
 /// Another Microsoft adapter's device identifier, which is no rasteriser.
 constexpr uint32_t kOtherMicrosoftDevice = 0x008E;
 /// PCI vendor identifiers of real graphics cards.
@@ -377,8 +382,40 @@ void test_software_renderer() {
 
 } // namespace
 
+/// A Direct3D 9 device's answers read as its states, and every renderer
+/// this test can make, which has no such device, answers unknown.
+void test_device_state() {
+    OA_CHECK(device_state_from_result(0) == DeviceState::ok);
+    OA_CHECK(device_state_from_result(device_lost_result) == DeviceState::lost);
+    OA_CHECK(device_state_from_result(device_not_reset_result) == DeviceState::not_reset);
+    // Another failure, and another success code, are neither.
+    OA_CHECK(device_state_from_result(kOtherDeviceFailure) == DeviceState::unknown);
+    OA_CHECK(device_state_from_result(kOtherSuccess) == DeviceState::unknown);
+    OA_CHECK(device_state(nullptr) == DeviceState::unknown);
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        OA_CHECK(false);
+        return;
+    }
+    constexpr int kWindowWidth = 64;
+    constexpr int kWindowHeight = 48;
+    SDL_Window* window = SDL_CreateWindow("render probe test", kWindowWidth, kWindowHeight, 0);
+    OA_CHECK(window != nullptr);
+    SDL_Renderer* renderer =
+        window != nullptr ? SDL_CreateRenderer(window, software_renderer.data()) : nullptr;
+    OA_CHECK(renderer != nullptr);
+    if (renderer != nullptr) {
+        OA_CHECK(device_state(renderer) == DeviceState::unknown);
+        SDL_DestroyRenderer(renderer);
+    }
+    if (window != nullptr)
+        SDL_DestroyWindow(window);
+    SDL_Quit();
+}
+
 int main() {
     test_rasteriser_names();
+    test_device_state();
     test_fixed_texture_limit();
     test_describe_reported();
     test_classify();

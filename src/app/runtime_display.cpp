@@ -4,10 +4,12 @@
 // The session display: its start, the lookup tables, and the sinks that
 // receive each finished 8-bit frame (SDL texture or headless capture).
 #include "oa/app/runtime.hpp"
+#include "render_run.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/pcx.hpp"
 #include <SDL3/SDL.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -159,9 +161,16 @@ void Runtime::present_sink_frame(
 ) {
     if (palette == nullptr)
         return;
+    auto& runtime = *static_cast<Runtime*>(user);
     // The sink is called from noexcept presentation code.
     try {
-        static_cast<Runtime*>(user)->present_indexed_frame(pixels, pitch, width, height, *palette);
+        runtime.present_indexed_frame(pixels, pitch, width, height, *palette);
+    } catch (const PresentError& error) {
+        // The loading pump's next render() makes the renderer again.
+        if (runtime.render_run_)
+            runtime.note_present_error(error.what(), false);
+        else
+            std::cerr << "display sink: " << error.what() << '\n';
     } catch (const std::exception& error) {
         std::cerr << "display sink: " << error.what() << '\n';
     }
@@ -183,13 +192,14 @@ void Runtime::present_indexed_frame(
         }
         output.texels_ready = true;
     }
-    output.texture = ensure_streaming_texture(
-        output.texture, SDL_PIXELFORMAT_XRGB8888, width, height, output.width, output.height
+    ensure_streaming_texture(
+        output.texture, loading_layer_format(), width, height, output.width, output.height
     );
+    const auto present_start = std::chrono::steady_clock::now();
     void* texels = nullptr;
     int texture_pitch = 0;
     if (!SDL_LockTexture(output.texture, nullptr, &texels, &texture_pitch))
-        throw std::runtime_error(std::string("SDL_LockTexture: ") + SDL_GetError());
+        throw_present_error("SDL_LockTexture");
     for (int32_t y = 0; y < height; ++y) {
         const uint8_t* row = pixels + static_cast<std::ptrdiff_t>(y) * pitch;
         auto* out = reinterpret_cast<uint32_t*>(
@@ -201,12 +211,21 @@ void Runtime::present_indexed_frame(
     SDL_UnlockTexture(output.texture);
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer) ||
         !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))
-        throw std::runtime_error(std::string("SDL render: ") + SDL_GetError());
+        throw_present_error("SDL render");
     present_software_cursor();
     capture_render_target();
+    if (render_fault_due(RenderFaultPoint::present))
+        throw PresentError("injected present error");
     if (!SDL_RenderPresent(sdl_.renderer))
-        throw std::runtime_error(std::string("SDL_RenderPresent: ") + SDL_GetError());
+        note_present_refused("SDL_RenderPresent");
     oa::base::float_precision::restore_program_float_control();
+    const auto present_ns =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now() - present_start
+        )
+                                  .count());
+    frame_pacing::note_frame_measure(frame_stats_, frame_pacing::FrameMeasure::present, present_ns);
+    note_present_time(present_ns);
 }
 
 } // namespace oa::app

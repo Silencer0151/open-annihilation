@@ -673,6 +673,66 @@ void Runtime::check_loading_sink() {
               << presented.height << '\n';
 }
 
+std::size_t Runtime::presented_pixels_differing(
+    const renderer::Surface& presented,
+    const renderer::Surface& composed,
+    int left_out_x,
+    int left_out_y,
+    int left_out_size,
+    std::string_view label
+) const {
+    if (presented.width != composed.width || presented.height != composed.height)
+        throw std::runtime_error(
+            std::string(label) + ": presented " + std::to_string(presented.width) + 'x' +
+            std::to_string(presented.height) + ", composed " + std::to_string(composed.width) +
+            'x' + std::to_string(composed.height)
+        );
+    const CanvasRect left_out{left_out_x, left_out_y, left_out_size, left_out_size};
+    std::size_t differing = 0;
+    for (int y = 0; y < static_cast<int>(composed.height); ++y)
+        for (int x = 0; x < static_cast<int>(composed.width); ++x) {
+            if (contains(left_out, x, y))
+                continue;
+            const auto offset =
+                (static_cast<std::size_t>(y) * composed.width + static_cast<std::size_t>(x)) * 3U;
+            differing += std::equal(
+                             presented.rgb.begin() + static_cast<std::ptrdiff_t>(offset),
+                             presented.rgb.begin() + static_cast<std::ptrdiff_t>(offset + 3),
+                             composed.rgb.begin() + static_cast<std::ptrdiff_t>(offset)
+                         )
+                             ? 0
+                             : 1;
+        }
+    return differing;
+}
+
+void Runtime::expect_presented_equals_composed(const fs::path& directory, std::string_view label) {
+    renderer::Surface presented;
+    capture_frame_ = &presented;
+    render();
+    capture_frame_ = nullptr;
+    if (presented.rgb.empty())
+        throw std::runtime_error(std::string(label) + ": no frame was presented");
+    renderer::Surface composed;
+    compose_match_frame(composed);
+    const std::size_t differing = presented_pixels_differing(
+        presented,
+        composed,
+        static_cast<int>(match_pointer_x_) - kCursorReach,
+        static_cast<int>(match_pointer_y_) - kCursorReach,
+        2 * kCursorReach,
+        label
+    );
+    if (differing == 0)
+        return;
+    write_ppm(directory / (std::string(label) + "-composed.ppm"), composed);
+    write_ppm(directory / (std::string(label) + "-presented.ppm"), presented);
+    throw std::runtime_error(
+        std::string(label) + ": " + std::to_string(differing) +
+        " presented pixels differ from compose_match_frame"
+    );
+}
+
 void Runtime::check_match_layers() {
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
@@ -685,39 +745,16 @@ void Runtime::check_match_layers() {
     );
     std::size_t frames = 0;
     const auto presented_frame = [&](renderer::Surface& presented) {
-        const CanvasRect cursor{
-            static_cast<int>(match_pointer_x_) - kCursorReach,
-            static_cast<int>(match_pointer_y_) - kCursorReach,
-            2 * kCursorReach,
-            2 * kCursorReach
-        };
+        const int cursor_x = static_cast<int>(match_pointer_x_) - kCursorReach;
+        const int cursor_y = static_cast<int>(match_pointer_y_) - kCursorReach;
         capture_frame_ = &presented;
         render();
         capture_frame_ = nullptr;
         renderer::Surface composed;
         compose_match_frame(composed);
-        if (presented.width != composed.width || presented.height != composed.height)
-            throw std::runtime_error(
-                "match layer check: presented " + std::to_string(presented.width) + 'x' +
-                std::to_string(presented.height) + ", composed " + std::to_string(composed.width) +
-                'x' + std::to_string(composed.height)
-            );
-        std::size_t differing = 0;
-        for (int y = 0; y < static_cast<int>(composed.height); ++y)
-            for (int x = 0; x < static_cast<int>(composed.width); ++x) {
-                if (contains(cursor, x, y))
-                    continue;
-                const auto offset =
-                    (static_cast<std::size_t>(y) * composed.width + static_cast<std::size_t>(x)) *
-                    3U;
-                differing += std::equal(
-                                 presented.rgb.begin() + static_cast<std::ptrdiff_t>(offset),
-                                 presented.rgb.begin() + static_cast<std::ptrdiff_t>(offset + 3),
-                                 composed.rgb.begin() + static_cast<std::ptrdiff_t>(offset)
-                             )
-                                 ? 0
-                                 : 1;
-            }
+        const std::size_t differing = presented_pixels_differing(
+            presented, composed, cursor_x, cursor_y, 2 * kCursorReach, "match layer check"
+        );
         if (differing != 0) {
             write_ppm(report_directory / "native-match-layers-composed.ppm", composed);
             write_ppm(report_directory / "native-match-layers-presented.ppm", presented);

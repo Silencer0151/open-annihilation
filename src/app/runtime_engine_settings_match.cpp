@@ -61,8 +61,7 @@ bool rect_contains(const layout::Rect& rect, float x, float y) noexcept {
 } // namespace
 
 void Runtime::destroy_engine_settings_match_host(EngineSettingsMatchHost* host) noexcept {
-    if (host != nullptr && host->layer != nullptr)
-        SDL_DestroyTexture(host->layer);
+    // The layer's textures go with it.
     delete host;
 }
 
@@ -469,19 +468,15 @@ void Runtime::present_engine_settings_layer() {
     auto& host = engine_settings_match_host();
     const int width = host.drawn->width;
     const int height = host.drawn->height;
-    if (host.layer == nullptr || host.layer_width != width || host.layer_height != height) {
-        if (host.layer != nullptr)
-            SDL_DestroyTexture(host.layer);
-        host.layer = SDL_CreateTexture(
-            sdl_.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, width, height
-        );
-        if (host.layer == nullptr || !SDL_SetTextureBlendMode(host.layer, SDL_BLENDMODE_BLEND) ||
-            !SDL_SetTextureScaleMode(host.layer, SDL_SCALEMODE_NEAREST))
-            throw std::runtime_error(std::string("SDL settings layer: ") + SDL_GetError());
-        host.layer_width = width;
-        host.layer_height = height;
+    if (host.layer.ensure(
+            sdl_.renderer,
+            SDL_PIXELFORMAT_RGBA32,
+            width,
+            height,
+            render_texture_limit(),
+            SDL_BLENDMODE_BLEND
+        ))
         host.uploaded.reset();
-    }
     if (host.uploaded != host.drawn || host.uploaded_gamma != gamma_table_) {
         const uint8_t* pixels = host.layer_rgba.data();
         std::vector<uint8_t> corrected;
@@ -490,8 +485,7 @@ void Runtime::present_engine_settings_layer() {
             apply_gamma_rgb(corrected.data(), corrected.size() / 4U, 4);
             pixels = corrected.data();
         }
-        if (!SDL_UpdateTexture(host.layer, nullptr, pixels, width * 4))
-            throw std::runtime_error(std::string("SDL settings layer upload: ") + SDL_GetError());
+        host.layer.update(pixels, width * 4, 4);
         host.uploaded = host.drawn;
         host.uploaded_gamma = gamma_table_;
     }
@@ -501,17 +495,13 @@ void Runtime::present_engine_settings_layer() {
         static_cast<float>(host.layer_bounds.width),
         static_cast<float>(host.layer_bounds.height)
     };
-    if (!SDL_RenderTexture(sdl_.renderer, host.layer, &bounds, &bounds))
-        throw std::runtime_error(std::string("SDL_RenderTexture: ") + SDL_GetError());
+    host.layer.draw(sdl_.renderer, &bounds, &bounds);
 }
 
 void Runtime::destroy_engine_settings_textures() {
-    if (!engine_settings_match_ || engine_settings_match_->layer == nullptr)
+    if (!engine_settings_match_ || engine_settings_match_->layer.tile_count() == 0)
         return;
-    SDL_DestroyTexture(engine_settings_match_->layer);
-    engine_settings_match_->layer = nullptr;
-    engine_settings_match_->layer_width = 0;
-    engine_settings_match_->layer_height = 0;
+    engine_settings_match_->layer.reset();
     engine_settings_match_->uploaded.reset();
 }
 

@@ -25,6 +25,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <SDL3/SDL_main.h>
@@ -114,6 +115,29 @@ void set_window_icon(SDL_Window* window) {
     SDL_DestroySurface(surface);
 }
 
+/// Refuses every render driver but SDL's software renderer, for
+/// --render-fault create.
+///
+/// @param driver SDL's name for the render driver
+/// @return true for every driver but software
+bool refuse_all_but_software(void*, std::string_view driver) {
+    return driver != oa::platform::render_probe::software_renderer;
+}
+
+/// Returns what --check-renderer-ladder forces of the renderer from the
+/// start: with --render-fault create, every render driver but SDL's
+/// software renderer refuses; otherwise nothing.
+///
+/// @param options the parsed command line
+/// @return the faults; empty in a player's run
+RenderFaultHooks start_faults(const Options& options) {
+    RenderFaultHooks faults;
+    if (options.check_renderer_ladder && options.render_fault &&
+        options.render_fault->point == RenderFaultPoint::create)
+        faults.refuse_driver = refuse_all_but_software;
+    return faults;
+}
+
 struct HostDisplay {
     SDL_Window* window = nullptr;
     // The window's renderer, made by walking SDL's render drivers, and what
@@ -166,7 +190,7 @@ struct HostDisplay {
         if (sized)
             take_screen_size(window, screen, options.start_full_screen);
         set_window_icon(window);
-        renderer_host.create(window);
+        renderer_host.create(window, start_faults(options));
     }
 
     ~HostDisplay() {
@@ -203,15 +227,21 @@ void play_intro_file(
         // game.
         playback.hooks.context = host;
         // The movie player does not hand its events on, so whether Alt+Enter
-        // took one does not matter.
+        // took one does not matter. A lost device is noted for after the
+        // movie.
         playback.hooks.window_event = [](void* context, const SDL_Event& event) {
             auto& display = *static_cast<HostDisplay*>(context);
+            if (display.renderer_host.take_event(event))
+                return;
             std::ignore = take_full_screen_event(display.window, display.full_screen, event);
         };
     }
     if (snapshot)
         playback.snapshot_path = options.snapshot;
     auto result = opened.player->play(playback);
+    // A device lost while the movie played is made again before what follows.
+    if (host != nullptr)
+        host->renderer_host.service();
     if (!result.ok()) {
         std::cerr << "intro " << path.filename().string() << ": " << result.error << '\n';
         return;

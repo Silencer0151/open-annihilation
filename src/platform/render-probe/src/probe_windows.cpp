@@ -266,6 +266,15 @@ bool read_direct3d_adapter(SDL_Renderer* renderer, AdapterFacts& facts) {
     return read_direct3d12(properties, facts);
 }
 
+DeviceState direct3d9_device_state(SDL_Renderer* renderer) noexcept {
+    auto* device = static_cast<IDirect3DDevice9*>(SDL_GetPointerProperty(
+        SDL_GetRendererProperties(renderer), SDL_PROP_RENDERER_D3D9_DEVICE_POINTER, nullptr
+    ));
+    if (device == nullptr)
+        return DeviceState::unknown;
+    return device_state_from_result(static_cast<int32_t>(device->TestCooperativeLevel()));
+}
+
 bool running_under_wine() {
     const HMODULE system_library = GetModuleHandleW(L"ntdll.dll");
     return system_library != nullptr &&

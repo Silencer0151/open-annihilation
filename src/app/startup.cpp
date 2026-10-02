@@ -8,6 +8,7 @@
 #include "oa/app/hook_call.hpp"
 #include "oa/platform/job_pool.hpp"
 #include "oa/platform/system.hpp"
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -268,6 +269,7 @@ void check_director_options(Options& options) {
         {options.check_interpolation, "--check-interpolation"},
         {options.check_unit_playout, "--check-unit-playout"},
         {options.check_engine_settings, "--check-engine-settings"},
+        {options.check_renderer_ladder, "--check-renderer-ladder"},
     };
     for (const auto& [given, name] : refused)
         if (given)
@@ -290,6 +292,55 @@ void check_director_options(Options& options) {
 bool hardware_acceleration_asked(const Options& options, bool setting) noexcept {
     return options.hardware_acceleration.value_or(setting);
 }
+
+namespace {
+
+/// Reads --render-fault's value: a failure's name, optionally followed by
+/// @FRAME, a presented frame from 1 through 10,000,000.
+///
+/// Throws std::runtime_error naming the names it takes when the name is
+/// unknown or the frame is not a count from 1, and when create, which acts
+/// at start-up, is given a frame.
+///
+/// @param text the option's value
+/// @return the failure and its frame
+[[nodiscard]] RenderFault parse_render_fault(std::string_view text) {
+    static constexpr std::pair<std::string_view, RenderFaultPoint> points[] = {
+        {"create", RenderFaultPoint::create},
+        {"present", RenderFaultPoint::present},
+        {"reset", RenderFaultPoint::reset},
+        {"lost", RenderFaultPoint::lost},
+        {"stall", RenderFaultPoint::stall},
+        {"float", RenderFaultPoint::float_state},
+    };
+    const char* const usage =
+        "--render-fault takes create, present, reset, lost, stall or float, optionally @FRAME";
+    const auto at = text.find('@');
+    const auto name = text.substr(0, at);
+    const auto named = std::find_if(std::begin(points), std::end(points), [&](const auto& point) {
+        return point.first == name;
+    });
+    if (named == std::end(points))
+        throw std::runtime_error(usage);
+    RenderFault fault;
+    fault.point = named->second;
+    if (at == std::string_view::npos)
+        return fault;
+    if (fault.point == RenderFaultPoint::create)
+        throw std::runtime_error("--render-fault create acts at start-up and takes no frame");
+    std::size_t frame = 0;
+    try {
+        frame = parse_count(text.substr(at + 1));
+    } catch (const std::runtime_error&) {
+        throw std::runtime_error(usage);
+    }
+    if (frame == 0)
+        throw std::runtime_error(usage);
+    fault.frame = static_cast<uint32_t>(frame);
+    return fault;
+}
+
+} // namespace
 
 [[nodiscard]] Options parse_options(int argc, char** argv, const Extension& extension) {
     Options result;
@@ -420,6 +471,10 @@ bool hardware_acceleration_asked(const Options& options, bool setting) noexcept 
             result.check_scroll_bars = true;
         else if (argument == "--check-engine-settings")
             result.check_engine_settings = true;
+        else if (argument == "--check-renderer-ladder")
+            result.check_renderer_ladder = true;
+        else if (argument == "--render-fault")
+            result.render_fault = parse_render_fault(value(argument));
         else if (argument == "--check-briefing-narration")
             result.check_briefing_narration = true;
         else if (argument == "--check-match-layers")
@@ -491,6 +546,7 @@ bool hardware_acceleration_asked(const Options& options, bool setting) noexcept 
                    "[--check-multiplayer-menu] "
                    "[--check-load-save] [--check-frontend-controls] "
                    "[--check-scroll-bars] [--check-engine-settings] "
+                   "[--check-renderer-ladder [--render-fault POINT[@FRAME]]] "
                    "[--check-briefing-narration] [--check-director-view] "
                    "[--check-director-render] [--check-interpolation] "
                    "[--check-unit-playout] "
@@ -609,12 +665,14 @@ bool hardware_acceleration_asked(const Options& options, bool setting) noexcept 
     check_director_options(result);
     if (result.busy_combat && result.combat_units == 0)
         throw std::runtime_error("--busy-combat needs --combat");
+    if (result.render_fault && !result.check_renderer_ladder)
+        throw std::runtime_error("--render-fault needs --check-renderer-ladder");
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_match_dialogs ||
         result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
-        result.check_engine_settings || result.check_match_orders || result.check_factory_orders ||
-        result.check_download_builds || result.check_side_column || result.check_kill_board ||
-        result.check_patrol_reclaim || result.check_reclaim_cursor ||
+        result.check_engine_settings || result.check_renderer_ladder || result.check_match_orders ||
+        result.check_factory_orders || result.check_download_builds || result.check_side_column ||
+        result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
         result.check_pointer_interfaces || result.check_director_view ||
         result.check_director_render || result.check_interpolation || result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,

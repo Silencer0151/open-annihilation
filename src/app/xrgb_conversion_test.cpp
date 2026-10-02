@@ -4,7 +4,9 @@
 // The conversion of RGB frames into the window's XRGB8888 pixels: each pixel
 // packed as 0xffRRGGBB through the gamma table, and the same bytes on pools
 // of every size; and into a 16-bit window's RGB565 pixels, each the one SDL
-// makes of the XRGB8888 pixel, on pools of every size.
+// makes of the XRGB8888 pixel, on pools of every size; a rectangle of a frame
+// as the same rows and columns of the whole; and the front end's frame through
+// the gamma table as opaque ARGB8888 pixels of the corrected colours.
 #include "xrgb_conversion.hpp"
 
 #include <SDL3/SDL.h>
@@ -165,16 +167,187 @@ void rgb565_is_what_sdl_makes_of_xrgb() {
     }
 }
 
+/// Converts a rectangle of a frame, in XRGB8888 or RGB565, into rows
+/// `row_slack` bytes wider than its pixels.
+std::vector<uint8_t> convert_rect(
+    const std::vector<uint8_t>& rgb,
+    uint32_t frame_width,
+    uint32_t x,
+    uint32_t y,
+    uint32_t width,
+    uint32_t height,
+    bool rgb565,
+    const std::array<uint8_t, 256>* gamma,
+    job_pool::Pool* pool
+) {
+    const std::size_t pixel_bytes = rgb565 ? 2U : 4U;
+    const std::size_t pitch = static_cast<std::size_t>(width) * pixel_bytes + row_slack;
+    std::vector<uint8_t> pixels(pitch * height, untouched);
+    const std::size_t rgb_pitch = static_cast<std::size_t>(frame_width) * 3U;
+    const uint8_t* first = rgb.data() + static_cast<std::size_t>(y) * rgb_pitch + x * 3U;
+    const auto convert =
+        rgb565 ? oa::app::convert_rgb24_rgb565_rect : oa::app::convert_rgb24_xrgb_rect;
+    convert(first, rgb_pitch, width, height, pixels.data(), pitch, gamma, pool);
+    return pixels;
+}
+
+void rectangle_is_that_part_of_the_whole() {
+    std::mt19937 random(test_seed + 3);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(level ^ 0x35U);
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    const uint32_t frame_width = 1001, frame_height = 97;
+    std::vector<uint8_t> rgb(static_cast<std::size_t>(frame_width) * frame_height * 3U);
+    for (auto& byte : rgb)
+        byte = static_cast<uint8_t>(random());
+
+    // Rectangles at odd offsets, of widths on and off the four-pixel step,
+    // over one band and several.
+    struct Rect {
+        uint32_t x, y, width, height;
+    };
+
+    for (const Rect rect :
+         {Rect{0, 0, frame_width, frame_height},
+          Rect{1, 3, 5, 2},
+          Rect{333, 7, 640, 77},
+          Rect{997, 95, 4, 2},
+          Rect{513, 31, 1, 33}}) {
+        for (const bool rgb565 : {false, true}) {
+            const std::size_t pixel_bytes = rgb565 ? 2U : 4U;
+            const std::array<uint8_t, 256>* const tables[] = {nullptr, &gamma};
+            for (const auto* table : tables) {
+                const auto whole =
+                    rgb565 ? convert_rgb565(rgb, frame_width, frame_height, table, nullptr)
+                           : convert(rgb, frame_width, frame_height, table, nullptr);
+                const std::size_t whole_pitch =
+                    static_cast<std::size_t>(frame_width) * pixel_bytes + row_slack;
+                const auto part = convert_rect(
+                    rgb,
+                    frame_width,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    rgb565,
+                    table,
+                    nullptr
+                );
+                const std::size_t pitch =
+                    static_cast<std::size_t>(rect.width) * pixel_bytes + row_slack;
+                bool all = true;
+                for (uint32_t row = 0; row < rect.height; ++row) {
+                    all = all && std::memcmp(
+                                     &part[row * pitch],
+                                     &whole[(rect.y + row) * whole_pitch + rect.x * pixel_bytes],
+                                     rect.width * pixel_bytes
+                                 ) == 0;
+                    for (std::size_t spare = rect.width * pixel_bytes; spare < pitch; ++spare)
+                        all = all && part[row * pitch + spare] == untouched;
+                }
+                CHECK(all);
+                for (const auto& pool : pools)
+                    CHECK(
+                        convert_rect(
+                            rgb,
+                            frame_width,
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                            rgb565,
+                            table,
+                            pool.get()
+                        ) == part
+                    );
+            }
+        }
+    }
+}
+
+void front_end_frame_serves_as_argb() {
+    // The 640x480 front-end frame: today it is corrected byte by byte through
+    // the gamma table and uploaded as RGB24; converted with the table, every
+    // pixel holds the same colour, opaque, as SDL reads it in ARGB8888.
+    const uint32_t width = 640, height = 480;
+    std::mt19937 random(test_seed + 4);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(255U - (level * 7U) % 256U);
+    std::vector<uint8_t> rgb(static_cast<std::size_t>(width) * height * 3U);
+    for (auto& byte : rgb)
+        byte = static_cast<uint8_t>(random());
+    std::vector<uint8_t> corrected = rgb;
+    for (auto& byte : corrected)
+        byte = gamma[byte];
+    const std::size_t pitch = static_cast<std::size_t>(width) * 4U;
+    std::vector<uint8_t> pixels(pitch * height);
+    oa::app::convert_rgb24_xrgb_rect(
+        rgb.data(),
+        static_cast<std::size_t>(width) * 3U,
+        width,
+        height,
+        pixels.data(),
+        pitch,
+        &gamma,
+        nullptr
+    );
+    bool opaque = true;
+    for (std::size_t pixel = 0; pixel < pixels.size(); pixel += 4U) {
+        uint32_t word = 0;
+        std::memcpy(&word, &pixels[pixel], 4);
+        opaque = opaque && (word >> 24) == 0xffU;
+    }
+    CHECK(opaque);
+    std::vector<uint8_t> read_back(static_cast<std::size_t>(width) * height * 3U);
+    CHECK(SDL_ConvertPixels(
+        static_cast<int>(width),
+        static_cast<int>(height),
+        SDL_PIXELFORMAT_ARGB8888,
+        pixels.data(),
+        static_cast<int>(pitch),
+        SDL_PIXELFORMAT_RGB24,
+        read_back.data(),
+        static_cast<int>(width * 3U)
+    ));
+    CHECK(read_back == corrected);
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    for (const auto& pool : pools) {
+        std::vector<uint8_t> banded(pitch * height);
+        oa::app::convert_rgb24_xrgb_rect(
+            rgb.data(),
+            static_cast<std::size_t>(width) * 3U,
+            width,
+            height,
+            banded.data(),
+            pitch,
+            &gamma,
+            pool.get()
+        );
+        CHECK(banded == pixels);
+    }
+}
+
 } // namespace
 
 int main() {
     conversion_packs_each_pixel();
     conversion_is_the_same_on_every_pool();
     rgb565_is_what_sdl_makes_of_xrgb();
+    rectangle_is_that_part_of_the_whole();
+    front_end_frame_serves_as_argb();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return EXIT_FAILURE;
     }
-    std::puts("xrgb conversion: every pixel packed alike on every pool, RGB565 as SDL packs it");
+    std::puts(
+        "xrgb conversion: every pixel packed alike on every pool, RGB565 as SDL packs it, "
+        "rectangles as the whole frame's, the front end as opaque ARGB8888"
+    );
     return EXIT_SUCCESS;
 }

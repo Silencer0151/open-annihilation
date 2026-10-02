@@ -8,6 +8,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -54,10 +56,54 @@ void log_line(const CreationHooks& hooks, const std::string& line) {
 
 } // namespace
 
+std::string rebuild_log_line(std::string_view driver, std::string_view reason) {
+    std::string line(graphics_log_prefix);
+    line += driver;
+    line += " failed: ";
+    line += reason;
+    line += "; making another renderer";
+    return line;
+}
+
+namespace {
+
+/// Walks the render drivers from where a walk stands until one makes the
+/// renderer (walk_render_drivers).
+///
+/// @param walk the walk, before its first attempt
+/// @param inputs the inputs the walk was started with
+/// @param hooks what sets the hint, makes the renderer and logs
+/// @return every attempt, whether the last made the renderer, and the
+///     error when none did
+CreationOutcome walk_drivers(
+    render_policy::CreationWalk walk,
+    const render_policy::CreationInputs& inputs,
+    const CreationHooks& hooks
+);
+
+} // namespace
+
 CreationOutcome
 walk_render_drivers(const render_policy::CreationInputs& inputs, const CreationHooks& hooks) {
+    return walk_drivers(render_policy::start_creation(inputs), inputs, hooks);
+}
+
+CreationOutcome walk_rebuild_drivers(
+    const render_policy::CreationInputs& inputs,
+    std::string_view failed_driver,
+    const CreationHooks& hooks
+) {
+    return walk_drivers(render_policy::start_rebuild(inputs, failed_driver), inputs, hooks);
+}
+
+namespace {
+
+CreationOutcome walk_drivers(
+    render_policy::CreationWalk walk,
+    const render_policy::CreationInputs& inputs,
+    const CreationHooks& hooks
+) {
     CreationOutcome outcome;
-    render_policy::CreationWalk walk = render_policy::start_creation(inputs);
     bool second_walk_logged = false;
     for (;;) {
         const render_policy::Attempt attempt = render_policy::next_attempt(walk, inputs);
@@ -100,8 +146,6 @@ walk_render_drivers(const render_policy::CreationInputs& inputs, const CreationH
     return outcome;
 }
 
-namespace {
-
 #if SDL_VERSION_ATLEAST(3, 4, 0)
 /// The first SDL release whose framebuffer hint takes a comma list of
 /// drivers.
@@ -123,8 +167,9 @@ bool framebuffer_hint_takes_list() noexcept {
 
 /// What SDL's creation hooks act on.
 struct SdlCreation {
-    SDL_Window* window{};     ///< the window the renderer is made for
-    SDL_Renderer* renderer{}; ///< the renderer made; null until one is
+    SDL_Window* window{};             ///< the window the renderer is made for
+    SDL_Renderer* renderer{};         ///< the renderer made; null until one is
+    const RenderFaultHooks* faults{}; ///< what a check forces; null for nothing
 };
 
 /// Sets SDL's framebuffer hint at normal priority, so that an environment
@@ -152,6 +197,12 @@ bool set_sdl_framebuffer_hint(void*, const std::string& value, std::string& erro
 /// @return true when the renderer was made
 bool create_sdl_renderer(void* context, const std::string& driver, std::string& error) {
     auto& creation = *static_cast<SdlCreation*>(context);
+    if (const auto* faults = creation.faults; faults != nullptr &&
+                                              faults->refuse_driver != nullptr && !driver.empty() &&
+                                              faults->refuse_driver(faults->context, driver)) {
+        error = std::string(refused_by_fault);
+        return false;
+    }
     creation.renderer =
         SDL_CreateRenderer(creation.window, driver.empty() ? nullptr : driver.c_str());
     if (creation.renderer != nullptr)
@@ -168,46 +219,138 @@ void log_graphics_line(void*, const std::string& line) {
     std::cout << line << '\n' << std::flush;
 }
 
+/// SDL's render drivers and SDL_RENDER_DRIVER's list, kept while a walk
+/// views them.
+struct DriverNames {
+    std::vector<std::string> sdl_names;              ///< SDL's drivers, in its order
+    std::vector<std::string> environment_names;      ///< SDL_RENDER_DRIVER's, in its order
+    std::vector<std::string_view> sdl_order;         ///< views of sdl_names
+    std::vector<std::string_view> environment_order; ///< views of environment_names
+};
+
+/// Reads SDL's render drivers and SDL_RENDER_DRIVER's comma list.
+///
+/// @param[out] names the names, which the inputs view
+/// @return what a walk needs, SDL_RENDER_DRIVER's list where it is set
+render_policy::CreationInputs driver_inputs(DriverNames& names) {
+    const int driver_count = SDL_GetNumRenderDrivers();
+    for (int index = 0; index < driver_count; ++index)
+        if (const char* name = SDL_GetRenderDriver(index); name != nullptr)
+            names.sdl_names.emplace_back(name);
+    const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+    const std::string_view list = named != nullptr ? std::string_view(named) : std::string_view();
+    for (std::size_t start = 0; start < list.size();) {
+        const std::size_t comma = std::min(list.find(',', start), list.size());
+        if (comma > start)
+            names.environment_names.emplace_back(list.substr(start, comma - start));
+        start = comma + 1;
+    }
+    names.sdl_order.assign(names.sdl_names.begin(), names.sdl_names.end());
+    names.environment_order.assign(names.environment_names.begin(), names.environment_names.end());
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    render_policy::CreationInputs inputs;
+    inputs.sdl_order = names.sdl_order;
+    inputs.environment_order = names.environment_order;
+    // phase 1: the records fill inputs.failed_drivers here; until then the
+    // walk skips none and never starts again from the top.
+    inputs.render_driver_named = !list.empty();
+    inputs.native_window_framebuffer =
+        render_probe::native_window_framebuffer(video_driver != nullptr ? video_driver : "");
+    inputs.hint_takes_list = framebuffer_hint_takes_list();
+    return inputs;
+}
+
+/// The hooks that make SDL's renderer for a walk.
+///
+/// @param creation what the hooks act on
+/// @return the hooks
+CreationHooks sdl_creation_hooks(SdlCreation& creation) {
+    CreationHooks hooks;
+    hooks.context = &creation;
+    hooks.set_framebuffer_hint = set_sdl_framebuffer_hint;
+    hooks.create = create_sdl_renderer;
+    hooks.log = log_graphics_line;
+    return hooks;
+}
+
+/// The reason a rebuild gives after a lost device take_event saw.
+constexpr std::string_view device_lost_reason = "the graphics device was lost";
+
 } // namespace
 
 RendererHost::~RendererHost() {
     destroy();
 }
 
-void RendererHost::create(SDL_Window* window) {
+void RendererHost::create(SDL_Window* window, const RenderFaultHooks& faults) {
     destroy();
-    const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
-    std::vector<std::string> names;
-    const int driver_count = SDL_GetNumRenderDrivers();
-    for (int index = 0; index < driver_count; ++index)
-        if (const char* name = SDL_GetRenderDriver(index); name != nullptr)
-            names.emplace_back(name);
-    const std::vector<std::string_view> order(names.begin(), names.end());
-    const char* video_driver = SDL_GetCurrentVideoDriver();
-
-    render_policy::CreationInputs inputs;
-    inputs.sdl_order = order;
-    // phase 1: the records fill inputs.failed_drivers here; until then the
-    // walk skips none and never starts again from the top.
-    inputs.render_driver_named = named != nullptr && *named != '\0';
-    inputs.native_window_framebuffer =
-        render_probe::native_window_framebuffer(video_driver != nullptr ? video_driver : "");
-    inputs.hint_takes_list = framebuffer_hint_takes_list();
-
+    window_ = window;
+    faults_ = faults;
+    DriverNames names;
+    const render_policy::CreationInputs inputs = driver_inputs(names);
+    named_ = inputs.render_driver_named;
     SdlCreation creation;
     creation.window = window;
-    CreationHooks hooks;
-    hooks.context = &creation;
-    hooks.set_framebuffer_hint = set_sdl_framebuffer_hint;
-    hooks.create = create_sdl_renderer;
-    hooks.log = log_graphics_line;
-    CreationOutcome outcome = walk_render_drivers(inputs, hooks);
+    creation.faults = &faults_;
+    CreationOutcome outcome = walk_render_drivers(inputs, sdl_creation_hooks(creation));
     attempts_ = std::move(outcome.attempts);
     if (!outcome.created)
         throw std::runtime_error(outcome.error);
     renderer_ = creation.renderer;
+    take_renderer();
+}
+
+void RendererHost::rebuild(std::string_view reason) {
+    const std::string failed = facts_.renderer;
+    std::cout << rebuild_log_line(failed, reason) << '\n' << std::flush;
+    // phase 1: the failure is a strike against the driver, which becomes a
+    // record when the same fails in the next run on it.
+    destroy();
+    lost_noted_ = false;
+    DriverNames names;
+    const render_policy::CreationInputs inputs = driver_inputs(names);
+    SdlCreation creation;
+    creation.window = window_;
+    creation.faults = &faults_;
+    CreationOutcome outcome = walk_rebuild_drivers(inputs, failed, sdl_creation_hooks(creation));
+    attempts_ = std::move(outcome.attempts);
+    if (!outcome.created)
+        throw std::runtime_error(outcome.error);
+    renderer_ = creation.renderer;
+    take_renderer();
+}
+
+void RendererHost::take_renderer() {
     facts_ = report_game_renderer(renderer_);
     oa::base::float_precision::restore_program_float_control();
+    layer_formats_ = render_policy::layer_formats(
+        facts_.renderer == render_probe::software_renderer, rgb565_window(), named_
+    );
+}
+
+bool RendererHost::rgb565_window() const {
+    if (faults_.rgb565_window != nullptr)
+        return faults_.rgb565_window(faults_.context);
+    return SDL_GetWindowPixelFormat(window_) == SDL_PIXELFORMAT_RGB565;
+}
+
+bool RendererHost::take_event(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_RENDER_DEVICE_LOST:
+        if (renderer_ != nullptr && event.render.windowID == SDL_GetWindowID(window_))
+            lost_noted_ = true;
+        return true;
+    case SDL_EVENT_RENDER_TARGETS_RESET:
+    case SDL_EVENT_RENDER_DEVICE_RESET:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void RendererHost::service() {
+    if (lost_noted_ && renderer_ != nullptr)
+        rebuild(device_lost_reason);
 }
 
 void RendererHost::destroy() noexcept {
@@ -227,6 +370,34 @@ const render_probe::AdapterFacts& RendererHost::facts() const noexcept {
 
 std::span<const CreationAttempt> RendererHost::attempts() const noexcept {
     return attempts_;
+}
+
+bool RendererHost::named() const noexcept {
+    return named_;
+}
+
+const render_policy::LayerFormats& RendererHost::layer_formats() const noexcept {
+    return layer_formats_;
+}
+
+render_policy::LayerFormat RendererHost::opaque_format() const {
+    if (facts_.renderer != render_probe::software_renderer)
+        return layer_formats_.opaque;
+    return render_policy::layer_formats(true, rgb565_window(), named_).opaque;
+}
+
+uint32_t RendererHost::texture_limit() const noexcept {
+    return faults_.texture_limit > 0 ? faults_.texture_limit : corrected_texture_limit(facts_);
+}
+
+render_probe::DeviceState RendererHost::device_state() const {
+    if (faults_.device_state != nullptr)
+        return faults_.device_state(faults_.context);
+    return render_probe::device_state(renderer_);
+}
+
+RenderFaultHooks& RendererHost::faults() noexcept {
+    return faults_;
 }
 
 } // namespace oa::app

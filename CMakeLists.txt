@@ -285,8 +285,11 @@ if(OA_BUILD_PLATFORM)
   # The game's renderer (render_host.hpp): made by walking SDL's render
   # drivers in SDL's own order, logging each refusal, with the framebuffer
   # hint set before SDL's software renderer, or by SDL's own call under
-  # SDL_RENDER_DRIVER; then described and logged (graphics_report.hpp).
-  add_library(oa-app-render-host src/app/render_host.cpp src/app/graphics_report.cpp)
+  # SDL_RENDER_DRIVER; then described and logged (graphics_report.hpp);
+  # made again after a failure while the game runs; and its window-size
+  # textures, as tiles beyond its texture limit (scaled_world.hpp).
+  add_library(oa-app-render-host src/app/render_host.cpp src/app/graphics_report.cpp
+    src/app/scaled_world.cpp)
   add_library(oa::app::render_host ALIAS oa-app-render-host)
   target_link_libraries(oa-app-render-host PUBLIC oa-app-headers oa-app-render-policy
     oa-platform-render-probe PRIVATE oa-base-float-precision SDL3::SDL3 oa-options)
@@ -315,6 +318,16 @@ if(OA_BUILD_PLATFORM)
     set_tests_properties(app-render-host-env PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=missing"
       ENVIRONMENT_MODIFICATION "SDL_FRAMEBUFFER_ACCELERATION=unset:")
+    # Window-size textures beyond the renderer's texture limit, as tiles with
+    # gutters, on SDL's software renderer over a surface: tiles under a
+    # limit of 1024 read back as one texture with no limit does, uploaded,
+    # updated, blended and drawn in part.
+    add_executable(oa-app-scaled-world-test src/app/scaled_world_test.cpp)
+    target_link_libraries(oa-app-scaled-world-test PRIVATE oa-app-render-host SDL3::SDL3
+      oa-test-support oa-options)
+    add_test(NAME app-scaled-world-software COMMAND oa-app-scaled-world-test)
+    set_tests_properties(app-scaled-world-software PROPERTIES TIMEOUT 60
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
     # The check host's table (check_host.hpp) and the parts of it that need
     # no running game: the pointer events it makes, the gadgets it finds and
     # the text it hands back.
@@ -521,7 +534,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_engine_settings.cpp src/app/runtime_engine_settings_wiring_check.cpp
   src/app/runtime_engine_settings_menu.cpp src/app/runtime_engine_settings_check.cpp
   src/app/runtime_engine_settings_match.cpp src/app/runtime_engine_settings_match_check.cpp
-  src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp)
+  src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp
+  src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp)
 # The run manifest of a director render and the settings dialog's header
 # name the engine's version.
 set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp APPEND
@@ -681,6 +695,28 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_engine_settings_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Each renderer failure the game handles while it runs, forced on the
+      # renderer the walk of SDL's render drivers makes, which on the dummy
+      # video driver is SDL's software renderer: the walk itself, a present
+      # that fails in a match and on a loading frame, a device reset in a
+      # match and during a load, a lost device, a device that waits for its
+      # reset, present stalls, a changed floating-point setting, and layers
+      # beyond a texture limit of 2048 in tiles. SDL_RENDER_DRIVER is left
+      # unset so that the walk runs. native-renderer-ladder-create forces
+      # every driver but software to refuse at start.
+      set(oa_renderer_ladder_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/renderer-ladder")
+      file(MAKE_DIRECTORY "${oa_renderer_ladder_dir}")
+      add_test(NAME native-renderer-ladder COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder.conf")
+      add_test(NAME native-renderer-ladder-create COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder --render-fault create
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-create.conf")
+      set_tests_properties(native-renderer-ladder native-renderer-ladder-create PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_renderer_ladder_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:;SDL_FRAMEBUFFER_ACCELERATION=unset:")
       # The first mission's briefing opened from NEWGAME.GUI with sound on the
       # dummy device: its narration is heard exactly while SHUTUP is on,
       # SHUTUP silences it, plays it anew and turns off once it is over,

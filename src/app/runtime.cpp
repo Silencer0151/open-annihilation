@@ -322,6 +322,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_renderer_ladder) {
+        check_renderer_ladder();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_briefing_narration) {
         check_briefing_narration();
         flush_preferences();
@@ -443,6 +448,9 @@ void Runtime::run_frame(bool& running) {
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     note_window_activation(event);
     note_input_activity(event);
+    // The renderer's own events reach no screen.
+    if (take_render_event(event))
+        return;
     // Alt+Enter switches between full screen and a window on every screen,
     // before the screen or a screen package sees the key; its repeats reach
     // no screen either, so a held Alt+Enter never opens the chat line or

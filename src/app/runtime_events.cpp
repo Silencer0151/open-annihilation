@@ -454,6 +454,17 @@ void Runtime::play_menu_sound(menu::Sound sound) {
         std::cerr << "sound unavailable: " << error << '\n';
 }
 
+void Runtime::take_movie_event(void* context, const SDL_Event& event) {
+    auto& runtime = *static_cast<Runtime*>(context);
+    // The movie player does not hand its events on, so whether Alt+Enter
+    // took one does not matter. A render event is noted for the next
+    // render(); the movie's own texture may go with a reset device, which
+    // ends the movie as any failed upload does.
+    if (runtime.take_render_event(event))
+        return;
+    std::ignore = runtime.take_full_screen_event(event);
+}
+
 void Runtime::play_movie_resource(std::string_view filename) {
     const auto path = options_.game_dir / "Data" / filename;
     auto opened = oa::media::IntroPlayer::open(path);
@@ -469,11 +480,7 @@ void Runtime::play_movie_resource(std::string_view filename) {
         // Alt+Enter switches full screen during the movie as it does in the
         // game.
         playback.hooks.context = this;
-        // The movie player does not hand its events on, so whether Alt+Enter
-        // took one does not matter.
-        playback.hooks.window_event = [](void* context, const SDL_Event& event) {
-            std::ignore = static_cast<Runtime*>(context)->take_full_screen_event(event);
-        };
+        playback.hooks.window_event = take_movie_event;
         const auto result = opened.player->play(playback);
         if (!result.ok())
             status_ = "movie playback failed: " + result.error;

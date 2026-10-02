@@ -11,6 +11,7 @@
 #include "full_screen.hpp"
 #include "match_model_draws.hpp"
 #include "offline_services.hpp"
+#include "scaled_world.hpp"
 #include "video_capture.hpp"
 #include "web_link.hpp"
 #include "world_scaling.hpp"
@@ -144,15 +145,10 @@ struct NamedBackgrounds {
 struct SdlObjects {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
-    SDL_Texture* texture = nullptr;
     bool borrowed = false;
 
-    /// Destroys the texture and, unless the window and renderer are borrowed, the renderer and the
-    /// window.
+    /// Destroys the renderer and the window, unless they are borrowed.
     void reset() noexcept {
-        if (texture != nullptr)
-            SDL_DestroyTexture(texture);
-        texture = nullptr;
         if (borrowed)
             return;
         if (renderer != nullptr)
@@ -192,8 +188,9 @@ struct CapturedFrame {
     oa::Palette palette{};
 };
 
-// The SDL display sink's texture: palette indices become XRGB texels through
-// a table rebuilt whenever the frame's palette changes.
+// The SDL display sink's texture: palette indices become opaque texels
+// (0xffRRGGBB, for XRGB8888 and ARGB8888 alike) through a table rebuilt
+// whenever the frame's palette changes.
 struct IndexedOutput {
     SDL_Texture* texture = nullptr;
     int width = 0;
@@ -752,9 +749,10 @@ class Runtime final : public menu::Host,
 
     /// Reads the renderer's target back into the video capture, when one runs, and into the
     /// surface a check asked for, when one is asked for. Called with each frame drawn, before it
-    /// is presented.
+    /// is presented. While the device is lost nothing is read.
     ///
-    /// Throws std::runtime_error when the pixels cannot be read or the capture fails.
+    /// Throws PresentError when the pixels cannot be read, and std::runtime_error when the
+    /// capture fails.
     void capture_render_target();
 
     /// Composes the frontend dialogs over a layered match.
@@ -2219,6 +2217,47 @@ class Runtime final : public menu::Host,
     /// @param run state to free; null is allowed
     static void destroy_render_run(RenderRun* run) noexcept;
 
+    /// Runs --check-renderer-ladder (runtime_renderer_ladder_check.cpp):
+    /// forces each renderer failure the game handles, or the one
+    /// --render-fault names, and checks that the game goes on presenting.
+    /// Throws std::runtime_error naming what failed.
+    void check_renderer_ladder();
+
+    /// The cases of --check-renderer-ladder (runtime_renderer_ladder_check.cpp).
+    struct RendererLadder;
+
+    /// Presents one frame of the current screen, read back, and checks it
+    /// against the frame composed on the processor (compose_match_frame),
+    /// leaving out the software cursor; in a match only.
+    ///
+    /// Throws std::runtime_error naming the check when the frame was not
+    /// presented or differs, after writing both frames under `directory`.
+    ///
+    /// @param directory where the frames of a failure are written
+    /// @param label the check's name, which begins the error and the files' names
+    void expect_presented_equals_composed(const fs::path& directory, std::string_view label);
+
+    /// Counts the pixels of a presented match frame that differ from the
+    /// frame composed on the processor, outside a rectangle.
+    ///
+    /// Throws std::runtime_error naming the check when the two differ in size.
+    ///
+    /// @param presented the frame read back
+    /// @param composed the frame compose_match_frame made
+    /// @param left_out_x left of the rectangle not compared, canvas pixels
+    /// @param left_out_y top of the rectangle not compared
+    /// @param left_out_size side of the square not compared
+    /// @param label the check's name, which begins the error
+    /// @return the pixels that differ
+    std::size_t presented_pixels_differing(
+        const renderer::Surface& presented,
+        const renderer::Surface& composed,
+        int left_out_x,
+        int left_out_y,
+        int left_out_size,
+        std::string_view label
+    ) const;
+
     /// The in-game menu's OA button and dialog (engine_settings_match_host.hpp).
     struct EngineSettingsMatchHost;
 
@@ -3365,7 +3404,8 @@ class Runtime final : public menu::Host,
     void write_display_pcx(const fs::path& path) const;
 
     /// Passes a finished indexed frame from the display sink to present_indexed_frame(), reporting
-    /// a failure on stderr.
+    /// a failure on stderr. A failed SDL call (PresentError) makes the renderer again at the
+    /// next render(), which the loading pump calls.
     ///
     /// The sink is called from noexcept presentation code, so nothing escapes.
     ///
@@ -3387,8 +3427,12 @@ class Runtime final : public menu::Host,
     /// Presents an indexed frame through SDL.
     ///
     /// The only place frame indices become texels: through the palette's texel
-    /// table into an XRGB8888 streaming texture, letterboxed as apply_output_mode
-    /// sets the logical presentation, with the software cursor on top.
+    /// table into a streaming texture of the loading layer's format
+    /// (loading_layer_format), letterboxed as apply_output_mode sets the
+    /// logical presentation, with the software cursor on top. Its present is
+    /// measured and fed to the stall rule.
+    ///
+    /// Throws PresentError when SDL refuses a call.
     ///
     /// @param pixels palette indices
     /// @param pitch bytes per row, at least `width`
@@ -4002,9 +4046,11 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_deathmatch_respawn();
 
-    /// Creates the RGB24 streaming output texture at a size, unless it already has it.
+    /// Creates the front end's streaming output texture (frontend_texture_)
+    /// at a size, in the front end's format (front_end_layer_format), as
+    /// tiles beyond the renderer's texture limit, unless it already has them.
     ///
-    /// Throws std::runtime_error when SDL cannot create it.
+    /// Throws PresentError when SDL cannot create it.
     ///
     /// @param width texture width
     /// @param height texture height
@@ -4014,8 +4060,12 @@ class Runtime final : public menu::Host,
     ///
     /// A match lays the battlefield and chrome out for the window's pixel size;
     /// other screens present at the canvas size, the load and save dialogs at the
-    /// size of the frame they are drawn over. Throws std::runtime_error when SDL
-    /// refuses.
+    /// size of the frame they are drawn over. The layout and the pointer's
+    /// known place change at once. When SDL refuses, the renderer is made
+    /// again at the next render() (note_present_error); without a renderer
+    /// host std::runtime_error is thrown. A match's window beyond the
+    /// renderer's texture limit makes no front-end texture, which a match
+    /// never draws.
     void apply_output_mode();
 
     /// Returns the battlefield zoom.
@@ -4068,20 +4118,22 @@ class Runtime final : public menu::Host,
     ///         no screen may see
     bool take_full_screen_event(const SDL_Event& event);
 
-    /// Returns a streaming texture of a pixel format and size, recreating it
-    /// when the format or the size changed.
+    /// Makes a streaming texture of a pixel format and size, recreating it
+    /// when the format or the size changed. An alpha format is drawn with no
+    /// blending, as an opaque layer.
     ///
-    /// Throws std::runtime_error when SDL cannot create it.
+    /// Throws PresentError when SDL cannot create it; the texture is then
+    /// null and its size 0x0, so that the next frame makes it again.
     ///
-    /// @param existing current texture, or null
+    /// @param[in,out] texture current texture, or null; the texture of that
+    ///     format and size
     /// @param format its pixel format
     /// @param width texture width
     /// @param height texture height
-    /// @param[in,out] stored_w width of `existing`; updated on recreation
-    /// @param[in,out] stored_h height of `existing`; updated on recreation
-    /// @return the texture of that format and size
-    SDL_Texture* ensure_streaming_texture(
-        SDL_Texture* existing,
+    /// @param[in,out] stored_w width of `texture`; updated on recreation
+    /// @param[in,out] stored_h height of `texture`; updated on recreation
+    void ensure_streaming_texture(
+        SDL_Texture*& texture,
         SDL_PixelFormat format,
         int width,
         int height,
@@ -4089,24 +4141,142 @@ class Runtime final : public menu::Host,
         int& stored_h
     );
 
-    /// Returns the pixel format the match layers are uploaded in: RGB565 when
-    /// the software renderer draws into a 16-bit RGB565 window, whose pixels
-    /// it then copies as they are, and XRGB8888 otherwise.
+    /// Returns the pixel format the match layers are uploaded in: the
+    /// renderer host's (RendererHost::opaque_format), which is ARGB8888 on
+    /// a hardware driver the walk chose; without a host, and on SDL's
+    /// software renderer, RGB565 while it draws into a 16-bit RGB565 window,
+    /// whose pixels it then copies as they are, and XRGB8888 otherwise. The
+    /// window is asked at each frame, since its pixels can change while the
+    /// game runs.
     ///
-    /// @return SDL_PIXELFORMAT_RGB565 or SDL_PIXELFORMAT_XRGB8888
-    [[nodiscard]] SDL_PixelFormat frame_texture_format() const;
+    /// @return SDL_PIXELFORMAT_ARGB8888, SDL_PIXELFORMAT_RGB565 or SDL_PIXELFORMAT_XRGB8888
+    [[nodiscard]] SDL_PixelFormat opaque_layer_format() const;
 
-    /// Uploads an RGB24 surface into a texture of the frame texture formats
-    /// (frame_texture_format) through the display gamma.
+    /// Returns the pixel format of the loading screen's and the palette
+    /// movies' texture: ARGB8888 on a hardware driver the walk chose, else
+    /// XRGB8888.
     ///
-    /// Throws std::runtime_error when the texture cannot be locked.
+    /// @return SDL_PIXELFORMAT_ARGB8888 or SDL_PIXELFORMAT_XRGB8888
+    [[nodiscard]] SDL_PixelFormat loading_layer_format() const;
+
+    /// Returns the pixel format of the front end's texture: ARGB8888 on a
+    /// hardware driver the walk chose, else RGB24.
     ///
-    /// @param texture XRGB8888 or RGB565 texture of the surface's size; null uploads nothing
+    /// @return SDL_PIXELFORMAT_ARGB8888 or SDL_PIXELFORMAT_RGB24
+    [[nodiscard]] SDL_PixelFormat front_end_layer_format() const;
+
+    /// Returns the largest texture side the game makes: the limit a check
+    /// forces, else the renderer's; none without a renderer host.
+    ///
+    /// @return texels; 0 for no limit
+    [[nodiscard]] uint32_t render_texture_limit() const;
+
+    /// Uploads an RGB24 surface into a texture of the opaque layers' formats
+    /// (opaque_layer_format) through the display gamma.
+    ///
+    /// Throws PresentError when the texture cannot be locked.
+    ///
+    /// @param texture XRGB8888, ARGB8888 or RGB565 texture of the surface's
+    ///        size; null uploads nothing
     /// @param source RGB surface
     void upload_rgb24_frame(SDL_Texture* texture, const renderer::Surface& source);
 
-    /// Destroys the match layer textures (HUD, world, cursor and dialog) and forgets their sizes.
+    /// Uploads an RGB24 surface into a texture or its tiles, of the opaque
+    /// layers' formats, through the display gamma as upload_rgb24_frame does.
+    ///
+    /// Throws PresentError when a tile cannot be locked.
+    ///
+    /// @param[in,out] texture the texture, made at the surface's size
+    /// @param source RGB surface
+    /// @param gamma the display gamma's table; null for none
+    void upload_rgb24_tiles(
+        TiledTexture& texture,
+        const renderer::Surface& source,
+        const std::array<uint8_t, 256>* gamma
+    );
+
+    /// Destroys the match layer textures (HUD, world, cursor, dialog and the
+    /// OA settings layer) and forgets their sizes.
     void destroy_match_layer_textures();
+
+    /// Forgets every texture the game made on the renderer: the match
+    /// layers, the front end's and the display sink's. Each streams from a
+    /// buffer on the processor, so the next frame makes them again.
+    void forget_render_textures();
+
+    /// Takes a render event before any screen sees it: a lost device makes
+    /// the renderer again at the next render(); a reset device forgets every
+    /// texture (forget_render_textures), and the third reset within a
+    /// minute makes the renderer again; a reset of the render targets ends
+    /// a lost device's wait. Window events that move, resize or switch the
+    /// window keep the frames that follow from counting as steady, and in
+    /// exclusive full screen losing the focus may lose the device; those
+    /// still reach the screens.
+    ///
+    /// @param event the event
+    /// @return true for the three render events, which no screen needs
+    bool take_render_event(const SDL_Event& event);
+
+    /// Takes a failed SDL call of the standard tier (PresentError). While
+    /// the device is lost, or found lost now, the failure is no driver's and
+    /// is passed over until the device is reset. Otherwise the renderer is
+    /// made again: at once, or at the next render().
+    ///
+    /// Throws std::runtime_error with the reason without a renderer host, so
+    /// that the run ends as it always has.
+    ///
+    /// @param reason what failed
+    /// @param now make the renderer again now, rather than at the next render()
+    void note_present_error(const std::string& reason, bool now);
+
+    /// Makes the renderer again after a failure (RendererHost::rebuild):
+    /// forgets every texture, lays the screen out again on the new renderer,
+    /// keeps the pointer's hold on the window, and in a match says so in the
+    /// message log.
+    ///
+    /// Throws std::runtime_error with the reason when SDL's software
+    /// renderer, made by an earlier rebuild, failed before it presented a
+    /// frame, and when no driver starts: the run ends.
+    ///
+    /// @param reason what failed
+    void rebuild_renderer(const std::string& reason);
+
+    /// Notes a presented frame and how long its uploading and presenting
+    /// took, for the stall rule: presents over 2 s three times within 10 s
+    /// of steady frames are logged once, and the game carries on.
+    ///
+    /// @param present_ns the frame's present measure, nanoseconds
+    void note_present_time(uint64_t present_ns);
+
+    /// Says whether a frame counts as steady for the stall rule: the window
+    /// shown and active, the frame at the full rate, not within 2 s of a
+    /// resize, a mode change or a full-screen switch, nor within a match's
+    /// first 5 s.
+    ///
+    /// @param now_ns the time on the steady clock, nanoseconds
+    /// @return true for a steady frame
+    [[nodiscard]] bool present_frame_steady(uint64_t now_ns) const;
+
+    /// Asks the renderer's device whether it is lost, as one is on some
+    /// renderers while another program holds the screen; and enters the wait
+    /// for its reset when it is.
+    ///
+    /// @return true while the device is lost
+    bool render_device_lost();
+
+    /// Handles a present SDL refused, which only an engine fault causes:
+    /// sets the render target back to the window and logs it once. Without
+    /// a renderer host it throws std::runtime_error, as it always has.
+    ///
+    /// @param what the call, which begins the error without a host
+    void note_present_refused(const char* what);
+
+    /// Says whether the failure --check-renderer-ladder forces comes now,
+    /// at the frame about to be presented, and forgets it once it has.
+    ///
+    /// @param point the failure the caller can force
+    /// @return true when it is that failure's frame
+    bool render_fault_due(RenderFaultPoint point);
 
     /// A HUD-layer rectangle in 640x480 source space and where it lands on
     /// the canvas.
@@ -4151,10 +4321,21 @@ class Runtime final : public menu::Host,
 
     /// Composes the current screen and presents it.
     ///
-    /// The loading screen went out through the display sink as it was drawn; a
-    /// match presents in layers when it can; any other frame is uploaded at the
-    /// display gamma (a match's frame is composed at it already).
+    /// First makes the renderer again when a failure asked for it, and the
+    /// front end's texture when a reset forgot it. The loading screen went
+    /// out through the display sink as it was drawn; a match presents in
+    /// layers when it can; any other frame is uploaded at the display gamma
+    /// (a match's frame is composed at it already). A failed SDL call
+    /// (PresentError) makes the renderer again and drops the frame; any
+    /// other error, a hook's among them, takes its own path.
     void render();
+
+    /// Presents the front end's frame (surface_): uploaded through the
+    /// display gamma, unless it is a match's, into the front end's texture
+    /// (frontend_texture_) and drawn over the window, letterboxed.
+    ///
+    /// Throws PresentError when SDL refuses a call.
+    void present_front_end();
 
     /// Returns the current frontend screen's gadgets and selection as the input handlers' menu.
     ///
@@ -6844,6 +7025,14 @@ class Runtime final : public menu::Host,
     /// @param filename movie file (1.zrb .. 5.zrb)
     void play_movie_resource(std::string_view filename);
 
+    /// Takes an event the movie player hands on while a movie plays: a
+    /// render event (take_render_event), else Alt+Enter
+    /// (take_full_screen_event).
+    ///
+    /// @param context the runtime
+    /// @param event the event
+    static void take_movie_event(void* context, const SDL_Event& event);
+
     /// Runs a dispatcher step through its registered handler.
     ///
     /// A registered step runs its handler; a step with no handler, engine or
@@ -7664,7 +7853,8 @@ class Runtime final : public menu::Host,
     /// @return -1 while either Shift is held, else 0
     int16_t shift_key_state() override;
 
-    /// Drops every pending SDL event.
+    /// Drops every pending SDL event but the render events, which
+    /// take_render_event takes first.
     void drain_input() override;
 
     /// Checks the frontend state checksum; the engine keeps no image checksum, so nothing is done.
@@ -7784,6 +7974,9 @@ class Runtime final : public menu::Host,
     // SDL outlives audio_player_: reverse member destruction closes streams
     // before the final SDL_Quit.
     SdlObjects sdl_;
+    // The front end's texture, at output_texture_w_ by output_texture_h_;
+    // after sdl_, so that it goes first.
+    TiledTexture frontend_texture_;
     // The mode Alt+Enter last asked the window for.
     FullScreenSwitch full_screen_switch_{};
     oa::ui::display_layout::MatchLayout match_layout_{};
@@ -8351,18 +8544,16 @@ class Runtime final : public menu::Host,
     renderer::Surface* capture_frame_ = nullptr;  // receives the next presented frame
     std::unique_ptr<VideoCapture> video_capture_; // --capture-video, while it runs
     std::vector<uint8_t> match_dialog_rgba_;      // frontend dialogs over the match canvas
-    SDL_Texture* match_dialog_tex_ = nullptr;
-    int match_dialog_tex_w_ = 0, match_dialog_tex_h_ = 0;
+    TiledTexture match_dialog_tex_;
     renderer::Surface match_hud_cpu_{};
     // The HUD layer the frame before showed, whose memory the next frame's
     // HUD is drawn into.
     renderer::Surface spare_match_hud_{};
     renderer::Surface match_world_cpu_{};
     SDL_Texture* match_hud_tex_ = nullptr;
-    SDL_Texture* match_world_tex_ = nullptr;
+    TiledTexture match_world_tex_;
     SDL_Texture* match_cursor_tex_ = nullptr;
     int match_hud_tex_w_ = 0, match_hud_tex_h_ = 0;
-    int match_world_tex_w_ = 0, match_world_tex_h_ = 0;
     SDL_Texture* match_dialog_side_tex_ = nullptr; // match_dialog_side_
     int match_dialog_side_tex_w_ = 0, match_dialog_side_tex_h_ = 0;
     int match_cursor_tex_w_ = 0, match_cursor_tex_h_ = 0;

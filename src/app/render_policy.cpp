@@ -402,6 +402,44 @@ note_present(StallWatch& watch, uint64_t steady_ns, uint64_t present_ns, RenderT
 }
 
 // ---------------------------------------------------------------------------
+// Device resets
+
+bool note_device_reset(ResetWatch& watch, uint64_t now_ms) noexcept {
+    // Forget the resets that fell out of the window. Fewer than
+    // resets_that_rebuild are ever kept: the one that makes a rebuild
+    // empties the watch.
+    uint32_t kept = 0;
+    for (uint32_t index = 0; index < watch.resets; ++index) {
+        const uint64_t time = watch.reset_times_ms[index];
+        if (now_ms >= time && now_ms - time < reset_window_ms)
+            watch.reset_times_ms[kept++] = time;
+    }
+    watch.resets = kept;
+    watch.reset_times_ms[watch.resets++] = now_ms;
+    if (watch.resets < resets_that_rebuild)
+        return false;
+    watch.resets = 0;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Texture formats of the layers
+
+LayerFormats layer_formats(bool software, bool rgb565_window, bool render_driver_named) noexcept {
+    LayerFormats formats;
+    if (software) {
+        formats.opaque = rgb565_window ? LayerFormat::rgb565 : LayerFormat::xrgb8888;
+        return formats;
+    }
+    if (render_driver_named)
+        return formats;
+    formats.opaque = LayerFormat::argb8888;
+    formats.loading = LayerFormat::argb8888;
+    formats.front_end = LayerFormat::argb8888;
+    return formats;
+}
+
+// ---------------------------------------------------------------------------
 // The step-down ladder
 
 namespace {

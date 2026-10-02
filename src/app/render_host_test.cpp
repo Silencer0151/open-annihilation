@@ -19,7 +19,14 @@
 // and the line says so; a named driver that does not exist ends the start
 // after one attempt, with the hint unset; software named is made with the
 // hint unset. With --case named-missing, the missing driver is named by
-// the environment variable itself.
+// the environment variable itself. Rebuilds: through stand-in hooks, the
+// drivers after the failed one, then software with the hint, SDL's whole
+// order again after software, and under SDL_RENDER_DRIVER the list's later
+// drivers then software; on the dummy video driver a rebuild makes
+// software again, throws when nothing starts, a lost device noted before
+// the runtime exists is mended by service, and a named list's rebuild
+// tries software alone. The faults refuse drivers with their own reason
+// and stand in for the texture limit and the device's state.
 #include "render_host.hpp"
 
 #include "oa/test/check.hpp"
@@ -345,6 +352,59 @@ void test_environment_start() {
     OA_CHECK(failed.error == "SDL_CreateRenderer: missing not available");
 }
 
+/// Walks the drivers of a rebuild through the stand-in.
+///
+/// @param inputs the walk's inputs
+/// @param failed the driver that failed
+/// @param[in,out] stand the stand-in
+/// @return the walk's outcome
+CreationOutcome rebuild_walk(const CreationInputs& inputs, std::string_view failed, Stand& stand) {
+    CreationHooks hooks;
+    hooks.context = &stand;
+    hooks.set_framebuffer_hint = stand_hint;
+    hooks.create = stand_create;
+    hooks.log = stand_log;
+    return oa::app::walk_rebuild_drivers(inputs, failed, hooks);
+}
+
+/// A rebuild tries the drivers after the one that failed, then software
+/// with the hint; after software it walks SDL's whole order again from the
+/// top. Under SDL_RENDER_DRIVER it tries the drivers the list names after
+/// the failed one, then software, and never SDL's whole order.
+void test_rebuild_walks() {
+    Stand after_beta;
+    after_beta.refusing = {driver_gamma};
+    OA_CHECK(rebuild_walk(start_inputs(true, true), driver_beta, after_beta).created);
+    OA_CHECK(
+        after_beta.calls == std::vector<std::string>({"create gamma", "hint 0", "create software"})
+    );
+    OA_CHECK(
+        oa::app::rebuild_log_line("beta", "it failed") ==
+        "open-annihilation: graphics: beta failed: it failed; making another renderer"
+    );
+
+    Stand after_software;
+    const CreationOutcome again = rebuild_walk(start_inputs(true, true), software, after_software);
+    OA_CHECK(again.created);
+    OA_CHECK(after_software.calls == std::vector<std::string>{"create alpha"});
+    OA_CHECK(after_software.log == std::vector<std::string>{oa::app::second_walk_log_line()});
+
+    const std::vector<std::string_view> named{"opengl", software};
+    CreationInputs environment = start_inputs(true, true);
+    environment.render_driver_named = true;
+    environment.environment_order = named;
+    Stand named_after;
+    OA_CHECK(rebuild_walk(environment, "opengl", named_after).created);
+    OA_CHECK(named_after.calls == std::vector<std::string>({"hint 0", "create software"}));
+
+    Stand named_software;
+    named_software.refusing = {software};
+    const CreationOutcome fatal = rebuild_walk(environment, software, named_software);
+    OA_CHECK(!fatal.created);
+    OA_CHECK(named_software.calls == std::vector<std::string>{"create software"});
+    OA_CHECK(fatal.error == "SDL_CreateRenderer: software would not start");
+}
+
 /// Returns the framebuffer hint SDL holds.
 ///
 /// @return its value; empty when unset
@@ -511,6 +571,191 @@ void test_named_software() {
     close_window(window);
 }
 
+/// Refuses every render driver.
+///
+/// @return true
+bool refuse_every_driver(void*, std::string_view) {
+    return true;
+}
+
+/// Refuses every render driver but software, as --render-fault create does.
+///
+/// @param driver the driver
+/// @return true for every driver but software
+bool refuse_hardware(void*, std::string_view driver) {
+    return driver != software;
+}
+
+/// Answers that the device is lost.
+///
+/// @return DeviceState::lost
+oa::platform::render_probe::DeviceState answer_lost(void*) {
+    return oa::platform::render_probe::DeviceState::lost;
+}
+
+/// Answers whether the window's pixels are RGB565 from the test's own answer.
+///
+/// @param context the answer
+/// @return the answer
+bool answer_rgb565(void* context) {
+    return *static_cast<bool*>(context);
+}
+
+/// On the dummy video driver: the faults refuse the hardware drivers with
+/// their own reason; a rebuild makes software again, through SDL's whole
+/// order; with software refused too it throws and leaves no renderer. The
+/// layers keep today's formats, the match's following the window's pixels
+/// at each call, and the faults' texture limit and device state stand in
+/// for the renderer's.
+void test_dummy_rebuild() {
+    SDL_Window* window = open_window();
+    if (window == nullptr) {
+        close_window(window);
+        return;
+    }
+    RendererHost host;
+    oa::app::RenderFaultHooks faults;
+    faults.refuse_driver = refuse_hardware;
+    try {
+        host.create(window, faults);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "create: %s\n", error.what());
+    }
+    OA_CHECK(host.renderer() != nullptr);
+    OA_CHECK(host.facts().renderer == software);
+    const auto attempts = host.attempts();
+    for (std::size_t index = 0; index + 1 < attempts.size(); ++index)
+        OA_CHECK(attempts[index].error == oa::app::refused_by_fault);
+    const auto& formats = host.layer_formats();
+    OA_CHECK(formats.opaque == oa::app::render_policy::LayerFormat::xrgb8888);
+    OA_CHECK(formats.loading == oa::app::render_policy::LayerFormat::xrgb8888);
+    OA_CHECK(formats.front_end == oa::app::render_policy::LayerFormat::rgb24);
+    // The window turns 16-bit and back with the renderer kept: the match's
+    // layers follow it, the rest stay as the renderer was made.
+    OA_CHECK(host.opaque_format() == oa::app::render_policy::LayerFormat::xrgb8888);
+    bool rgb565 = true;
+    host.faults().context = &rgb565;
+    host.faults().rgb565_window = answer_rgb565;
+    OA_CHECK(host.opaque_format() == oa::app::render_policy::LayerFormat::rgb565);
+    OA_CHECK(host.layer_formats().opaque == oa::app::render_policy::LayerFormat::xrgb8888);
+    OA_CHECK(host.layer_formats().loading == oa::app::render_policy::LayerFormat::xrgb8888);
+    OA_CHECK(host.layer_formats().front_end == oa::app::render_policy::LayerFormat::rgb24);
+    rgb565 = false;
+    OA_CHECK(host.opaque_format() == oa::app::render_policy::LayerFormat::xrgb8888);
+    host.faults().rgb565_window = nullptr;
+    host.faults().context = nullptr;
+    OA_CHECK(host.texture_limit() == 0);
+    host.faults().texture_limit = 2048;
+    OA_CHECK(host.texture_limit() == 2048);
+    OA_CHECK(host.device_state() == oa::platform::render_probe::DeviceState::unknown);
+    host.faults().device_state = answer_lost;
+    OA_CHECK(host.device_state() == oa::platform::render_probe::DeviceState::lost);
+    host.faults().device_state = nullptr;
+
+    host.rebuild("a test");
+    OA_CHECK(host.renderer() != nullptr);
+    OA_CHECK(host.facts().renderer == software);
+    OA_CHECK(!host.attempts().empty() && host.attempts().back().created);
+    OA_CHECK(host.texture_limit() == 2048);
+
+    host.faults().refuse_driver = refuse_every_driver;
+    bool thrown = false;
+    try {
+        host.rebuild("a test");
+    } catch (const std::runtime_error& error) {
+        thrown = std::string_view(error.what()).starts_with(oa::app::renderer_creation_error);
+    }
+    OA_CHECK(thrown);
+    OA_CHECK(host.renderer() == nullptr);
+    close_window(window);
+}
+
+/// A lost device seen before the runtime exists is noted by take_event and
+/// mended by service, which makes the renderer again; other events are not
+/// taken.
+void test_lost_before_runtime() {
+    SDL_Window* window = open_window();
+    if (window == nullptr) {
+        close_window(window);
+        return;
+    }
+    RendererHost host;
+    try {
+        host.create(window);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "create: %s\n", error.what());
+    }
+    SDL_Event key{};
+    key.type = SDL_EVENT_KEY_DOWN;
+    OA_CHECK(!host.take_event(key));
+    SDL_Event reset{};
+    reset.type = SDL_EVENT_RENDER_DEVICE_RESET;
+    reset.render.windowID = SDL_GetWindowID(window);
+    OA_CHECK(host.take_event(reset));
+    SDL_Event lost{};
+    lost.type = SDL_EVENT_RENDER_DEVICE_LOST;
+    lost.render.windowID = SDL_GetWindowID(window);
+    OA_CHECK(SDL_PushEvent(&lost));
+    SDL_Event taken{};
+    bool noted = false;
+    while (SDL_PollEvent(&taken))
+        noted = host.take_event(taken) || noted;
+    OA_CHECK(noted);
+    try {
+        host.service();
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "service: %s\n", error.what());
+        OA_CHECK(false);
+    }
+    OA_CHECK(host.renderer() != nullptr);
+    OA_CHECK(host.facts().renderer == software);
+    // After software, the rebuild's walk went through SDL's order again
+    // from the top, up to software.
+    std::size_t software_place = 0;
+    while (static_cast<int>(software_place) < SDL_GetNumRenderDrivers() &&
+           std::string_view(SDL_GetRenderDriver(static_cast<int>(software_place))) != software)
+        ++software_place;
+    OA_CHECK(host.attempts().size() == software_place + 1);
+    host.destroy();
+    close_window(window);
+}
+
+/// Under SDL_RENDER_DRIVER standing in as "opengl,software" on the dummy
+/// video driver the start makes software; a rebuild then tries software
+/// alone, the only driver the list names after it, and the layers keep
+/// today's formats.
+void test_named_list_rebuild() {
+    SDL_Window* window = open_window();
+    if (window == nullptr) {
+        close_window(window);
+        return;
+    }
+    OA_CHECK(SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl,software"));
+    RendererHost host;
+    try {
+        host.create(window);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "create: %s\n", error.what());
+    }
+    OA_CHECK(host.named());
+    OA_CHECK(host.facts().renderer == software);
+    OA_CHECK(host.layer_formats().opaque == oa::app::render_policy::LayerFormat::xrgb8888);
+    OA_CHECK(host.layer_formats().front_end == oa::app::render_policy::LayerFormat::rgb24);
+    try {
+        host.rebuild("a test");
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "rebuild: %s\n", error.what());
+    }
+    OA_CHECK(host.renderer() != nullptr);
+    OA_CHECK(host.attempts().size() == 1);
+    OA_CHECK(
+        host.attempts().size() == 1 && host.attempts()[0].driver == software &&
+        host.attempts()[0].created
+    );
+    host.destroy();
+    close_window(window);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -528,8 +773,12 @@ int main(int argc, char** argv) {
     test_skipping();
     test_advice_rule();
     test_environment_start();
+    test_rebuild_walks();
     test_dummy_walk();
     test_dummy_hint_held();
+    test_dummy_rebuild();
+    test_lost_before_runtime();
+    test_named_list_rebuild();
     test_named_missing(true);
     test_named_software();
     return oa::test::check_exit_status();

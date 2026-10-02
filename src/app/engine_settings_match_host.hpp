@@ -58,9 +58,9 @@ struct Runtime::EngineSettingsMatchHost {
     oa::ui::display_layout::Rect layer_bounds{}; ///< the part of the layer that is not clear
     std::optional<LayerLook> uploaded;         ///< what the texture holds; nothing when it is stale
     std::array<uint8_t, 256> uploaded_gamma{}; ///< the gamma table the texture was uploaded at
-    SDL_Texture* layer{}; ///< the settings layer's texture; null before the first
-    int layer_width{};    ///< the texture's width, in window pixels
-    int layer_height{};   ///< the texture's height, in window pixels
+    /// The settings layer's texture, in tiles beyond the renderer's limit;
+    /// none before the first draw.
+    TiledTexture layer;
 
     /// Takes one input on the match: the dialog's while it is open, the OA
     /// button's while the in-game menu's column shows, and the shortcut.
