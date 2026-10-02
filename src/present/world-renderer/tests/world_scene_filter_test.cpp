@@ -12,10 +12,16 @@
 // with nothing written, and rebuilding a plan no larger allocates nothing. A
 // pinned FNV-1a digest of seeded scenes holds the bytes on every platform and
 // build type: it moves only with a deliberate change to the pass, said in
-// the commit that moves it. The time of a 1080p battlefield filtered from a
-// scene twice its size, at one half and at two scales whose footprints cover
-// three scene pixels, is logged, for information only.
+// the commit that moves it. The nearest resample shows, for each picture
+// pixel, the scene pixel the terrain fill's 16.16 step names: a scene of the
+// map filled at one pixel per map pixel and resampled at a scale is the
+// terrain filled at that scale, on every pool, and a scene smaller than the
+// picture reads, missing storage or a short row is refused with nothing
+// written. The time of a 1080p battlefield filtered from a scene twice its
+// size, at one half and at two scales whose footprints cover three scene
+// pixels, is logged, for information only.
 #include "oa/platform/job_pool.hpp"
+#include "oa/present/world_renderer.hpp"
 #include "oa/present/world_renderer/scene_filter.hpp"
 #include "oa/test/check.hpp"
 
@@ -25,6 +31,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -44,6 +52,7 @@ constexpr uint32_t seed_reference = 0xBB67AE85U;
 constexpr uint32_t seed_bands = 0x3C6EF372U;
 constexpr uint32_t seed_digest = 0xA54FF53AU;
 constexpr uint32_t seed_timing = 0x510E527FU;
+constexpr uint32_t seed_resample = 0x9B05688CU;
 
 /// Returns numerator / denominator in 16.16, rounded to the nearest.
 ///
@@ -128,6 +137,23 @@ constexpr double reference_tolerance = 0.5 + 1.0 / 256.0;
 
 /// Byte a picture is filled with before a refused frame, to show it untouched.
 constexpr uint8_t untouched_fill = 0xA5;
+
+/// Scales the nearest resample is followed at, picture pixels per scene
+/// pixel: the zoom range's ends, its simple fractions and one at none, and
+/// 0, which counts as 1.
+constexpr float resample_scales[] = {0.5F, 0.6F, 0.75F, 1.0F, 1.37F, 2.0F, 3.0F, 4.0F, 0.0F};
+
+/// The terrain the nearest resample is held to: the test map's size in
+/// tiles, its distinct tiles, and the picture filled from it.
+constexpr uint32_t resample_map_tiles_wide = 48;
+constexpr uint32_t resample_map_tiles_high = 40;
+constexpr uint32_t resample_map_tile_count = 24;
+constexpr uint32_t resample_view_width = 1000;
+constexpr uint32_t resample_view_height = 700;
+/// Pixels past each row of the resample's pictures, which it never writes.
+constexpr uint32_t resample_padding = 5;
+/// Threads of the pools the resample runs on besides the calling thread alone.
+constexpr uint32_t resample_pool_sizes[] = {2, 3, 4, 8};
 
 /// A 32-bit xorshift sequence, the same on every platform.
 struct Random {
@@ -776,6 +802,275 @@ void test_malformed_frames() {
     OA_CHECK(refused(wr::AreaError::no_plan, moved_from, scene.source(), picture.target()));
 }
 
+/// Returns the scale of the nearest resample in 16.16, as its header gives it.
+///
+/// @param scale picture pixels per scene pixel; not above 0 counts as 1
+/// @return the scale rounded to the nearest 16.16 unit, at least 1
+uint64_t resample_fixed_scale(float scale) {
+    if (!(scale > 0.0F))
+        return wr::area_fixed_one;
+    return std::max<uint64_t>(
+        1U, static_cast<uint64_t>(std::lround(static_cast<double>(scale) * wr::area_fixed_one))
+    );
+}
+
+/// Returns whether the padding past every row of a picture still holds untouched_fill.
+///
+/// @param picture the picture
+/// @return true when no byte past a row's width was written
+bool padding_untouched(const Picture& picture) {
+    for (uint32_t row = 0; row < picture.height; ++row)
+        for (uint32_t byte = picture.width * wr::area_pixel_bytes;
+             byte < picture.stride * wr::area_pixel_bytes;
+             ++byte)
+            if (picture.rgb[std::size_t{row} * picture.stride * wr::area_pixel_bytes + byte] !=
+                untouched_fill)
+                return false;
+    return true;
+}
+
+/// Checks that each picture pixel of the nearest resample is the scene pixel
+/// floor(x * 65536 / scale_fp), floor(y * 65536 / scale_fp) names, that the
+/// scene it reads is resample_scene_extent's, and that nothing past a row is
+/// written.
+void test_nearest_resample_mapping() {
+    Random random{seed_resample};
+    constexpr uint32_t width = 97;
+    constexpr uint32_t height = 61;
+    for (const float scale : resample_scales) {
+        const uint64_t scale_fp = resample_fixed_scale(scale);
+        const uint64_t scene_width = (width - 1U) * uint64_t{wr::area_fixed_one} / scale_fp + 1U;
+        const uint64_t scene_height = (height - 1U) * uint64_t{wr::area_fixed_one} / scale_fp + 1U;
+        OA_CHECK(wr::resample_scene_extent(scale, width) == scene_width);
+        OA_CHECK(wr::resample_scene_extent(scale, height) == scene_height);
+        const Picture scene = random_scene(
+            random,
+            static_cast<uint32_t>(scene_width),
+            static_cast<uint32_t>(scene_height),
+            static_cast<uint32_t>(scene_width) + 3U
+        );
+        Picture picture = blank(width, height, width + resample_padding, untouched_fill);
+        OA_CHECK(
+            wr::resample_nearest_rgb24(scene.source(), scale, picture.target()) ==
+            wr::AreaError::none
+        );
+        bool all = true;
+        for (uint32_t y = 0; y < height; ++y) {
+            const auto scene_y = static_cast<uint32_t>(y * uint64_t{wr::area_fixed_one} / scale_fp);
+            for (uint32_t x = 0; x < width; ++x) {
+                const auto scene_x =
+                    static_cast<uint32_t>(x * uint64_t{wr::area_fixed_one} / scale_fp);
+                for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel)
+                    all = all && picture.at(x, y, channel) == scene.at(scene_x, scene_y, channel);
+            }
+        }
+        OA_CHECK(all);
+        OA_CHECK(padding_untouched(picture));
+    }
+}
+
+/// Returns a map of random tiles, each of random palette indices.
+///
+/// @param random the sequence the tiles are drawn from
+/// @return the map
+oa::formats::tnt::Map resample_test_map(Random& random) {
+    oa::formats::tnt::Map map;
+    map.tile_width = resample_map_tiles_wide;
+    map.tile_height = resample_map_tiles_high;
+    map.tile_count = resample_map_tile_count;
+    map.tile_indices.resize(std::size_t{resample_map_tiles_wide} * resample_map_tiles_high);
+    for (auto& index : map.tile_indices)
+        index = static_cast<uint16_t>(random.next() % resample_map_tile_count);
+    map.tile_palette_indices.resize(
+        std::size_t{resample_map_tile_count} * oa::formats::tnt::layout::tile_bytes
+    );
+    for (auto& index : map.tile_palette_indices)
+        index = static_cast<uint8_t>(random.next() >> 24);
+    return map;
+}
+
+/// Returns a palette whose every entry differs in all three bytes.
+///
+/// @return the palette
+oa::PaletteBytes resample_test_palette() {
+    oa::PaletteBytes palette{};
+    for (std::size_t index = 0; index < oa::palette_color_count; ++index) {
+        palette[index * oa::palette_entry_bytes] = static_cast<uint8_t>(index);
+        palette[index * oa::palette_entry_bytes + 1] = static_cast<uint8_t>(index * 7U + 3U);
+        palette[index * oa::palette_entry_bytes + 2] = static_cast<uint8_t>(255U - index);
+    }
+    return palette;
+}
+
+/// Checks that a scene of the map filled at one pixel per map pixel, two
+/// pixels wider and taller than the picture reads, then resampled nearest at
+/// a scale, is the terrain filled at that scale, padding included; at scale
+/// 1 it is the scene's corner. Without a pool and on every pool the bytes
+/// are the same.
+void test_nearest_resample_is_the_terrain_fill() {
+    Random random{seed_resample ^ seed_bands};
+    const oa::formats::tnt::Map map = resample_test_map(random);
+    const oa::PaletteBytes palette = resample_test_palette();
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : resample_pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+
+    // Where the camera is, at each scale: the corner, the middle and past
+    // the map's right and bottom edges.
+    const struct {
+        uint32_t source_x;
+        uint32_t source_y;
+        float scale;
+    } views[] = {
+        {0, 0, 1.0F},
+        {517, 333, 1.0F},
+        {211, 97, 1.37F},
+        {64, 640, 0.6F},
+        {1300, 1100, 0.6F},
+        {5, 7, 2.0F},
+        {800, 3, 0.75F},
+        {40, 30, 4.0F},
+    };
+
+    constexpr uint32_t stride = resample_view_width + resample_padding;
+    for (const auto& view : views) {
+        const uint64_t scale_fp = resample_fixed_scale(view.scale);
+        const auto scene_width = static_cast<uint32_t>(
+            (resample_view_width - 1U) * uint64_t{wr::area_fixed_one} / scale_fp + 3U
+        );
+        const auto scene_height = static_cast<uint32_t>(
+            (resample_view_height - 1U) * uint64_t{wr::area_fixed_one} / scale_fp + 3U
+        );
+        OA_CHECK(wr::resample_scene_extent(view.scale, resample_view_width) + 2U == scene_width);
+        OA_CHECK(wr::resample_scene_extent(view.scale, resample_view_height) + 2U == scene_height);
+        Picture scene = blank(scene_width, scene_height, scene_width + 3U, 0);
+        OA_CHECK(!wr::fill_scaled_viewport(
+                      map,
+                      palette,
+                      view.source_x,
+                      view.source_y,
+                      scene_width,
+                      scene_height,
+                      1.0F,
+                      scene.rgb.data(),
+                      scene.stride
+        )
+                      .has_value());
+        Picture filled = blank(resample_view_width, resample_view_height, stride, untouched_fill);
+        OA_CHECK(!wr::fill_scaled_viewport(
+                      map,
+                      palette,
+                      view.source_x,
+                      view.source_y,
+                      resample_view_width,
+                      resample_view_height,
+                      view.scale,
+                      filled.rgb.data(),
+                      stride
+        )
+                      .has_value());
+        Picture resampled =
+            blank(resample_view_width, resample_view_height, stride, untouched_fill);
+        OA_CHECK(
+            wr::resample_nearest_rgb24(scene.source(), view.scale, resampled.target()) ==
+            wr::AreaError::none
+        );
+        OA_CHECK(resampled.rgb == filled.rgb);
+        OA_CHECK(padding_untouched(resampled));
+        for (const auto& pool : pools) {
+            Picture pooled =
+                blank(resample_view_width, resample_view_height, stride, untouched_fill);
+            OA_CHECK(
+                wr::resample_nearest_rgb24(
+                    scene.source(), view.scale, pooled.target(), pool.get()
+                ) == wr::AreaError::none
+            );
+            OA_CHECK(pooled.rgb == filled.rgb);
+        }
+    }
+}
+
+/// Checks that the nearest resample refuses a scene smaller than the
+/// picture reads, missing storage and a stride below its row's width,
+/// writing nothing, and fills an empty picture with nothing.
+void test_nearest_resample_refusals() {
+    constexpr uint32_t width = 40;
+    constexpr uint32_t height = 28;
+    constexpr float scale = 2.0F;
+    // At scale 2 the picture reads 20 x 14 scene pixels.
+    constexpr uint32_t scene_width = width / 2U;
+    constexpr uint32_t scene_height = height / 2U;
+    OA_CHECK(wr::resample_scene_extent(scale, width) == scene_width);
+    OA_CHECK(wr::resample_scene_extent(scale, height) == scene_height);
+    // Scale 1, and a scale that is not above 0, read the picture's own size;
+    // an empty picture reads nothing.
+    OA_CHECK(wr::resample_scene_extent(1.0F, width) == width);
+    OA_CHECK(wr::resample_scene_extent(0.0F, width) == width);
+    OA_CHECK(wr::resample_scene_extent(-1.0F, width) == width);
+    OA_CHECK(wr::resample_scene_extent(scale, 0) == 0);
+
+    Random random{seed_resample ^ seed_slow};
+    const Picture scene = random_scene(random, scene_width, scene_height, scene_width);
+    Picture picture = blank(width, height, width + resample_padding, untouched_fill);
+    const std::vector<uint8_t> untouched = picture.rgb;
+    const auto refused = [&](wr::AreaError expected, wr::RgbSource source, wr::RgbTarget target) {
+        return wr::resample_nearest_rgb24(source, scale, target) == expected &&
+               picture.rgb == untouched;
+    };
+
+    wr::RgbSource source = scene.source();
+    wr::RgbTarget target = picture.target();
+    source.width = scene_width - 1U;
+    OA_CHECK(refused(wr::AreaError::scene_too_small, source, picture.target()));
+    source = scene.source();
+    source.height = scene_height - 1U;
+    OA_CHECK(refused(wr::AreaError::scene_too_small, source, picture.target()));
+    source = scene.source();
+    source.rgb = nullptr;
+    OA_CHECK(refused(wr::AreaError::missing_pixels, source, picture.target()));
+    target.rgb = nullptr;
+    OA_CHECK(refused(wr::AreaError::missing_pixels, scene.source(), target));
+    source = scene.source();
+    source.stride_pixels = scene_width - 1U;
+    OA_CHECK(refused(wr::AreaError::stride_out_of_range, source, picture.target()));
+    target = picture.target();
+    target.stride_pixels = width - 1U;
+    OA_CHECK(refused(wr::AreaError::stride_out_of_range, scene.source(), target));
+    // An empty picture is filled with nothing, even with no storage.
+    target = {};
+    OA_CHECK(refused(wr::AreaError::none, scene.source(), target));
+    // The scene the picture reads, and no more, is enough.
+    OA_CHECK(
+        wr::resample_nearest_rgb24(scene.source(), scale, picture.target()) == wr::AreaError::none
+    );
+    OA_CHECK(picture.rgb != untouched);
+    OA_CHECK(padding_untouched(picture));
+}
+
+/// Checks that every error of the area pass and the nearest resample has a
+/// text of its own, and that no error is "none".
+void test_error_texts() {
+    const wr::AreaError errors[] = {
+        wr::AreaError::scale_out_of_range,
+        wr::AreaError::empty_picture,
+        wr::AreaError::picture_too_large,
+        wr::AreaError::no_plan,
+        wr::AreaError::picture_mismatch,
+        wr::AreaError::scene_too_small,
+        wr::AreaError::stride_out_of_range,
+        wr::AreaError::missing_pixels,
+        wr::AreaError::rows_out_of_range,
+    };
+    OA_CHECK(std::strcmp(wr::area_error_text(wr::AreaError::none), "none") == 0);
+    for (std::size_t first = 0; first < std::size(errors); ++first) {
+        const char* text = wr::area_error_text(errors[first]);
+        OA_CHECK(text != nullptr && text[0] != '\0');
+        OA_CHECK(std::strcmp(text, "none") != 0);
+        for (std::size_t second = first + 1U; second < std::size(errors); ++second)
+            OA_CHECK(std::strcmp(text, wr::area_error_text(errors[second])) != 0);
+    }
+}
+
 /// Checks the pinned digest of seeded scenes filtered at digest_scales.
 void test_pinned_digest() {
     Random random{seed_digest};
@@ -851,6 +1146,10 @@ int main() {
     test_malformed_plans();
     test_rebuild_keeps_storage();
     test_malformed_frames();
+    test_nearest_resample_mapping();
+    test_nearest_resample_is_the_terrain_fill();
+    test_nearest_resample_refusals();
+    test_error_texts();
     test_pinned_digest();
     log_time_at_1080p();
     return oa::test::check_exit_status();

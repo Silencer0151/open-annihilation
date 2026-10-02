@@ -7,7 +7,9 @@
 // picture, each screen pixel the average of the scene under its footprint
 // weighted by the area it covers. It works in integers only: the weights are
 // exact in 16.16 fixed point, and the bytes are the same on every platform,
-// build type and number of threads.
+// build type and number of threads. Beside it, the nearest resample turns a
+// scene into the picture at any other scale, nearest-pixel, with the terrain
+// fill's step.
 
 #include "oa/platform/job_pool.hpp"
 
@@ -62,7 +64,7 @@ struct AreaTap {
     std::array<uint32_t, area_taps_max> weights{};
 };
 
-/// Why the area pass refused a plan or a frame.
+/// Why the area pass or the nearest resample refused a plan or a frame.
 enum class AreaError {
     none,
     scale_out_of_range,  ///< scale below area_scale_min or above area_scale_max
@@ -75,6 +77,12 @@ enum class AreaError {
     missing_pixels,      ///< a scene or picture with no storage
     rows_out_of_range,   ///< a band's rows are not within the picture
 };
+
+/// Says what an error of the area pass or the nearest resample means, for messages.
+///
+/// @param error the error
+/// @return static text; "none" for AreaError::none
+[[nodiscard]] const char* area_error_text(AreaError error) noexcept;
 
 class AreaPlan;
 
@@ -241,6 +249,52 @@ struct RgbTarget {
 [[nodiscard]] AreaError area_filter_rgb24(
     const AreaPlan& plan,
     const RgbSource& scene,
+    const RgbTarget& picture,
+    platform::job_pool::Pool* pool = nullptr
+);
+
+/// Rows of the picture each band of resample_nearest_rgb24 fills.
+inline constexpr uint32_t resample_band_rows = 32;
+
+/// Returns the scene columns (or rows) resample_nearest_rgb24 reads for a picture's columns (or
+/// rows).
+///
+/// The last picture column x = picture_extent - 1 reads scene column
+/// floor(x * area_fixed_one / scale_fp), where scale_fp is the scale in
+/// 16.16, rounded to the nearest and at least 1; the scene must be wider
+/// than that column.
+///
+/// @param scale picture pixels per scene pixel; non-positive means 1
+/// @param picture_extent picture columns (or rows)
+/// @return the last scene column read plus one; 0 for an empty picture
+[[nodiscard]] uint64_t resample_scene_extent(float scale, uint32_t picture_extent) noexcept;
+
+/// Writes the picture of a scene at another scale, nearest-pixel.
+///
+/// The scene starts at the picture's top-left corner. Picture pixel (x, y)
+/// shows scene pixel (floor(x * area_fixed_one / scale_fp),
+/// floor(y * area_fixed_one / scale_fp)), where scale_fp is the scale in
+/// 16.16, rounded to the nearest and at least 1: the step fill_scaled_viewport
+/// samples the map with, so the picture of a scene of the mosaic drawn at one
+/// pixel per map pixel is the terrain fill_scaled_viewport draws at that
+/// scale, and at scale 1 the picture is a copy of the scene's corner. The
+/// rows are filled in bands of resample_band_rows rows, on the pool's
+/// threads when one is given; every row is the same whichever thread fills
+/// it. Reads only the scene pixels resample_scene_extent names; writes
+/// nothing past each picture row's width. The picture must not share
+/// storage with the scene. An empty picture is filled with nothing.
+///
+/// @param scene the scene, at least resample_scene_extent of the scale and the picture's width
+///        by that of the scale and its height
+/// @param scale picture pixels per scene pixel; non-positive means 1
+/// @param[out] picture the picture, of any size
+/// @param pool threads to fill the bands on; null fills them on the calling thread
+/// @return AreaError::none, or why the frame was refused, in which case nothing was written:
+///         missing_pixels, stride_out_of_range for a stride below its width, or
+///         scene_too_small
+[[nodiscard]] AreaError resample_nearest_rgb24(
+    const RgbSource& scene,
+    float scale,
     const RgbTarget& picture,
     platform::job_pool::Pool* pool = nullptr
 );

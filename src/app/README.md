@@ -121,6 +121,30 @@ logs it.
   there is one band and no more. The debug grid before the list, and the
   fog, the order overlays, the build ghost, the selection band, the health
   bars and the HUD after it, are drawn on the drawing thread as before.
+  The terrain, the list and the fog are drawn at the draw scale into the
+  scene `world_scaling` gives: the scene pixels per map pixel, which the
+  terrain fill and its box filter, the fog, the model bridge and the
+  sprites, particles and lines of the list take, while units and features
+  are culled, and the order overlays, build ghost, selection band and every
+  painter after them placed, in screen pixels at the zoom. The game draws
+  at the zoom, its scene the world layer itself; a check may draw the scene
+  at another scale apart from the world layer, which a nearest resample
+  (`resample_nearest_rgb24`) then fills at the zoom. What the match reads
+  back from drawing (the view in Game, the on-screen list, the piece
+  transforms, the radar) follows the zoom and the camera alone;
+  `native-match-layers` draws the scene at 1 apart at zoom 1, 0.5 and 2 and
+  checks that, and that at zoom 1 the world layer is the same byte for
+  byte; at zoom 2 a nano particle drawn on that scene fills its 2 by 2
+  square there and, resampled, a 4 by 4 square at twice its place.
+- `world_scaling.hpp`, `world_scaling.cpp`: how a frame draws the
+  battlefield (`world_scaling`), from the zoom, the battlefield's size and
+  the draw scale asked for, as a pure function. Without a draw scale the
+  scene is the battlefield at the zoom, the world layer itself; drawn apart
+  at the zoom it is the battlefield's size, and at another scale it covers
+  the battlefield's map pixels at that scale with two more columns and
+  rows, rounded up to even sizes. `app-world-scaling` checks these by
+  table, and that over the zoom range and every window's battlefield the
+  scene holds every pixel the nearest resample reads.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
   match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
   Game Settings sheet, the removal question) is placed as 3.1c's panel

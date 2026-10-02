@@ -338,6 +338,14 @@ if(BUILD_TESTING)
   add_executable(oa-app-memory-guard-test src/app/memory_guard_test.cpp)
   target_link_libraries(oa-app-memory-guard-test PRIVATE oa-app-memory-guard oa-test-support oa-options)
   add_test(NAME app-memory-guard COMMAND oa-app-memory-guard-test)
+  # How a frame draws the battlefield: without a draw scale, and at the
+  # zoom, the scene is the battlefield; at another scale it covers the
+  # battlefield's map pixels with a margin, in even sizes, and holds every
+  # pixel the nearest resample reads over the zoom range.
+  add_executable(oa-app-world-scaling-test src/app/world_scaling_test.cpp src/app/world_scaling.cpp)
+  target_link_libraries(oa-app-world-scaling-test PRIVATE oa-app-headers oa-present-world-renderer
+    oa-test-support oa-options)
+  add_test(NAME app-world-scaling COMMAND oa-app-world-scaling-test)
   # The application loop's pacing over a fake clock: frames evenly spaced
   # at the rate asked for, 30 ticks a second at any frame rate, the fraction
   # of a tick each frame shows, the camera's scroll for a frame's real time,
@@ -432,6 +440,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_check_host.cpp src/app/check_host_input.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
+  src/app/world_scaling.cpp
   src/app/frame_pacing.cpp src/app/frame_stats_panel.cpp src/app/runtime_frame_stats.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
@@ -522,8 +531,15 @@ if(OA_BUILD_PLATFORM)
       # The match frame presented through SDL on dummy devices must equal the
       # CPU composition headless runs use, with the overlays visible, and a
       # nano particle fills a square two pixels on a side at zoom 1 and four
-      # at zoom 2. A won skirmish then leaves its VICTORY frame on its own for
-      # the end screen, which darkens that frame at the match's size.
+      # at zoom 2; with the battlefield's scene drawn at draw scale 1 apart
+      # from the world layer, two on the scene, and the zoom's square at the
+      # zoom times its place on the scene in the world layer resampled from
+      # it. That scene drawn apart from
+      # the world layer and resampled nearest at zoom 1 gives the world layer
+      # byte for byte, and at zoom 1, 0.5 and 2 leaves what the match reads
+      # back from drawing as the zoom's own frame does. A won skirmish then
+      # leaves its VICTORY frame on its own for the end screen, which darkens
+      # that frame at the match's size.
       set(oa_layer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-layers")
       file(MAKE_DIRECTORY "${oa_layer_check_dir}")
       add_test(NAME native-match-layers COMMAND oa-game --game-dir "${OA_GAME_DIR}"

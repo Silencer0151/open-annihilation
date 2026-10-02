@@ -131,6 +131,34 @@ scenes. It logs the time of a 1664x952 picture, the battlefield of a
 half and at two thirds, the last two with footprints of three scene pixels
 a side, for information.
 
+## The nearest resample
+
+`resample_nearest_rgb24` (`scene_filter.hpp`) turns a scene, the battlefield
+drawn at a draw scale of its own, into the picture at another scale,
+nearest-pixel, in bands of `resample_band_rows` (32) picture rows on an
+optional job pool. It reads and writes the area pass's `RgbSource` and
+`RgbTarget`. Its step is the terrain fill's: picture column `x` shows scene
+column `floor(x * 65536 / s)`, where `s` is the scale in 16.16 rounded to
+the nearest, and rows alike, so a scene of the mosaic drawn at one pixel per
+map pixel and resampled at a zoom is, byte for byte, the terrain the fill
+draws at that zoom, and at scale 1 the picture is a copy of the scene's
+corner. It refuses, writing nothing, missing storage, a stride below its
+row's width and a scene smaller than the picture reads, which
+`resample_scene_extent` gives for each axis; `area_error_text` says what
+each refusal means. The game draws its battlefield at the zoom and
+resamples nothing, except for a check that draws the scene apart from the
+world layer.
+
+`world-scene-filter`'s nearest-resample case checks every picture pixel
+against that mapping at scales from 0.5 to 4, and 0, which counts as 1;
+resamples a scene of a random map filled 1:1, two pixels larger than the
+picture reads, at zooms from 0.6 to 4, from the corner, the middle and past
+the map's edges, and checks the picture against the fill at that zoom
+without a pool and on pools of 2, 3, 4 and 8 threads; checks the scene's
+size against `resample_scene_extent`, that nothing past a row is written,
+and that a scene too small, missing storage or a short row is refused with
+nothing written.
+
 ## Draw order
 
 `plan_battlefield_draws` (`world_draw_order.hpp`) orders a frame's features

@@ -150,6 +150,15 @@ Runtime::live_viewport(uint32_t camera_x, uint32_t camera_y) const {
     };
 }
 
+WorldScaling Runtime::world_scaling() const {
+    return oa::app::world_scaling(
+        match_zoom(),
+        match_layout_.battlefield_width(),
+        match_layout_.battlefield_height(),
+        scene_draw_scale_
+    );
+}
+
 void Runtime::initialize_sdl() {
     if (sdl_.window == nullptr || sdl_.renderer == nullptr) {
         if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1"))

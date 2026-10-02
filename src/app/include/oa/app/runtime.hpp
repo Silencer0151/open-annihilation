@@ -13,6 +13,7 @@
 #include "offline_services.hpp"
 #include "video_capture.hpp"
 #include "web_link.hpp"
+#include "world_scaling.hpp"
 #include "oa/ui/display_layout.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/base/game_loop.hpp"
@@ -2910,17 +2911,18 @@ class Runtime final : public menu::Host,
     /// Grays the battlefield outside the viewer's line of sight and blacks out never-mapped ground.
     ///
     /// One 32-pixel FOG.GAF tile per edge-grid cell. Tiles are placed in map space
-    /// and scaled through the terrain's zoom DDA, so the tile edges stay on the
-    /// same map pixels at any zoom. Nothing is drawn with mapping and line of
-    /// sight both off.
+    /// and scaled through the terrain's DDA at the draw scale, so the tile edges
+    /// stay on the same map pixels at any scale. Nothing is drawn with mapping
+    /// and line of sight both off.
     ///
-    /// @param[in,out] destination battlefield frame
+    /// @param[in,out] destination battlefield frame, or the scene it is drawn from
     /// @param camera_x camera column in map pixels
     /// @param camera_y camera row in map pixels
     /// @param dest_x frame column of the battlefield
     /// @param dest_y frame row of the battlefield
     /// @param dest_w battlefield width in frame pixels
     /// @param dest_h battlefield height in frame pixels
+    /// @param draw_scale frame pixels per map pixel (WorldScaling::draw_scale); 0 or less is 1
     void apply_match_fog(
         oa::present::world_renderer::Surface& destination,
         uint32_t camera_x,
@@ -2928,7 +2930,8 @@ class Runtime final : public menu::Host,
         int dest_x,
         int dest_y,
         int dest_w,
-        int dest_h
+        int dest_h,
+        float draw_scale
     );
 
     /// Loads the FOG.GAF tile sets and prepares native RGB fog levels, once.
@@ -3194,6 +3197,15 @@ class Runtime final : public menu::Host,
     /// resource readout, the build captions and the extension's HUD. Each
     /// part is charged to its profile category. Throws std::logic_error
     /// without a match, and std::runtime_error when a band cannot be drawn.
+    ///
+    /// The terrain, the draws and the fog are drawn at the draw scale into
+    /// the scene world_scaling() gives; units and features are culled, and
+    /// the order overlays, build ghost, selection band and everything painted
+    /// after them placed, in screen pixels at the zoom. A scene drawn apart
+    /// from the world layer is resampled nearest into it after the fog. What
+    /// the match reads back from the draw (the view in Game, the on-screen
+    /// list, the piece transforms, the radar's picture and blips) follows the
+    /// zoom and the camera alone, whatever the draw scale.
     void render_match_surface();
 
     /// Returns the 3DO renderer state of the current match, built on first use.
@@ -3240,13 +3252,14 @@ class Runtime final : public menu::Host,
         std::vector<oa::sim::effect_particles::PiecePrimitive>& out
     );
 
-    /// Fills the terrain cache with a box-filtered picture while the battlefield is zoomed out.
+    /// Fills the terrain cache with a box-filtered picture while the scene is drawn below one pixel
+    /// per map pixel.
     ///
     /// A presentation enhancement: the terrain cache the match renderer would
     /// fill by nearest sampling is filled here with a box average over each
-    /// pixel's footprint, keyed to the same camera and zoom so the renderer
-    /// reuses it. 1:1 and magnified views never enter, so their output is
-    /// unchanged.
+    /// pixel's footprint, at the scene's size and keyed to the same camera
+    /// and draw scale (world_scaling()) so the renderer reuses it. Scenes
+    /// drawn 1:1 or magnified never enter, so their output is unchanged.
     void refresh_filtered_terrain();
 
     /// Loads the load screen's background, bar art and font, once; a missing part is reported on
@@ -3982,6 +3995,15 @@ class Runtime final : public menu::Host,
     /// @return the viewport
     [[nodiscard]] oa::present::world_renderer::BattlefieldViewport
     live_viewport(uint32_t camera_x, uint32_t camera_y) const;
+
+    /// Returns how the frame draws the battlefield (oa::app::world_scaling).
+    ///
+    /// Every frame draws at the zoom into the world layer itself, as the game
+    /// has always drawn it; only a check asks for another draw scale
+    /// (scene_draw_scale_), drawn apart.
+    ///
+    /// @return the draw scale and the scene, from the live layout and zoom
+    [[nodiscard]] WorldScaling world_scaling() const;
 
     /// Starts SDL video and audio with a resizable window and renderer unless both were borrowed,
     /// then sets the presentation and loads the software cursor.
@@ -5313,13 +5335,26 @@ class Runtime final : public menu::Host,
     /// nozzle; drawn through render_match_surface(), the frame must show the
     /// spray's top particle as a square of its palette colour with its top
     /// left corner at the projected point, 2 pixels on a side at zoom 1 and 4
-    /// at zoom 2, and nothing else may change. Frames go to
-    /// `report_directory` as native-pixel-particle-zoom-*.ppm. The match's
-    /// effects, the camera and the zoom are restored. Throws
-    /// std::runtime_error on a failure.
+    /// at zoom 2, and nothing else may change. At each zoom the frame is
+    /// drawn again with its scene at draw scale 1 apart from the world layer:
+    /// the scene must show the particle's 2-pixel square at its point
+    /// projected on the scene, and the world layer resampled from it the
+    /// zoom's square at that point times the zoom, with nothing else changed
+    /// on either. Frames go to `report_directory` as
+    /// native-pixel-particle-zoom-*.ppm. The match's effects, the camera and
+    /// the zoom are restored. Throws std::runtime_error on a failure.
     ///
     /// @param report_directory directory the frames are written to
     void check_pixel_particles(const fs::path& report_directory);
+
+    /// Draws the match frame for a check, its scene at a draw scale apart from the world layer.
+    ///
+    /// The terrain's box filter is refreshed first (refresh_filtered_terrain())
+    /// and the frame drawn by render_match_surface(). The draw scale holds
+    /// for this draw alone, also when it throws.
+    ///
+    /// @param draw_scale scene pixels per map pixel (scene_draw_scale_); none draws at the zoom
+    void render_match_surface_at(std::optional<float> draw_scale);
 
     /// Checks the loading screen through the SDL display sink.
     ///
@@ -5332,11 +5367,29 @@ class Runtime final : public menu::Host,
     /// compose_match_frame outside the software cursor.
     ///
     /// The loading sink check runs first, then the selection visuals
-    /// (check_selection_visuals()) and the pixel particles
-    /// (check_pixel_particles()), and the won match's end
+    /// (check_selection_visuals()), the pixel particles
+    /// (check_pixel_particles()) and the scene drawn at a draw scale of its
+    /// own (check_scene_draw_scale()), and the won match's end
     /// (check_presented_match_end()) last. Throws std::runtime_error on a
     /// failure.
     void check_match_layers();
+
+    /// Checks the battlefield's scene drawn at a draw scale of its own, apart from the world layer.
+    ///
+    /// Over the local unit, at zoom 1, 0.5 and 2, the frame is drawn as the
+    /// game draws it and then with its scene drawn at draw scale 1 apart from
+    /// the world layer and resampled nearest into it at the zoom. At zoom 1
+    /// the world layer must be the same, byte for byte; at every zoom the
+    /// draw must leave what the match reads back from drawing as the frame
+    /// drawn at the zoom leaves it: the Game block (but its resource readout,
+    /// which eases toward the stores once a draw), the on-screen list, every
+    /// unit's piece transforms and the world's digest. A differing world
+    /// layer goes to `report_directory` as native-scene-draw-scale-*.ppm. The
+    /// camera and the zoom are restored. Throws std::runtime_error on a
+    /// failure.
+    ///
+    /// @param report_directory directory a differing frame is written to
+    void check_scene_draw_scale(const fs::path& report_directory);
 
     /// Checks the standing order buttons against the selection and the units.
     ///
@@ -8228,6 +8281,8 @@ class Runtime final : public menu::Host,
     };
 
     FeatureFogRules feature_fog_rules_{};
+    // The terrain of the scene, at its size, and the camera and draw scale it
+    // was filled for.
     oa::present::world_renderer::Surface match_terrain_cache_{};
     uint32_t terrain_cache_cam_x_ = ~0u;
     uint32_t terrain_cache_cam_y_ = ~0u;
@@ -8236,6 +8291,12 @@ class Runtime final : public menu::Host,
     uint32_t terrain_filtered_cam_x_ = ~0u;
     uint32_t terrain_filtered_cam_y_ = ~0u;
     float terrain_filtered_zoom_ = -1.0F;
+    /// The scene a frame drawn apart from the world layer drew
+    /// (WorldScaling::apart), kept for the next such frame; empty otherwise.
+    renderer::Surface match_scene_cpu_{};
+    /// The draw scale a check asks the battlefield's scene to be drawn at,
+    /// apart from the world layer (world_scaling()); none draws at the zoom.
+    std::optional<float> scene_draw_scale_{};
     std::vector<uint8_t> match_fog_grid_{};
     std::vector<int> scale_src_x_{};
     renderer::Surface* overlay_target_ = nullptr;

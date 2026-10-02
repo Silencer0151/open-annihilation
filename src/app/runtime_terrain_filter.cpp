@@ -52,7 +52,7 @@ void footprint_bounds(std::vector<uint32_t>& bounds, uint32_t start, int count, 
 /// @param source_y map row of the first destination pixel
 /// @param dest_w destination width
 /// @param dest_h destination height
-/// @param zoom destination pixels per map pixel, below 1
+/// @param zoom destination pixels per map pixel (the draw scale), below 1
 /// @param[out] dest_rgb 3 bytes per destination pixel
 /// @return false when the terrain's tile tables are malformed or name a missing tile
 bool box_filter_terrain(
@@ -141,14 +141,17 @@ bool box_filter_terrain(
 void Runtime::refresh_filtered_terrain() {
     if (screen_ != Screen::match || !match_ || !selected_tnt_)
         return;
-    const auto zoom = match_zoom();
-    if (!(zoom > 0.0F) || zoom >= kFilteredZoomLimit)
+    // The scene's terrain, at the draw scale: below one pixel per map pixel
+    // only, so a scene drawn 1:1 or magnified keeps the nearest fill.
+    const auto scaling = world_scaling();
+    const auto draw_scale = scaling.draw_scale;
+    if (!(draw_scale > 0.0F) || draw_scale >= kFilteredZoomLimit)
         return;
     const auto& map = *selected_tnt_;
     const auto map_width = static_cast<int32_t>(map.tile_width * 32U);
     const auto map_height = static_cast<int32_t>(map.tile_height * 32U);
-    const int dest_w = match_layout_.battlefield_width();
-    const int dest_h = match_layout_.battlefield_height();
+    const int dest_w = scaling.scene_width;
+    const int dest_h = scaling.scene_height;
     if (dest_w <= 0 || dest_h <= 0)
         return;
     // The renderer clamps the camera the same way before it checks its cache.
@@ -169,22 +172,22 @@ void Runtime::refresh_filtered_terrain() {
         cache.rgb.resize(pixels);
     }
     const auto current = [&](uint32_t cam_x, uint32_t cam_y, float cam_zoom) {
-        return cam_x == camera_x && cam_y == camera_y && std::abs(cam_zoom - zoom) <= 1.0e-4F;
+        return cam_x == camera_x && cam_y == camera_y && std::abs(cam_zoom - draw_scale) <= 1.0e-4F;
     };
     if (!resized &&
         current(terrain_filtered_cam_x_, terrain_filtered_cam_y_, terrain_filtered_zoom_) &&
         current(terrain_cache_cam_x_, terrain_cache_cam_y_, terrain_cache_zoom_))
         return;
     if (!box_filter_terrain(
-            map, match_palette_, camera_x, camera_y, dest_w, dest_h, zoom, cache.rgb.data()
+            map, match_palette_, camera_x, camera_y, dest_w, dest_h, draw_scale, cache.rgb.data()
         ))
         return; // A malformed map is reported by the renderer's own fill.
     terrain_cache_cam_x_ = camera_x;
     terrain_cache_cam_y_ = camera_y;
-    terrain_cache_zoom_ = zoom;
+    terrain_cache_zoom_ = draw_scale;
     terrain_filtered_cam_x_ = camera_x;
     terrain_filtered_cam_y_ = camera_y;
-    terrain_filtered_zoom_ = zoom;
+    terrain_filtered_zoom_ = draw_scale;
 }
 
 } // namespace oa::app

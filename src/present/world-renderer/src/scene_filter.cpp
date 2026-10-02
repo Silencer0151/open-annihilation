@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The area pass: exact area weights in 16.16 fixed point, filtered in bands.
+// The area pass: exact area weights in 16.16 fixed point, filtered in bands;
+// and the nearest resample, banded alike.
 #include "oa/present/world_renderer/scene_filter.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace oa::present::world_renderer {
 namespace {
@@ -306,7 +309,55 @@ void filter_checked_rows(
     }
 }
 
+/// Returns the scale of resample_nearest_rgb24 in 16.16, rounded to the nearest and at least 1.
+///
+/// @param scale picture pixels per scene pixel; non-positive means 1
+/// @return the scale in 16.16
+uint32_t resample_scale_fp(float scale) noexcept {
+    if (!(scale > 0.0F))
+        return area_fixed_one;
+    const auto scale_fp =
+        static_cast<uint32_t>(std::lround(static_cast<double>(scale) * area_fixed_one));
+    return scale_fp == 0 ? 1U : scale_fp;
+}
+
+/// Returns the scene column (or row) under a picture column (or row): the
+/// terrain fill's step taken that many times from 0.
+///
+/// @param scale_fp picture pixels per scene pixel in 16.16, at least 1
+/// @param picture_index picture column (or row)
+/// @return the scene column (or row)
+uint64_t resample_scene_index(uint32_t scale_fp, uint32_t picture_index) noexcept {
+    return static_cast<uint64_t>(picture_index) * area_fixed_one / scale_fp;
+}
+
 } // namespace
+
+const char* area_error_text(AreaError error) noexcept {
+    switch (error) {
+    case AreaError::none:
+        return "none";
+    case AreaError::scale_out_of_range:
+        return "the scale is outside the area pass's range";
+    case AreaError::empty_picture:
+        return "the picture has no columns or no rows";
+    case AreaError::picture_too_large:
+        return "the picture is wider or taller than the area pass takes";
+    case AreaError::no_plan:
+        return "the area pass has no plan";
+    case AreaError::picture_mismatch:
+        return "the picture's size is not the plan's";
+    case AreaError::scene_too_small:
+        return "the scene is smaller than the picture reads";
+    case AreaError::stride_out_of_range:
+        return "a row stride is below its width or above the limit";
+    case AreaError::missing_pixels:
+        return "the scene or the picture has no storage";
+    case AreaError::rows_out_of_range:
+        return "the band's rows are not within the picture";
+    }
+    return "unknown area pass error";
+}
 
 uint32_t area_scene_extent(uint32_t scale, uint32_t picture_extent) noexcept {
     if (scale < area_scale_min || scale > area_scale_max ||
@@ -379,6 +430,62 @@ AreaError area_filter_rgb24(
             filter_checked_rows(
                 plan, scene, picture, row_begin, std::min(height, row_begin + area_band_rows)
             );
+        }
+    );
+    return AreaError::none;
+}
+
+uint64_t resample_scene_extent(float scale, uint32_t picture_extent) noexcept {
+    if (picture_extent == 0)
+        return 0;
+    return resample_scene_index(resample_scale_fp(scale), picture_extent - 1U) + 1U;
+}
+
+AreaError resample_nearest_rgb24(
+    const RgbSource& scene, float scale, const RgbTarget& picture, platform::job_pool::Pool* pool
+) {
+    if (picture.width == 0 || picture.height == 0)
+        return AreaError::none;
+    if (scene.rgb == nullptr || picture.rgb == nullptr)
+        return AreaError::missing_pixels;
+    if (scene.stride_pixels < scene.width || picture.stride_pixels < picture.width)
+        return AreaError::stride_out_of_range;
+    if (resample_scene_extent(scale, picture.width) > scene.width ||
+        resample_scene_extent(scale, picture.height) > scene.height)
+        return AreaError::scene_too_small;
+    const uint32_t scale_fp = resample_scale_fp(scale);
+    // At scale 1 every row is a copy; elsewhere each column's scene column is
+    // worked out once for every row.
+    std::vector<uint32_t> columns;
+    if (scale_fp != area_fixed_one) {
+        columns.resize(picture.width);
+        for (uint32_t x = 0; x < picture.width; ++x)
+            columns[x] = static_cast<uint32_t>(resample_scene_index(scale_fp, x));
+    }
+    const std::size_t scene_row_bytes = std::size_t{scene.stride_pixels} * area_pixel_bytes;
+    const std::size_t picture_row_bytes = std::size_t{picture.stride_pixels} * area_pixel_bytes;
+    const std::size_t picture_width_bytes = std::size_t{picture.width} * area_pixel_bytes;
+    const uint32_t height = picture.height;
+    platform::job_pool::run_bands(
+        pool, platform::job_pool::bands_of_rows(height, resample_band_rows), [&](uint32_t band) {
+            const uint32_t row_begin = band * resample_band_rows;
+            const uint32_t row_end = std::min(height, row_begin + resample_band_rows);
+            for (uint32_t y = row_begin; y < row_end; ++y) {
+                const uint8_t* source =
+                    scene.rgb +
+                    static_cast<std::size_t>(resample_scene_index(scale_fp, y)) * scene_row_bytes;
+                uint8_t* out = picture.rgb + std::size_t{y} * picture_row_bytes;
+                if (columns.empty()) {
+                    std::memcpy(out, source, picture_width_bytes);
+                    continue;
+                }
+                for (const uint32_t column : columns) {
+                    std::memcpy(
+                        out, source + std::size_t{column} * area_pixel_bytes, area_pixel_bytes
+                    );
+                    out += area_pixel_bytes;
+                }
+            }
         }
     );
     return AreaError::none;

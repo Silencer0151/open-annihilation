@@ -28,7 +28,8 @@ void Runtime::apply_match_fog(
     int dest_x,
     int dest_y,
     int dest_w,
-    int dest_h
+    int dest_h,
+    float draw_scale
 ) {
     if (!match_ || dest_w <= 0 || dest_h <= 0)
         return;
@@ -45,9 +46,8 @@ void Runtime::apply_match_fog(
     if (coverage.empty() || sight.width <= 0 || sight.height <= 0 || (!los_on && !mapping_on))
         return;
     ensure_fog_frames();
-    const auto zoom = match_zoom();
     auto zoom_fp = static_cast<uint32_t>(
-        std::lround(static_cast<double>(zoom <= 0.0F ? 1.0F : zoom) * 65536.0)
+        std::lround(static_cast<double>(draw_scale <= 0.0F ? 1.0F : draw_scale) * 65536.0)
     );
     if (zoom_fp == 0)
         zoom_fp = 1;

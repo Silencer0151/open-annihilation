@@ -37,7 +37,10 @@ if(BUILD_TESTING)
   target_link_libraries(oa-world-draw-bands-test PRIVATE oa-present-world-renderer oa-platform-job-pool)
   add_test(NAME world-draw-bands COMMAND oa-world-draw-bands-test)
   # The area pass against its references, across band splits and pools of
-  # 1 to 8 threads, with a pinned digest; it logs its time at 1080p.
+  # 1 to 8 threads, with a pinned digest; it logs its time at 1080p. The
+  # nearest resample against its mapping, and a scene of the map drawn 1:1
+  # and resampled at a zoom against the terrain filled at that zoom, on
+  # pools of 2, 3, 4 and 8 threads.
   add_executable(oa-world-scene-filter-test tests/world_scene_filter_test.cpp)
   target_link_libraries(oa-world-scene-filter-test PRIVATE oa-present-world-renderer oa-platform-job-pool
     oa-test-support)

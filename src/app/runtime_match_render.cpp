@@ -19,6 +19,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/present/model/sprite_placement.hpp"
+#include "oa/present/world_renderer/scene_filter.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_draw_order.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
@@ -860,53 +861,73 @@ void Runtime::render_match_surface() {
         hud.height = static_cast<uint32_t>(kCanvasHeight);
         hud.rgb.assign(static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3), 0);
     }
+    // The terrain, the draws and the fog go into the scene at the draw scale;
+    // unless it is drawn apart, the scene is the world layer at the zoom.
+    const auto scaling = world_scaling();
+    const float draw_scale = scaling.draw_scale;
+    const int32_t scene_w = scaling.scene_width;
+    const int32_t scene_h = scaling.scene_height;
     const auto terrain_pixels =
-        static_cast<std::size_t>(bf_w) * static_cast<std::size_t>(bf_h) * 3U;
-    if (match_terrain_cache_.width != static_cast<uint32_t>(bf_w) ||
-        match_terrain_cache_.height != static_cast<uint32_t>(bf_h) ||
+        static_cast<std::size_t>(scene_w) * static_cast<std::size_t>(scene_h) * 3U;
+    if (match_terrain_cache_.width != static_cast<uint32_t>(scene_w) ||
+        match_terrain_cache_.height != static_cast<uint32_t>(scene_h) ||
         match_terrain_cache_.rgb.size() != terrain_pixels) {
-        match_terrain_cache_.width = static_cast<uint32_t>(bf_w);
-        match_terrain_cache_.height = static_cast<uint32_t>(bf_h);
+        match_terrain_cache_.width = static_cast<uint32_t>(scene_w);
+        match_terrain_cache_.height = static_cast<uint32_t>(scene_h);
         match_terrain_cache_.rgb.resize(terrain_pixels);
         terrain_cache_cam_x_ = ~0u;
     }
     // A director's camera redraws the terrain at any change of zoom, however
     // small, so that what a frame shows never hangs on the frames before it.
     if (terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
-        std::abs(terrain_cache_zoom_ - match_zoom()) > 1.0e-4F ||
-        (directed && terrain_cache_zoom_ != match_zoom())) {
+        std::abs(terrain_cache_zoom_ - draw_scale) > 1.0e-4F ||
+        (directed && terrain_cache_zoom_ != draw_scale)) {
         if (auto error = oa::present::world_renderer::fill_scaled_viewport(
                 *selected_tnt_,
                 match_palette_,
                 camera_x,
                 camera_y,
-                static_cast<uint32_t>(bf_w),
-                static_cast<uint32_t>(bf_h),
-                match_zoom(),
+                static_cast<uint32_t>(scene_w),
+                static_cast<uint32_t>(scene_h),
+                draw_scale,
                 match_terrain_cache_.rgb.data(),
-                static_cast<uint32_t>(bf_w),
+                static_cast<uint32_t>(scene_w),
                 draw_pool_.get()
             ))
             throw std::runtime_error("cannot render match terrain: " + error->message);
         terrain_cache_cam_x_ = camera_x;
         terrain_cache_cam_y_ = camera_y;
-        terrain_cache_zoom_ = match_zoom();
+        terrain_cache_zoom_ = draw_scale;
     }
     // The world layer is the battlefield alone; the HUD stays in 640x480
     // source space until presentation (or compose_match_frame) scales it.
     spare_match_hud_ = std::move(match_hud_cpu_);
     match_hud_cpu_ = std::move(hud);
-    match_world_cpu_.width = static_cast<uint32_t>(bf_w);
-    match_world_cpu_.height = static_cast<uint32_t>(bf_h);
-    match_world_cpu_.rgb.resize(terrain_pixels);
-    std::memcpy(match_world_cpu_.rgb.data(), match_terrain_cache_.rgb.data(), terrain_pixels);
+    auto& scene_layer = scaling.apart ? match_scene_cpu_ : match_world_cpu_;
+    scene_layer.width = static_cast<uint32_t>(scene_w);
+    scene_layer.height = static_cast<uint32_t>(scene_h);
+    scene_layer.rgb.resize(terrain_pixels);
+    std::memcpy(scene_layer.rgb.data(), match_terrain_cache_.rgb.data(), terrain_pixels);
     viewport.destination_x = 0;
     viewport.destination_y = 0;
     viewport.surface_width = static_cast<uint32_t>(bf_w);
     viewport.surface_height = static_cast<uint32_t>(bf_h);
-    world_pixel_clip_ = {0, 0, bf_w, bf_h};
+    // The scene's view: the battlefield's camera and corner at the draw
+    // scale. Units and features are culled through the battlefield's view,
+    // at the zoom, and drawn through the scene's.
+    auto scene_view = viewport;
+    scene_view.scale = draw_scale;
+    scene_view.width = static_cast<uint32_t>(scene_w);
+    scene_view.height = static_cast<uint32_t>(scene_h);
+    scene_view.surface_width = static_cast<uint32_t>(scene_w);
+    scene_view.surface_height = static_cast<uint32_t>(scene_h);
+    const auto drawn_at = [&](const oa::present::world_renderer::ScreenPoint& culled,
+                              const std::array<uint32_t, 3>& position) {
+        return scaling.apart ? project_match_point(scene_view, position) : culled;
+    };
+    world_pixel_clip_ = {0, 0, scene_w, scene_h};
     oa::present::world_renderer::Surface world_surface{
-        match_world_cpu_.width, match_world_cpu_.height, std::move(match_world_cpu_.rgb)
+        scene_layer.width, scene_layer.height, std::move(scene_layer.rgb)
     };
     const auto cull_margin =
         std::max(256, static_cast<int>(std::lround(128.0 * static_cast<double>(match_zoom()))));
@@ -1072,7 +1093,9 @@ void Runtime::render_match_surface() {
     // now to hold every slot with a model instance, which is every slot
     // the draws can reach (unit_model).
     hold_unit_draw_states(models);
-    const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
+    // The model bridge holds the scene's map pixels and writes them back at
+    // the draw scale.
+    const auto scale = scene_view.scale == 0.0F ? 1.0F : scene_view.scale;
     const model_render::RgbFrame rgb_frame{
         world_surface.rgb.data(),
         static_cast<int32_t>(world_surface.width),
@@ -1080,10 +1103,10 @@ void Runtime::render_match_surface() {
         static_cast<int32_t>(world_surface.width) * 3
     };
     const oa::Rect32 bridge_area{
-        viewport.destination_x,
-        viewport.destination_y,
-        viewport.destination_x + bf_w - 1,
-        viewport.destination_y + bf_h - 1
+        scene_view.destination_x,
+        scene_view.destination_y,
+        scene_view.destination_x + scene_w - 1,
+        scene_view.destination_y + scene_h - 1
     };
     oa::present::DisplayContext* bound_display = oa::present::display_context();
     oa::present::bind_display(&models.display.context);
@@ -1378,9 +1401,9 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
             return;
         }
-        // Part of the way through the ticks' steps.
+        // Part of the way through the ticks' steps, on the scene.
         const auto screen = project_match_point(
-            viewport,
+            scene_view,
             oa::sim::match_runtime::fixed_words(point_along_step(
                 item.position, item.motion, presentation.batch, presentation.fraction
             ))
@@ -1391,7 +1414,7 @@ void Runtime::render_match_surface() {
                 match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]
             };
             const auto side = oa::present::world_renderer::screen_span(
-                viewport, oa::sim::effect_particles::pixel_item_side
+                scene_view, oa::sim::effect_particles::pixel_item_side
             );
             // The square, its top left corner at the point, clipped to the
             // frame before it is filled.
@@ -1461,13 +1484,15 @@ void Runtime::render_match_surface() {
             {feature.cell_x, feature.cell_z, feature_height(feature.feature_index)}
         );
     }
+    // A sprite feature is culled on the battlefield and drawn where it falls
+    // on the scene.
     for (const auto& feature : match_gaf_features_) {
-        const auto screen = project_match_point(
-            viewport,
-            {static_cast<uint32_t>(feature.position.x),
-             static_cast<uint32_t>(feature.position.y),
-             static_cast<uint32_t>(feature.position.z)}
-        );
+        const std::array<uint32_t, 3> position{
+            static_cast<uint32_t>(feature.position.x),
+            static_cast<uint32_t>(feature.position.y),
+            static_cast<uint32_t>(feature.position.z)
+        };
+        const auto screen = project_match_point(viewport, position);
         if (!on_battlefield(screen.x, screen.y) ||
             feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
             continue;
@@ -1475,7 +1500,7 @@ void Runtime::render_match_surface() {
             oa::present::model::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
         if (plan.object)
             continue;
-        features_to_draw.push_back({nullptr, &feature, plan, screen});
+        features_to_draw.push_back({nullptr, &feature, plan, drawn_at(screen, position)});
         feature_sites.push_back(
             {feature.cell_x, feature.cell_z, feature_height(feature.feature_index)}
         );
@@ -1537,19 +1562,19 @@ void Runtime::render_match_surface() {
     plan_projectile_models(models);
     // Every captured tile goes back to the frame after the projectiles.
     add_draw(WorldDrawKind::commit_always, 0);
-    plan_match_projectiles(draw_list, viewport);
+    plan_match_projectiles(draw_list, scene_view);
     // Nano streams are the type-6 particles; the beam line is a debug aid.
     const auto debug_beams = options_.debug_order_lines
                                  ? match_->nano_lasers()
                                  : std::vector<oa::sim::match_runtime::Match::NanoLaser>{};
     for (const auto& beam : debug_beams) {
-        const auto from = project_match_point(viewport, beam.from);
+        const auto from = project_match_point(scene_view, beam.from);
         const std::array<uint32_t, 3> dest{
             static_cast<uint32_t>(beam.to_origin[0] + beam.to_extent[0] / 2),
             static_cast<uint32_t>(beam.to_origin[1] + beam.to_extent[1] / 2),
             static_cast<uint32_t>(beam.to_origin[2] + beam.to_extent[2] / 2)
         };
-        const auto to = project_match_point(viewport, dest);
+        const auto to = project_match_point(scene_view, dest);
         const auto pal = static_cast<std::size_t>(0xa1) * 4U;
         const std::array<uint8_t, 3> color =
             pal + 2 < match_palette_.size()
@@ -1642,7 +1667,7 @@ void Runtime::render_match_surface() {
         static_cast<int32_t>(world_surface.height)
     };
     frame_draw.palette = &match_palette_;
-    frame_draw.scale = viewport.scale;
+    frame_draw.scale = scene_view.scale;
     frame_draw.bridge = &models.bridge;
     frame_draw.display = &models.display;
     frame_draw.projectile_shadow = &models.projectile_shadow;
@@ -1654,11 +1679,48 @@ void Runtime::render_match_surface() {
         world_surface,
         camera_x,
         camera_y,
-        viewport.destination_x,
-        viewport.destination_y,
-        bf_w,
-        bf_h
+        scene_view.destination_x,
+        scene_view.destination_y,
+        scene_w,
+        scene_h,
+        draw_scale
     );
+    // A scene drawn apart becomes the world layer's picture at the zoom, on
+    // which everything after the fog is drawn in screen pixels.
+    if (scaling.apart) {
+        match_world_cpu_.width = static_cast<uint32_t>(bf_w);
+        match_world_cpu_.height = static_cast<uint32_t>(bf_h);
+        match_world_cpu_.rgb.resize(
+            static_cast<std::size_t>(bf_w) * static_cast<std::size_t>(bf_h) * 3U
+        );
+        const oa::present::world_renderer::RgbSource scene{
+            world_surface.rgb.data(), world_surface.width, world_surface.height, world_surface.width
+        };
+        const oa::present::world_renderer::RgbTarget picture{
+            match_world_cpu_.rgb.data(),
+            match_world_cpu_.width,
+            match_world_cpu_.height,
+            match_world_cpu_.width
+        };
+        if (const auto error = oa::present::world_renderer::resample_nearest_rgb24(
+                scene,
+                static_cast<float>(static_cast<double>(match_zoom()) / draw_scale),
+                picture,
+                draw_pool_.get()
+            );
+            error != oa::present::world_renderer::AreaError::none)
+            throw std::runtime_error(
+                std::string("cannot resample the battlefield's scene: ") +
+                oa::present::world_renderer::area_error_text(error)
+            );
+        match_scene_cpu_ = {
+            world_surface.width, world_surface.height, std::move(world_surface.rgb)
+        };
+        world_surface = {
+            match_world_cpu_.width, match_world_cpu_.height, std::move(match_world_cpu_.rgb)
+        };
+        world_pixel_clip_ = {0, 0, bf_w, bf_h};
+    }
     // Over the fog tiles: the local player's order overlays while Shift is
     // held (asked of the keyboard, not the pointer word), so that orders
     // queued onto never-mapped or unseen ground stay in view (in 3.1c the

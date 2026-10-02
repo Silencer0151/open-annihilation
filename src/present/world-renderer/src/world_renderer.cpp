@@ -225,7 +225,7 @@ std::optional<Error> fill_scaled_viewport(
             ErrorCode::invalid_map_model, "TNT arrays do not match the declared tile grid"
         };
     }
-    auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(scale) * 65536.0));
+    auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(scale) * fixed_one));
     if (scale_fp == 0)
         scale_fp = 1;
     std::array<uint8_t, 256U * 3U> lut{};

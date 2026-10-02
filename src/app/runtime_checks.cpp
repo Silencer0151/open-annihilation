@@ -12,6 +12,7 @@
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "oa/sim/state_hash.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
 #include "match_fault.hpp"
@@ -78,6 +79,14 @@ constexpr std::size_t kSelectionBoxMinPercent = 25;
 // stream at, and how far right of that the stream aims.
 constexpr int kParticleDrop = 48;
 constexpr int kParticleReach = 64;
+
+// The zooms the scene draw scale check draws at, the game's own first, and
+// the draw scale its scene is drawn at apart from the world layer.
+constexpr std::array<float, 3> kSceneCheckZooms{1.0F, 0.5F, 2.0F};
+constexpr float kSceneCheckDrawScale = 1.0F;
+// 64-bit FNV-1a's starting value and multiplier, over the piece transforms.
+constexpr uint64_t kFnvOffsetBasis = 0xcbf29ce484222325ULL;
+constexpr uint64_t kFnvPrime = 0x100000001b3ULL;
 
 // Where the overlay check's probe draws, in 640x480 pixels: a line of text
 // 63 above the bottom bar and 1 right of the battlefield's edge, and under it
@@ -722,6 +731,7 @@ void Runtime::check_match_layers() {
     check_match_overlays(presented_frame, report_directory / "native-match-presented.ppm");
     check_selection_visuals(presented_frame);
     check_pixel_particles(report_directory);
+    check_scene_draw_scale(report_directory);
     std::cout << "match layer check: " << frames << " presented frames equal compose_match_frame\n";
     check_presented_match_end(report_directory);
 }
@@ -802,48 +812,105 @@ void Runtime::check_pixel_particles(const fs::path& report_directory) {
         view.destination_y = 0;
         view.surface_width = with.width;
         view.surface_height = with.height;
-        const auto corner = project_match_point(
-            view,
-            {std::bit_cast<uint32_t>(drawn->position.x),
-             std::bit_cast<uint32_t>(drawn->position.y),
-             std::bit_cast<uint32_t>(drawn->position.z)}
-        );
         const auto colour = palette_rgb(drawn->color);
-        const auto inside = [&](int x, int y) {
-            return x >= corner.x && x < corner.x + side && y >= corner.y && y < corner.y + side;
+        // The square drawn on a frame against the frame drawn without it: it
+        // must be filled with the particle's colour and nothing else changed.
+        const auto check_square = [&](const renderer::Surface& frame,
+                                      const renderer::Surface& before,
+                                      oa::present::world_renderer::ScreenPoint at,
+                                      int square,
+                                      const std::string& where) {
+            if (at.x < 0 || at.y < 0 || at.x + square > static_cast<int>(frame.width) ||
+                at.y + square > static_cast<int>(frame.height))
+                throw std::runtime_error(
+                    "pixel particle check: the nozzle is off the " + where + ' ' + name
+                );
+            std::size_t filled = 0;
+            std::size_t strays = 0;
+            for (int y = 0; y < static_cast<int>(frame.height); ++y)
+                for (int x = 0; x < static_cast<int>(frame.width); ++x) {
+                    const auto offset =
+                        (static_cast<std::size_t>(y) * frame.width + static_cast<std::size_t>(x)) *
+                        3U;
+                    const std::array<uint8_t, 3> pixel{
+                        frame.rgb[offset], frame.rgb[offset + 1], frame.rgb[offset + 2]
+                    };
+                    if (x >= at.x && x < at.x + square && y >= at.y && y < at.y + square)
+                        filled += pixel == colour ? 1 : 0;
+                    else
+                        strays += std::equal(
+                                      pixel.begin(),
+                                      pixel.end(),
+                                      before.rgb.begin() + static_cast<std::ptrdiff_t>(offset)
+                                  )
+                                      ? 0
+                                      : 1;
+                }
+            if (filled != static_cast<std::size_t>(square * square) || strays != 0)
+                throw std::runtime_error(
+                    "pixel particle check: " + std::to_string(filled) + " of the " +
+                    std::to_string(square) + 'x' + std::to_string(square) + " square at " +
+                    std::to_string(at.x) + ',' + std::to_string(at.y) + " filled and " +
+                    std::to_string(strays) + " pixels changed outside it on the " + where + ' ' +
+                    name
+                );
         };
-        if (corner.x < 0 || corner.y < 0 || corner.x + side > static_cast<int>(with.width) ||
-            corner.y + side > static_cast<int>(with.height))
+        const std::array<uint32_t, 3> position{
+            std::bit_cast<uint32_t>(drawn->position.x),
+            std::bit_cast<uint32_t>(drawn->position.y),
+            std::bit_cast<uint32_t>(drawn->position.z)
+        };
+        check_square(with, without, project_match_point(view, position), side, "battlefield");
+
+        // The scene drawn at 1 apart from the world layer: the particle fills
+        // its square at the scene's own scale on the scene, and the resample
+        // into the world layer a square as many times larger, at as many
+        // times its place on the scene, as the zoom is to the draw scale.
+        const auto ratio = static_cast<int>(zoom / kSceneCheckDrawScale);
+        const auto scaling = oa::app::world_scaling(
+            zoom,
+            static_cast<int32_t>(with.width),
+            static_cast<int32_t>(with.height),
+            kSceneCheckDrawScale
+        );
+        render_match_surface_at(kSceneCheckDrawScale);
+        const auto apart_without = match_world_cpu_;
+        const auto scene_without = match_scene_cpu_;
+        fx::spawn_nano_outward(
+            match_->effects(), match_->state().game, zeros, nozzle, {aim, aim}, fx::layer_nano
+        );
+        render_match_surface_at(kSceneCheckDrawScale);
+        const auto apart_with = match_world_cpu_;
+        const auto scene_with = match_scene_cpu_;
+        match_->effects() = *saved_effects;
+        write_ppm(
+            report_directory / ("native-pixel-particle-zoom-" +
+                                std::to_string(static_cast<int>(zoom)) + "-apart.ppm"),
+            apart_with
+        );
+        if (scene_with.width != static_cast<uint32_t>(scaling.scene_width) ||
+            scene_with.height != static_cast<uint32_t>(scaling.scene_height) ||
+            apart_with.width != with.width || apart_with.height != with.height)
             throw std::runtime_error(
-                "pixel particle check: the nozzle is off the battlefield " + name
+                "pixel particle check: the scene was not drawn apart at " +
+                std::to_string(scaling.scene_width) + 'x' + std::to_string(scaling.scene_height) +
+                ' ' + name
             );
-        std::size_t filled = 0;
-        std::size_t strays = 0;
-        for (int y = 0; y < static_cast<int>(with.height); ++y)
-            for (int x = 0; x < static_cast<int>(with.width); ++x) {
-                const auto at =
-                    (static_cast<std::size_t>(y) * with.width + static_cast<std::size_t>(x)) * 3U;
-                const std::array<uint8_t, 3> pixel{
-                    with.rgb[at], with.rgb[at + 1], with.rgb[at + 2]
-                };
-                if (inside(x, y))
-                    filled += pixel == colour ? 1 : 0;
-                else
-                    strays += std::equal(
-                                  pixel.begin(),
-                                  pixel.end(),
-                                  without.rgb.begin() + static_cast<std::ptrdiff_t>(at)
-                              )
-                                  ? 0
-                                  : 1;
-            }
-        if (filled != static_cast<std::size_t>(side * side) || strays != 0)
-            throw std::runtime_error(
-                "pixel particle check: " + std::to_string(filled) + " of the " +
-                std::to_string(side) + 'x' + std::to_string(side) + " square at " +
-                std::to_string(corner.x) + ',' + std::to_string(corner.y) + " filled and " +
-                std::to_string(strays) + " pixels changed outside it " + name
-            );
+        auto scene_view = view;
+        scene_view.scale = kSceneCheckDrawScale;
+        scene_view.width = scene_with.width;
+        scene_view.height = scene_with.height;
+        scene_view.surface_width = scene_with.width;
+        scene_view.surface_height = scene_with.height;
+        const auto on_scene = project_match_point(scene_view, position);
+        check_square(scene_with, scene_without, on_scene, side / ratio, "scene");
+        check_square(
+            apart_with,
+            apart_without,
+            {on_scene.x * ratio, on_scene.y * ratio},
+            side,
+            "world layer drawn apart"
+        );
         report += std::string(report.empty() ? "" : ", ") + std::to_string(side) + 'x' +
                   std::to_string(side) + ' ' + name;
     }
@@ -851,8 +918,158 @@ void Runtime::check_pixel_particles(const fs::path& report_directory) {
     match_zoom_target_ = saved_zoom_target;
     match_camera_x_ = saved_camera_x;
     match_camera_z_ = saved_camera_z;
-    render_match_surface();
-    std::cout << "pixel particle check: a nano particle fills " << report << '\n';
+    match_scene_cpu_ = {};
+    render_match_surface_at(std::nullopt);
+    std::cout << "pixel particle check: a nano particle fills " << report
+              << ", on the battlefield and on its scene drawn at 1 apart and resampled\n";
+}
+
+void Runtime::render_match_surface_at(std::optional<float> draw_scale) {
+    scene_draw_scale_ = draw_scale;
+    try {
+        refresh_filtered_terrain();
+        render_match_surface();
+    } catch (...) {
+        scene_draw_scale_.reset();
+        throw;
+    }
+    scene_draw_scale_.reset();
+}
+
+void Runtime::check_scene_draw_scale(const fs::path& report_directory) {
+    uint16_t anchor = 0;
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
+            oa::world_unit_at(&match_->state(), slot.unit_index)->owner_index ==
+                match_local_player_) {
+            anchor = slot.unit_index;
+            break;
+        }
+    if (anchor == 0)
+        throw std::runtime_error("scene draw scale check found no local unit");
+
+    // What the match reads back from a draw.
+    struct ReadBack {
+        std::unique_ptr<oa::Game> game;
+        std::vector<uint16_t> on_screen;
+        uint64_t pieces{};
+        uint64_t world{};
+    };
+
+    const auto read_back = [this] {
+        ReadBack read;
+        // The Game block but its resource readout, which eases toward the
+        // stores once a draw, whatever the draw.
+        read.game = std::make_unique<oa::Game>(match_->state().game);
+        read.game->resource_readout = {};
+        read.on_screen = on_screen_units_;
+        // Every unit's piece transforms, 64-bit FNV-1a over their words.
+        read.pieces = kFnvOffsetBasis;
+        const auto mix = [&read](int32_t word) {
+            const auto bits = std::bit_cast<uint32_t>(word);
+            for (int shift = 0; shift < 32; shift += 8) {
+                read.pieces ^= (bits >> shift) & 0xffU;
+                read.pieces *= kFnvPrime;
+            }
+        };
+        for (const auto& slot : match_->world().slots) {
+            if (slot.unit_index == 0)
+                continue;
+            auto* instance = match_->instance(slot.unit_index);
+            if (instance == nullptr)
+                continue;
+            for (const auto& piece : instance->model().pieces()) {
+                mix(piece.transformed_origin.x);
+                mix(piece.transformed_origin.y);
+                mix(piece.transformed_origin.z);
+                for (const auto& vertex : piece.transformed_vertices) {
+                    mix(vertex.x);
+                    mix(vertex.y);
+                    mix(vertex.z);
+                }
+            }
+        }
+        read.world = oa::sim::trace::match_state_hash(
+            *match_, match_timing_, match_camera_x_, match_camera_z_, nullptr
+        );
+        return read;
+    };
+    const auto same_game = [](const ReadBack& first, const ReadBack& second) {
+        return std::memcmp(first.game.get(), second.game.get(), sizeof(oa::Game)) == 0;
+    };
+    const auto saved_zoom = match_zoom_;
+    const auto saved_zoom_target = match_zoom_target_;
+    const auto saved_camera_x = match_camera_x_;
+    const auto saved_camera_z = match_camera_z_;
+    std::string report;
+    for (const float zoom : kSceneCheckZooms) {
+        match_zoom_ = match_zoom_target_ = zoom;
+        center_camera_on_unit(anchor);
+        const auto name = "at zoom " + std::to_string(zoom).substr(0, 3);
+        // A first draw settles the view at the zoom; the second is the frame
+        // as the game draws it.
+        render_match_surface_at(std::nullopt);
+        render_match_surface_at(std::nullopt);
+        const auto drawn = match_world_cpu_;
+        const auto drawn_read = read_back();
+        const auto scaling = oa::app::world_scaling(
+            zoom,
+            static_cast<int32_t>(drawn.width),
+            static_cast<int32_t>(drawn.height),
+            kSceneCheckDrawScale
+        );
+        render_match_surface_at(kSceneCheckDrawScale);
+        const auto apart = match_world_cpu_;
+        const auto apart_read = read_back();
+        if (!scaling.apart ||
+            match_scene_cpu_.width != static_cast<uint32_t>(scaling.scene_width) ||
+            match_scene_cpu_.height != static_cast<uint32_t>(scaling.scene_height) ||
+            apart.width != drawn.width || apart.height != drawn.height)
+            throw std::runtime_error(
+                "scene draw scale check: the scene was not drawn apart at " +
+                std::to_string(scaling.scene_width) + 'x' + std::to_string(scaling.scene_height) +
+                " into a " + std::to_string(drawn.width) + 'x' + std::to_string(drawn.height) +
+                " world layer " + name
+            );
+        if (!same_game(apart_read, drawn_read) || apart_read.on_screen != drawn_read.on_screen ||
+            apart_read.pieces != drawn_read.pieces || apart_read.world != drawn_read.world)
+            throw std::runtime_error(
+                std::string("scene draw scale check: the draw left ") +
+                (!same_game(apart_read, drawn_read)             ? "the Game block"
+                 : apart_read.on_screen != drawn_read.on_screen ? "the on-screen list"
+                 : apart_read.pieces != drawn_read.pieces       ? "the piece transforms"
+                                                                : "the world's digest") +
+                " otherwise than the frame drawn at the zoom " + name
+            );
+        if (zoom == 1.0F && apart.rgb != drawn.rgb) {
+            std::size_t differing = 0;
+            for (std::size_t at = 0; at + 2 < drawn.rgb.size(); at += 3)
+                differing += std::equal(
+                                 drawn.rgb.begin() + static_cast<std::ptrdiff_t>(at),
+                                 drawn.rgb.begin() + static_cast<std::ptrdiff_t>(at + 3),
+                                 apart.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                             )
+                                 ? 0
+                                 : 1;
+            write_ppm(report_directory / "native-scene-draw-scale-drawn.ppm", drawn);
+            write_ppm(report_directory / "native-scene-draw-scale-apart.ppm", apart);
+            throw std::runtime_error(
+                "scene draw scale check: " + std::to_string(differing) +
+                " pixels of the scene drawn at 1 and resampled differ from the world layer " + name
+            );
+        }
+        report += std::string(report.empty() ? "" : ", ") + std::to_string(scaling.scene_width) +
+                  'x' + std::to_string(scaling.scene_height) + ' ' + name;
+    }
+    match_zoom_ = saved_zoom;
+    match_zoom_target_ = saved_zoom_target;
+    match_camera_x_ = saved_camera_x;
+    match_camera_z_ = saved_camera_z;
+    match_scene_cpu_ = {};
+    render_match_surface_at(std::nullopt);
+    std::cout << "scene draw scale check: scenes drawn at 1 apart, " << report
+              << ", leave what the match reads as the zoom's frame does; at zoom 1 the world layer "
+                 "is the same\n";
 }
 
 void Runtime::check_selection_visuals(const std::function<void(renderer::Surface&)>& frame_of) {
