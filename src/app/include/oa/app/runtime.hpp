@@ -5476,6 +5476,17 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_download_builds();
 
+    /// Checks the commander's build pages against the side column on windows of several sizes.
+    ///
+    /// On each window from 640x480 to 3840x2160 a skirmish starts, the commander
+    /// is selected through SDL and NEXT walks its build pages back to the first,
+    /// each page written to local/reports/side-column-<size>-<step>.ppm. Every
+    /// shown gadget must end inside the rows the side column draws, every unit
+    /// button any loaded page holds must be drawn on some page of every window, and
+    /// a click on the blank strip under the column must arm no build. Throws
+    /// std::runtime_error after the last window when any of these failed.
+    void check_side_column();
+
     /// Checks that a patrolling construction kbot reclaims a feature on its way.
     ///
     /// Places an ARMCK a few cells from the auto-reclaimable map feature nearest

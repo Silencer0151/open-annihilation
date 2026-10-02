@@ -370,6 +370,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
   src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
   src/app/runtime_factory_check.cpp src/app/runtime_build_page_check.cpp
+  src/app/runtime_side_column_check.cpp
   src/app/runtime_kill_board.cpp src/app/runtime_frontend_controls_check.cpp
   src/app/runtime_briefing_narration_check.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
@@ -665,6 +666,18 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_download_check_dir}/download-builds.conf")
       set_tests_properties(native-download-builds PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_download_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The commander's build pages on windows from 640x480 to 3840x2160,
+      # walked with NEXT through SDL input on dummy devices: each fits the
+      # side column, the same build buttons are reachable on every window and
+      # the strip under the column builds nothing.
+      set(oa_side_column_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/side-column")
+      file(MAKE_DIRECTORY "${oa_side_column_check_dir}")
+      add_test(NAME native-side-column COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-side-column
+        --preferences-file "${oa_side_column_check_dir}/side-column.conf")
+      set_tests_properties(native-side-column PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_side_column_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # An ARMCK given PATROL through SDL input past map features with the
       # metal store empty takes RepairPatrol, reclaims one on its way, is

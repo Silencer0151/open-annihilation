@@ -220,6 +220,7 @@ void check_director_options(Options& options) {
         {options.check_match_orders, "--check-match-orders"},
         {options.check_factory_orders, "--check-factory-orders"},
         {options.check_download_builds, "--check-download-builds"},
+        {options.check_side_column, "--check-side-column"},
         {options.check_kill_board, "--check-kill-board"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
@@ -377,6 +378,8 @@ void check_director_options(Options& options) {
             result.check_factory_orders = true;
         else if (argument == "--check-download-builds")
             result.check_download_builds = true;
+        else if (argument == "--check-side-column")
+            result.check_side_column = true;
         else if (argument == "--check-kill-board")
             result.check_kill_board = true;
         else if (argument == "--check-patrol-reclaim")
@@ -430,7 +433,7 @@ void check_director_options(Options& options) {
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
                    "[--check-match-orders] [--check-factory-orders] "
-                   "[--check-download-builds] [--check-kill-board] "
+                   "[--check-download-builds] [--check-side-column] [--check-kill-board] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
                    "[--check-pointer-interfaces] "
                    "[--check-multiplayer-menu] "
@@ -541,10 +544,10 @@ void check_director_options(Options& options) {
         result.headless_check || result.check_match_layers || result.check_match_dialogs ||
         result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
         result.check_engine_settings || result.check_match_orders || result.check_factory_orders ||
-        result.check_download_builds || result.check_kill_board || result.check_patrol_reclaim ||
-        result.check_reclaim_cursor || result.check_pointer_interfaces ||
-        result.check_director_view || result.check_director_render || result.check_interpolation ||
-        result.check_unit_playout;
+        result.check_download_builds || result.check_side_column || result.check_kill_board ||
+        result.check_patrol_reclaim || result.check_reclaim_cursor ||
+        result.check_pointer_interfaces || result.check_director_view ||
+        result.check_director_render || result.check_interpolation || result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

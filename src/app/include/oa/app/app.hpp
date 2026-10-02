@@ -218,6 +218,9 @@ struct Options {
     // Opens a download page and a missile silo's page through the SDL
     // presenter, builds a download unit and queues and removes a missile.
     bool check_download_builds = false;
+    // Walks the commander's build pages on windows of several sizes through
+    // the SDL presenter and checks each fits the side column.
+    bool check_side_column = false;
     // Presses F4 in a skirmish and checks the kills board at the top right.
     bool check_kill_board = false;
     // Sends a construction kbot on PATROL through the SDL presenter with the
