@@ -65,17 +65,27 @@ InitializationResult initialize_weapon_slots(
     };
 }
 
-WeaponRegistry::WeaponRegistry() {
+WeaponRegistry::WeaponRegistry() : slots_(std::make_unique<Slots>()) {
     for (size_t i = 0; i < weapon_registry_capacity; ++i) {
-        definitions_[i].registry_index = static_cast<uint8_t>(i);
-        records_[i].weapon_id = static_cast<uint8_t>(i);
+        slots_->definitions[i].registry_index = static_cast<uint8_t>(i);
+        slots_->records[i].weapon_id = static_cast<uint8_t>(i);
     }
+}
+
+WeaponRegistry::WeaponRegistry(const WeaponRegistry& other)
+    : slots_(std::make_unique<Slots>(*other.slots_)) {
+}
+
+WeaponRegistry& WeaponRegistry::operator=(const WeaponRegistry& other) {
+    if (this != &other)
+        *slots_ = *other.slots_;
+    return *this;
 }
 
 void WeaponRegistry::install(const WeaponDef& weapon, const data::defs::WeaponAssetNames& assets) {
     const uint8_t index = weapon.weapon_id;
-    records_[index] = weapon;
-    auto& definition = definitions_[index];
+    slots_->records[index] = weapon;
+    auto& definition = slots_->definitions[index];
     definition.reload_time_ticks = static_cast<uint16_t>(weapon.reload_time);
     definition.default_damage = static_cast<uint16_t>(weapon.damage_default);
     definition.projectile_velocity = weapon.weapon_velocity;
@@ -113,13 +123,13 @@ void WeaponRegistry::install(const WeaponDef& weapon, const data::defs::WeaponAs
     definition.flight_time_ticks = static_cast<uint16_t>(weapon.flight_time);
     definition.smoke_delay_ticks = static_cast<uint16_t>(weapon.smoke_delay);
     definition.coverage = weapon.coverage;
-    names_[index] = weapon.key;
+    slots_->names[index] = weapon.key;
 }
 
 void WeaponRegistry::install_damage_override(
     uint8_t index, std::string_view unit_name, int32_t amount
 ) {
-    auto& overrides = definitions_[index].damage_overrides;
+    auto& overrides = slots_->definitions[index].damage_overrides;
     std::string name(unit_name);
     for (auto& c : name)
         if (c >= 'A' && c <= 'Z')
@@ -168,8 +178,8 @@ const WeaponDefinition* WeaponRegistry::find(std::string_view name) const noexce
     if (name.empty())
         return nullptr;
     for (size_t i = 0; i < weapon_registry_capacity; ++i)
-        if (!names_[i].empty() && equal_name(names_[i], name))
-            return &definitions_[i];
+        if (!slots_->names[i].empty() && equal_name(slots_->names[i], name))
+            return &slots_->definitions[i];
     return nullptr;
 }
 

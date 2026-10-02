@@ -283,10 +283,14 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(std::string("SDL window size: ") + SDL_GetError());
             capture = std::make_unique<VideoCapture>(options.capture_video, width, height);
         }
-        Runtime runtime(std::move(options), assets, extension, display.window, display.renderer);
-        runtime.take_video_capture(std::move(capture));
-        runtime.take_full_screen_switch(display.full_screen);
-        return runtime.run();
+        // The runtime holds hundreds of kilobytes of game state, so it lives
+        // on the heap: the main thread's stack is 1 MiB on Windows.
+        const auto runtime = std::make_unique<Runtime>(
+            std::move(options), assets, extension, display.window, display.renderer
+        );
+        runtime->take_video_capture(std::move(capture));
+        runtime->take_full_screen_switch(display.full_screen);
+        return runtime->run();
     } catch (const std::exception& error) {
         report_fatal(error.what());
         return 1;

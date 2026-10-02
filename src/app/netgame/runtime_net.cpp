@@ -1386,7 +1386,11 @@ int Runtime::run_net_loopback_check(std::size_t ticks) {
     // Both machines run the same extension table; the check presses Pause
     // through it as the engine's hotkeys do.
     const Extension& extension = extension_;
-    Runtime joiner(std::move(joiner_options), assets_, extension);
+    // The joining machine is a whole second runtime, so it lives on the heap
+    // beside this one rather than on the thread's stack.
+    const auto joiner_runtime =
+        std::make_unique<Runtime>(std::move(joiner_options), assets_, extension);
+    Runtime& joiner = *joiner_runtime;
 
     // The host services the joiner while it waits (loopback_configure). It
     // stops before the joiner is destroyed, however the check ends, so the

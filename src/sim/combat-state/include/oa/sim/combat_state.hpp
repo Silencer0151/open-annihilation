@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -222,11 +223,28 @@ turn_toward_angle(uint16_t current, uint16_t desired, uint16_t rate) noexcept {
 inline constexpr size_t weapon_registry_capacity = 256;
 
 /// The 256 weapon definitions of a game, indexed by their TDF ID.
+///
+/// The definitions, names and records are kept in one allocation of their
+/// own, so a registry is a few bytes wherever it is placed, on a thread's
+/// stack too. A definition keeps its address for as long as its registry
+/// lives: copying or assigning a registry, from a temporary too, copies the
+/// slots into the target's own storage.
 class WeaponRegistry {
   public:
 
     /// Creates 256 empty definitions, each carrying its own registry index.
     WeaponRegistry();
+
+    /// Creates a registry holding a copy of every slot of another.
+    ///
+    /// @param other registry whose definitions, names and records are copied
+    WeaponRegistry(const WeaponRegistry& other);
+
+    /// Copies every slot of another registry over this one's.
+    ///
+    /// @param other registry whose definitions, names and records are copied
+    /// @return this registry
+    WeaponRegistry& operator=(const WeaponRegistry& other);
 
     /// Installs one loaded weapon slot under its section name.
     ///
@@ -254,29 +272,36 @@ class WeaponRegistry {
 
     /// Returns record zero, the fallback for unresolved weapon names.
     [[nodiscard]] const WeaponDefinition& default_definition() const noexcept {
-        return definitions_[0];
+        return slots_->definitions[0];
     }
 
     /// Returns the definition at a registry index.
     [[nodiscard]] const WeaponDefinition& definition(uint8_t index) const noexcept {
-        return definitions_[index];
+        return slots_->definitions[index];
     }
 
     /// Returns the internal name at a registry index, empty when none is installed.
-    [[nodiscard]] std::string_view name(uint8_t index) const noexcept { return names_[index]; }
+    [[nodiscard]] std::string_view name(uint8_t index) const noexcept {
+        return slots_->names[index];
+    }
 
     /// Returns the weapon records, one per registry index, as Game.weapon_defs holds them.
     ///
     /// A slot nothing was installed in is zeroed apart from its weapon_id.
     [[nodiscard]] const std::array<WeaponDef, weapon_registry_capacity>& records() const noexcept {
-        return records_;
+        return slots_->records;
     }
 
   private:
 
-    std::array<WeaponDefinition, weapon_registry_capacity> definitions_{};
-    std::array<std::string, weapon_registry_capacity> names_{};
-    std::array<WeaponDef, weapon_registry_capacity> records_{};
+    /// Each registry index's definition, internal name and record.
+    struct Slots {
+        std::array<WeaponDefinition, weapon_registry_capacity> definitions{};
+        std::array<std::string, weapon_registry_capacity> names{};
+        std::array<WeaponDef, weapon_registry_capacity> records{};
+    };
+
+    std::unique_ptr<Slots> slots_;
 };
 
 /// Installs every loaded slot of a weapon table, with its [DAMAGE] entries.
