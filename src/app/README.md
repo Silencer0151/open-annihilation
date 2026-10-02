@@ -367,14 +367,20 @@ and `app-window-icon` that the embedded one decodes.
   look of the button and the darkened menu under the dialog compared pixel
   for pixel with what they should draw;
   `runtime_engine_settings_dialog_check.cpp` the dialog driven by the
-  pointer and the keys (every section, each setting in effect at once, OK,
-  Cancel, Restore defaults and the keys they save) and the main menu with
-  the button and the dialog as 640x480, 1280x720, 1920x1080 and 2560x1080
-  windows show them; `runtime_engine_settings_match_check.cpp` the in-game
-  menu's button and dialog at those sizes, with the locks of a game played
-  alone and of a shared game; and `runtime_engine_settings_wiring_check.cpp`
-  each setting taking effect in a match, Escape's order among them. With
-  `--snapshot`, the check writes each of those frames beside the named file.
+  pointer, the wheel and the keys (every section, scrolling, each setting in
+  effect at once, OK, Cancel, Restore defaults and the keys they save) and
+  the main menu with the button and the dialog as 640x480, 1280x720,
+  1920x1080 and 2560x1080 windows show them;
+  `runtime_engine_settings_match_check.cpp` the in-game menu's button and
+  dialog at those sizes, with the locks of a game played alone and of a
+  shared game, and the wheel scrolling the dialog, not the battlefield; and
+  `runtime_engine_settings_wiring_check.cpp` each setting taking effect in a
+  match, Escape's order among them. Both dialog steps scroll a section
+  taller than the dialog's view, `engine_settings_tall_section.hpp`, shown
+  in place of the open section's rows, since every section of the dialog
+  fits its view; the wheel events are the check host's
+  (`check_host_input.hpp`). With `--snapshot`, the check writes each of
+  those frames beside the named file.
   `native-engine-settings-determinism`
   (`tools/check_native_engine_settings.py`) checks that every setting at its
   default plays the game as it plays without any, and that the settings that

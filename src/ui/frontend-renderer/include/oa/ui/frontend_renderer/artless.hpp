@@ -7,8 +7,9 @@
 // drawn this way. Everything is given in source pixels (the game's 640x480
 // screen) and drawn through a Placement, which puts source pixel (0, 0) at
 // a surface pixel and draws each source pixel as a whole-number block, so
-// a caller draws at the size it shows. Every primitive clips to the surface
-// and leaves a surface whose pixels do not fill its size as it is.
+// a caller draws at the size it shows. Every primitive clips to the surface,
+// and to the placement's clip when it has one, and leaves a surface whose
+// pixels do not fill its size as it is.
 #pragma once
 
 #include "oa/formats/fnt.hpp"
@@ -33,11 +34,15 @@ struct SourceRect {
     int32_t height{}; ///< rows; 0 or less is empty
 };
 
-/// Where source pixels land on a surface, and how large.
+/// Where source pixels land on a surface, and how large, and the source
+/// pixels drawing may touch.
 struct Placement {
     int32_t x{};      ///< surface column of source column 0
     int32_t y{};      ///< surface row of source row 0
     int32_t scale{1}; ///< surface pixels across each source pixel; below 1 draws nothing
+    /// In source pixels: nothing is drawn outside it. Empty, the default,
+    /// clips to the surface alone.
+    SourceRect clip{};
 };
 
 /// A one-bit picture: `bits` holds width x height bytes, row by row, nonzero

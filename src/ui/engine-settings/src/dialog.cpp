@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
+#include <utility>
 
 namespace oa::ui::engine_settings {
 
@@ -48,6 +50,39 @@ constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
 int32_t screen_size_index(ScreenSize size) noexcept {
     const auto found = std::find(screen_sizes.begin(), screen_sizes.end(), size);
     return found == screen_sizes.end() ? 0 : static_cast<int32_t>(found - screen_sizes.begin());
+}
+
+/// Returns a setting's lock, a check's own section's when it gives one.
+///
+/// @param locks the dialog's locks
+/// @param setting the setting
+/// @param section a check's own section; null for the dialog's
+/// @return why it cannot be changed now
+Lock row_lock(const Locks& locks, Setting setting, const SectionHooks* section) {
+    const Lock lock = lock_of(locks, setting);
+    if (section == nullptr || section->lock == nullptr)
+        return lock;
+    return section->lock(section->context, setting, lock);
+}
+
+/// Tells whether a setting's hint lines are its status, as a check's own
+/// section has it when it says.
+///
+/// @param setting the setting
+/// @param section a check's own section; null for the dialog's
+/// @return true when its hint lines are its status
+bool row_hint_is_status(Setting setting, const SectionHooks* section) {
+    if (section == nullptr || section->hint_is_status == nullptr)
+        return hint_is_status(setting);
+    return section->hint_is_status(section->context, setting);
+}
+
+/// Returns a section's place among Dialog::scroll.
+///
+/// @param page the section
+/// @return its index, below page_count
+std::size_t scroll_index(Page page) noexcept {
+    return std::min(static_cast<std::size_t>(page), page_count - 1);
 }
 
 /// Returns a whole number of a range's steps, rounded to the nearest.
@@ -140,34 +175,65 @@ Lock lock_of(const Locks& locks, Setting setting) noexcept {
     }
 }
 
-Rows place_rows(Page page, const Locks& locks) noexcept {
+bool hint_is_status(Setting) noexcept {
+    return false;
+}
+
+std::span<const Setting> section_settings(Page page, const SectionHooks* section) {
+    if (section == nullptr || section->settings == nullptr)
+        return page_settings(page);
+    return section->settings(section->context, page);
+}
+
+Rows place_rows(Page page, const Locks& locks, int32_t scroll, const SectionHooks* section) {
     Rows placed{};
     int32_t top = first_row_top;
-    const auto settings = page_settings(page);
-    for (std::size_t index = 0; index < settings.size() && index < most_rows; ++index) {
-        Row& row = placed.rows[index];
+    const auto settings = section_settings(page, section);
+    placed.rows.reserve(settings.size());
+    for (std::size_t index = 0; index < settings.size(); ++index) {
+        Row& row = placed.rows.emplace_back();
         row.setting = settings[index];
         row.control = first_row_control + static_cast<int32_t>(index);
-        row.lock = lock_of(locks, row.setting);
+        row.lock = row_lock(locks, row.setting, section);
+        row.hint_is_status = row_hint_is_status(row.setting, section);
         row.top = top;
         const int32_t label_top = top + 1 + row_padding;
+        const bool locked = row.lock != Lock::none;
+        // The lock, right-aligned on the label line; the label ends short of it.
+        const SourceRect right_lock{
+            content_right - lock_width, label_top, lock_width, label_line_height
+        };
         int32_t label_right = content_right;
-        if (row.lock != Lock::none) {
-            row.lock_area = {content_right - lock_width, label_top, lock_width, label_line_height};
-            label_right = row.lock_area.x - label_gap;
-        }
-        if (row.setting == Setting::anti_aliasing) {
-            const auto levels = static_cast<int32_t>(anti_aliasing_levels.size());
-            const int32_t strip_width = levels * level_width + 2;
+        int32_t control_width = 0;
+        if (row.setting == Setting::anti_aliasing)
+            control_width = static_cast<int32_t>(anti_aliasing_levels.size()) * level_width + 2;
+        else if (!is_slider(row.setting))
+            control_width = switch_width;
+        if (control_width == 0 || (locked && row.hint_is_status)) {
+            // A slider's lock, or the lock of a switch whose hint lines are
+            // its status, which stands where the switch was.
+            if (locked) {
+                row.lock_area = right_lock;
+                label_right = row.lock_area.x - label_gap;
+            }
+        } else {
             row.control_area = {
-                content_right - strip_width, label_top, strip_width, label_line_height
+                content_right - control_width, label_top, control_width, label_line_height
             };
             label_right = row.control_area.x - label_gap;
-        } else if (!is_slider(row.setting)) {
-            row.control_area = {
-                content_right - switch_width, label_top, switch_width, label_line_height
-            };
-            label_right = row.control_area.x - label_gap;
+            // Any other locked control keeps its place, so that its value
+            // shows, with its lock left of it. Its label keeps only the
+            // columns left of the lock: 93 beside a switch, too few beside
+            // the level strip, which no lock reaches.
+            if (locked) {
+                row.lock_area = {
+                    row.control_area.x - label_gap - lock_width,
+                    label_top,
+                    lock_width,
+                    label_line_height
+                };
+                label_right = row.lock_area.x - label_gap;
+            }
         }
         row.label = {content_left, label_top, label_right - content_left, label_line_height};
         row.hint_lines = hint_line_count(row.setting);
@@ -191,10 +257,84 @@ Rows place_rows(Page page, const Locks& locks) noexcept {
         bottom += row_padding;
         row.height = bottom - top;
         top = bottom;
-        ++placed.count;
     }
     placed.bottom = top;
+    scroll_rows(placed, scroll);
     return placed;
+}
+
+void scroll_rows(Rows& rows, int32_t by) noexcept {
+    const auto lift = [by](SourceRect& rect) {
+        if (rect.width > 0 && rect.height > 0)
+            rect.y -= by;
+    };
+    for (Row& row : rows.rows) {
+        row.top -= by;
+        lift(row.label);
+        lift(row.lock_area);
+        for (SourceRect& hint : row.hints)
+            lift(hint);
+        lift(row.control_area);
+        lift(row.value);
+    }
+    rows.bottom -= by;
+}
+
+int32_t content_height(const Rows& rows, int32_t scroll) noexcept {
+    return rows.bottom + scroll + 1 + end_gap - first_row_top;
+}
+
+int32_t scroll_limit(int32_t content_height) noexcept {
+    return std::max(content_height - view.height, int32_t{0});
+}
+
+ScrolledRows open_rows(const Dialog& dialog) {
+    ScrolledRows open{};
+    open.rows = place_rows(dialog.page, dialog.locks, 0, dialog.section_hooks);
+    open.content_height = content_height(open.rows, 0);
+    open.limit = scroll_limit(open.content_height);
+    open.scroll = std::clamp(dialog.scroll[scroll_index(dialog.page)], int32_t{0}, open.limit);
+    scroll_rows(open.rows, open.scroll);
+    return open;
+}
+
+int32_t scroll_showing(const ScrolledRows& open, std::size_t index) noexcept {
+    if (index >= open.rows.rows.size())
+        return open.scroll;
+    const Row& row = open.rows.rows[index];
+    // The row's line, at the section's top, may come up to the view's first
+    // row; the line under it, or the end gap under the last row, down to its
+    // last. A row taller than the view would show its top.
+    const int32_t line = row.top + open.scroll;
+    const int32_t highest = line - view.y;
+    const int32_t lowest = index + 1 == open.rows.rows.size()
+                               ? open.limit
+                               : line + row.height - (view.y + view.height - 1);
+    const int32_t scroll = std::min(std::max(open.scroll, lowest), highest);
+    return std::clamp(scroll, int32_t{0}, open.limit);
+}
+
+SourceRect scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept {
+    const SourceRect inside{
+        scroll_well.x + 1, scroll_well.y + 1, scroll_well.width - 2, scroll_well.height - 2
+    };
+    int32_t height = inside.height;
+    if (content_height > view.height)
+        height = std::max(least_thumb_height, inside.height * view.height / content_height);
+    const int32_t travel = inside.height - height;
+    int32_t top = inside.y;
+    if (limit > 0)
+        top += (travel * std::clamp(scroll, int32_t{0}, limit) + limit / 2) / limit;
+    return {inside.x, top, inside.width, height};
+}
+
+int32_t scroll_at(int32_t thumb_top, int32_t limit, int32_t content_height) noexcept {
+    const SourceRect thumb = scroll_thumb(0, limit, content_height);
+    const int32_t travel = scroll_well.height - 2 - thumb.height;
+    if (travel <= 0 || limit <= 0)
+        return 0;
+    const int32_t along = std::clamp(thumb_top - thumb.y, int32_t{0}, travel);
+    return (limit * along + travel / 2) / travel;
 }
 
 SourceRect list_item(Page page) noexcept {
@@ -434,6 +574,16 @@ bool contains(const layout::SourceRect& rect, int32_t x, int32_t y) noexcept {
     return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
 }
 
+/// Tells whether a rectangle lies wholly in another.
+///
+/// @param rect the rectangle
+/// @param outer the other
+/// @return true when no part of it lies outside
+bool wholly_in(const layout::SourceRect& rect, const layout::SourceRect& outer) noexcept {
+    return rect.x >= outer.x && rect.y >= outer.y && rect.x + rect.width <= outer.x + outer.width &&
+           rect.y + rect.height <= outer.y + outer.height;
+}
+
 /// Returns the row a control is, when it is one of the open section's.
 ///
 /// @param rows the open section's rows
@@ -441,25 +591,29 @@ bool contains(const layout::SourceRect& rect, int32_t x, int32_t y) noexcept {
 /// @return the row; nullptr for a control that is not a row's
 const layout::Row* row_of(const layout::Rows& rows, int32_t control) noexcept {
     const int32_t index = control - first_row_control;
-    if (index < 0 || static_cast<std::size_t>(index) >= rows.count)
+    if (index < 0 || static_cast<std::size_t>(index) >= rows.rows.size())
         return nullptr;
     return &rows.rows[static_cast<std::size_t>(index)];
 }
 
 /// Returns the control under a point that a press can act on.
 ///
-/// A locked row's control takes no press.
+/// A row's control answers only on the part the view shows, and a locked
+/// row's takes no press. The scroll bar answers while the section scrolls.
 ///
-/// @param rows the open section's rows
+/// @param open the open section's rows
 /// @param x the point's column
 /// @param y the point's row
 /// @return the control; no_control when none is there
-int32_t control_at(const layout::Rows& rows, int32_t x, int32_t y) noexcept {
-    for (std::size_t index = 0; index < rows.count; ++index) {
-        const layout::Row& row = rows.rows[index];
-        if (row.lock == Lock::none && contains(row.control_area, x, y))
-            return row.control;
+int32_t control_at(const layout::ScrolledRows& open, int32_t x, int32_t y) noexcept {
+    if (contains(layout::view, x, y)) {
+        for (const layout::Row& row : open.rows.rows) {
+            if (row.lock == Lock::none && contains(row.control_area, x, y))
+                return row.control;
+        }
     }
+    if (open.limit > 0 && contains(layout::scroll_hit, x, y))
+        return scroll_bar_control;
     for (const int32_t control : {restore_control, cancel_control, ok_control}) {
         if (contains(layout::footer_button(control), x, y))
             return control;
@@ -480,9 +634,9 @@ int32_t control_at(const layout::Rows& rows, int32_t x, int32_t y) noexcept {
 /// @return the controls
 std::vector<int32_t> focus_order(const layout::Rows& rows) {
     std::vector<int32_t> order;
-    for (std::size_t index = 0; index < rows.count; ++index) {
-        if (rows.rows[index].lock == Lock::none)
-            order.push_back(rows.rows[index].control);
+    for (const layout::Row& row : rows.rows) {
+        if (row.lock == Lock::none)
+            order.push_back(row.control);
     }
     order.push_back(restore_control);
     order.push_back(cancel_control);
@@ -492,24 +646,107 @@ std::vector<int32_t> focus_order(const layout::Rows& rows) {
     return order;
 }
 
-/// Moves the focus to the next or previous control.
+/// Notes where the pointer is, so that the hover can follow the rows a
+/// scroll moves under it.
 ///
 /// @param[in,out] dialog the dialog
-/// @param rows the open section's rows
+/// @param x the pointer's column
+/// @param y the pointer's row
+void note_pointer(Dialog& dialog, int32_t x, int32_t y) noexcept {
+    dialog.pointer_known = true;
+    dialog.pointer_x = x;
+    dialog.pointer_y = y;
+}
+
+/// Finds the control under the last pointer point again, after a scroll
+/// moved the rows under it; a held press keeps its hover.
+///
+/// @param[in,out] dialog the dialog
+/// @param open the open section's rows, at the offset the scroll left
+void hover_again(Dialog& dialog, const layout::ScrolledRows& open) noexcept {
+    if (!dialog.pointer_known || dialog.pressed != no_control)
+        return;
+    dialog.hovered = control_at(open, dialog.pointer_x, dialog.pointer_y);
+}
+
+/// Scrolls the open section to an offset, moving its placed rows with it.
+/// No scroll changes a setting or moves the focus.
+///
+/// @param[in,out] dialog the dialog
+/// @param[in,out] open the open section's rows (layout::open_rows), left at
+///     the new offset
+/// @param offset the offset, clamped to the section's limit
+/// @return DialogAction::redraw when the section moved, else DialogAction::none
+DialogAction scroll_to(Dialog& dialog, layout::ScrolledRows& open, int32_t offset) noexcept {
+    const int32_t next = std::clamp(offset, int32_t{0}, open.limit);
+    dialog.scroll[layout::scroll_index(dialog.page)] = next;
+    if (next == open.scroll)
+        return DialogAction::none;
+    layout::scroll_rows(open.rows, next - open.scroll);
+    open.scroll = next;
+    hover_again(dialog, open);
+    return DialogAction::redraw;
+}
+
+/// Scrolls the least that shows a row whole, when a control is one of the
+/// open section's rows; nothing moves while a press is held.
+///
+/// @param[in,out] dialog the dialog
+/// @param[in,out] open the open section's rows, left at the offset shown
+/// @param control the control
+/// @return DialogAction::redraw when the section moved, else DialogAction::none
+DialogAction show_row(Dialog& dialog, layout::ScrolledRows& open, int32_t control) noexcept {
+    if (control < first_row_control || dialog.pressed != no_control)
+        return DialogAction::none;
+    return scroll_to(
+        dialog,
+        open,
+        layout::scroll_showing(open, static_cast<std::size_t>(control - first_row_control))
+    );
+}
+
+/// Moves the focus to the next or previous control, and scrolls its row
+/// into view when it is a row.
+///
+/// @param[in,out] dialog the dialog
+/// @param[in,out] open the open section's rows, left at the offset shown
 /// @param forward true for the next control, false for the previous
 /// @return DialogAction::redraw
-DialogAction move_focus(Dialog& dialog, const layout::Rows& rows, bool forward) {
-    const auto order = focus_order(rows);
+DialogAction move_focus(Dialog& dialog, layout::ScrolledRows& open, bool forward) {
+    const auto order = focus_order(open.rows);
     const auto found = std::find(order.begin(), order.end(), dialog.focused);
     if (found == order.end()) {
         dialog.focused = forward ? order.front() : order.back();
-        return DialogAction::redraw;
+    } else {
+        const auto count = static_cast<std::ptrdiff_t>(order.size());
+        const std::ptrdiff_t at = found - order.begin();
+        const std::ptrdiff_t next = (at + (forward ? 1 : count - 1)) % count;
+        dialog.focused = order[static_cast<std::size_t>(next)];
     }
-    const auto count = static_cast<std::ptrdiff_t>(order.size());
-    const std::ptrdiff_t at = found - order.begin();
-    const std::ptrdiff_t next = (at + (forward ? 1 : count - 1)) % count;
-    dialog.focused = order[static_cast<std::size_t>(next)];
+    static_cast<void>(show_row(dialog, open, dialog.focused));
     return DialogAction::redraw;
+}
+
+/// Scrolls the open section for Page Up, Page Down, Home or End, whatever
+/// has the focus; nothing moves while a press is held.
+///
+/// @param[in,out] dialog the dialog
+/// @param[in,out] open the open section's rows, left at the new offset
+/// @param key the key
+/// @return DialogAction::redraw when the section moved, else DialogAction::none
+DialogAction scroll_key(Dialog& dialog, layout::ScrolledRows& open, DialogKey key) noexcept {
+    if (dialog.pressed != no_control)
+        return DialogAction::none;
+    int32_t next = open.scroll;
+    if (key == DialogKey::page_up)
+        next -= layout::page_step;
+    else if (key == DialogKey::page_down)
+        next += layout::page_step;
+    else if (key == DialogKey::home)
+        next = 0;
+    else
+        next = open.limit;
+    return scroll_to(dialog, open, next);
 }
 
 /// Reports a change of the chosen settings, or only a look's.
@@ -567,19 +804,58 @@ void step(EngineSettings& settings, Setting setting, bool up) noexcept {
     set_switch(settings, setting, up);
 }
 
-/// Resets every setting the dialog can change to its default.
+/// Copies one setting's value.
+///
+/// @param[in,out] to the settings it is copied into
+/// @param from the settings it is copied from
+/// @param setting the setting
+void copy_setting(EngineSettings& to, const EngineSettings& from, Setting setting) noexcept {
+    switch (setting) {
+    case Setting::path_search:
+        to.path_search_nodes = from.path_search_nodes;
+        break;
+    case Setting::wheel_zoom:
+        to.wheel_zoom = from.wheel_zoom;
+        break;
+    case Setting::escape_opens_menu:
+        to.escape_opens_menu = from.escape_opens_menu;
+        break;
+    case Setting::switch_alt:
+        to.switch_alt = from.switch_alt;
+        break;
+    case Setting::unit_limit:
+        to.unit_limit = from.unit_limit;
+        break;
+    case Setting::max_frame_rate:
+        to.max_frame_rate = from.max_frame_rate;
+        break;
+    case Setting::anti_aliasing:
+        to.anti_aliasing = from.anti_aliasing;
+        break;
+    case Setting::screen_size:
+        to.screen_size = from.screen_size;
+        break;
+    case Setting::frame_stats:
+        to.frame_stats = from.frame_stats;
+        break;
+    }
+}
+
+/// Resets every setting the dialog can change to its default. Each locked
+/// setting, found through its row's lock on every section, keeps its value.
 ///
 /// @param[in,out] dialog the dialog
 /// @return what the reset asks of the host
-DialogAction restore_defaults(Dialog& dialog) noexcept {
+DialogAction restore_defaults(Dialog& dialog) {
     const EngineSettings before = dialog.chosen;
     EngineSettings restored = dialog.defaults;
-    if (dialog.locks.path_search != Lock::none)
-        restored.path_search_nodes = before.path_search_nodes;
-    if (dialog.locks.unit_limit != Lock::none)
-        restored.unit_limit = before.unit_limit;
-    if (dialog.locks.max_frame_rate != Lock::none)
-        restored.max_frame_rate = before.max_frame_rate;
+    for (std::size_t index = 0; index < page_count; ++index) {
+        const auto page = static_cast<Page>(index);
+        for (const Setting setting : layout::section_settings(page, dialog.section_hooks)) {
+            if (layout::row_lock(dialog.locks, setting, dialog.section_hooks) != Lock::none)
+                copy_setting(restored, before, setting);
+        }
+    }
     dialog.chosen = restored;
     dialog.restored = true;
     return changed_or_redraw(before, dialog.chosen);
@@ -613,7 +889,8 @@ DialogAction cancel(Dialog& dialog) noexcept {
 /// @return DialogAction::redraw
 DialogAction show_page(Dialog& dialog, Page page) noexcept {
     dialog.page = page;
-    if (dialog.focused >= first_row_control && dialog.focused < restore_control)
+    dialog.wheel_rows = 0.0F;
+    if (dialog.focused >= first_row_control)
         dialog.focused = page_control(page);
     return DialogAction::redraw;
 }
@@ -709,13 +986,21 @@ void open_dialog(
 }
 
 DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
+    note_pointer(dialog, x, y);
+    layout::ScrolledRows open = layout::open_rows(dialog);
     if (dialog.dragging) {
-        const layout::Row* row = row_of(rows, dialog.pressed);
+        // The thumb follows the pointer's row only, and the offset the thumb.
+        if (dialog.pressed == scroll_bar_control)
+            return scroll_to(
+                dialog,
+                open,
+                layout::scroll_at(y - dialog.scroll_grab, open.limit, open.content_height)
+            );
+        const layout::Row* row = row_of(open.rows, dialog.pressed);
         if (row != nullptr)
             return drag_to(dialog, *row, x);
     }
-    const int32_t hovered = control_at(rows, x, y);
+    const int32_t hovered = control_at(open, x, y);
     if (hovered == dialog.hovered)
         return DialogAction::none;
     dialog.hovered = hovered;
@@ -723,16 +1008,34 @@ DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
 }
 
 DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y) {
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
-    const int32_t control = control_at(rows, x, y);
+    note_pointer(dialog, x, y);
+    layout::ScrolledRows open = layout::open_rows(dialog);
+    const int32_t control = control_at(open, x, y);
     dialog.hovered = control;
     dialog.pressed = control;
     dialog.dragging = false;
     if (control == no_control)
         return DialogAction::none;
+    if (control == scroll_bar_control) {
+        // On the thumb, the press grabs it at the row pressed; on the well,
+        // the thumb's middle jumps to the pointer and the drag starts there.
+        // The scroll bar takes no focus, so the focus stays where it is.
+        dialog.dragging = true;
+        const layout::SourceRect thumb =
+            layout::scroll_thumb(open.scroll, open.limit, open.content_height);
+        if (y >= thumb.y && y < thumb.y + thumb.height) {
+            dialog.scroll_grab = y - thumb.y;
+            return DialogAction::redraw;
+        }
+        dialog.scroll_grab = thumb.height / 2;
+        static_cast<void>(scroll_to(
+            dialog, open, layout::scroll_at(y - dialog.scroll_grab, open.limit, open.content_height)
+        ));
+        return DialogAction::redraw;
+    }
     if (dialog.focused != no_control)
         dialog.focused = control;
-    const layout::Row* row = row_of(rows, control);
+    const layout::Row* row = row_of(open.rows, control);
     if (row != nullptr && layout::is_slider(row->setting)) {
         dialog.dragging = true;
         const DialogAction action = drag_to(dialog, *row, x);
@@ -742,18 +1045,20 @@ DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y) {
 }
 
 DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
+    note_pointer(dialog, x, y);
+    const layout::ScrolledRows open = layout::open_rows(dialog);
     const int32_t pressed = dialog.pressed;
     const bool dragged = dialog.dragging;
     dialog.pressed = no_control;
     dialog.dragging = false;
+    dialog.scroll_grab = 0;
     if (pressed == no_control)
         return DialogAction::none;
-    const int32_t control = control_at(rows, x, y);
+    const int32_t control = control_at(open, x, y);
     dialog.hovered = control;
     if (dragged || control != pressed)
         return DialogAction::redraw;
-    const layout::Row* row = row_of(rows, control);
+    const layout::Row* row = row_of(open.rows, control);
     if (row != nullptr) {
         const EngineSettings before = dialog.chosen;
         if (row->setting == Setting::anti_aliasing) {
@@ -765,11 +1070,12 @@ DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
         }
         return changed_or_redraw(before, dialog.chosen);
     }
-    return activate(dialog, rows, control);
+    return activate(dialog, open.rows, control);
 }
 
 DialogAction dialog_key(Dialog& dialog, DialogKey key) {
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
+    layout::ScrolledRows open = layout::open_rows(dialog);
+    const layout::Rows& rows = open.rows;
     switch (key) {
     case DialogKey::enter:
         return accept(dialog);
@@ -777,22 +1083,33 @@ DialogAction dialog_key(Dialog& dialog, DialogKey key) {
         return cancel(dialog);
     case DialogKey::down:
     case DialogKey::tab:
-        return move_focus(dialog, rows, true);
+        return move_focus(dialog, open, true);
     case DialogKey::up:
     case DialogKey::back_tab:
-        return move_focus(dialog, rows, false);
+        return move_focus(dialog, open, false);
+    case DialogKey::page_up:
+    case DialogKey::page_down:
+    case DialogKey::home:
+    case DialogKey::end:
+        return scroll_key(dialog, open, key);
     default:
         break;
     }
     if (dialog.focused == no_control)
-        return move_focus(dialog, rows, true);
+        return move_focus(dialog, open, true);
+    // A key that acts on a row brings it into view first, so that the
+    // player sees what it changed.
+    const DialogAction shown = show_row(dialog, open, dialog.focused);
+    const auto or_shown = [shown](DialogAction action) {
+        return action == DialogAction::none ? shown : action;
+    };
     if (key == DialogKey::space)
-        return activate(dialog, rows, dialog.focused);
+        return or_shown(activate(dialog, rows, dialog.focused));
     const bool up = key == DialogKey::right;
     const layout::Row* row = row_of(rows, dialog.focused);
     if (row != nullptr) {
         if (row->lock != Lock::none)
-            return DialogAction::none;
+            return shown;
         const EngineSettings before = dialog.chosen;
         step(dialog.chosen, row->setting, up);
         return changed_or_redraw(before, dialog.chosen);
@@ -808,6 +1125,30 @@ DialogAction dialog_key(Dialog& dialog, DialogKey key) {
         return DialogAction::none;
     dialog.focused = footer[next];
     return DialogAction::redraw;
+}
+
+DialogAction dialog_wheel(Dialog& dialog, int32_t x, int32_t y, float notches) {
+    if (!dialog_contains(x, y) || dialog.pressed != no_control || !std::isfinite(notches))
+        return DialogAction::none;
+    note_pointer(dialog, x, y);
+    layout::ScrolledRows open = layout::open_rows(dialog);
+    if (open.limit == 0) {
+        dialog.wheel_rows = 0.0F;
+        return DialogAction::none;
+    }
+    // Away from the player scrolls towards the top. A turn larger than the
+    // section scrolls to its end.
+    const float reach = static_cast<float>(open.limit) + 1.0F;
+    const float rows = std::clamp(
+        dialog.wheel_rows - notches * static_cast<float>(layout::wheel_step), -reach, reach
+    );
+    const auto whole = static_cast<int32_t>(rows);
+    dialog.wheel_rows = rows - static_cast<float>(whole);
+    const int32_t next = std::clamp(open.scroll + whole, int32_t{0}, open.limit);
+    // What is carried towards an end the section has reached is dropped.
+    if ((next == 0 && dialog.wheel_rows < 0.0F) || (next == open.limit && dialog.wheel_rows > 0.0F))
+        dialog.wheel_rows = 0.0F;
+    return scroll_to(dialog, open, next);
 }
 
 bool dialog_contains(int32_t x, int32_t y) noexcept {
@@ -887,10 +1228,20 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
         DialogFont::small,
         layout::heading_tracking
     );
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
-    for (std::size_t index = 0; index < rows.count; ++index) {
-        const layout::Row& row = rows.rows[index];
-        text_part(row.label, layout::label_of(row.setting), DialogFont::regular);
+    // The rows: only the parts wholly in the view are listed, so that each
+    // listed control is pressed where it is drawn and each text is whole.
+    const layout::ScrolledRows open = layout::open_rows(dialog);
+    const auto row_part = [&parts](LayoutPart part) {
+        if (wholly_in(part.rect, layout::view))
+            parts.push_back(std::move(part));
+    };
+    const auto row_text = [&row_part](
+                              layout::SourceRect rect, std::string_view text, DialogFont font
+                          ) { row_part(LayoutPart{rect, std::string(text), font, 0, no_control}); };
+    for (const layout::Row& row : open.rows.rows) {
+        // A locked row's control is drawn but takes no press.
+        const int32_t control = row.lock == Lock::none ? row.control : no_control;
+        row_text(row.label, layout::label_of(row.setting), DialogFont::regular);
         if (row.lock != Lock::none) {
             const layout::SourceRect text_area{
                 row.lock_area.x + layout::padlock_width + layout::padlock_gap,
@@ -898,21 +1249,26 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
                 row.lock_area.width - layout::padlock_width - layout::padlock_gap,
                 row.lock_area.height,
             };
-            control_part(
-                {row.lock_area.x, row.lock_area.y, layout::padlock_width, row.lock_area.height},
-                no_control
+            row_part(
+                LayoutPart{
+                    {row.lock_area.x, row.lock_area.y, layout::padlock_width, row.lock_area.height},
+                    {},
+                    DialogFont::regular,
+                    0,
+                    no_control,
+                }
             );
-            text_part(text_area, layout::lock_text(row.lock), DialogFont::small);
+            row_text(text_area, layout::lock_text(row.lock), DialogFont::small);
         }
         for (std::size_t line = 0; line < row.hint_lines; ++line)
-            text_part(
+            row_text(
                 row.hints[line],
                 layout::hint_line(row.setting, dialog.chosen, line),
                 DialogFont::small
             );
         if (row.setting == Setting::anti_aliasing) {
             for (std::size_t level = 0; level < anti_aliasing_levels.size(); ++level) {
-                parts.push_back(
+                row_part(
                     LayoutPart{
                         {row.control_area.x + 1 + static_cast<int32_t>(level) * layout::level_width,
                          row.control_area.y + 1,
@@ -921,18 +1277,18 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
                         std::string(layout::level_caption(anti_aliasing_levels[level])),
                         DialogFont::small,
                         0,
-                        row.control,
+                        control,
                     }
                 );
             }
         } else if (layout::is_slider(row.setting)) {
-            control_part(row.control_area, row.lock == Lock::none ? row.control : no_control);
-            text_part(
+            row_part(LayoutPart{row.control_area, {}, DialogFont::regular, 0, control});
+            row_text(
                 row.value, layout::value_text(row.setting, dialog.chosen), DialogFont::regular
             );
-        } else {
+        } else if (row.control_area.width > 0) {
             const int32_t half = (row.control_area.width - 2) / 2;
-            parts.push_back(
+            row_part(
                 LayoutPart{
                     {row.control_area.x + 1,
                      row.control_area.y + 1,
@@ -941,10 +1297,10 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
                     std::string(layout::off_text),
                     DialogFont::small,
                     0,
-                    row.control,
+                    control,
                 }
             );
-            parts.push_back(
+            row_part(
                 LayoutPart{
                     {row.control_area.x + 1 + half,
                      row.control_area.y + 1,
@@ -953,11 +1309,13 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
                     std::string(layout::on_text),
                     DialogFont::small,
                     0,
-                    row.control,
+                    control,
                 }
             );
         }
     }
+    if (open.limit > 0)
+        control_part(layout::scroll_well, scroll_bar_control);
 
     // The footer.
     const std::array<std::pair<int32_t, std::string_view>, 3> buttons{{

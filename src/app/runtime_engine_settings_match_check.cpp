@@ -4,7 +4,9 @@
 // --check-engine-settings, the match's part: the OA button under Resume, the
 // dialog beside the darkened column, the pause and the locks.
 
+#include "check_host_input.hpp"
 #include "engine_settings_match_host.hpp"
+#include "engine_settings_tall_section.hpp"
 
 #include "oa/app/runtime.hpp"
 
@@ -430,6 +432,53 @@ void Runtime::check_engine_settings_in_match() {
             ),
             "a game played alone says it is shared" + on
         );
+
+        // The wheel over the dialog reaches it and not the battlefield: given
+        // a section taller than its view, a notch scrolls it, the zoom stays
+        // and the dialog is drawn again; Home scrolls it back.
+        {
+            namespace tall = engine_settings_check;
+
+            // The dialog shows its own sections again however the block
+            // ends, and the next frame draws them.
+            struct OwnSections {
+                Runtime& runtime;
+                uint64_t& revision;
+
+                ~OwnSections() {
+                    if (auto* shown = runtime.engine_settings_dialog()) {
+                        tall::show_own_sections(*shown);
+                        ++revision;
+                    }
+                }
+            } own_sections{*this, engine_settings_match_host().revision};
+
+            tall::show_tall_section(*engine_settings_dialog());
+            const auto offset = [this] {
+                const auto* open = engine_settings_dialog();
+                return open->scroll[static_cast<std::size_t>(open->page)];
+            };
+            const float zoom = match_zoom_target_;
+            const uint64_t revision = engine_settings_match_host().revision;
+            const auto over = centre(dialog_at);
+            SDL_Event wheel =
+                check_host_input::wheel_event(sdl_.renderer, sdl_.window, over.x, over.y, -1.0F);
+            dispatch_event(wheel, running);
+            require(running, "the wheel in the dialog ended the run" + on);
+            require(
+                offset() == tall::kWheelStepPixels,
+                "a notch of the wheel did not scroll the dialog" + on
+            );
+            require(
+                match_zoom_target_ == zoom, "the wheel over the dialog zoomed the battlefield" + on
+            );
+            require(
+                engine_settings_match_host().revision != revision,
+                "a scroll did not draw the dialog again" + on
+            );
+            tap_key(SDLK_HOME, SDL_KMOD_NONE);
+            require(offset() == 0, "Home did not scroll the dialog back to its top" + on);
+        }
 
         // A press beside the dialog does nothing; Escape is Cancel and puts
         // the opened settings back, and back to the in-game menu; while it is

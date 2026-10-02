@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The parts of the check host (check_host.hpp) that need no running game:
-// the pointer events it makes, the gadget it finds by name and the text it
-// hands back. app-check-host tests them.
+// the pointer and wheel events it makes, the gadget it finds by name and the
+// text it hands back. app-check-host tests them.
 #pragma once
 
 #include "oa/ui/gui_layout.hpp"
@@ -36,6 +36,21 @@ namespace oa::app::check_host_input {
 [[nodiscard]] SDL_Event pointer_event(
     SDL_Renderer* renderer, SDL_Window* window, uint32_t type, int32_t x, int32_t y, uint8_t clicks
 );
+
+/// Makes a mouse wheel event at a point of the 640x480 canvas.
+///
+/// The point is placed in the window as pointer_event places it, and the
+/// event names the window as pointer_event's does. Throws
+/// std::runtime_error when the renderer cannot place the point.
+///
+/// @param renderer the game's renderer; null in a run without a window
+/// @param window the game's window; null in a run without a window
+/// @param x canvas column
+/// @param y canvas row
+/// @param notches the wheel's turn, positive away from the player
+/// @return the event
+[[nodiscard]] SDL_Event
+wheel_event(SDL_Renderer* renderer, SDL_Window* window, int32_t x, int32_t y, float notches);
 
 /// Finds a gadget of a layout by its name, compared ignoring ASCII case.
 ///

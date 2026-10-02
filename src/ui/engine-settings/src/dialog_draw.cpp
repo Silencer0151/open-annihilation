@@ -80,7 +80,7 @@ constexpr Rgb kLockColor{0xe0, 0xb0, 0x4f};
 /// How far a locked row is faded into the panel, in 256ths.
 constexpr uint32_t kLockedFade = 115;
 /// The columns between a control and its keyboard focus outline.
-constexpr int32_t kFocusInset = 2;
+constexpr int32_t kFocusInset = layout::focus_inset;
 
 /// The OA mark's letters, 4 by 7 each with a column between: for the
 /// header and the in-game button.
@@ -388,6 +388,7 @@ bool switch_on(const EngineSettings& settings, Setting setting) noexcept {
 /// @param area the switch
 /// @param on the switch is On
 /// @param hovered the pointer is over it
+/// @param locked the switch cannot be changed now: On shows without the accent
 /// @param fonts the fonts
 void draw_switch(
     renderer::Surface& target,
@@ -395,6 +396,7 @@ void draw_switch(
     const SourceRect& area,
     bool on,
     bool hovered,
+    bool locked,
     const DialogFonts& fonts
 ) {
     renderer::fill_source_rect(target, placement, area, kWellColor);
@@ -405,7 +407,9 @@ void draw_switch(
     const SourceRect off{area.x + 1, area.y + 1, half, area.height - 2};
     const SourceRect on_half{area.x + 1 + half, area.y + 1, half, area.height - 2};
     if (on)
-        renderer::fill_source_rect(target, placement, on_half, kAccentColor);
+        renderer::fill_source_rect(
+            target, placement, on_half, locked ? kControlHoverColor : kAccentColor
+        );
     else
         renderer::fill_source_rect(target, placement, off, kOffSelectedColor);
     draw_boxed_text(
@@ -556,7 +560,59 @@ void draw_lock(
     draw_boxed_text(target, placement, fonts.small, text, text_area, Align::left, kLockColor);
 }
 
-/// Draws the open section: its heading and its rows.
+/// Returns a placement that draws only inside a rectangle, and inside the
+/// placement's own clip when it has one.
+///
+/// @param placement the placement
+/// @param rect the rectangle, in source pixels
+/// @return the placement, clipped
+renderer::Placement clipped_to(const renderer::Placement& placement, const SourceRect& rect) {
+    renderer::Placement clipped = placement;
+    const SourceRect& outer = placement.clip;
+    if (outer.width <= 0 || outer.height <= 0) {
+        clipped.clip = rect;
+        return clipped;
+    }
+    const int32_t left = std::max(rect.x, outer.x);
+    const int32_t top = std::max(rect.y, outer.y);
+    const int32_t right = std::min(rect.x + rect.width, outer.x + outer.width);
+    const int32_t bottom = std::min(rect.y + rect.height, outer.y + outer.height);
+    clipped.clip = {left, top, std::max(right - left, 0), std::max(bottom - top, 0)};
+    // Where the rectangles do not meet nothing is drawn: an empty clip would
+    // clip to the surface alone, and a scale of 0 draws nothing.
+    if (clipped.clip.width == 0 || clipped.clip.height == 0)
+        clipped.scale = 0;
+    return clipped;
+}
+
+/// Draws the open section's scroll bar: a well like a switch's, its thumb
+/// in its inner columns, both lighter under the pointer or while held.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands
+/// @param dialog the dialog
+/// @param open the open section's rows
+void draw_scroll_bar(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Dialog& dialog,
+    const layout::ScrolledRows& open
+) {
+    const bool hot = dialog.hovered == scroll_bar_control || dialog.pressed == scroll_bar_control;
+    renderer::fill_source_rect(target, placement, layout::scroll_well, kWellColor);
+    renderer::draw_outline(
+        target, placement, layout::scroll_well, hot ? kControlHoverColor : kControlBorderColor
+    );
+    renderer::fill_source_rect(
+        target,
+        placement,
+        layout::scroll_thumb(open.scroll, open.limit, open.content_height),
+        hot ? kSwitchIdleColor : kControlHoverColor
+    );
+}
+
+/// Draws the open section: its heading, its rows clipped to the view they
+/// scroll in, and its scroll bar while they scroll.
 ///
 /// @param[in,out] target the surface
 /// @param placement where the dialog lands
@@ -578,18 +634,21 @@ void draw_section(
         kQuietColor,
         layout::heading_tracking
     );
-    const layout::Rows rows = layout::place_rows(dialog.page, dialog.locks);
-    for (std::size_t index = 0; index < rows.count; ++index) {
-        const layout::Row& row = rows.rows[index];
+    const layout::ScrolledRows open = layout::open_rows(dialog);
+    const layout::Rows& rows = open.rows;
+    // A row the view cuts shows the part inside it, its text and its focus
+    // outline included.
+    const renderer::Placement in_view = clipped_to(placement, layout::view_clip);
+    for (const layout::Row& row : rows.rows) {
         const bool locked = row.lock != Lock::none;
         const bool hovered =
             !locked && (dialog.hovered == row.control || dialog.pressed == row.control);
         renderer::fill_source_rect(
-            target, placement, {layout::content_left, row.top, layout::content_width, 1}, kRuleColor
+            target, in_view, {layout::content_left, row.top, layout::content_width, 1}, kRuleColor
         );
         draw_boxed_text(
             target,
-            placement,
+            in_view,
             fonts.regular,
             layout::label_of(row.setting),
             row.label,
@@ -599,7 +658,7 @@ void draw_section(
         for (std::size_t line = 0; line < row.hint_lines; ++line) {
             draw_boxed_text(
                 target,
-                placement,
+                in_view,
                 fonts.small,
                 layout::hint_line(row.setting, dialog.chosen, line),
                 row.hints[line],
@@ -609,12 +668,12 @@ void draw_section(
         }
         if (row.setting == Setting::anti_aliasing) {
             draw_levels(
-                target, placement, row.control_area, dialog.chosen.anti_aliasing, hovered, fonts
+                target, in_view, row.control_area, dialog.chosen.anti_aliasing, hovered, fonts
             );
         } else if (layout::is_slider(row.setting)) {
             draw_slider(
                 target,
-                placement,
+                in_view,
                 row.control_area,
                 layout::stop_of(dialog.chosen, row.setting),
                 layout::slider_of(row.setting).stops,
@@ -623,41 +682,60 @@ void draw_section(
             );
             draw_boxed_text(
                 target,
-                placement,
+                in_view,
                 fonts.regular,
                 layout::value_text(row.setting, dialog.chosen),
                 row.value,
                 Align::right,
                 kTextColor
             );
-        } else {
+        } else if (row.control_area.width > 0) {
             draw_switch(
                 target,
-                placement,
+                in_view,
                 row.control_area,
                 switch_on(dialog.chosen, row.setting),
                 hovered,
+                locked,
                 fonts
             );
         }
         if (locked) {
+            // A status is the player's explanation and keeps its strength:
+            // such a row fades only its label line, down to its status.
+            const int32_t faded =
+                row.hint_is_status
+                    ? layout::row_padding + layout::label_line_height + layout::hint_gap
+                    : row.height - 1;
             renderer::blend_source_rect(
                 target,
-                placement,
-                {layout::content_left, row.top + 1, layout::content_width, row.height - 1},
+                in_view,
+                {layout::content_left, row.top + 1, layout::content_width, faded},
                 kPanelColor,
                 kLockedFade
             );
-            draw_lock(target, placement, row.lock_area, row.lock, fonts);
+            draw_lock(target, in_view, row.lock_area, row.lock, fonts);
         }
         if (dialog.focused == row.control && !locked)
             renderer::draw_outline(
-                target, placement, grown(row.control_area, kFocusInset), kAccentColor
+                target, in_view, grown(row.control_area, kFocusInset), kAccentColor
             );
     }
     renderer::fill_source_rect(
-        target, placement, {layout::content_left, rows.bottom, layout::content_width, 1}, kRuleColor
+        target, in_view, {layout::content_left, rows.bottom, layout::content_width, 1}, kRuleColor
     );
+    if (open.limit == 0)
+        return;
+    // Scrolled from its top, the view's first row keeps a line, so that the
+    // cut there is the same hairline as a row's own.
+    if (open.scroll > 0)
+        renderer::fill_source_rect(
+            target,
+            in_view,
+            {layout::content_left, layout::view.y, layout::content_width, 1},
+            kRuleColor
+        );
+    draw_scroll_bar(target, placement, dialog, open);
 }
 
 /// Draws the footer: Restore defaults, Cancel and OK.

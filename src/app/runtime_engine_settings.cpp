@@ -365,6 +365,14 @@ Runtime::engine_settings_dialog_key(uint32_t key, uint16_t modifiers) noexcept {
     case SDLK_TAB:
         return (modifiers & SDL_KMOD_SHIFT) != 0 ? settings::DialogKey::back_tab
                                                  : settings::DialogKey::tab;
+    case SDLK_PAGEUP:
+        return settings::DialogKey::page_up;
+    case SDLK_PAGEDOWN:
+        return settings::DialogKey::page_down;
+    case SDLK_HOME:
+        return settings::DialogKey::home;
+    case SDLK_END:
+        return settings::DialogKey::end;
     default:
         return std::nullopt;
     }

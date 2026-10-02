@@ -7,8 +7,10 @@
 // the preferences they leave), and the main menu with its OA button and the
 // dialog as the window shows them at several sizes.
 
+#include "check_host_input.hpp"
 #include "engine_settings_menu_host.hpp"
 #include "engine_settings_state.hpp"
+#include "engine_settings_tall_section.hpp"
 
 #include "oa/app/runtime.hpp"
 #include "oa/platform/preferences.hpp"
@@ -340,9 +342,15 @@ void Runtime::check_engine_settings_dialog() {
         rest();
         return dialog;
     };
-    // Moves the keyboard focus onto a control with Down.
+    // Moves the keyboard focus onto a control with Down, at most once round
+    // the focus order: the section's rows, the footer's buttons and the
+    // sections' entries, and one more press to show the focus.
     const auto focus = [&](int32_t control, std::string_view what) {
-        for (int32_t presses = 0; presses < settings::ok_control + 2; ++presses) {
+        const auto order =
+            settings::page_settings(engine_settings_dialog()->page).size() +
+            static_cast<std::size_t>(settings::ok_control - settings::restore_control + 1) +
+            settings::page_count;
+        for (std::size_t presses = 0; presses <= order; ++presses) {
             if (engine_settings_dialog()->focused == control)
                 return;
             tap(SDLK_DOWN);
@@ -390,6 +398,72 @@ void Runtime::check_engine_settings_dialog() {
         before = shown;
         require(engine_settings() == defaults, "showing a section changed a setting");
     }
+
+    // The wheel and the scroll keys reach the dialog. Given a section taller
+    // than its view, a notch towards the player scrolls it 24 pixels, Page
+    // Down 200 more and End to its end, Page Up 200 back and Home to its top;
+    // a notch away from the player at the top, a notch towards the player at
+    // the end, and a notch outside the dialog, do nothing.
+    {
+        namespace tall = engine_settings_check;
+
+        // The dialog shows its own sections again however the block ends.
+        struct OwnSections {
+            Runtime& runtime;
+
+            ~OwnSections() {
+                if (auto* shown = runtime.engine_settings_dialog())
+                    tall::show_own_sections(*shown);
+            }
+        } own_sections{*this};
+
+        tall::show_tall_section(*engine_settings_dialog());
+        const auto turn_wheel = [&](layout::Point at, float notches) {
+            SDL_Event wheel =
+                check_host_input::wheel_event(sdl_.renderer, sdl_.window, at.x, at.y, notches);
+            bool running = true;
+            dispatch_event(wheel, running);
+            require(running, "the wheel in the dialog ended the run");
+        };
+        const auto offset = [this] {
+            const auto* open = engine_settings_dialog();
+            return open->scroll[static_cast<std::size_t>(open->page)];
+        };
+        // The dialog's middle, over its rows.
+        const layout::Point over_rows{
+            placement.x + settings::dialog_width / 2, placement.y + settings::dialog_height / 2
+        };
+        turn_wheel(over_rows, 1.0F);
+        require(offset() == 0, "the wheel scrolled the dialog above its top");
+        turn_wheel(over_rows, -1.0F);
+        require(
+            offset() == tall::kWheelStepPixels, "a notch of the wheel did not scroll the dialog"
+        );
+        turn_wheel(kRestingPointer, -1.0F);
+        require(offset() == tall::kWheelStepPixels, "the wheel outside the dialog scrolled it");
+        tap(SDLK_PAGEDOWN);
+        require(
+            offset() == tall::kWheelStepPixels + tall::kPageStepPixels,
+            "Page Down did not scroll the dialog"
+        );
+        tap(SDLK_END);
+        const int32_t end = offset();
+        require(
+            end > tall::kWheelStepPixels + tall::kPageStepPixels, "End did not scroll to the end"
+        );
+        turn_wheel(over_rows, -1.0F);
+        require(offset() == end, "the wheel scrolled the dialog past its end");
+        tap(SDLK_PAGEUP);
+        require(offset() == end - tall::kPageStepPixels, "Page Up did not scroll the dialog");
+        tap(SDLK_HOME);
+        require(offset() == 0, "Home did not scroll back to the top");
+        require(
+            engine_settings_dialog()->focused == settings::no_control &&
+                engine_settings() == defaults,
+            "scrolling showed the focus or changed a setting"
+        );
+    }
+    rest();
 
     // Each setting through the pointer or the keys, in effect at once.
     auto chosen = defaults;

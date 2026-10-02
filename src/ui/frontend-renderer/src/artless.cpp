@@ -49,19 +49,36 @@ int32_t clamp_to_int32(int64_t value) noexcept {
     ));
 }
 
-/// Returns the source pixels whose blocks touch the surface.
+/// Narrows a source rectangle to a placement's clip, when it has one.
+///
+/// @param[in,out] span the rectangle, in source pixels
+/// @param placement the placement
+void clip_to_placement(Span64& span, const Placement& placement) noexcept {
+    const SourceRect& clip = placement.clip;
+    if (clip.width <= 0 || clip.height <= 0)
+        return;
+    span.left = std::max<int64_t>(span.left, clip.x);
+    span.top = std::max<int64_t>(span.top, clip.y);
+    span.right = std::min<int64_t>(span.right, int64_t{clip.x} + clip.width);
+    span.bottom = std::min<int64_t>(span.bottom, int64_t{clip.y} + clip.height);
+}
+
+/// Returns the source pixels whose blocks touch the surface, within the
+/// placement's clip.
 ///
 /// @param surface the surface
 /// @param placement where source pixels land, its scale at least 1
 /// @return the source rectangle of every source pixel drawn at least in part
 Span64 visible_source(const Surface& surface, const Placement& placement) noexcept {
     const int64_t scale = placement.scale;
-    return {
+    Span64 shown{
         floor_divide(-int64_t{placement.x}, scale),
         floor_divide(-int64_t{placement.y}, scale),
         floor_divide(int64_t{surface.width} - placement.x - 1, scale) + 1,
         floor_divide(int64_t{surface.height} - placement.y - 1, scale) + 1,
     };
+    clip_to_placement(shown, placement);
+    return shown;
 }
 
 /// Tells whether a surface's pixels fill its size.
@@ -241,16 +258,19 @@ void blend_source_rect(
 ) noexcept {
     if (placement.scale < 1 || rect.width <= 0 || rect.height <= 0)
         return;
-    // Clip in 64 bits first, so that no placement or rectangle overflows.
+    // Clip in 64 bits first, so that no placement or rectangle overflows:
+    // to the placement's clip in source pixels, then to the surface.
+    Span64 source{rect.x, rect.y, int64_t{rect.x} + rect.width, int64_t{rect.y} + rect.height};
+    clip_to_placement(source, placement);
+    if (source.left >= source.right || source.top >= source.bottom)
+        return;
     const int64_t scale = placement.scale;
-    const int64_t left = std::max<int64_t>(placement.x + rect.x * scale, 0);
-    const int64_t top = std::max<int64_t>(placement.y + rect.y * scale, 0);
-    const int64_t right = std::min<int64_t>(
-        placement.x + (int64_t{rect.x} + rect.width) * scale, int64_t{surface.width}
-    );
-    const int64_t bottom = std::min<int64_t>(
-        placement.y + (int64_t{rect.y} + rect.height) * scale, int64_t{surface.height}
-    );
+    const int64_t left = std::max<int64_t>(placement.x + source.left * scale, 0);
+    const int64_t top = std::max<int64_t>(placement.y + source.top * scale, 0);
+    const int64_t right =
+        std::min<int64_t>(placement.x + source.right * scale, int64_t{surface.width});
+    const int64_t bottom =
+        std::min<int64_t>(placement.y + source.bottom * scale, int64_t{surface.height});
     if (left >= right || top >= bottom)
         return;
     blend_rect(

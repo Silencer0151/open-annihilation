@@ -4,8 +4,11 @@
 // The settings dialog: where its parts lie, its sections and rows, switches,
 // sliders and their stops, the level strip, pointer and key events, OK,
 // Cancel and Restore defaults, the locks and their texts, and what it draws.
-// With --data, its fonts from the installed game and every text fitting its
-// place.
+// A section of the test's own, taller than the view under the heading,
+// checks scrolling: the view and its limit, the wheel, the scroll bar, the
+// scroll keys, the focus brought into view, rows cut by the view, the
+// control numbers, and the two forms of a locked switch. With --data, its
+// fonts from the installed game and every text fitting its place.
 
 #include "oa/ui/engine_settings/dialog.hpp"
 
@@ -14,9 +17,15 @@
 #include "oa/test/game_assets.hpp"
 #include "oa/test/game_data.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <iostream>
+#include <limits>
+#include <set>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -40,6 +49,7 @@ using settings::DialogAction;
 using settings::DialogKey;
 using settings::Lock;
 using settings::Page;
+using settings::Setting;
 
 constexpr std::array<Page, 5> kPages{
     Page::path_search,
@@ -172,9 +182,9 @@ void every_part_lies_inside_the_dialog_and_apart() {
                 }
                 // The open section stays within its columns, above the footer.
                 const auto rows = geometry::place_rows(page, locks);
-                CHECK(rows.count == settings::page_settings(page).size());
+                CHECK(rows.rows.size() == settings::page_settings(page).size());
                 CHECK(rows.bottom < geometry::footer_rule_row);
-                for (std::size_t index = 0; index < rows.count; ++index) {
+                for (std::size_t index = 0; index < rows.rows.size(); ++index) {
                     const auto& row = rows.rows[index];
                     CHECK(inside(row.label, section));
                     CHECK(inside(row.control_area, section));
@@ -214,7 +224,7 @@ void each_section_shows_its_rows() {
     CHECK(settings::page_settings(Page::developer)[0] == settings::Setting::frame_stats);
     // Graphics' three rows lie above the footer.
     const auto graphics = geometry::place_rows(Page::graphics, {});
-    CHECK(graphics.count == 3);
+    CHECK(graphics.rows.size() == 3);
     CHECK(graphics.bottom <= geometry::footer_rule_row);
 
     const auto parts = settings::dialog_layout(opened(Page::controls));
@@ -601,6 +611,785 @@ void locks_show_their_text_and_hold_their_settings() {
     CHECK(!dialog.chosen.frame_stats);
 }
 
+/// A section of the test's own, shown in Graphics' place: its rows, and the
+/// locks and status hints it gives them.
+struct Section {
+    std::vector<Setting> rows;
+    std::vector<std::pair<Setting, Lock>> locks;
+    std::vector<Setting> status;
+};
+
+/// Returns the test section's rows for Graphics, and the dialog's own for
+/// the other sections (SectionHooks::settings).
+std::span<const Setting> section_settings(void* context, Page page) {
+    const auto& section = *static_cast<const Section*>(context);
+    if (page != Page::graphics)
+        return settings::page_settings(page);
+    return section.rows;
+}
+
+/// Returns the lock the test section gives a setting, else the dialog's
+/// (SectionHooks::lock).
+Lock section_lock(void* context, Setting setting, Lock lock) {
+    const auto& section = *static_cast<const Section*>(context);
+    for (const auto& [locked, kind] : section.locks)
+        if (locked == setting)
+            return kind;
+    return lock;
+}
+
+/// Tells whether the test section makes a setting's hint lines its status
+/// (SectionHooks::hint_is_status).
+bool section_status(void* context, Setting setting) {
+    const auto& section = *static_cast<const Section*>(context);
+    return std::find(section.status.begin(), section.status.end(), setting) != section.status.end();
+}
+
+/// Returns five rows as tall as the Graphics page the scrolling is for: a
+/// slider with one hint line (65 rows), the level strip (59), a slider with
+/// two (77), a switch with two (59) and a switch with one (47).
+Section five_rows() {
+    return {
+        {Setting::max_frame_rate,
+         Setting::anti_aliasing,
+         Setting::screen_size,
+         Setting::escape_opens_menu,
+         Setting::frame_stats},
+        {},
+        {},
+    };
+}
+
+/// Returns nine rows in one section: 543 rows from the first row's line to
+/// the line under the last.
+Section nine_rows() {
+    return {
+        {Setting::path_search,
+         Setting::wheel_zoom,
+         Setting::escape_opens_menu,
+         Setting::switch_alt,
+         Setting::unit_limit,
+         Setting::max_frame_rate,
+         Setting::anti_aliasing,
+         Setting::screen_size,
+         Setting::frame_stats},
+        {},
+        {},
+    };
+}
+
+/// A dialog open on Graphics with a section of the test's own in its place.
+struct Scrolling {
+    Section section;
+    settings::SectionHooks hooks{};
+    settings::Dialog dialog;
+
+    /// Opens the dialog on Graphics with a section of the test's own in its place.
+    explicit Scrolling(
+        Section shown,
+        const settings::EngineSettings& current = {},
+        const settings::Locks& locks = {}
+    )
+        : section(std::move(shown)) {
+        hooks.context = &section;
+        hooks.settings = section_settings;
+        hooks.lock = section_lock;
+        hooks.hint_is_status = section_status;
+        open(current, locks);
+    }
+
+    Scrolling(const Scrolling&) = delete;
+    Scrolling& operator=(const Scrolling&) = delete;
+
+    /// Opens the dialog again on Graphics, with the test's section in its place.
+    void open(const settings::EngineSettings& current = {}, const settings::Locks& locks = {}) {
+        settings::open_dialog(dialog, current, {}, locks, "v0.2.0", Page::graphics);
+        dialog.section_hooks = &hooks;
+    }
+
+    /// Returns Graphics' stored offset.
+    int32_t scroll() const { return dialog.scroll[static_cast<std::size_t>(Page::graphics)]; }
+
+    /// Returns the open section's rows, placed at its offset.
+    geometry::ScrolledRows rows() const { return geometry::open_rows(dialog); }
+};
+
+/// Tells whether two rectangles are the same.
+bool same_rect(const renderer::SourceRect& a, const renderer::SourceRect& b) {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+}
+
+/// Turns the wheel at a point of the section.
+DialogAction wheel(settings::Dialog& dialog, float notches, Point at = {300, 150}) {
+    return settings::dialog_wheel(dialog, at.x, at.y, notches);
+}
+
+void the_view_and_the_scroll_bar_keep_their_places() {
+    CHECK(same_rect(geometry::view, {158, 54, 309, 236}));
+    CHECK(same_rect(geometry::view_clip, {156, 54, 313, 236}));
+    CHECK(same_rect(geometry::scroll_well, {470, 54, 7, 236}));
+    CHECK(same_rect(geometry::scroll_hit, {467, 54, 12, 236}));
+    CHECK(geometry::wheel_step == 24);
+    CHECK(geometry::page_step == 200);
+    CHECK(geometry::least_thumb_height == 16);
+    CHECK(geometry::end_gap == 8);
+    // The view runs from the first row's line to the row above the footer's.
+    CHECK(geometry::view.y == geometry::first_row_top);
+    CHECK(geometry::view.y + geometry::view.height == geometry::footer_rule_row);
+    // Columns 477 and 478 stay clear before the dark edge; the hit area ends there.
+    CHECK(geometry::scroll_well.x + geometry::scroll_well.width == 477);
+    CHECK(geometry::scroll_hit.x + geometry::scroll_hit.width == settings::dialog_width - 1);
+}
+
+void sections_that_fit_do_not_scroll() {
+    // Each section's content: its rows, and the end gap under the last.
+    const std::array<int32_t, 5> content{74, 162, 86, 210, 56};
+    for (std::size_t index = 0; index < kPages.size(); ++index) {
+        const Page page = kPages[index];
+        for (const auto& locks : lock_states()) {
+            settings::Dialog dialog = opened(page, locks);
+            const auto at_top = geometry::place_rows(page, locks);
+            CHECK(geometry::content_height(at_top, 0) == content[index]);
+            CHECK(geometry::scroll_limit(content[index]) == 0);
+            // A stored offset is clamped to the limit: the rows stay put.
+            dialog.scroll[index] = 100;
+            const auto open = geometry::open_rows(dialog);
+            CHECK(open.scroll == 0 && open.limit == 0);
+            CHECK(open.rows.rows.size() == at_top.rows.size());
+            CHECK(open.rows.bottom == at_top.bottom);
+            for (std::size_t row = 0; row < at_top.rows.size(); ++row) {
+                CHECK(open.rows.rows[row].top == at_top.rows[row].top);
+                CHECK(same_rect(open.rows.rows[row].control_area, at_top.rows[row].control_area));
+                CHECK(same_rect(open.rows.rows[row].label, at_top.rows[row].label));
+            }
+            for (const auto& part : settings::dialog_layout(dialog))
+                CHECK(part.control != settings::scroll_bar_control);
+            // Neither the wheel, the keys nor a press in the margin scroll it.
+            CHECK(wheel(dialog, -1.0F) == DialogAction::none);
+            for (const DialogKey key :
+                 {DialogKey::page_down, DialogKey::end, DialogKey::page_up, DialogKey::home})
+                CHECK(settings::dialog_key(dialog, key) == DialogAction::none);
+            CHECK(dialog.focused == settings::no_control);
+            CHECK(settings::dialog_pointer_down(dialog, 473, 150) == DialogAction::none);
+            CHECK(settings::dialog_pointer_up(dialog, 473, 150) == DialogAction::none);
+            CHECK(dialog.hovered == settings::no_control);
+            CHECK(geometry::open_rows(dialog).scroll == 0);
+        }
+    }
+}
+
+void a_long_section_scrolls_by_its_overflow() {
+    Scrolling five(five_rows());
+    const auto open = five.rows();
+    CHECK(open.rows.rows.size() == 5);
+    const std::array<int32_t, 5> tops{54, 119, 178, 255, 314};
+    const std::array<int32_t, 5> heights{65, 59, 77, 59, 47};
+    for (std::size_t index = 0; index < open.rows.rows.size() && index < tops.size(); ++index) {
+        const auto& row = open.rows.rows[index];
+        CHECK(row.top == tops[index]);
+        CHECK(row.height == heights[index]);
+        CHECK(row.control == settings::first_row_control + static_cast<int32_t>(index));
+        // No row is taller than the view, so the focus can always show one whole.
+        CHECK(row.height < geometry::view.height);
+    }
+    CHECK(open.rows.bottom == 361);
+    CHECK(open.content_height == 316);
+    CHECK(open.limit == 80);
+    CHECK(open.scroll == 0);
+
+    // At its end every row is 80 rows higher, the closing line at 281.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 500;
+    const auto end = five.rows();
+    CHECK(end.scroll == 80);
+    CHECK(end.rows.bottom == 281);
+    CHECK(end.rows.rows[0].top == -26);
+    CHECK(end.rows.rows[1].control_area.y == 48);
+    CHECK(end.rows.rows[4].top == 234);
+    // Every part a row has moves with it; a part it lacks stays empty.
+    const auto lifted = [](const renderer::SourceRect& at_end, const renderer::SourceRect& at_top) {
+        if (at_top.width == 0 || at_top.height == 0)
+            return same_rect(at_end, at_top);
+        return same_rect(at_end, {at_top.x, at_top.y - 80, at_top.width, at_top.height});
+    };
+    for (std::size_t index = 0; index < open.rows.rows.size(); ++index) {
+        const auto& top_row = open.rows.rows[index];
+        const auto& end_row = end.rows.rows[index];
+        CHECK(lifted(end_row.label, top_row.label));
+        CHECK(lifted(end_row.lock_area, top_row.lock_area));
+        for (std::size_t line = 0; line < top_row.hints.size(); ++line)
+            CHECK(lifted(end_row.hints[line], top_row.hints[line]));
+        CHECK(lifted(end_row.control_area, top_row.control_area));
+        CHECK(lifted(end_row.value, top_row.value));
+    }
+
+    // The thumb: 174 rows of the well's 234, its top 55 at the top, 85
+    // half-way and 115 at the end; a dragged top gives the offset back.
+    CHECK(same_rect(geometry::scroll_thumb(0, 80, 316), {471, 55, 5, 174}));
+    CHECK(geometry::scroll_thumb(40, 80, 316).y == 85);
+    CHECK(geometry::scroll_thumb(80, 80, 316).y == 115);
+    CHECK(geometry::scroll_at(55, 80, 316) == 0);
+    CHECK(geometry::scroll_at(85, 80, 316) == 40);
+    CHECK(geometry::scroll_at(115, 80, 316) == 80);
+    CHECK(geometry::scroll_at(10, 80, 316) == 0);
+    CHECK(geometry::scroll_at(400, 80, 316) == 80);
+    // To the nearest row: two rows down the thumb's 60 is 2.67 of the 80.
+    CHECK(geometry::scroll_at(57, 80, 316) == 3);
+    CHECK(geometry::scroll_at(56, 80, 316) == 1);
+    for (int32_t scroll = 0; scroll <= 80; ++scroll) {
+        const auto thumb = geometry::scroll_thumb(scroll, 80, 316);
+        CHECK(thumb.y >= 55 && thumb.y + thumb.height <= 289);
+        // The offset a thumb's top gives puts the thumb back there.
+        CHECK(geometry::scroll_thumb(geometry::scroll_at(thumb.y, 80, 316), 80, 316).y == thumb.y);
+    }
+
+    // Nine rows: 543 rows, a limit of 316 and a thumb of 100.
+    Scrolling all(nine_rows());
+    CHECK(all.rows().content_height == 552);
+    CHECK(all.rows().limit == 316);
+    CHECK(geometry::scroll_thumb(0, 316, 552).height == 100);
+    // A section far taller than the view keeps the thumb's least height.
+    CHECK(geometry::scroll_thumb(0, 10000, 10236).height == geometry::least_thumb_height);
+}
+
+void control_numbers_put_the_rows_after_every_fixed_control() {
+    for (std::size_t index = 0; index < kPages.size(); ++index)
+        CHECK(settings::page_control(kPages[index]) == static_cast<int32_t>(index));
+    CHECK(settings::restore_control == 5);
+    CHECK(settings::cancel_control == 6);
+    CHECK(settings::ok_control == 7);
+    CHECK(settings::scroll_bar_control == 8);
+    CHECK(settings::first_row_control == 9);
+
+    // Every row's number comes after every fixed control's, and each is its own.
+    Scrolling all(nine_rows());
+    std::set<int32_t> rows;
+    for (const auto& row : all.rows().rows.rows) {
+        CHECK(row.control > settings::scroll_bar_control);
+        CHECK(rows.insert(row.control).second);
+    }
+    CHECK(rows.size() == 9);
+    CHECK(*rows.rbegin() == settings::first_row_control + 8);
+    // The focus moves through the rows, the footer's buttons and the
+    // sections' entries, never the scroll bar.
+    std::vector<int32_t> expected;
+    for (int32_t row = 0; row < 9; ++row)
+        expected.push_back(settings::first_row_control + row);
+    for (const int32_t control :
+         {settings::restore_control, settings::cancel_control, settings::ok_control})
+        expected.push_back(control);
+    for (const Page page : kPages)
+        expected.push_back(settings::page_control(page));
+    for (const int32_t control : expected) {
+        CHECK(settings::dialog_key(all.dialog, DialogKey::tab) == DialogAction::redraw);
+        CHECK(all.dialog.focused == control);
+    }
+    CHECK(settings::dialog_key(all.dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(all.dialog.focused == settings::first_row_control);
+    // Space on the last row of nine flips its switch: it is a row, not a button.
+    settings::Dialog& dialog = all.dialog;
+    for (int32_t press = 0; press < 8; ++press)
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::down));
+    CHECK(dialog.focused == settings::first_row_control + 8);
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(dialog.chosen.frame_stats);
+}
+
+/// Checks the layout at one offset: every part inside the dialog and apart,
+/// every part over the view wholly in it, the scroll bar once and right of
+/// every focus outline, and every listed control pressed where it is drawn.
+void check_layout_at(Scrolling& scrolling, int32_t scroll) {
+    const renderer::SourceRect face{
+        geometry::edge,
+        geometry::edge,
+        settings::dialog_width - 2 * geometry::edge,
+        settings::dialog_height - 2 * geometry::edge,
+    };
+    scrolling.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
+    const auto parts = settings::dialog_layout(scrolling.dialog);
+    int32_t bars = 0;
+    for (std::size_t a = 0; a < parts.size(); ++a) {
+        const auto& part = parts[a];
+        CHECK(part.rect.width > 0 && part.rect.height > 0);
+        CHECK(inside(part.rect, face));
+        if (overlap(part.rect, geometry::view) && !inside(part.rect, geometry::view)) {
+            std::cerr << "at " << scroll << ": '" << part.text << "' is cut by the view\n";
+            CHECK(inside(part.rect, geometry::view));
+        }
+        for (std::size_t b = a + 1; b < parts.size(); ++b)
+            CHECK(!overlap(part.rect, parts[b].rect));
+        if (part.control == settings::scroll_bar_control) {
+            ++bars;
+            CHECK(same_rect(part.rect, geometry::scroll_well));
+        }
+    }
+    CHECK(bars == 1);
+    for (const auto& row : scrolling.rows().rows.rows)
+        CHECK(
+            row.control_area.x + row.control_area.width + geometry::focus_inset <
+            geometry::scroll_well.x
+        );
+    for (const auto& part : parts) {
+        if (part.control == settings::no_control)
+            continue;
+        const Point point = centre(part.rect);
+        static_cast<void>(settings::dialog_pointer_move(scrolling.dialog, point.x, point.y));
+        CHECK(scrolling.dialog.hovered == part.control);
+    }
+    CHECK(scrolling.scroll() == scroll);
+}
+
+void the_layout_lists_the_parts_wholly_in_the_view() {
+    for (Section section : {five_rows(), nine_rows()}) {
+        Scrolling scrolling(std::move(section));
+        const int32_t limit = scrolling.rows().limit;
+        std::set<std::string> seen;
+        for (int32_t scroll = 0; scroll <= limit; ++scroll) {
+            check_layout_at(scrolling, scroll);
+            for (const auto& part : settings::dialog_layout(scrolling.dialog))
+                seen.insert(part.text);
+        }
+        // Every row's label and hint lines are listed whole at some offset.
+        for (const Setting setting : scrolling.section.rows) {
+            CHECK(seen.contains(std::string(geometry::label_of(setting))));
+            for (std::size_t line = 0; line < geometry::hint_line_count(setting); ++line)
+                CHECK(seen.contains(
+                    std::string(geometry::hint_line(setting, scrolling.dialog.chosen, line))
+                ));
+        }
+    }
+}
+
+void the_wheel_scrolls_by_notches_and_carries_fractions() {
+    Scrolling five(five_rows());
+    // Towards the player scrolls down, 24 rows a notch, to the end in four.
+    for (const int32_t expected : {24, 48, 72, 80}) {
+        CHECK(wheel(five.dialog, -1.0F) == DialogAction::redraw);
+        CHECK(five.scroll() == expected);
+    }
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::none);
+    CHECK(five.scroll() == 80);
+    CHECK(five.dialog.wheel_rows == 0.0F);
+    // Away from the player scrolls up, and stops at the top.
+    for (const int32_t expected : {56, 32, 8, 0}) {
+        CHECK(wheel(five.dialog, 1.0F) == DialogAction::redraw);
+        CHECK(five.scroll() == expected);
+    }
+    CHECK(wheel(five.dialog, 2.0F) == DialogAction::none);
+    CHECK(five.scroll() == 0);
+    // Fractions of a notch carry over until they make whole rows: 0.75 rows
+    // a turn.
+    const float fine = -1.0F / 32.0F;
+    CHECK(wheel(five.dialog, fine) == DialogAction::none);
+    CHECK(five.scroll() == 0 && five.dialog.wheel_rows == 0.75F);
+    CHECK(wheel(five.dialog, fine) == DialogAction::redraw);
+    CHECK(five.scroll() == 1 && five.dialog.wheel_rows == 0.5F);
+    CHECK(wheel(five.dialog, fine) == DialogAction::redraw);
+    CHECK(five.scroll() == 2 && five.dialog.wheel_rows == 0.25F);
+    CHECK(wheel(five.dialog, fine) == DialogAction::redraw);
+    CHECK(five.scroll() == 3 && five.dialog.wheel_rows == 0.0F);
+    // A turn far larger than the section reaches its end, and the carry
+    // towards that end is dropped there.
+    CHECK(wheel(five.dialog, -1.0e9F) == DialogAction::redraw);
+    CHECK(five.scroll() == 80 && five.dialog.wheel_rows == 0.0F);
+    CHECK(wheel(five.dialog, fine) == DialogAction::none);
+    CHECK(five.dialog.wheel_rows == 0.0F);
+    // A carry is dropped when another section shows.
+    CHECK(wheel(five.dialog, 1.0F / 32.0F) == DialogAction::none);
+    CHECK(five.dialog.wheel_rows == -0.75F);
+    CHECK(click(five.dialog, centre(geometry::list_item(Page::controls))) == DialogAction::redraw);
+    CHECK(five.dialog.wheel_rows == 0.0F);
+    CHECK(click(five.dialog, centre(geometry::list_item(Page::graphics))) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+
+    // Anywhere over the dialog, the section list and the footer included;
+    // nowhere outside it.
+    CHECK(wheel(five.dialog, 1.0F, {20, 100}) == DialogAction::redraw);
+    CHECK(wheel(five.dialog, 1.0F, {300, 310}) == DialogAction::redraw);
+    CHECK(five.scroll() == 32);
+    for (const Point outside :
+         {Point{-1, 100},
+          Point{settings::dialog_width, 100},
+          Point{300, -1},
+          Point{300, settings::dialog_height}})
+        CHECK(wheel(five.dialog, 1.0F, outside) == DialogAction::none);
+    CHECK(five.scroll() == 32);
+    // Not a number, nor an endless turn, scrolls.
+    CHECK(
+        settings::dialog_wheel(five.dialog, 300, 150, std::numeric_limits<float>::quiet_NaN()) ==
+        DialogAction::none
+    );
+    CHECK(
+        settings::dialog_wheel(five.dialog, 300, 150, std::numeric_limits<float>::infinity()) ==
+        DialogAction::none
+    );
+    CHECK(five.scroll() == 32);
+
+    // Nothing moves while a press is held: on a footer button or a slider.
+    const Point restore = centre(geometry::restore_button);
+    CHECK(settings::dialog_pointer_down(five.dialog, restore.x, restore.y) == DialogAction::redraw);
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::none);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 0, 0));
+    const auto track = five.rows().rows.rows[2].control_area;
+    const Point last_stop{track.x + track.width - 1, track.y + 4};
+    CHECK(
+        settings::dialog_pointer_down(five.dialog, last_stop.x, last_stop.y) ==
+        DialogAction::changed
+    );
+    CHECK(five.dialog.dragging);
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::none);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, last_stop.x, last_stop.y));
+    CHECK(five.scroll() == 32);
+    // A scroll changes no setting.
+    const auto chosen = five.dialog.chosen;
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::redraw);
+    CHECK(five.dialog.chosen == chosen);
+}
+
+void the_scroll_keys_scroll_whatever_has_the_focus() {
+    Scrolling all(nine_rows());
+    // Page Down and Page Up by 200 rows, stopping at the ends; End and Home.
+    for (const auto& [key, expected] :
+         {std::pair{DialogKey::page_down, 200},
+          std::pair{DialogKey::page_down, 316},
+          std::pair{DialogKey::page_up, 116},
+          std::pair{DialogKey::page_up, 0},
+          std::pair{DialogKey::end, 316},
+          std::pair{DialogKey::home, 0}}) {
+        CHECK(settings::dialog_key(all.dialog, key) == DialogAction::redraw);
+        CHECK(all.scroll() == expected);
+    }
+    CHECK(settings::dialog_key(all.dialog, DialogKey::home) == DialogAction::none);
+    CHECK(settings::dialog_key(all.dialog, DialogKey::page_up) == DialogAction::none);
+    // They never show the focus, nor change a setting.
+    CHECK(all.dialog.focused == settings::no_control);
+    CHECK(all.dialog.chosen == settings::EngineSettings{});
+
+    // With the focus on the unit limit's slider, Home and End scroll and
+    // leave the slider and the focus alone.
+    for (int32_t press = 0; press < 5; ++press)
+        static_cast<void>(settings::dialog_key(all.dialog, DialogKey::tab));
+    CHECK(all.dialog.focused == settings::first_row_control + 4);
+    const auto chosen = all.dialog.chosen;
+    CHECK(settings::dialog_key(all.dialog, DialogKey::end) == DialogAction::redraw);
+    CHECK(all.scroll() == 316);
+    CHECK(settings::dialog_key(all.dialog, DialogKey::home) == DialogAction::redraw);
+    CHECK(all.scroll() == 0);
+    CHECK(all.dialog.focused == settings::first_row_control + 4);
+    CHECK(all.dialog.chosen == chosen);
+
+    // One Page Down reaches the end of five rows.
+    Scrolling five(five_rows());
+    CHECK(settings::dialog_key(five.dialog, DialogKey::page_down) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+    // Nothing moves while a press is held.
+    const Point ok = centre(geometry::ok_button);
+    static_cast<void>(settings::dialog_pointer_down(five.dialog, ok.x, ok.y));
+    CHECK(settings::dialog_key(five.dialog, DialogKey::home) == DialogAction::none);
+    CHECK(five.scroll() == 80);
+}
+
+void the_focus_scrolls_its_row_into_view() {
+    Scrolling five(five_rows());
+    // Tab from no focus: the first three rows at 0, the fourth at 25 (its
+    // lower line at 289), the last at the end.
+    const std::array<std::pair<int32_t, int32_t>, 6> forward{{
+        {settings::first_row_control, 0},
+        {settings::first_row_control + 1, 0},
+        {settings::first_row_control + 2, 0},
+        {settings::first_row_control + 3, 25},
+        {settings::first_row_control + 4, 80},
+        {settings::restore_control, 80},
+    }};
+    for (const auto& [control, expected] : forward) {
+        CHECK(settings::dialog_key(five.dialog, DialogKey::tab) == DialogAction::redraw);
+        CHECK(five.dialog.focused == control);
+        CHECK(five.scroll() == expected);
+    }
+    // Back up: the third row shows whole at 80, the second scrolls to 65 and
+    // the first to 0. A button or an entry never scrolls.
+    const std::array<std::pair<int32_t, int32_t>, 5> back{{
+        {settings::first_row_control + 4, 80},
+        {settings::first_row_control + 3, 80},
+        {settings::first_row_control + 2, 80},
+        {settings::first_row_control + 1, 65},
+        {settings::first_row_control, 0},
+    }};
+    for (const auto& [control, expected] : back) {
+        CHECK(settings::dialog_key(five.dialog, DialogKey::back_tab) == DialogAction::redraw);
+        CHECK(five.dialog.focused == control);
+        CHECK(five.scroll() == expected);
+    }
+    CHECK(settings::dialog_key(five.dialog, DialogKey::up) == DialogAction::redraw);
+    CHECK(five.dialog.focused == settings::page_control(Page::developer));
+    CHECK(five.scroll() == 0);
+
+    // Scrolling never moves the focus; a key that acts on the focused row
+    // brings it back into view first.
+    five.open();
+    for (int32_t press = 0; press < 5; ++press)
+        static_cast<void>(settings::dialog_key(five.dialog, DialogKey::down));
+    CHECK(five.dialog.focused == settings::first_row_control + 4);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::home) == DialogAction::redraw);
+    CHECK(five.dialog.focused == settings::first_row_control + 4);
+    CHECK(five.scroll() == 0);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(five.dialog.chosen.frame_stats);
+    CHECK(five.scroll() == 80);
+    // A key that only brings the row back, changing nothing, still redraws.
+    CHECK(settings::dialog_key(five.dialog, DialogKey::home) == DialogAction::redraw);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::right) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+    // Space on a slider does nothing but bring it into view.
+    for (int32_t press = 0; press < 4; ++press)
+        static_cast<void>(settings::dialog_key(five.dialog, DialogKey::up));
+    CHECK(five.dialog.focused == settings::first_row_control);
+    CHECK(five.scroll() == 0);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::end) == DialogAction::redraw);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::space) == DialogAction::redraw);
+    CHECK(five.scroll() == 0);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::space) == DialogAction::none);
+}
+
+void the_scroll_bar_follows_a_drag() {
+    Scrolling five(five_rows());
+    // The pointer over the bar hovers it.
+    CHECK(settings::dialog_pointer_move(five.dialog, 473, 150) == DialogAction::redraw);
+    CHECK(five.dialog.hovered == settings::scroll_bar_control);
+    CHECK(settings::dialog_pointer_move(five.dialog, 467, 289) == DialogAction::none);
+    CHECK(settings::dialog_pointer_move(five.dialog, 478, 54) == DialogAction::none);
+    // A press on the thumb grabs it where it is pressed and moves nothing.
+    CHECK(settings::dialog_pointer_down(five.dialog, 473, 100) == DialogAction::redraw);
+    CHECK(five.dialog.pressed == settings::scroll_bar_control && five.dialog.dragging);
+    CHECK(five.dialog.scroll_grab == 45);
+    CHECK(five.scroll() == 0);
+    // The thumb follows the pointer's row only, wherever the pointer goes,
+    // and the offset follows the thumb to the nearest row.
+    CHECK(settings::dialog_pointer_move(five.dialog, 300, 102) == DialogAction::redraw);
+    CHECK(five.scroll() == 3);
+    CHECK(settings::dialog_pointer_move(five.dialog, 300, 130) == DialogAction::redraw);
+    CHECK(five.scroll() == 40);
+    CHECK(settings::dialog_pointer_move(five.dialog, 10, 130) == DialogAction::none);
+    CHECK(settings::dialog_pointer_move(five.dialog, 10, 400) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+    CHECK(settings::dialog_pointer_move(five.dialog, 600, -100) == DialogAction::redraw);
+    CHECK(five.scroll() == 0);
+    CHECK(five.dialog.chosen == settings::EngineSettings{});
+    // While it is held the wheel and the scroll keys do nothing.
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::none);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::end) == DialogAction::none);
+    CHECK(five.scroll() == 0);
+    // The release ends the drag, wherever it happens, and acts on nothing.
+    CHECK(settings::dialog_pointer_up(five.dialog, 10, 10) == DialogAction::redraw);
+    CHECK(!five.dialog.dragging && five.dialog.pressed == settings::no_control);
+    CHECK(settings::dialog_pointer_move(five.dialog, 10, 400) == DialogAction::none);
+    CHECK(five.scroll() == 0);
+
+    // A press on the well below the thumb brings the thumb's middle to it,
+    // and above it likewise; the drag starts there.
+    CHECK(settings::dialog_pointer_down(five.dialog, 473, 260) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+    CHECK(five.dialog.scroll_grab == 87);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 473, 260));
+    CHECK(settings::dialog_pointer_down(five.dialog, 473, 70) == DialogAction::redraw);
+    CHECK(five.scroll() == 0);
+    CHECK(settings::dialog_pointer_move(five.dialog, 473, 172) == DialogAction::redraw);
+    CHECK(five.scroll() == 40);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 473, 172));
+
+    // A press on the bar leaves the keyboard focus where it was, and the
+    // next Tab moves on from there: a press on the thumb,
+    five.open();
+    CHECK(settings::dialog_key(five.dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(five.dialog.focused == settings::first_row_control);
+    static_cast<void>(settings::dialog_pointer_down(five.dialog, 473, 100));
+    CHECK(five.dialog.focused == settings::first_row_control);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 473, 100));
+    CHECK(five.dialog.focused == settings::first_row_control);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(five.dialog.focused == settings::first_row_control + 1);
+    // and a press on the well below it, which scrolls to the end.
+    five.open();
+    for (int32_t press = 0; press < 3; ++press)
+        static_cast<void>(settings::dialog_key(five.dialog, DialogKey::tab));
+    CHECK(five.dialog.focused == settings::first_row_control + 2);
+    CHECK(five.scroll() == 0);
+    CHECK(settings::dialog_pointer_down(five.dialog, 473, 260) == DialogAction::redraw);
+    CHECK(five.scroll() == 80);
+    CHECK(five.dialog.focused == settings::first_row_control + 2);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 473, 260));
+    CHECK(five.dialog.focused == settings::first_row_control + 2);
+    CHECK(settings::dialog_key(five.dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(five.dialog.focused == settings::first_row_control + 3);
+    CHECK(five.scroll() == 80);
+}
+
+void a_cut_row_answers_only_where_it_shows() {
+    Scrolling five(five_rows());
+    // At 40 the last row's switch shows its top seven rows, 283 to 289: a
+    // press there acts, a press under the view does not.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 40;
+    const auto stats = five.rows().rows.rows[4].control_area;
+    CHECK(stats.y == 283);
+    const int32_t on = stats.x + stats.width - 4;
+    CHECK(click(five.dialog, {on, 292}) == DialogAction::none);
+    CHECK(!five.dialog.chosen.frame_stats);
+    CHECK(click(five.dialog, {on, 286}) == DialogAction::changed);
+    CHECK(five.dialog.chosen.frame_stats);
+    // Its parts are drawn but not listed.
+    for (const auto& part : settings::dialog_layout(five.dialog))
+        CHECK(part.control != settings::first_row_control + 4);
+
+    // At 50 the first row's slider line shows from 54: a press on its
+    // visible part drags it, a press above the view does not.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 50;
+    const auto track = five.rows().rows.rows[0].control_area;
+    CHECK(track.y == 47);
+    CHECK(settings::dialog_pointer_down(five.dialog, track.x + 1, 50) == DialogAction::none);
+    CHECK(five.dialog.chosen.max_frame_rate == settings::highest_frame_rate);
+    CHECK(settings::dialog_pointer_down(five.dialog, track.x + 1, 56) == DialogAction::changed);
+    CHECK(five.dialog.chosen.max_frame_rate == settings::lowest_frame_rate);
+    // The drag follows the pointer's column wherever the line is.
+    CHECK(
+        settings::dialog_pointer_move(five.dialog, track.x + track.width, 20) ==
+        DialogAction::changed
+    );
+    CHECK(five.dialog.chosen.max_frame_rate == settings::highest_frame_rate);
+    static_cast<void>(settings::dialog_pointer_up(five.dialog, 0, 0));
+
+    // At the end the strip's top is cut at 54; it still answers below it.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto strip = five.rows().rows.rows[1].control_area;
+    CHECK(strip.y == 48);
+    const int32_t second = strip.x + 1 + geometry::level_width + geometry::level_width / 2;
+    CHECK(click(five.dialog, {second, 50}) == DialogAction::none);
+    CHECK(click(five.dialog, {second, 58}) == DialogAction::changed);
+    CHECK(five.dialog.chosen.anti_aliasing == settings::AntiAliasing::x2);
+    // A press never scrolls.
+    CHECK(five.scroll() == 80);
+}
+
+void offsets_are_kept_for_each_section_until_the_dialog_opens_again() {
+    Scrolling five(five_rows());
+    CHECK(wheel(five.dialog, -1.0F) == DialogAction::redraw);
+    CHECK(five.scroll() == 24);
+    CHECK(click(five.dialog, centre(geometry::list_item(Page::controls))) == DialogAction::redraw);
+    CHECK(geometry::open_rows(five.dialog).scroll == 0);
+    CHECK(click(five.dialog, centre(geometry::list_item(Page::graphics))) == DialogAction::redraw);
+    CHECK(five.scroll() == 24);
+    CHECK(geometry::open_rows(five.dialog).rows.rows[0].top == geometry::first_row_top - 24);
+    // Restore defaults is no scroll: the offset stays.
+    CHECK(click(five.dialog, centre(geometry::restore_button)) == DialogAction::redraw);
+    CHECK(five.scroll() == 24);
+    // Each opening starts every section at its top.
+    five.open();
+    CHECK(five.dialog.scroll == (std::array<int32_t, settings::page_count>{}));
+    CHECK(five.scroll() == 0);
+}
+
+void the_hover_follows_the_rows_under_a_still_pointer() {
+    Scrolling five(five_rows());
+    // Over the first row's value: no control. A notch brings the level strip
+    // under the pointer, and it is hovered without the pointer moving.
+    CHECK(settings::dialog_pointer_move(five.dialog, 400, 104) == DialogAction::none);
+    CHECK(five.dialog.hovered == settings::no_control);
+    CHECK(wheel(five.dialog, -1.0F, {400, 104}) == DialogAction::redraw);
+    CHECK(five.dialog.hovered == settings::first_row_control + 1);
+    // The keys move the rows under it too.
+    CHECK(settings::dialog_key(five.dialog, DialogKey::home) == DialogAction::redraw);
+    CHECK(five.dialog.hovered == settings::no_control);
+}
+
+void locked_switch_rows_keep_their_value_in_sight() {
+    // The fourth row, a switch whose hint lines are its status, locked
+    // during a game; the fifth, any other switch, set on the command line.
+    Section section = five_rows();
+    section.locks = {
+        {Setting::escape_opens_menu, Lock::in_game},
+        {Setting::frame_stats, Lock::command_line},
+    };
+    section.status = {Setting::escape_opens_menu};
+    settings::EngineSettings current{};
+    current.escape_opens_menu = true;
+    current.frame_stats = true;
+    current.unit_limit = 900;
+    Scrolling five(std::move(section), current);
+    const auto rows = five.rows().rows.rows;
+    // Its lock where the switch was, ending where the switch ended; no
+    // switch; the label 153 columns wide, 8 short of the lock.
+    const auto& status = rows[3];
+    CHECK(status.hint_is_status);
+    CHECK(status.control_area.width == 0);
+    CHECK(same_rect(status.lock_area, {319, 264, 148, 16}));
+    CHECK(same_rect(status.label, {158, 264, 153, 16}));
+    // The switch kept, its lock 8 columns left of it and the label 93 wide.
+    const auto& kept = rows[4];
+    CHECK(!kept.hint_is_status);
+    CHECK(same_rect(kept.control_area, {415, 323, 52, 16}));
+    CHECK(same_rect(kept.lock_area, {259, 323, 148, 16}));
+    CHECK(same_rect(kept.label, {158, 323, 93, 16}));
+    for (const auto& row : {status, kept}) {
+        CHECK(!overlap(row.label, row.lock_area));
+        CHECK(!overlap(row.lock_area, row.control_area));
+        CHECK(row.height == (row.hint_lines == 2 ? 59 : 47));
+    }
+    // A locked row is as tall as it is unlocked: the limit stays 80.
+    CHECK(five.rows().limit == 80);
+
+    // At the end both show whole: the padlock and lock text, the kept
+    // switch's Off and On with no control, and no switch for the status row.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    const auto parts = settings::dialog_layout(five.dialog);
+    CHECK(find_part(parts, "Locked during a game", settings::no_control) != nullptr);
+    CHECK(find_part(parts, "Set on the command line", settings::no_control) != nullptr);
+    int32_t status_captions = 0;
+    int32_t kept_captions = 0;
+    for (const auto& part : parts) {
+        CHECK(part.control != settings::first_row_control + 3);
+        CHECK(part.control != settings::first_row_control + 4);
+        if (part.text != "OFF" && part.text != "ON")
+            continue;
+        status_captions += part.rect.y == 185 ? 1 : 0;
+        if (part.rect.y == 244) {
+            CHECK(part.control == settings::no_control);
+            ++kept_captions;
+        }
+    }
+    CHECK(status_captions == 0);
+    CHECK(kept_captions == 2);
+    bool status_padlock = false;
+    bool kept_padlock = false;
+    for (const auto& part : parts) {
+        if (!part.text.empty() || part.control != settings::no_control)
+            continue;
+        status_padlock = status_padlock || same_rect(part.rect, {319, 184, 5, 16});
+        kept_padlock = kept_padlock || same_rect(part.rect, {259, 243, 5, 16});
+    }
+    CHECK(status_padlock && kept_padlock);
+
+    // Neither takes a press or the focus.
+    CHECK(settings::dialog_pointer_down(five.dialog, 460, 250) == DialogAction::none);
+    CHECK(settings::dialog_pointer_up(five.dialog, 460, 250) == DialogAction::none);
+    CHECK(settings::dialog_pointer_down(five.dialog, 460, 190) == DialogAction::none);
+    CHECK(settings::dialog_pointer_up(five.dialog, 460, 190) == DialogAction::none);
+    CHECK(five.dialog.chosen == current);
+    five.open(current);
+    for (const int32_t expected :
+         {settings::first_row_control,
+          settings::first_row_control + 1,
+          settings::first_row_control + 2,
+          settings::restore_control}) {
+        CHECK(settings::dialog_key(five.dialog, DialogKey::tab) == DialogAction::redraw);
+        CHECK(five.dialog.focused == expected);
+    }
+    CHECK(five.scroll() == 0);
+
+    // Restore defaults keeps every locked value, the switches' included.
+    CHECK(click(five.dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(five.dialog.chosen.escape_opens_menu);
+    CHECK(five.dialog.chosen.frame_stats);
+    CHECK(five.dialog.chosen.unit_limit == settings::default_unit_limit);
+}
+
 struct Canvas {
     renderer::Surface surface;
 
@@ -678,6 +1467,161 @@ void the_dialog_draws_its_faces_and_accents(const settings::DialogFonts& fonts) 
     CHECK(pressed.at(2, 2) == kBand);
 }
 
+constexpr renderer::Rgb kRule{0x2b, 0x30, 0x27};
+constexpr renderer::Rgb kText{0xe7, 0xe8, 0xdf};
+constexpr renderer::Rgb kHint{0x9a, 0xa1, 0x90};
+constexpr renderer::Rgb kWell{0x12, 0x14, 0x10};
+constexpr renderer::Rgb kControlBorder{0x3a, 0x40, 0x34};
+constexpr renderer::Rgb kControlHover{0x5b, 0x63, 0x52};
+constexpr renderer::Rgb kSwitchIdle{0x7d, 0x84, 0x74};
+constexpr renderer::Rgb kLock{0xe0, 0xb0, 0x4f};
+
+/// Returns a colour faded into the panel as a locked row is: 115 of 256
+/// parts panel.
+renderer::Rgb faded(renderer::Rgb color) {
+    constexpr uint32_t fade = 115;
+    renderer::Rgb mixed{};
+    for (std::size_t channel = 0; channel < mixed.size(); ++channel)
+        mixed[channel] = static_cast<uint8_t>(
+            (color[channel] * (256U - fade) + kPanel[channel] * fade + 128U) / 256U
+        );
+    return mixed;
+}
+
+/// Returns a font whose every printable glyph is a solid block 3 columns
+/// wide and 8 rows high, so that every text draws pixels in its whole colour.
+settings::DialogFonts block_fonts() {
+    renderer::TextFont font;
+    font.font.nominal_height = 8;
+    constexpr uint8_t ink_index = 1;
+    for (int32_t byte = ' '; byte < 0x7f; ++byte) {
+        const bool space = byte == ' ';
+        font.font.glyphs[static_cast<std::size_t>(byte)] = oa::formats::fnt::Glyph{
+            3,
+            8,
+            0,
+            0,
+            std::vector<uint8_t>(24, ink_index),
+            std::vector<uint8_t>(24, space ? 0 : 1),
+        };
+    }
+    font.ink[ink_index] = renderer::blend_opaque;
+    return {font, font};
+}
+
+void the_dialog_draws_the_scroll_bar_and_clips_the_rows() {
+    const auto fonts = block_fonts();
+    // Sections that fit draw no scroll bar, whatever offset they hold.
+    for (const Page page : kPages) {
+        Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+        settings::Dialog dialog = opened(page);
+        settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, fonts);
+        CHECK(canvas.at(473, 150) == kPanel);
+        CHECK(canvas.at(300, geometry::first_row_top) == kRule);
+        Canvas held = blank(settings::dialog_width, settings::dialog_height);
+        dialog.scroll[static_cast<std::size_t>(page)] = 50;
+        settings::draw_dialog(held.surface, {0, 0, 1}, dialog, fonts);
+        CHECK(held.surface.rgb == canvas.surface.rgb);
+    }
+
+    // At the top: the well with its border, the thumb in its top 174 rows.
+    // On a canvas taller than the dialog, nothing of the rows below the view
+    // is drawn under the dialog.
+    Scrolling five(five_rows());
+    Canvas top = blank(settings::dialog_width, 400);
+    settings::draw_dialog(top.surface, {0, 0, 1}, five.dialog, fonts);
+    CHECK(top.at(470, 100) == kControlBorder);
+    CHECK(top.at(476, 100) == kControlBorder);
+    CHECK(top.at(473, 54) == kControlBorder);
+    CHECK(top.at(473, 289) == kControlBorder);
+    CHECK(top.at(473, 100) == kControlHover);
+    CHECK(top.at(473, 228) == kControlHover);
+    CHECK(top.at(473, 229) == kWell);
+    CHECK(top.at(469, 100) == kPanel);
+    CHECK(top.at(477, 100) == kPanel);
+    CHECK(top.at(300, geometry::first_row_top) == kRule);
+    CHECK(top.at(440, 330) == (renderer::Rgb{0, 0, 0}));
+    // The fourth row's first status line is cut at 289: drawn above, not below.
+    CHECK(top.at(159, 284) == kHint);
+    CHECK(top.at(159, 291) != kHint);
+
+    // Scrolled to 40 with the pointer on the bar: the bar lighter, the thumb
+    // at 85, a fixed line at the view's top, and nothing of the rows above
+    // the view drawn over the header or beside the heading.
+    five.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 40;
+    static_cast<void>(settings::dialog_pointer_move(five.dialog, 473, 150));
+    Canvas scrolled = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(scrolled.surface, {0, 0, 1}, five.dialog, fonts);
+    CHECK(scrolled.at(470, 100) == kControlHover);
+    CHECK(scrolled.at(473, 84) == kWell);
+    CHECK(scrolled.at(473, 85) == kSwitchIdle);
+    CHECK(scrolled.at(473, 258) == kSwitchIdle);
+    CHECK(scrolled.at(473, 259) == kWell);
+    CHECK(scrolled.at(300, geometry::first_row_top) == kRule);
+    CHECK(scrolled.at(300, 14) == kBand);
+    CHECK(scrolled.at(160, 30) == kPanel);
+    CHECK(scrolled.at(220, 45) == kPanel);
+    // The first row's slider line shows from 57, its track filled to the knob.
+    CHECK(scrolled.at(160, 57 + geometry::track_offset + 1) == kAccent);
+
+    // Locked: the status row fades its label line only, its status at full
+    // strength; the other switch fades whole, its On without the accent,
+    // and each padlock is drawn over the fade.
+    Section section = five_rows();
+    section.locks = {
+        {Setting::escape_opens_menu, Lock::in_game},
+        {Setting::frame_stats, Lock::command_line},
+    };
+    section.status = {Setting::escape_opens_menu};
+    settings::EngineSettings current{};
+    current.frame_stats = true;
+    Scrolling locked(std::move(section), current);
+    locked.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+    Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(canvas.surface, {0, 0, 1}, locked.dialog, fonts);
+    CHECK(canvas.at(159, 190) == faded(kText));         // the status row's label
+    CHECK(canvas.at(159, 205) == kHint);                // its first status line
+    CHECK(canvas.at(159, 217) == kHint);                // its second
+    CHECK(canvas.at(400, 188) == kLock);                // its padlock, where the switch was
+    CHECK(canvas.at(445, 185) == kPanel);               // no switch: neither its well
+    CHECK(canvas.at(445, 199) == kPanel);               // nor its border
+    CHECK(canvas.at(159, 249) == faded(kText));         // the other row's label
+    CHECK(canvas.at(159, 264) == faded(kHint));         // its hint
+    CHECK(canvas.at(444, 245) == faded(kControlHover)); // its On, without the accent
+    CHECK(canvas.at(444, 245) != faded(kAccent));
+    CHECK(canvas.at(415, 250) == faded(kControlBorder)); // its switch's border
+    locked.dialog.chosen.frame_stats = false;
+    Canvas off = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(off.surface, {0, 0, 1}, locked.dialog, fonts);
+    CHECK(off.at(418, 245) == faded(kOffSelected)); // its Off, faded
+    CHECK(off.at(444, 245) == faded(kWell));
+
+    // With the focus shown on a row, a press held on the bar leaves its
+    // outline drawn.
+    Scrolling focused(five_rows());
+    CHECK(settings::dialog_key(focused.dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(settings::dialog_pointer_down(focused.dialog, 473, 100) == DialogAction::redraw);
+    Canvas held = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(held.surface, {0, 0, 1}, focused.dialog, fonts);
+    const auto track = focused.rows().rows.rows[0].control_area;
+    CHECK(held.at(track.x - geometry::focus_inset, track.y + 4) == kAccent);
+    CHECK(held.at(470, 100) == kControlHover);
+    CHECK(held.at(473, 100) == kSwitchIdle);
+    // So does a press held on the well, which scrolled to the end: the third
+    // row's outline is drawn where its slider now lies.
+    Scrolling jumped(five_rows());
+    for (int32_t press = 0; press < 3; ++press)
+        static_cast<void>(settings::dialog_key(jumped.dialog, DialogKey::tab));
+    CHECK(settings::dialog_pointer_down(jumped.dialog, 473, 260) == DialogAction::redraw);
+    CHECK(jumped.scroll() == 80);
+    Canvas well = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(well.surface, {0, 0, 1}, jumped.dialog, fonts);
+    const auto size_track = jumped.rows().rows.rows[2].control_area;
+    CHECK(size_track.y == 153);
+    CHECK(well.at(size_track.x - geometry::focus_inset, size_track.y + 4) == kAccent);
+    CHECK(well.at(473, 200) == kSwitchIdle);
+}
+
 void fonts_load_and_every_text_fits_its_place() {
     auto assets = oa::test::require_game_assets("the settings dialog's fonts");
     const auto fonts = settings::load_dialog_fonts(assets);
@@ -715,6 +1659,41 @@ void fonts_load_and_every_text_fits_its_place() {
         }
     }
     the_dialog_draws_its_faces_and_accents(fonts);
+
+    // A section that scrolls: every text it lists fits its place at every
+    // offset, and each lock's text fits beside a kept switch as on a slider.
+    Scrolling all(nine_rows());
+    const int32_t limit = all.rows().limit;
+    for (int32_t scroll = 0; scroll <= limit; ++scroll) {
+        all.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
+        for (const auto& part : settings::dialog_layout(all.dialog)) {
+            if (part.text.empty())
+                continue;
+            const auto& font =
+                part.font == settings::DialogFont::regular ? fonts.regular.font : fonts.small.font;
+            const auto width =
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, part.text));
+            CHECK(width <= part.rect.width);
+        }
+    }
+    for (const Lock lock : {Lock::in_game, Lock::set_by_host, Lock::command_line}) {
+        Section section = five_rows();
+        section.locks = {{Setting::escape_opens_menu, lock}, {Setting::frame_stats, lock}};
+        section.status = {Setting::escape_opens_menu};
+        Scrolling locked(std::move(section));
+        locked.dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
+        const auto parts = settings::dialog_layout(locked.dialog);
+        int32_t lock_texts = 0;
+        for (const auto& part : parts) {
+            if (part.text != geometry::lock_text(lock))
+                continue;
+            ++lock_texts;
+            const auto width =
+                static_cast<int32_t>(oa::formats::fnt::measure_text(fonts.small.font, part.text));
+            CHECK(width <= part.rect.width);
+        }
+        CHECK(lock_texts == 2);
+    }
 }
 
 } // namespace
@@ -736,7 +1715,21 @@ int main(int argc, char** argv) {
         the_footer_buttons_restore_cancel_and_keep();
         the_focus_moves_round_every_control();
         locks_show_their_text_and_hold_their_settings();
+        the_view_and_the_scroll_bar_keep_their_places();
+        sections_that_fit_do_not_scroll();
+        a_long_section_scrolls_by_its_overflow();
+        control_numbers_put_the_rows_after_every_fixed_control();
+        the_layout_lists_the_parts_wholly_in_the_view();
+        the_wheel_scrolls_by_notches_and_carries_fractions();
+        the_scroll_keys_scroll_whatever_has_the_focus();
+        the_focus_scrolls_its_row_into_view();
+        the_scroll_bar_follows_a_drag();
+        a_cut_row_answers_only_where_it_shows();
+        offsets_are_kept_for_each_section_until_the_dialog_opens_again();
+        the_hover_follows_the_rows_under_a_still_pointer();
+        locked_switch_rows_keep_their_value_in_sight();
         the_dialog_draws_its_faces_and_accents(settings::DialogFonts{});
+        the_dialog_draws_the_scroll_bar_and_clips_the_rows();
     }
     if (failures != 0)
         return 1;

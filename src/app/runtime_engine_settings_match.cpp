@@ -219,9 +219,13 @@ void Runtime::EngineSettingsMatchHost::take_dialog_input(
         if (input.button == SDL_BUTTON_LEFT)
             std::ignore = take_sounded(settings::dialog_pointer_up(dialog, point.x, point.y));
         return;
+    // The wheel scrolls the open section; the battlefield under the dialog
+    // never sees it.
+    case ScreenInputKind::wheel:
+        std::ignore = take_sounded(settings::dialog_wheel(dialog, point.x, point.y, input.wheel_y));
+        return;
     case ScreenInputKind::key_up:
     case ScreenInputKind::text:
-    case ScreenInputKind::wheel:
         return;
     }
 }

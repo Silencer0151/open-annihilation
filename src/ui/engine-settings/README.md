@@ -46,15 +46,17 @@ always plays at 1× pathfinding and the host's unit limit.
 
 ## The dialog
 
-`engine_settings/dialog.hpp` holds the dialog (`Dialog`), what pointer and key
-events do to it (`dialog_pointer_down` and the others, `dialog_key`), where its
-parts lie (`dialog_layout`), and how it and the OA button are drawn
-(`draw_dialog`, `draw_oa_button`) without the game's art, in the game's own
-fonts (`load_dialog_fonts`): its button font for labels, values, the section
-list and the title, and its smaller label font for the section heading, hints,
-locks, captions and the version, each readied for text in one colour.
-`src/geometry.hpp` places every part, so a control is pressed where it is
-drawn.
+`engine_settings/dialog.hpp` holds the dialog (`Dialog`), what pointer, wheel
+and key events do to it (`dialog_pointer_down` and the others, `dialog_wheel`,
+`dialog_key`), where its parts lie (`dialog_layout`), and how it and the OA
+button are drawn (`draw_dialog`, `draw_oa_button`) without the game's art, in
+the game's own fonts (`load_dialog_fonts`): its button font for labels,
+values, the section list and the title, and its smaller label font for the
+section heading, hints, locks, captions and the version, each readied for
+text in one colour. `src/geometry.hpp` places every part, so a control is
+pressed where it is drawn. `Dialog::section_hooks` (`SectionHooks`) lets the
+dialog's tests and the game's checks show rows and locks of their own in
+place of a section's; a host never sets it.
 
 It is 480 by 324 source pixels, a dark gunmetal panel with a one-pixel raised
 edge and hairline rules, and one green accent for what is selected:
@@ -67,11 +69,45 @@ edge and hairline rules, and one green accent for what is selected:
   with stops and its value under the hint;
 - Restore defaults, Cancel and OK along the bottom.
 
+A section holds any number of rows. They lie in a view under the section's
+heading, from the first row's line at pixel row 54 down to the pixel row
+above the footer's line, 236 pixels high; the header, the list, the heading
+and the footer never move. A section whose rows, with 8 clear pixels under
+the last row's line, are taller than the view scrolls by whole source
+pixels, and shows a scroll bar in the margin right of its rows: a well like
+a switch's, its thumb as tall as the view's share of the section and never
+under 16 pixels. Every section of the dialog fits its view today, so none
+scrolls and none shows the bar. Each section keeps its offset while the
+dialog is open, and every section starts at its top each time it opens. A
+row the view cuts shows the part inside it and takes a press only there;
+while the section is scrolled from its top, the view's first pixel row keeps
+a hairline, the same as a row's own line. `dialog_layout` lists only the
+parts wholly in the view.
+
+The mouse wheel over the dialog scrolls the section 24 pixels a notch,
+carrying a fraction of a pixel to the next turn; what is carried towards an
+end the section has reached is dropped, and all of it when another section
+shows. The scroll bar takes a press anywhere in the margin, on its thumb to
+drag it or on its well to bring the thumb's middle there and drag it from
+there; the thumb follows the pointer's row only. The bar takes no keyboard
+focus, and a press on it leaves the focus where it is. While a press is held
+the wheel and the scroll keys do nothing, so only a drag of the scroll bar
+scrolls then. No scroll changes a setting or moves the focus.
+
+Controls are numbered: the sections' entries 0 to 4, Restore defaults 5,
+Cancel 6, OK 7, the scroll bar 8, and the open section's rows from 9, with
+no upper end.
+
 The game fonts have no "×" or "·", so the dialog writes "x" and "-".
 
 A locked setting is faded, takes no press and no keyboard focus, and shows a
 padlock with "Locked during a game", "Set by the host" or, for the frame rate
-under `--max-fps`, "Set on the command line".
+under `--max-fps`, "Set on the command line". A locked slider shows the
+padlock at the right of its label line. A locked switch keeps its switch,
+faded, with the padlock left of it, so that its value still shows; a locked
+switch whose hint lines are its status shows the padlock where the switch
+was, and fades only its label line, so that the status keeps its strength.
+No switch is locked today.
 
 Changes show at once; OK keeps them, Cancel puts back what the dialog opened
 with, Restore defaults resets every setting that is not locked. A click on a
@@ -86,15 +122,25 @@ and drags it.
 | Shift+Tab, Up | the focus to the previous control |
 | Left, Right | a switch Off or On, a slider or the level strip one step; along the footer's buttons |
 | Space | flips a switch, presses a button, opens a section |
+| Page Down, Page Up | scroll the section 200 pixels down or up |
+| End, Home | scroll the section to its end or its top |
 
 The focus shows once a key moves it; the first key to the dialog only shows
-it.
+it. Page Up, Page Down, Home and End scroll whatever has the focus, and
+never show or move it. A key that moves the focus onto a row, or acts on a
+focused row, first scrolls the least that shows the row whole; a key that
+moves it to a button or a section's entry does not scroll.
 
 ## Tests
 
 `ui-engine-settings` covers the defaults, a Raspberry Pi's included, the keys read and written and the
 locks; `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches, slider stops, level
-strip, keys, footer buttons, locks and the faces it draws; and
-`ui-engine-settings-dialog-data` its fonts, and every text fitting its place
-in them, over the installed game.
+strip, keys, footer buttons, locks and the faces it draws, and, on sections
+of the test's own taller than the view (`SectionHooks`), its scrolling: the
+view and its limit, the wheel, the scroll bar, the scroll keys, the focus
+brought into view, rows the view cuts, the control numbers and both forms
+of a locked switch; and `ui-engine-settings-dialog-data` its fonts, and
+every text fitting its place in them, a scrolled section's at every offset
+included, over the installed game. `native-engine-settings` sends the wheel
+and the scroll keys through the main menu's and the match's dialog.

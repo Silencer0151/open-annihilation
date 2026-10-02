@@ -12,8 +12,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace oa::ui::engine_settings::geometry {
 
@@ -103,7 +105,8 @@ inline constexpr int32_t slider_line_height = 14;
 inline constexpr int32_t slider_value_width = 110;
 /// The columns between a slider's track and its value.
 inline constexpr int32_t slider_value_gap = 10;
-/// The columns kept clear between a label and the control or lock beside it.
+/// The columns kept clear between a label and the control or lock beside it,
+/// and between a lock and the switch it stands beside.
 inline constexpr int32_t label_gap = 8;
 /// An Off/On switch's width; each half is half of it, inside a 1-pixel border.
 inline constexpr int32_t switch_width = 52;
@@ -117,6 +120,8 @@ inline constexpr int32_t padlock_width = 5;
 inline constexpr int32_t padlock_height = 7;
 /// The columns between the padlock and its text.
 inline constexpr int32_t padlock_gap = 3;
+/// The columns between a control and its keyboard focus outline.
+inline constexpr int32_t focus_inset = 2;
 
 /// A slider's knob: its width and height.
 inline constexpr int32_t knob_width = 7;
@@ -144,10 +149,38 @@ inline constexpr SourceRect ok_button{content_right - 52, button_top, 52, button
 /// Cancel, left of OK.
 inline constexpr SourceRect cancel_button{ok_button.x - 5 - 52, button_top, 52, button_height};
 
-/// The number of sections.
-inline constexpr std::size_t page_count = 5;
-/// The most rows a section holds.
-inline constexpr std::size_t most_rows = 3;
+using oa::ui::engine_settings::page_count;
+
+/// The view the open section's rows scroll in, under its heading: from the
+/// first row's line to the row above the footer's line.
+inline constexpr SourceRect view{
+    content_left, first_row_top, content_width, footer_rule_row - first_row_top
+};
+/// What the rows are drawn clipped to: the view, wider on each side by a
+/// focus outline.
+inline constexpr SourceRect view_clip{
+    view.x - focus_inset, view.y, view.width + 2 * focus_inset, view.height
+};
+/// The clear rows under the last row's line at the end of a section, so
+/// that at its end the line never meets the footer's.
+inline constexpr int32_t end_gap = row_padding;
+/// The scroll bar's thumb's width.
+inline constexpr int32_t scroll_thumb_width = 5;
+/// The scroll bar's well: in the margin right of the rows, one clear column
+/// right of a focus outline, as high as the view; the thumb runs inside its
+/// one-pixel border.
+inline constexpr SourceRect scroll_well{
+    content_right + focus_inset + 1, view.y, scroll_thumb_width + 2, view.height
+};
+/// Where a press holds the scroll bar: the whole margin right of the rows.
+inline constexpr SourceRect scroll_hit{content_right, view.y, padding, view.height};
+/// The scroll bar's thumb's least height.
+inline constexpr int32_t least_thumb_height = 16;
+/// The rows a notch of the mouse wheel scrolls: two hint lines.
+inline constexpr int32_t wheel_step = 2 * hint_line_height;
+/// The rows Page Up and Page Down scroll: the view less three hint lines,
+/// so that what showed at one edge still shows at the other.
+inline constexpr int32_t page_step = view.height - 3 * hint_line_height;
 
 /// What a slider offers: its stops' count.
 struct Slider {
@@ -159,21 +192,31 @@ struct Row {
     Setting setting{};           ///< what it changes
     int32_t control{no_control}; ///< its control's number
     Lock lock{};                 ///< why it cannot be changed now
+    bool hint_is_status{};       ///< its hint lines are its status, which a lock never fades
     int32_t top{};               ///< the row of its line
     int32_t height{};            ///< rows from its line to the next row's
     SourceRect label{};          ///< its label
     SourceRect lock_area{};      ///< its padlock and lock text; empty when unlocked
     std::array<SourceRect, most_hint_lines> hints{}; ///< its hint's lines
     std::size_t hint_lines{};                        ///< the lines its hint takes
-    SourceRect control_area{};                       ///< its switch, level strip or slider track
-    SourceRect value{};                              ///< a slider's value; empty for the others
+    /// Its switch, level strip or slider track; empty for a locked switch
+    /// whose hint lines are its status, which shows its lock there.
+    SourceRect control_area{};
+    SourceRect value{}; ///< a slider's value; empty for the others
 };
 
 /// The open section's rows, placed.
 struct Rows {
-    std::array<Row, most_rows> rows{}; ///< the first `count` hold rows
-    std::size_t count{};               ///< 1 to most_rows
-    int32_t bottom{};                  ///< the row of the line under the last row
+    std::vector<Row> rows; ///< one for each setting the section shows
+    int32_t bottom{};      ///< the row of the line under the last row
+};
+
+/// The open section's rows placed at its scroll offset, and the offset's range.
+struct ScrolledRows {
+    Rows rows;                ///< placed `scroll` rows higher than at the section's top
+    int32_t scroll{};         ///< the offset, 0 to `limit`
+    int32_t limit{};          ///< the most the section scrolls; 0 when its rows fit the view
+    int32_t content_height{}; ///< rows from the first row's line to the end gap under the last
 };
 
 /// Returns how a setting is changed.
@@ -209,12 +252,89 @@ void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept;
 /// @return why it cannot be changed now
 [[nodiscard]] Lock lock_of(const Locks& locks, Setting setting) noexcept;
 
+/// Tells whether a setting's hint lines are its status: such a row, locked,
+/// shows its lock where its switch was, and only its label line fades.
+///
+/// @param setting the setting
+/// @return true for a setting whose hint lines are its status; no setting's are yet
+[[nodiscard]] bool hint_is_status(Setting setting) noexcept;
+
+/// Returns the settings a section shows, a check's own section's when given.
+///
+/// @param page the section
+/// @param section a check's own section; null for the dialog's
+/// @return its settings, top to bottom
+[[nodiscard]] std::span<const Setting> section_settings(Page page, const SectionHooks* section);
+
 /// Places the rows of a section.
+///
+/// A locked switch keeps its switch, faded, with its lock left of it, so
+/// that its value shows; a locked switch whose hint lines are its status
+/// shows its lock where the switch was.
 ///
 /// @param page the section
 /// @param locks the dialog's locks
+/// @param scroll the rows the section is scrolled by from its top; not clamped
+/// @param section a check's own section; null for the dialog's
 /// @return its rows
-[[nodiscard]] Rows place_rows(Page page, const Locks& locks) noexcept;
+[[nodiscard]] Rows place_rows(
+    Page page, const Locks& locks, int32_t scroll = 0, const SectionHooks* section = nullptr
+);
+
+/// Moves placed rows up: each row's line and every part it has, and the
+/// line under the last row. An empty part stays empty.
+///
+/// @param[in,out] rows the rows
+/// @param by the rows they move up; negative moves them down
+void scroll_rows(Rows& rows, int32_t by) noexcept;
+
+/// Returns a section's content height: from its first row's line to the
+/// end gap under its last row's.
+///
+/// @param rows its rows, placed at any offset
+/// @param scroll the offset they are placed at
+/// @return the height, in rows
+[[nodiscard]] int32_t content_height(const Rows& rows, int32_t scroll) noexcept;
+
+/// Returns the most a section scrolls.
+///
+/// @param content_height its content height (content_height)
+/// @return the rows its content is taller than the view; 0 when it fits
+[[nodiscard]] int32_t scroll_limit(int32_t content_height) noexcept;
+
+/// Places the open section's rows once, at its offset clamped to its limit.
+///
+/// @param dialog the dialog
+/// @return its rows, offset, limit and content height
+[[nodiscard]] ScrolledRows open_rows(const Dialog& dialog);
+
+/// Returns the offset nearest the open one that shows a row whole: from its
+/// line to the line under it, or for the last row the section's end.
+///
+/// @param open the open section's rows (open_rows)
+/// @param index the row, from 0
+/// @return the offset, 0 to the section's limit; the open one for no such row
+[[nodiscard]] int32_t scroll_showing(const ScrolledRows& open, std::size_t index) noexcept;
+
+/// Returns the scroll bar's thumb: inside the well's border, as tall as the
+/// view's share of the content and never under least_thumb_height, and as
+/// far down its travel as the offset is down the limit, to the nearest row.
+///
+/// @param scroll the offset, 0 to `limit`
+/// @param limit the section's limit, above 0
+/// @param content_height the section's content height
+/// @return the thumb
+[[nodiscard]] SourceRect
+scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
+
+/// Returns the offset that puts the scroll bar's thumb's top at a row, to
+/// the nearest row.
+///
+/// @param thumb_top the thumb's top row, clamped to its travel
+/// @param limit the section's limit, above 0
+/// @param content_height the section's content height
+/// @return the offset, 0 to `limit`
+[[nodiscard]] int32_t scroll_at(int32_t thumb_top, int32_t limit, int32_t content_height) noexcept;
 
 /// Returns a section's entry in the list.
 ///

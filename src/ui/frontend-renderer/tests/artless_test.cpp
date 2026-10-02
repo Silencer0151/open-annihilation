@@ -3,7 +3,8 @@
 
 // Drawing without the game's art (artless.hpp): fills and blends, bevels,
 // outlines, one-colour text and one-bit marks, placed and scaled from source
-// pixels and clipped to the surface, pixel by pixel.
+// pixels and clipped to the surface and to a placement's clip, pixel by
+// pixel.
 
 #include "oa/ui/frontend_renderer/artless.hpp"
 
@@ -247,6 +248,61 @@ void text_is_placed_scaled_and_clipped() {
     CHECK(renderer::draw_text(none, {100, 100, 1}, font, "AAA", 0, 3, green) == 9);
     CHECK(renderer::draw_text(none, {0, 0, 0}, font, "AAA", 0, 3, green) == 9);
     CHECK(none.rgb == blank(4, 4).rgb);
+}
+
+// Draws a fill, a blend, an outline, a bevel, a mark and text through a placement.
+void draw_every_primitive(renderer::Surface& surface, const renderer::Placement& placement) {
+    const auto font = test_font();
+    renderer::fill_source_rect(surface, placement, {0, 0, 3, 9}, green);
+    renderer::blend_source_rect(surface, placement, {3, 0, 4, 9}, green, 128);
+    renderer::draw_outline(surface, placement, {1, 1, 9, 7}, light);
+    renderer::draw_bevel(surface, placement, {7, 2, 5, 5}, light, dark);
+    renderer::draw_mark(surface, placement, renderer::oa_mark_thin, 2, 2, green);
+    static_cast<void>(renderer::draw_text(surface, placement, font, "AgA", 3, 6, dark));
+}
+
+void a_clip_keeps_every_primitive_inside_it() {
+    for (const int32_t scale : {1, 2}) {
+        const renderer::Placement whole{1, 2, scale};
+        auto unclipped =
+            blank(static_cast<uint32_t>(14 * scale), static_cast<uint32_t>(12 * scale));
+        draw_every_primitive(unclipped, whole);
+
+        // Clipped to source columns 2 to 7 and rows 3 to 6: the same pixels
+        // inside the clip's blocks, and nothing outside them.
+        const renderer::SourceRect clip{2, 3, 6, 4};
+        renderer::Placement clipped_placement = whole;
+        clipped_placement.clip = clip;
+        auto clipped = blank(unclipped.width, unclipped.height);
+        draw_every_primitive(clipped, clipped_placement);
+        std::size_t drawn = 0;
+        for (uint32_t y = 0; y < clipped.height; ++y)
+            for (uint32_t x = 0; x < clipped.width; ++x) {
+                const int32_t source_x = (static_cast<int32_t>(x) - whole.x) / scale;
+                const int32_t source_y = (static_cast<int32_t>(y) - whole.y) / scale;
+                const bool in_clip = static_cast<int32_t>(x) >= whole.x &&
+                                     static_cast<int32_t>(y) >= whole.y && source_x >= clip.x &&
+                                     source_y >= clip.y && source_x < clip.x + clip.width &&
+                                     source_y < clip.y + clip.height;
+                const renderer::Rgb want = in_clip ? pixel(unclipped, x, y) : black;
+                CHECK(pixel(clipped, x, y) == want);
+                drawn += in_clip && want != black ? 1U : 0U;
+            }
+        CHECK(drawn != 0);
+
+        // A clip the drawing does not meet draws nothing; an empty clip
+        // clips to the surface alone.
+        renderer::Placement apart = whole;
+        apart.clip = {40, 40, 3, 3};
+        auto none = blank(unclipped.width, unclipped.height);
+        draw_every_primitive(none, apart);
+        CHECK(none.rgb == blank(unclipped.width, unclipped.height).rgb);
+        renderer::Placement empty = whole;
+        empty.clip = {2, 3, 0, 4};
+        auto all = blank(unclipped.width, unclipped.height);
+        draw_every_primitive(all, empty);
+        CHECK(all.rgb == unclipped.rgb);
+    }
 }
 
 // A palette whose colour i is grey i, so its brightness is 1000 * i.
@@ -516,6 +572,7 @@ int main(int argc, char** argv) {
     outline_rings_the_inside();
     text_draws_its_glyphs_in_one_colour();
     text_is_placed_scaled_and_clipped();
+    a_clip_keeps_every_primitive_inside_it();
     text_fonts_keep_the_shading_and_drop_the_ring();
     marks_draw_their_set_pixels();
     if (failures != 0)

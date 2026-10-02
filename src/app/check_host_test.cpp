@@ -4,10 +4,10 @@
 // The check host (check_host.hpp): its header stands alone, its table holds
 // a context and eighteen entries, all null until check_host() sets them, and
 // its screen id is the screen registry's; and the parts of it that need no
-// running game: the left-button pointer events it makes at canvas points,
-// with and without a renderer that shows the canvas scaled, the gadget it
-// finds by name whatever the case, and the text it hands back only when it
-// fits.
+// running game: the left-button pointer events and the wheel events it
+// makes at canvas points, with and without a renderer that shows the canvas
+// scaled, the gadget it finds by name whatever the case, and the text it
+// hands back only when it fits.
 #include "oa/app/check_host.hpp"
 
 #include "check_host_input.hpp"
@@ -91,8 +91,8 @@ void test_pointer_events_without_window() {
     CHECK(refused);
 }
 
-/// Checks that a renderer showing the canvas at twice its size places the
-/// point at twice its coordinates.
+/// Checks that a renderer showing the canvas at twice its size places a
+/// pointer or wheel event's point at twice its coordinates.
 void test_pointer_events_through_renderer() {
     SDL_Surface* target =
         SDL_CreateSurface(kCanvasWidth * kScale, kCanvasHeight * kScale, SDL_PIXELFORMAT_RGBA32);
@@ -109,9 +109,27 @@ void test_pointer_events_through_renderer() {
             input::pointer_event(renderer, nullptr, SDL_EVENT_MOUSE_BUTTON_DOWN, 100, 50, 1);
         CHECK(press.button.x == 100.0F * kScale && press.button.y == 50.0F * kScale);
         CHECK(press.button.windowID == 0);
+        const auto wheel = input::wheel_event(renderer, nullptr, 100, 50, 1.0F);
+        CHECK(wheel.wheel.mouse_x == 100.0F * kScale && wheel.wheel.mouse_y == 50.0F * kScale);
+        CHECK(wheel.wheel.windowID == 0);
         SDL_DestroyRenderer(renderer);
     }
     SDL_DestroySurface(target);
+}
+
+/// Checks the wheel events made without a renderer: the canvas point is the
+/// event's, the window id 0, and the turn the notches given.
+void test_wheel_events_without_window() {
+    const auto away = input::wheel_event(nullptr, nullptr, 320, 240, 1.0F);
+    CHECK(away.type == SDL_EVENT_MOUSE_WHEEL);
+    CHECK(away.wheel.windowID == 0);
+    CHECK(away.wheel.direction == SDL_MOUSEWHEEL_NORMAL);
+    CHECK(away.wheel.x == 0.0F && away.wheel.y == 1.0F);
+    CHECK(away.wheel.mouse_x == 320.0F && away.wheel.mouse_y == 240.0F);
+
+    const auto toward = input::wheel_event(nullptr, nullptr, 0, 479, -0.25F);
+    CHECK(toward.wheel.y == -0.25F);
+    CHECK(toward.wheel.mouse_x == 0.0F && toward.wheel.mouse_y == 479.0F);
 }
 
 /// Checks the gadget found by name, whatever the case.
@@ -149,6 +167,7 @@ int main() {
     test_empty_table();
     test_pointer_events_without_window();
     test_pointer_events_through_renderer();
+    test_wheel_events_without_window();
     test_find_gadget();
     test_copy_text();
     if (failures != 0) {

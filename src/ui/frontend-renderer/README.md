@@ -99,8 +99,10 @@ dialog and its OA button on the RGB surface in flat colours. Everything is
 given in source pixels (the 640x480 screen) and drawn through a `Placement`,
 which puts source pixel (0, 0) at a surface pixel and draws each source pixel
 as a square block of `scale` surface pixels; a scale below 1 draws nothing.
-Every primitive clips to the surface, and a surface whose pixels do not fill
-its size is left as it is.
+Every primitive clips to the surface, and to the placement's `clip`, a
+rectangle of source pixels, when it is not empty; the settings dialog clips
+the rows of a section that scrolls this way. A surface whose pixels do not
+fill its size is left as it is.
 
 - `fill_source_rect` and `blend_source_rect` fill or blend a rectangle as
   `blend_rect` does; a fill one pixel high or wide is a hairline, and a
@@ -124,7 +126,8 @@ its size is left as it is.
   letters "OA" of the OA mark.
 
 `artless_test.cpp` (`frontend-artless-draw`) checks every primitive pixel by
-pixel at several placements and scales, clipping included, against synthetic
-fonts; with the installed game (`frontend-artless-draw-data`), it checks that
-text in `hattfont12` and `hattfont11` covers exactly what `raster_text`
-covers and blends each pixel at its ink.
+pixel at several placements and scales, clipping to the surface and to a
+placement's clip included, against synthetic fonts; with the installed game
+(`frontend-artless-draw-data`), it checks that text in `hattfont12` and
+`hattfont11` covers exactly what `raster_text` covers and blends each pixel
+at its ink.

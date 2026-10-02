@@ -192,6 +192,9 @@ int Runtime::EngineSettingsMenuHost::dialog_event(ScreenContext* context, void*)
         if (input.button == SDL_BUTTON_LEFT)
             action = settings::dialog_pointer_up(*dialog, x, y);
         break;
+    case ScreenInputKind::wheel:
+        action = settings::dialog_wheel(*dialog, x, y, input.wheel_y);
+        break;
     case ScreenInputKind::key_down:
         if (const auto key = engine_settings_dialog_key(input.key, input.modifiers)) {
             action = settings::dialog_key(*dialog, *key);

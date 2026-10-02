@@ -15,6 +15,8 @@
 #include "oa/ui/frontend_renderer.hpp"
 #include "oa/ui/frontend_renderer/artless.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -48,6 +50,9 @@ enum class Page : uint8_t {
     developer,   ///< Developer, after a divider
 };
 
+/// The number of sections.
+inline constexpr std::size_t page_count = 5;
+
 /// The settings, as the dialog's rows show them.
 enum class Setting : uint8_t {
     path_search,       ///< Pathfinding cycles: a slider
@@ -63,22 +68,39 @@ enum class Setting : uint8_t {
 
 /// Returns the settings a section shows, top to bottom.
 ///
+/// A section holds any number of rows: when they are taller than the space
+/// under its heading, its rows scroll there.
+///
 /// @param page the section
-/// @return one to three settings
+/// @return one or more settings
 [[nodiscard]] std::span<const Setting> page_settings(Page page) noexcept;
+
+// Every control has a number: the sections' entries, then the footer's
+// buttons, then the scroll bar, then the open section's rows, which have no
+// upper end, so a row never takes a fixed control's number.
 
 /// No control: what Dialog::hovered, pressed and focused hold when they name none.
 inline constexpr int32_t no_control = -1;
 /// The first section's entry in the list; the others follow in Page order.
 inline constexpr int32_t first_page_control = 0;
-/// The open section's first row's control; the next rows' follow it.
-inline constexpr int32_t first_row_control = 5;
 /// Restore defaults.
-inline constexpr int32_t restore_control = 8;
+inline constexpr int32_t restore_control = 5;
 /// Cancel.
-inline constexpr int32_t cancel_control = 9;
+inline constexpr int32_t cancel_control = 6;
 /// OK.
-inline constexpr int32_t ok_control = 10;
+inline constexpr int32_t ok_control = 7;
+/// The open section's scroll bar, shown while its rows are taller than the
+/// space they scroll in. It takes no keyboard focus.
+inline constexpr int32_t scroll_bar_control = 8;
+/// The open section's first row's control; the next rows' follow it, one
+/// for each row the section has.
+inline constexpr int32_t first_row_control = 9;
+static_assert(
+    first_page_control + static_cast<int32_t>(page_count) <= restore_control &&
+        restore_control < cancel_control && cancel_control < ok_control &&
+        ok_control < scroll_bar_control && scroll_bar_control < first_row_control,
+    "the sections' entries come first, then the footer's buttons, the scroll bar and the rows"
+);
 
 /// Returns the control of a section's entry in the list.
 ///
@@ -90,21 +112,25 @@ inline constexpr int32_t ok_control = 10;
 
 /// The keys the dialog answers to; a host gives the platform's keys these meanings.
 enum class DialogKey : uint8_t {
-    enter,    ///< OK
-    escape,   ///< Cancel
-    up,       ///< the focus to the control above
-    down,     ///< the focus to the control below
-    left,     ///< the focused control one step down: Off, a lower value
-    right,    ///< the focused control one step up: On, a higher value
-    space,    ///< presses the focused button or flips the focused switch
-    tab,      ///< the focus to the next control
-    back_tab, ///< the focus to the previous control
+    enter,     ///< OK
+    escape,    ///< Cancel
+    up,        ///< the focus to the control above
+    down,      ///< the focus to the control below
+    left,      ///< the focused control one step down: Off, a lower value
+    right,     ///< the focused control one step up: On, a higher value
+    space,     ///< presses the focused button or flips the focused switch
+    tab,       ///< the focus to the next control
+    back_tab,  ///< the focus to the previous control
+    page_up,   ///< scrolls the open section up by most of its view
+    page_down, ///< scrolls the open section down by most of its view
+    home,      ///< scrolls the open section to its top
+    end,       ///< scrolls the open section to its end
 };
 
 /// What an event asks of the host.
 enum class DialogAction : uint8_t {
     none,      ///< nothing
-    redraw,    ///< only the dialog's look changed: a hover, the focus, a press or the section
+    redraw,    ///< only its look changed: a hover, the focus, a press, a scroll or the section
     changed,   ///< Dialog::chosen changed: put it in effect and redraw
     accepted,  ///< OK: keep Dialog::chosen in effect, save it and close the dialog
     cancelled, ///< Cancel: put Dialog::opened back in effect and close the dialog
@@ -117,8 +143,28 @@ enum class ButtonLook : uint8_t {
     pressed, ///< a press on it is held
 };
 
+/// A section of a check's own, shown in place of a section's rows: the rows
+/// it holds, and how each is locked. It lets the dialog's tests and the
+/// game's own checks give a section more rows than the view under its
+/// heading holds, and lock any row. A host never sets one.
+struct SectionHooks {
+    void* context{}; ///< passed back to each function
+    /// Returns the settings a section shows, top to bottom, in place of
+    /// page_settings(page); the span stays valid while the hooks are set.
+    /// Null shows page_settings(page).
+    std::span<const Setting> (*settings)(void* context, Page page){};
+    /// Returns a setting's lock, given the one Dialog::locks puts on it;
+    /// null keeps that one.
+    Lock (*lock)(void* context, Setting setting, Lock lock){};
+    /// Tells whether a setting's hint lines are its status: a locked switch
+    /// whose hint lines are its status shows its lock where the switch was,
+    /// and only its label line fades. Null leaves it as the dialog has it.
+    bool (*hint_is_status)(void* context, Setting setting){};
+};
+
 /// One open dialog. A host reads opened, chosen, defaults, restored and
-/// page; the members after them are the dialog's own.
+/// page; section_hooks is set only by tests and checks; the other members
+/// after them are the dialog's own.
 struct Dialog {
     EngineSettings opened{};      ///< in effect as it opened; Cancel puts them back
     EngineSettings chosen{};      ///< what it shows; in effect as they change
@@ -130,7 +176,22 @@ struct Dialog {
     int32_t hovered{no_control};  ///< the control under the pointer
     int32_t pressed{no_control};  ///< the control a held press is on
     int32_t focused{no_control}; ///< the control with the keyboard focus; shown once a key moves it
-    bool dragging{};             ///< the held press drags a slider's knob
+    bool dragging{};             ///< the held press drags a slider's knob or the scroll bar's thumb
+    /// Each section's scroll offset, in source pixels from its top; clamped
+    /// to the section's limit wherever it is used. Every section starts at
+    /// its top when the dialog opens.
+    std::array<int32_t, page_count> scroll{};
+    /// The part of a source pixel the wheel has turned and not yet
+    /// scrolled; negative towards the section's top.
+    float wheel_rows{};
+    /// The pixel row of the scroll bar's thumb, from the thumb's top, that a
+    /// held press on the bar holds.
+    int32_t scroll_grab{};
+    bool pointer_known{}; ///< the dialog has had a pointer event
+    int32_t pointer_x{};  ///< the last pointer event's column, in source pixels
+    int32_t pointer_y{};  ///< the last pointer event's row, in source pixels
+    /// A check's own section in place of the dialog's; null for the dialog's.
+    const SectionHooks* section_hooks{};
 };
 
 /// The font a text of the dialog is drawn in.
@@ -151,8 +212,10 @@ struct LayoutPart {
 
 /// Returns the parts the dialog draws now: the header's texts, the list's
 /// entries, the open section's heading, labels, hints, locks, controls and
-/// values, and the footer's buttons. No two overlap, and each lies inside
-/// the dialog's edge.
+/// values, the scroll bar while the section scrolls, and the footer's
+/// buttons. No two overlap, and each lies inside the dialog's edge. Of the
+/// open section's rows only the parts that lie wholly in its view are
+/// listed; a part the view cuts is drawn but not listed.
 ///
 /// @param dialog the dialog
 /// @return the parts
@@ -193,7 +256,10 @@ void open_dialog(
     Page page
 );
 
-/// Moves the pointer: hovers a control, or drags a held slider's knob.
+/// Moves the pointer: hovers a control, or drags what a held press holds. A
+/// slider's knob follows the pointer's column only; the scroll bar's thumb
+/// follows its row only, wherever the pointer goes, and the open section
+/// scrolls with the thumb.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -201,7 +267,13 @@ void open_dialog(
 /// @return what the move asks of the host
 [[nodiscard]] DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y);
 
-/// Presses the pointer's button: a press on a control holds it.
+/// Presses the pointer's button: a press on a control holds it, and moves
+/// the keyboard focus to it once a key has shown the focus. A press on a
+/// slider moves its knob to the nearest stop. A press on the scroll bar
+/// holds the bar and leaves the focus where it is: on the thumb it grabs
+/// the thumb where it is pressed; on the well above or below the thumb, the
+/// thumb's middle jumps to the pointer, the section scrolls with it and the
+/// drag starts there.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -220,10 +292,31 @@ void open_dialog(
 
 /// Takes a key.
 ///
+/// Page Up, Page Down, Home and End scroll the open section whatever has
+/// the focus, and never move or show it. A key that moves the focus onto a
+/// row, or acts on a focused row, first scrolls the least that shows the
+/// row whole.
+///
 /// @param[in,out] dialog the dialog
 /// @param key the key's meaning
 /// @return what the key asks of the host
 [[nodiscard]] DialogAction dialog_key(Dialog& dialog, DialogKey key);
+
+/// Turns the mouse wheel over the dialog: scrolls the open section 24 source
+/// pixels a notch, when its rows are taller than the space they scroll in.
+/// A fraction of a pixel carries over to the next turn; what is carried
+/// towards an end the section has reached is dropped, and all of it when
+/// another section shows. A turn outside the dialog, or while a press is
+/// held, does nothing.
+///
+/// @param[in,out] dialog the dialog
+/// @param x the pointer's column, in source pixels from the dialog's left edge
+/// @param y the pointer's row, in source pixels from the dialog's top edge
+/// @param notches the wheel's turn, positive away from the player, which
+///     scrolls towards the section's top
+/// @return what the turn asks of the host: DialogAction::redraw when the
+///     section scrolled, else DialogAction::none
+[[nodiscard]] DialogAction dialog_wheel(Dialog& dialog, int32_t x, int32_t y, float notches);
 
 /// Tells whether a point lies on the dialog.
 ///
