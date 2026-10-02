@@ -209,8 +209,19 @@ void Runtime::present_indexed_frame(
             out[x] = output.texels[row[x]];
     }
     SDL_UnlockTexture(output.texture);
-    if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer) ||
-        !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))
+    if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
+        throw_present_error("SDL render");
+    // Each frame the sink presents is a new picture.
+    bool drawn = false;
+    if (accelerated_presentation()) {
+        try {
+            draw_accelerated_screen(output.texture, width, height, ++accelerated_.screen_revision);
+            drawn = true;
+        } catch (const AccelerationError& error) {
+            drop_acceleration(error.what());
+        }
+    }
+    if (!drawn && !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))
         throw_present_error("SDL render");
     present_software_cursor();
     capture_render_target();

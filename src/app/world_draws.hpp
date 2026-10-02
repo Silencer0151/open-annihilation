@@ -284,6 +284,13 @@ struct WorldFrameDraw {
     oa::present::model::ModelDisplay* display{};
     const oa::Sprite* projectile_shadow{}; ///< FX.GAF "shadow" frame 0; no data for none
     alignas(4) oa::Rect32 debris_view{};   ///< the rectangle debris origins are culled to
+    /// Pixels across and down a frame line (a laser, lightning or a debug
+    /// beam) is drawn thick, so that it stays visible once the frame is
+    /// reduced to the screen; 1 draws it as the game always has.
+    int32_t line_thickness{1};
+    /// Pixels across and down a selection line is drawn thick in the model
+    /// bridge, at one pixel per map pixel; 1 draws it as the game always has.
+    int32_t bridge_line_thickness{1};
 };
 
 /// The buffers one band draws with, apart from the bridge band.

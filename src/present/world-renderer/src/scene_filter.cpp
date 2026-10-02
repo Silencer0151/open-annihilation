@@ -491,4 +491,15 @@ AreaError resample_nearest_rgb24(
     return AreaError::none;
 }
 
+int32_t scene_line_thickness(float draw_scale, float zoom) noexcept {
+    if (!(zoom > 0.0F) || !(draw_scale > zoom))
+        return 1;
+    return std::max<int32_t>(
+        1,
+        static_cast<int32_t>(
+            std::lround(static_cast<double>(draw_scale) / static_cast<double>(zoom))
+        )
+    );
+}
+
 } // namespace oa::present::world_renderer

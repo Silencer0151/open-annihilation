@@ -255,6 +255,7 @@ void check_director_options(Options& options) {
         {options.check_scroll_bars, "--check-scroll-bars"},
         {options.check_briefing_narration, "--check-briefing-narration"},
         {options.check_match_layers, "--check-match-layers"},
+        {options.check_render_tiers, "--check-render-tiers"},
         {options.check_match_orders, "--check-match-orders"},
         {options.check_factory_orders, "--check-factory-orders"},
         {options.check_download_builds, "--check-download-builds"},
@@ -479,6 +480,8 @@ namespace {
             result.check_briefing_narration = true;
         else if (argument == "--check-match-layers")
             result.check_match_layers = true;
+        else if (argument == "--check-render-tiers")
+            result.check_render_tiers = true;
         else if (argument == "--check-match-orders")
             result.check_match_orders = true;
         else if (argument == "--check-factory-orders")
@@ -539,13 +542,14 @@ namespace {
                    "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
+                   "[--check-render-tiers [--force-capable]] "
                    "[--check-match-orders] [--check-factory-orders] "
                    "[--check-download-builds] [--check-side-column] [--check-kill-board] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
                    "[--check-pointer-interfaces] "
                    "[--check-multiplayer-menu] "
                    "[--check-load-save] [--check-frontend-controls] "
-                   "[--check-scroll-bars] [--check-engine-settings] "
+                   "[--check-scroll-bars] [--check-engine-settings [--force-capable]] "
                    "[--check-renderer-ladder [--render-fault POINT[@FRAME]]] "
                    "[--check-briefing-narration] [--check-director-view] "
                    "[--check-director-render] [--check-interpolation] "
@@ -555,7 +559,6 @@ namespace {
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
                    "[--hardware-acceleration | --no-hardware-acceleration] "
-                   "[--force-capable] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -633,8 +636,6 @@ namespace {
         throw std::runtime_error(
             "--hardware-acceleration and --no-hardware-acceleration cannot be used together"
         );
-    if (result.force_capable && !result.check_engine_settings)
-        throw std::runtime_error("--force-capable needs --check-engine-settings");
     if (result.campaign_mission.has_value() != !result.campaign.empty())
         throw std::runtime_error("--campaign and --mission are used together");
     if (result.campaign_restart_tick && !result.campaign_mission)
@@ -665,16 +666,26 @@ namespace {
     check_director_options(result);
     if (result.busy_combat && result.combat_units == 0)
         throw std::runtime_error("--busy-combat needs --combat");
+    if (result.check_render_tiers && result.headless_check)
+        throw std::runtime_error(
+            "--check-render-tiers draws in a window and cannot be used with --headless-check"
+        );
+    if (result.force_capable && !result.check_render_tiers && !result.check_engine_settings)
+        throw std::runtime_error(
+            "--force-capable is accepted only with --check-render-tiers and "
+            "--check-engine-settings"
+        );
     if (result.render_fault && !result.check_renderer_ladder)
         throw std::runtime_error("--render-fault needs --check-renderer-ladder");
     result.fixed_clock =
-        result.headless_check || result.check_match_layers || result.check_match_dialogs ||
-        result.check_load_save || result.check_frontend_controls || result.check_scroll_bars ||
-        result.check_engine_settings || result.check_renderer_ladder || result.check_match_orders ||
-        result.check_factory_orders || result.check_download_builds || result.check_side_column ||
-        result.check_kill_board || result.check_patrol_reclaim || result.check_reclaim_cursor ||
-        result.check_pointer_interfaces || result.check_director_view ||
-        result.check_director_render || result.check_interpolation || result.check_unit_playout;
+        result.headless_check || result.check_match_layers || result.check_render_tiers ||
+        result.check_match_dialogs || result.check_load_save || result.check_frontend_controls ||
+        result.check_scroll_bars || result.check_engine_settings || result.check_renderer_ladder ||
+        result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
+        result.check_side_column || result.check_kill_board || result.check_patrol_reclaim ||
+        result.check_reclaim_cursor || result.check_pointer_interfaces ||
+        result.check_director_view || result.check_director_render || result.check_interpolation ||
+        result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

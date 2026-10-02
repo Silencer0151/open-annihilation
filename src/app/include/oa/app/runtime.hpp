@@ -36,6 +36,7 @@
 #include "oa/present/surface.hpp"
 #include "oa/present/unit_playout.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
+#include "oa/present/world_renderer/scene_filter.hpp"
 #include "oa/present/world_renderer/unit_renderer.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
@@ -4094,8 +4095,10 @@ class Runtime final : public menu::Host,
     /// Returns how the frame draws the battlefield (oa::app::world_scaling).
     ///
     /// Every frame draws at the zoom into the world layer itself, as the game
-    /// has always drawn it; only a check asks for another draw scale
-    /// (scene_draw_scale_), drawn apart.
+    /// has always drawn it; a check may ask for another draw scale
+    /// (scene_draw_scale_), drawn apart. A match frame the accelerated
+    /// presentation draws (accelerated_presentation()) draws as
+    /// accelerated_world_scaling gives at its rung's budget and magnify.
     ///
     /// @return the draw scale and the scene, from the live layout and zoom
     [[nodiscard]] WorldScaling world_scaling() const;
@@ -4314,7 +4317,195 @@ class Runtime final : public menu::Host,
 
     /// Presents the match as layers through SDL: the HUD strips and the world layer, the dialog
     /// layer and the software cursor.
+    ///
+    /// With the accelerated presentation on (accelerated_presentation()),
+    /// presents through present_accelerated_match_layers once the dialog
+    /// layer is composed; when that fails, the accelerated presentation is
+    /// dropped (drop_acceleration) and the frame presented as the standard
+    /// tier presents it.
     void present_match_layers();
+
+    /// Draws the layers over the HUD and world layers and presents the frame:
+    /// a placed dialog's part over the side column, the OA settings layer, the
+    /// dialog layer, the software cursor, the capture, and the present, with
+    /// its time.
+    ///
+    /// Throws PresentError when SDL refuses a call.
+    ///
+    /// @param frame_format the match layers' pixel format (opaque_layer_format)
+    /// @param dialogs the dialog layer holds a dialog (compose_match_dialog_layer)
+    /// @param upload_start when the frame's uploads started
+    /// @param present_start when its draws started
+    void finish_match_layers(
+        SDL_PixelFormat frame_format,
+        bool dialogs,
+        std::chrono::steady_clock::time_point upload_start,
+        std::chrono::steady_clock::time_point present_start
+    );
+
+    /// How the accelerated presentation stands: switched on by its host, at a
+    /// rung of the step-down ladder, with the card's textures, prescale
+    /// targets and buffers it made, and what the last match frame drew.
+    struct AcceleratedPresentation {
+        bool on{}; ///< switched on (switch_accelerated_presentation)
+        /// A picture-keeping reader draws the world as the standard tier does
+        /// (ensure_screen_world).
+        bool suspended{};
+        /// The rung: the scene budget, magnify on or off, the chrome's filter
+        /// and the card's magnification.
+        render_policy::LadderState rung{};
+        uint32_t texture_limit{}; ///< the renderer host's texture limit in texels; 0 for none
+        WorldScaling frame{};     ///< how the last match frame drew the battlefield
+        float frame_alpha{1.0F};  ///< the presentation fraction the last match frame drew
+        /// The last match frame presented had its scene magnified by the card.
+        bool magnified{};
+        /// The area pass's weights, kept while the zoom and the battlefield do not change.
+        oa::present::world_renderer::AreaPlan area_plan;
+        /// The nearest picture of a magnified frame's scene, under its painters.
+        std::vector<uint8_t> base;
+        /// What a magnified frame's painters changed, as ARGB8888 words.
+        std::vector<uint8_t> overlay;
+        /// The overlay's bands of xrgb_band_rows rows holding an opaque pixel
+        /// this frame, and as last uploaded.
+        std::vector<uint8_t> opaque_bands;
+        std::vector<uint8_t> uploaded_bands;
+        bool overlay_uploaded{};        ///< the overlay's texture holds an uploaded overlay
+        TiledTexture scene;             ///< the magnified scene, made at its largest
+        TiledTexture overlay_texture;   ///< the overlay, at the battlefield's size
+        PrescaleTarget world_prescale;  ///< the scene's prescale target, at its largest
+        PrescaleTarget hud_prescale;    ///< the HUD layer's prescale target
+        PrescaleTarget screen_prescale; ///< the front end's and loading screen's, freed in a match
+        int layout_width{};             ///< the match layout the match textures were made for
+        int layout_height{};            ///< its height
+        /// Bumped at each paint of the HUD layer, which every match frame
+        /// paints, so that the HUD's prescale target is drawn again on every
+        /// frame the loop presents and on none presented without a paint.
+        uint64_t hud_revision{};
+        /// Bumped at each paint of the front end's frame, which every frame
+        /// the loop presents paints but one whose panel keeps the frame shown.
+        uint64_t screen_revision{};
+        ScaledWorldCounts counts; ///< what the card was asked to make and draw
+    };
+
+    /// Switches the accelerated presentation on, at a rung of the step-down
+    /// ladder, or off, for every frame from the next. The renderer host's
+    /// texture limit (render_texture_limit) is taken when it is switched on.
+    /// Off frees every texture and buffer it made. Nothing switches it on but
+    /// its host: a check, until the setting and the flags reach it.
+    ///
+    /// @param on true to switch it on
+    /// @param rung the rung it draws at
+    void switch_accelerated_presentation(bool on, const render_policy::LadderState& rung);
+
+    /// Says whether frames are presented in the accelerated tier: it is on,
+    /// there is a renderer, the run is not headless and no director draws.
+    ///
+    /// @return true when the accelerated presentation draws the frame
+    [[nodiscard]] bool accelerated_presentation() const noexcept;
+
+    /// Drops the accelerated presentation for the rest of the run after a
+    /// call only it makes failed: logs the reason once and frees every texture
+    /// and buffer it made, so that frames are presented as the standard tier
+    /// presents them.
+    ///
+    /// @param reason what failed
+    void drop_acceleration(const std::string& reason);
+
+    /// Frees every texture and buffer the accelerated presentation made.
+    void free_accelerated_presentation() noexcept;
+
+    /// Frees the accelerated presentation's match textures, prescale targets
+    /// and buffers, as a match ends or the presentation is switched.
+    void free_accelerated_match_textures() noexcept;
+
+    /// Frees what the accelerated presentation made for the match's layout,
+    /// as the layout changes: the scene's tiles, the overlay's texture and
+    /// buffers, and the prescale targets of the scene and the HUD layer. The
+    /// base and the area pass's weights, which the frame just drawn for the
+    /// new layout filled, are kept for it.
+    void free_accelerated_layout_textures() noexcept;
+
+    /// Reduces a scene drawn at a draw scale above the zoom to the world
+    /// layer's battlefield picture by the exact area pass, on the drawing
+    /// threads, building the pass's weights when the zoom or the battlefield
+    /// changed.
+    ///
+    /// Throws std::runtime_error when the pass refuses the scene.
+    ///
+    /// @param scene the scene, at least as large as the pass reads
+    void area_filter_scene(const oa::present::world_renderer::Surface& scene);
+
+    /// Makes the accelerated presentation's match textures for the live
+    /// layout, once, at their largest: the scene's tiles at the largest scene
+    /// a magnified frame draws, the overlay at the battlefield's size, and
+    /// the prescale targets of the scene and the HUD layer where the card's
+    /// filter needs them, within the prescale budget; each in tiles beyond
+    /// the renderer's texture limit.
+    ///
+    /// Throws AccelerationError when the card refuses one.
+    void ensure_accelerated_match_textures();
+
+    /// Returns how the card scales a layer at a scale: NEAREST at a
+    /// whole-number scale, else the rung's filter, with the prescale factor
+    /// a target already made allows.
+    ///
+    /// @param scale the scale, in window pixels per layer pixel
+    /// @param width the layer's width in texels
+    /// @param height the layer's height in texels
+    /// @param target the prescale target the layer would be drawn into
+    /// @return the filter and the factor
+    [[nodiscard]] CardScale accelerated_card_scale(
+        double scale, uint32_t width, uint32_t height, const PrescaleTarget& target
+    ) const;
+
+    /// Returns the prescale factor the rung gives a layer at a scale, within
+    /// what is left of the prescale budget. A target beyond the renderer's
+    /// texture limit is split into tiles, so the limit does not lower it.
+    ///
+    /// @param scale the scale, in window pixels per layer pixel
+    /// @param width the layer's width in texels
+    /// @param height the layer's height in texels
+    /// @param charged pixels of the prescale targets already alive
+    /// @return the factor; 1 for no prescale target
+    [[nodiscard]] uint32_t accelerated_prescale_factor(
+        double scale, uint32_t width, uint32_t height, uint64_t charged
+    ) const;
+
+    /// Presents the match layers in the accelerated tier: the HUD strips by
+    /// the chrome's filter; the world layer 1:1 as the standard tier draws
+    /// it, or, for a magnified frame, the scene magnified by the card with
+    /// the overlay of what the painters changed laid over it 1:1; then
+    /// finish_match_layers. Frees the front end's prescale target.
+    ///
+    /// Throws AccelerationError when a call only the accelerated tier makes
+    /// fails, and PresentError when another SDL call does.
+    ///
+    /// @param dialogs the dialog layer holds a dialog (compose_match_dialog_layer)
+    void present_accelerated_match_layers(bool dialogs);
+
+    /// Draws a letterboxed 640x480-style frame's texture by the chrome's
+    /// filter at the letterbox's scale, from its prescale target where the
+    /// filter is sharp-bilinear: the front end's and the loading screen's.
+    ///
+    /// Throws AccelerationError when a call only the accelerated tier makes fails.
+    ///
+    /// @param texture the frame's texture, whose scale mode is NEAREST
+    /// @param width the texture's width in texels
+    /// @param height the texture's height in texels
+    /// @param revision the frame's revision: a new one draws it into the prescale target again
+    void draw_accelerated_screen(SDL_Texture* texture, int width, int height, uint64_t revision);
+
+    /// Draws one standard-tier world for the moment the last frame showed, the
+    /// same tick and fraction, when the accelerated presentation scaled the
+    /// world: the picture a screenshot, a film frame, the load and save
+    /// backdrop, the briefing's backdrop and the end screen keep. The units
+    /// drawn are counted for that draw alone and the frame's counts kept,
+    /// and the HUD's resource readout is not eased again, so the match's
+    /// Game.resource_readout stays as the frame left it. Makes no SDL call.
+    /// Does nothing for a frame the standard tier drew.
+    ///
+    /// Throws std::runtime_error when the world cannot be drawn.
+    void ensure_screen_world();
 
     /// Presents the software cursor over the match layers at the pointer.
     void present_software_cursor();
@@ -5588,6 +5779,39 @@ class Runtime final : public menu::Host,
     /// letterboxed area, shows its palette colour. Pixels near the software cursor
     /// are not compared. Throws std::runtime_error on a failure.
     void check_loading_sink();
+
+    /// Checks the accelerated presentation over a skirmish, or over the
+    /// campaign mission --campaign and --mission name, for game data with no
+    /// skirmish map (--check-render-tiers).
+    ///
+    /// Skips, with exit code 77, on a machine reporting less than the 2 GiB
+    /// threshold of memory, and on a renderer the probe finds not capable
+    /// unless --force-capable was given. Then, with the accelerated
+    /// presentation switched on at the full scene budget with magnify on:
+    /// zoom 1 at a whole-number chrome scale equals compose_match_frame
+    /// exactly in the battlefield and within 1 in the HUD; zoom 0.5, 0.6 and
+    /// 0.75 by the area pass equal the processor's composition exactly in the
+    /// battlefield; zoom 1.37, 2 and 4 keep within the tolerances of the
+    /// references applied to the scene, then the overlay (on SDL's software
+    /// renderer, of that renderer's own LINEAR, software_linear_rgb24), and
+    /// so does the very first frame at 1.37 and 2.5 after the presentation
+    /// is switched on and after each change of the window's size; a
+    /// whole-tick frame equals the same frame drawn after three between-tick
+    /// frames; the capture at zoom 2 has the window's size and the presented
+    /// picture; at zoom 0.5 and 2, ensure_screen_world gives the standard
+    /// tier's battlefield of the same moment and changes neither the frame's
+    /// counts of units drawn nor Game.resource_readout; at a whole-number
+    /// chrome scale no prescale target is drawn; the HUD's is drawn once on
+    /// each frame the loop presents, which paints the HUD, and not on a
+    /// present without a paint; and through a zoom ease from 0.5 to 4 and
+    /// back no scene, overlay or prescale target is made or destroyed and
+    /// none is drawn at zoom 2. Pictures of one moment at zoom 0.5, 1 and 2.5
+    /// in both tiers go to the report directory as native-render-tiers-*.png.
+    /// Switched off again, every frame equals the standard tier's. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @return 0 when it passed; 77 when it skipped
+    [[nodiscard]] int check_render_tiers();
 
     /// Checks the match presented through SDL layers: every presented frame must equal
     /// compose_match_frame outside the software cursor.
@@ -8535,6 +8759,10 @@ class Runtime final : public menu::Host,
     /// The draw scale a check asks the battlefield's scene to be drawn at,
     /// apart from the world layer (world_scaling()); none draws at the zoom.
     std::optional<float> scene_draw_scale_{};
+    /// The accelerated presentation (switch_accelerated_presentation); off
+    /// unless a check switches it on. Declared after sdl_, so its textures go
+    /// before the renderer.
+    AcceleratedPresentation accelerated_{};
     std::vector<uint8_t> match_fog_grid_{};
     std::vector<int> scale_src_x_{};
     renderer::Surface* overlay_target_ = nullptr;

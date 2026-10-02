@@ -235,6 +235,13 @@ struct Options {
     bool check_briefing_narration = false;
     // Checks the presented match frame against the CPU composition.
     bool check_match_layers = false;
+    // Switches the accelerated presentation on over the main menu and a
+    // skirmish, or the campaign mission --campaign and --mission name, and
+    // checks what it presents against the processor's composition and the
+    // card's references, at zooms and window sizes of its own; skips (exit
+    // code 77) under 2 GiB of memory or on a renderer the probe finds not
+    // capable (<report dir>/native-render-tiers-*.png).
+    bool check_render_tiers = false;
     // Clicks the order page's standing order and toggle buttons through the
     // SDL presenter and checks what they show and what the units do.
     bool check_match_orders = false;
@@ -334,10 +341,12 @@ struct Options {
     // decides the Hardware acceleration setting for the run whatever the
     // settings say, and is never saved; empty when neither was given.
     std::optional<bool> hardware_acceleration;
-    // --force-capable, which only --check-engine-settings takes: the
-    // renderer counts as one the graphics card could scale the frames on,
-    // and neither the environment's render driver nor SDL's software
-    // renderer locks Hardware acceleration or Vertical sync.
+    // --force-capable, which only --check-render-tiers and
+    // --check-engine-settings take: the renderer counts as one the graphics
+    // card could scale the frames on, so that the accelerated tier runs on
+    // SDL's software renderer, and neither the environment's render driver
+    // nor SDL's software renderer locks Hardware acceleration or Vertical
+    // sync. It never lifts the 2 GiB rule.
     bool force_capable = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that

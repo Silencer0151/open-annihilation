@@ -3,13 +3,28 @@
 
 // How a match frame draws the battlefield: the draw scale, the scene pixels
 // per map pixel, apart from the zoom, the screen pixels per map pixel, and
-// the size of the scene the terrain, the draws and the fog go into.
+// the size of the scene the terrain, the draws and the fog go into; and the
+// draw scale and method the accelerated tier draws it at, within its scene
+// budget.
 #pragma once
+
+#include "oa/app/render_policy.hpp"
 
 #include <cstdint>
 #include <optional>
 
 namespace oa::app {
+
+/// How a scene drawn apart from the world layer becomes the battlefield's picture.
+enum class SceneMethod : uint8_t {
+    none,    ///< the scene is the world layer, drawn at the zoom
+    nearest, ///< resampled nearest into the world layer at the zoom
+    area,    ///< averaged into the world layer by the exact area pass, below zoom 1
+    /// Resampled nearest into the world layer, the base the painters after
+    /// the fog paint over; the graphics card magnifies the scene itself, above
+    /// zoom 1, and lays what the painters changed over it.
+    magnify,
+};
 
 /// How a frame draws the battlefield: its draw scale and the scene it draws into.
 ///
@@ -24,33 +39,122 @@ struct WorldScaling {
     float draw_scale{1.0F};
     int32_t scene_width{};  ///< scene columns
     int32_t scene_height{}; ///< scene rows
-    /// The scene is drawn apart from the world layer and resampled nearest
-    /// into it at the zoom; otherwise it is the world layer.
+    /// The scene is drawn apart from the world layer and becomes it by the
+    /// method; otherwise it is the world layer.
     bool apart{};
+    SceneMethod method{SceneMethod::none}; ///< none exactly when the scene is not apart
 };
 
 /// Returns how a frame draws the battlefield at a zoom.
 ///
 /// Without a draw scale the frame draws at the zoom into the world layer
 /// itself, and the scene is the battlefield. A draw scale draws the scene
-/// apart from the world layer. At the zoom that scene is the battlefield's
-/// size; at another scale it covers the battlefield's map pixels at the draw
-/// scale with WorldScaling::margin more columns and rows, rounded up to an
-/// even number of each: even(ceil(battlefield * draw_scale / zoom) + margin)
-/// in each axis. A draw scale that is not above 0 counts as none, and a zoom
-/// that is not above 0 gives the battlefield's size.
+/// apart from the world layer, resampled nearest into it. At the zoom that
+/// scene is the battlefield's size; at another scale it covers the
+/// battlefield's map pixels at the draw scale with WorldScaling::margin more
+/// columns and rows, rounded up to an even number of each:
+/// even(ceil(battlefield * draw_scale / zoom) + margin) in each axis. A draw
+/// scale that is not above 0 counts as none, and a zoom that is not above 0
+/// gives the battlefield's size.
 ///
 /// @param zoom screen pixels per map pixel
 /// @param battlefield_width battlefield columns in screen pixels
 /// @param battlefield_height battlefield rows in screen pixels
 /// @param draw_scale scene pixels per map pixel to draw the scene at apart from the world layer;
 ///        none draws at the zoom
-/// @return the draw scale and the scene
+/// @return the draw scale and the scene, with SceneMethod::nearest when apart
 [[nodiscard]] WorldScaling world_scaling(
     float zoom,
     int32_t battlefield_width,
     int32_t battlefield_height,
     std::optional<float> draw_scale
 ) noexcept;
+
+/// Scene pixels per battlefield pixel the full scene budget allows, k: the
+/// draw scale is at most the zoom times its square root. A placeholder until
+/// the accelerated tier's frames are measured.
+inline constexpr double full_budget_scene_ratio = 4.0;
+/// Most scene pixels the full scene budget allows, P. A placeholder.
+inline constexpr uint64_t full_budget_scene_pixels = uint64_t{1} << 23;
+/// Scene pixels per battlefield pixel the reduced scene budget allows. A placeholder.
+inline constexpr double reduced_budget_scene_ratio = 2.25;
+/// Most scene pixels the reduced scene budget allows. A placeholder.
+inline constexpr uint64_t reduced_budget_scene_pixels = uint64_t{1} << 22;
+/// The zoom over the draw scale above which the area pass is skipped and
+/// the scene drawn at the zoom: the pass would change almost nothing. A
+/// placeholder.
+inline constexpr double area_cut_off = 0.9;
+
+/// Returns the draw scale the accelerated tier draws a zoomed-out battlefield at.
+///
+/// The highest scale within the budget, from the zoom to 1: the zoom times
+/// the square root of the scene pixels per battlefield pixel the budget
+/// allows, and of its most scene pixels over the battlefield's pixels, at
+/// most 1 and at most twice the zoom. The zoom under budget none, and at
+/// zoom 1 and above.
+///
+/// @param zoom screen pixels per map pixel
+/// @param battlefield_width battlefield columns in screen pixels
+/// @param battlefield_height battlefield rows in screen pixels
+/// @param budget the scene budget
+/// @return scene pixels per map pixel
+[[nodiscard]] float accelerated_draw_scale(
+    float zoom,
+    int32_t battlefield_width,
+    int32_t battlefield_height,
+    render_policy::SceneBudget budget
+) noexcept;
+
+/// Returns how the accelerated tier draws the battlefield at a zoom.
+///
+/// Below zoom 1 the scene is drawn at accelerated_draw_scale and averaged
+/// into the world layer by the area pass (SceneMethod::area), unless the
+/// draw scale is the zoom or the zoom over it is above area_cut_off: the
+/// frame then draws at the zoom, as the standard tier does. At zoom 1 the
+/// frame draws as the standard tier does. Above zoom 1 with magnify on, the
+/// scene is drawn at 1 (SceneMethod::magnify); with it off, at the zoom. A
+/// scene drawn apart has world_scaling's size at its draw scale.
+///
+/// @param zoom screen pixels per map pixel
+/// @param battlefield_width battlefield columns in screen pixels
+/// @param battlefield_height battlefield rows in screen pixels
+/// @param budget the scene budget
+/// @param magnify the graphics card magnifies the scene above zoom 1;
+///        false is the step-down's magnify-off rung
+/// @return the draw scale, the scene and its method
+[[nodiscard]] WorldScaling accelerated_world_scaling(
+    float zoom,
+    int32_t battlefield_width,
+    int32_t battlefield_height,
+    render_policy::SceneBudget budget,
+    bool magnify
+) noexcept;
+
+/// The size of a scene.
+struct SceneExtent {
+    int32_t width{};  ///< scene columns
+    int32_t height{}; ///< scene rows
+};
+
+/// Returns the largest scene accelerated_world_scaling gives a magnified
+/// frame of a battlefield, over every zoom above 1, which it gives at a zoom
+/// just above 1: the battlefield with WorldScaling::margin more columns and
+/// rows, rounded up to even sizes.
+///
+/// @param battlefield_width battlefield columns in screen pixels
+/// @param battlefield_height battlefield rows in screen pixels
+/// @return the scene's size
+[[nodiscard]] SceneExtent
+largest_magnified_scene(int32_t battlefield_width, int32_t battlefield_height) noexcept;
+
+/// Returns the scale the area pass reduces a scene drawn at a draw scale by
+/// to the battlefield at a zoom: the zoom over the draw scale in 16.16 fixed
+/// point, rounded up, so that the scene columns and rows the pass reads
+/// never exceed the map pixels the battlefield shows at the draw scale.
+///
+/// @param zoom screen pixels per map pixel, from half the draw scale to it
+/// @param draw_scale scene pixels per map pixel, above 0
+/// @return screen pixels per scene pixel, 16.16, from one half to one
+[[nodiscard]] uint32_t area_scale(float zoom, float draw_scale) noexcept;
 
 } // namespace oa::app

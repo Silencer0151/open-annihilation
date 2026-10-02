@@ -169,6 +169,16 @@ Runtime::live_viewport(uint32_t camera_x, uint32_t camera_y) const {
 }
 
 WorldScaling Runtime::world_scaling() const {
+    // The accelerated presentation draws at its own draw scale, within its
+    // budget; a check's draw scale, and every other frame, as before.
+    if (!scene_draw_scale_ && accelerated_presentation() && screen_ == Screen::match)
+        return accelerated_world_scaling(
+            match_zoom(),
+            match_layout_.battlefield_width(),
+            match_layout_.battlefield_height(),
+            accelerated_.rung.budget,
+            accelerated_.rung.magnify
+        );
     return oa::app::world_scaling(
         match_zoom(),
         match_layout_.battlefield_width(),
@@ -512,6 +522,14 @@ void Runtime::present_match_layers() {
     if (match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
     const bool dialogs = compose_match_dialog_layer();
+    if (accelerated_presentation()) {
+        try {
+            present_accelerated_match_layers(dialogs);
+            return;
+        } catch (const AccelerationError& error) {
+            drop_acceleration(error.what());
+        }
+    }
     const auto frame_format = opaque_layer_format();
     ensure_streaming_texture(
         match_hud_tex_,
@@ -563,6 +581,15 @@ void Runtime::present_match_layers() {
         static_cast<float>(match_world_cpu_.height)
     };
     match_world_tex_.draw(sdl_.renderer, nullptr, &world);
+    finish_match_layers(frame_format, dialogs, upload_start, present_start);
+}
+
+void Runtime::finish_match_layers(
+    SDL_PixelFormat frame_format,
+    bool dialogs,
+    std::chrono::steady_clock::time_point upload_start,
+    std::chrono::steady_clock::time_point present_start
+) {
     // A placed dialog's part over the side column goes over the HUD layer.
     if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
         ensure_streaming_texture(
@@ -753,7 +780,24 @@ void Runtime::present_front_end() {
     }
     if (!SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL render");
-    frontend_texture_.draw(sdl_.renderer, nullptr, nullptr);
+    // The front end's picture goes through the card's filter where it is one
+    // texture; tiles beyond the renderer's limit are drawn as before.
+    bool drawn = false;
+    if (accelerated_presentation() && frontend_texture_.single() != nullptr) {
+        try {
+            draw_accelerated_screen(
+                frontend_texture_.single(),
+                output_texture_w_,
+                output_texture_h_,
+                accelerated_.screen_revision
+            );
+            drawn = true;
+        } catch (const AccelerationError& error) {
+            drop_acceleration(error.what());
+        }
+    }
+    if (!drawn)
+        frontend_texture_.draw(sdl_.renderer, nullptr, nullptr);
     capture_render_target();
     if (render_fault_due(RenderFaultPoint::present))
         throw PresentError("injected present error");

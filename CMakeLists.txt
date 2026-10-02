@@ -286,13 +286,16 @@ if(OA_BUILD_PLATFORM)
   # drivers in SDL's own order, logging each refusal, with the framebuffer
   # hint set before SDL's software renderer, or by SDL's own call under
   # SDL_RENDER_DRIVER; then described and logged (graphics_report.hpp);
-  # made again after a failure while the game runs; and its window-size
-  # textures, as tiles beyond its texture limit (scaled_world.hpp).
+  # made again after a failure while the game runs; its window-size
+  # textures, as tiles beyond its texture limit, and the accelerated tier's
+  # drawing on the card (scaled_world.hpp), with the frames' conversion for
+  # the textures (xrgb_conversion.hpp).
   add_library(oa-app-render-host src/app/render_host.cpp src/app/graphics_report.cpp
-    src/app/scaled_world.cpp)
+    src/app/scaled_world.cpp src/app/xrgb_conversion.cpp)
   add_library(oa::app::render_host ALIAS oa-app-render-host)
   target_link_libraries(oa-app-render-host PUBLIC oa-app-headers oa-app-render-policy
-    oa-platform-render-probe PRIVATE oa-base-float-precision SDL3::SDL3 oa-options)
+    oa-platform-render-probe oa-platform-job-pool oa-present-world-renderer PRIVATE
+    oa-base-float-precision SDL3::SDL3 oa-options)
   if(BUILD_TESTING)
     add_executable(oa-app-video-capture-test src/app/video_capture_test.cpp)
     target_link_libraries(oa-app-video-capture-test PRIVATE oa-app-video-capture oa-options)
@@ -321,12 +324,19 @@ if(OA_BUILD_PLATFORM)
     # Window-size textures beyond the renderer's texture limit, as tiles with
     # gutters, on SDL's software renderer over a surface: tiles under a
     # limit of 1024 read back as one texture with no limit does, uploaded,
-    # updated, blended and drawn in part.
+    # updated, blended and drawn in part. Then the accelerated tier's drawing
+    # on the card, on the same renderer: the battlefield's scene magnified
+    # and the interface scaled, read back against that renderer's own
+    # LINEAR, modelled on the processor, within 2 levels; NEAREST exact at
+    # whole-number scales; PIXELART as NEAREST, as that renderer gives it;
+    # scenes and prescale targets in tiles with their gutters, drawing as
+    # one texture does; the overlay over a picture; and no prescale target
+    # made or drawn again needlessly.
     add_executable(oa-app-scaled-world-test src/app/scaled_world_test.cpp)
-    target_link_libraries(oa-app-scaled-world-test PRIVATE oa-app-render-host SDL3::SDL3
-      oa-test-support oa-options)
+    target_link_libraries(oa-app-scaled-world-test PRIVATE oa-app-render-host
+      oa-present-world-renderer SDL3::SDL3 oa-test-support oa-options)
     add_test(NAME app-scaled-world-software COMMAND oa-app-scaled-world-test)
-    set_tests_properties(app-scaled-world-software PROPERTIES TIMEOUT 60
+    set_tests_properties(app-scaled-world-software PROPERTIES TIMEOUT 120
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
     # The check host's table (check_host.hpp) and the parts of it that need
     # no running game: the pointer events it makes, the gadgets it finds and
@@ -430,6 +440,16 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-world-scaling-test PRIVATE oa-app-headers oa-present-world-renderer
     oa-test-support oa-options)
   add_test(NAME app-world-scaling COMMAND oa-app-world-scaling-test)
+  # The battlefield's thin lines drawn band by band: lines of the frame and
+  # selection lines of the model bridge, 2 pixels thick as a reduced scene
+  # draws them, cover the pixels a square pen gives across the bands' edges,
+  # the same on 1 to 8 bands and drawing threads; 1 pixel thick, the line's
+  # own pixels.
+  add_executable(oa-app-world-draws-test src/app/world_draws_test.cpp src/app/world_draws.cpp)
+  target_link_libraries(oa-app-world-draws-test PRIVATE oa-present oa-present-model
+    oa-present-world-renderer oa-formats-gaf oa-sim-effect-particles oa-sim-model-runtime
+    oa-platform-job-pool oa-test-support oa-options)
+  add_test(NAME app-world-draws COMMAND oa-app-world-draws-test)
   # The application loop's pacing over a fake clock: frames evenly spaced
   # at the rate asked for, 30 ticks a second at any frame rate, the fraction
   # of a tick each frame shows, the cap just below the display's rate while
@@ -505,7 +525,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_match_hud.cpp src/app/runtime_match_menus.cpp src/app/runtime_load_game.cpp
   src/app/runtime_order_panel.cpp src/app/runtime_order_check.cpp
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
-  src/app/runtime_present.cpp src/app/xrgb_conversion.cpp src/app/runtime_display.cpp
+  src/app/runtime_present.cpp src/app/runtime_display.cpp
+  src/app/runtime_accelerated.cpp src/app/runtime_render_tiers_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
@@ -548,7 +569,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
-  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status)
+  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
+  oa-formats-png)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -632,6 +654,26 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_layer_check_dir}/match-layers.conf")
       set_tests_properties(native-match-layers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_layer_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The accelerated presentation, switched on for this check alone, on
+      # SDL's software renderer taken as capable: the main menu and a fight's
+      # match read back at zoom 1, by the area pass at 0.5, 0.6 and 0.75 and
+      # magnified at 1.37, 2 and 4 must equal the processor's composition or
+      # keep within that renderer's own filters; a frame must not depend on
+      # those before it, the first after the tier is switched on or the
+      # window resized among them; the picture kept for screenshots must be
+      # the standard tier's and ease nothing; a zoom ease must make no
+      # texture; prescale targets are drawn once a painted frame; switched
+      # off, every frame is the standard tier's. Pictures of one moment at
+      # zoom 0.5, 1 and 2.5 in both tiers go to local/reports. Skips under
+      # 2 GiB of memory.
+      set(oa_render_tiers_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers")
+      file(MAKE_DIRECTORY "${oa_render_tiers_check_dir}")
+      add_test(NAME native-render-tiers COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-render-tiers --force-capable
+        --preferences-file "${oa_render_tiers_check_dir}/render-tiers.conf")
+      set_tests_properties(native-render-tiers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_render_tiers_check_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # LOADGAME.GUI from Single Player and, through the SDL presenter, as the
       # save and load dialogs over a paused skirmish: each placed as its loader
@@ -1061,9 +1103,12 @@ if(OA_BUILD_PLATFORM)
         --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
       # oa-game's own checks over the demo, started the same way: the
       # navigation check's notices, grayed-out entries and campaign, the
-      # grayed-out save and load entries, and the notice MULTI shows over
-      # data with no multiplayer map.
-      set(oa_demo_game_checks navigation saved-games multiplayer-menu)
+      # grayed-out save and load entries, the notice MULTI shows over data
+      # with no multiplayer map, and the accelerated presentation on SDL's
+      # software renderer taken as capable over the main menu and the first
+      # Arm mission (--check-render-tiers --force-capable), which skips
+      # under 2 GiB of memory.
+      set(oa_demo_game_checks navigation saved-games multiplayer-menu render-tiers)
       foreach(check IN LISTS oa_demo_game_checks)
         add_test(NAME native-demo-${check} COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_demo_installer.py"

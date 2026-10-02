@@ -374,24 +374,48 @@ void draw_world_band(
             break;
         }
         case WorldDrawKind::line: {
+            // A thick line is the line drawn again at each offset of a
+            // square pen, centred where the thickness allows.
             const LineDraw& line = list.lines[draw.index];
-            draw_world_line(target, line.x0, line.y0, line.x1, line.y1, line.color);
+            const int32_t thickness = std::max(frame.line_thickness, 1);
+            const int32_t first = -(thickness - 1) / 2;
+            for (int32_t down = first; down < first + thickness; ++down)
+                for (int32_t across = first; across < first + thickness; ++across)
+                    draw_world_line(
+                        target,
+                        line.x0 + across,
+                        line.y0 + down,
+                        line.x1 + across,
+                        line.y1 + down,
+                        line.color
+                    );
             break;
         }
         case WorldDrawKind::selection_line: {
-            // Each line captures the tiles it crosses before drawing.
+            // Each line captures the tiles it crosses before drawing, with
+            // its thickness.
             const LineDraw& line = list.lines[draw.index];
+            const int32_t thickness = std::max(frame.bridge_line_thickness, 1);
+            const int32_t first = -(thickness - 1) / 2;
+            const int32_t last = first + thickness - 1;
             model_render::bridge_open(
                 bridge,
                 band,
-                {std::min(line.x0, line.x1),
-                 std::min(line.y0, line.y1),
-                 std::max(line.x0, line.x1),
-                 std::max(line.y0, line.y1)}
+                {std::min(line.x0, line.x1) + first,
+                 std::min(line.y0, line.y1) + first,
+                 std::max(line.x0, line.x1) + last,
+                 std::max(line.y0, line.y1) + last}
             );
-            oa::present::draw_clipped_line(
-                surface, line.x0, line.y0, line.x1, line.y1, line.palette_index
-            );
+            for (int32_t down = first; down <= last; ++down)
+                for (int32_t across = first; across <= last; ++across)
+                    oa::present::draw_clipped_line(
+                        surface,
+                        line.x0 + across,
+                        line.y0 + down,
+                        line.x1 + across,
+                        line.y1 + down,
+                        line.palette_index
+                    );
             break;
         }
         case WorldDrawKind::model: {

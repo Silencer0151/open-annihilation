@@ -45,6 +45,13 @@ if(BUILD_TESTING)
   target_link_libraries(oa-world-scene-filter-test PRIVATE oa-present-world-renderer oa-platform-job-pool
     oa-test-support)
   add_test(NAME world-scene-filter COMMAND oa-world-scene-filter-test)
+  # How steady the zoomed battlefield stays as the view moves: a thin line
+  # through the area pass, today's point sampling and the thin-line rule,
+  # and the shimmer of the area pass and of the card's filters' references
+  # against point sampling and NEAREST.
+  add_executable(oa-world-zoom-stability-test tests/world_zoom_stability_test.cpp)
+  target_link_libraries(oa-world-zoom-stability-test PRIVATE oa-present-world-renderer oa-test-support)
+  add_test(NAME world-zoom-stability COMMAND oa-world-zoom-stability-test)
   add_executable(oa-world-draw-order-test tests/world_draw_order_test.cpp)
   target_link_libraries(oa-world-draw-order-test PRIVATE oa-present-world-renderer)
   add_test(NAME world-draw-order COMMAND oa-world-draw-order-test)

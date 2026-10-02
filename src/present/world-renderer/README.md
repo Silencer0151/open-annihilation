@@ -69,7 +69,8 @@ scene under its footprint, each scene pixel weighted by the area of it the
 footprint covers. The scale `m`, screen pixels per scene pixel, is 16.16
 fixed point from one half to one; the scene starts at the picture's corner,
 and picture column `x` covers scene columns `[x / m, (x + 1) / m)`, at most
-three of them, and rows alike. Nothing calls it yet: the zoomed-out
+three of them, and rows alike. Only the accelerated presentation calls it,
+which nothing but a check switches on yet: the game's zoomed-out
 battlefield is drawn as before, terrain averaged over whole map pixels and
 units point-sampled.
 
@@ -89,9 +90,9 @@ units point-sampled.
   within half a level, and half of 1/256 of one, of the exact average.
 - **At one half** every weight is one half, so the picture is the 2x2 box
   `(a + b + c + d + 2) / 4`, the rounding the terrain's box filter gives its
-  2x2 footprints at zoom 0.5. Comparing the two byte for byte needs the
-  application's terrain filter, and comes with the change that wires the
-  pass in. **At one** the picture is a copy of the scene.
+  2x2 footprints at zoom 0.5; `native-render-tiers` compares the two byte
+  for byte on the map's terrain. **At one** the picture is a copy of the
+  scene.
 - **Cost.** Each band averages every scene row it needs across the columns
   once, then sums those row averages down each picture row's footprint. It
   works in strips of 256 columns, whose row averages, four scene rows of
@@ -115,6 +116,41 @@ units point-sampled.
 
 `area_sample_reference` is the exact average in double precision, from the
 footprint's geometry rather than a plan; tests hold the pass to it.
+
+## What the graphics card is asked to do
+
+`scene_filter.hpp` also holds, in double precision on the processor, the
+references the accelerated presentation's drawing on the card is held to:
+`nearest_rgb24` and `bilinear_rgb24`, the card's NEAREST and LINEAR scale
+modes, with pixel centres at half-pixel places and the scene's edges
+clamped; `sharp_bilinear_rgb24`, NEAREST into a prescale target a whole
+number of times the scene's size and then LINEAR; `pixelart_rgb24`, the
+renderer's pixel-art filter; `overlay_rgb24`, the overlay rule: an opaque
+overlay pixel's colour replaces the picture's and a transparent one leaves
+it; and `footprint_sample_reference` and `exact_channel`, the exact average
+under a picture pixel's footprint wherever the scene lands. A
+`ScenePlacement` says where the scene lands: its scale across and down and
+the picture point its corner lands on. `scene_line_thickness` is the rule
+the game draws lasers, lightning and selection lines by in a scene the area
+pass reduces: the draw scale over the zoom, rounded, at least 1, so a line
+stays about one screen pixel thick. `line_energy` measures a thin line's
+light, and `shimmer` how far a run of frames' changes depart from those of
+the exact pictures of the same moments.
+
+`world-scene-filter` checks that the sharp-bilinear and pixel-art
+references copy the scene at 1 and replicate it into whole blocks at 2, 3
+and 4 where LINEAR blends, that between whole scales each scene pixel is a
+block with one blended edge pixel, the overlay rule, and the footprint
+average against the area pass's reference. `world-zoom-stability` follows a
+seeded line one map pixel wide, a map pixel a frame for 64 frames and in
+eighths of a pixel, at zooms 0.5 to 0.95: the area pass keeps each row's
+light within one level per pixel the line lit, today's point sampling
+loses the line on some frames, and a line drawn by the thin-line rule
+keeps from two thirds to four thirds of a screen pixel's light; and on a
+seeded map of fine detail, the area pass's frames shimmer less than point
+sampling's at 0.5, 0.6 and 0.75, and the sharp-bilinear and pixel-art
+references less than NEAREST at 1.37 and 2, the scene moving in eighths of
+a map pixel. `world-screen-span` keeps today's one-pixel minimum.
 
 `world-scene-filter` checks the weights; that the pass gives the bytes of a
 straightforward implementation intersecting every footprint with every scene

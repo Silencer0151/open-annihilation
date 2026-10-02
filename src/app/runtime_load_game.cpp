@@ -37,6 +37,7 @@ void Runtime::capture_load_game_parent() {
     renderer::Surface frame;
     oa::ui::display_layout::Rect panel{};
     if (screen_ == Screen::match) {
+        ensure_screen_world();
         compose_match_layers(frame);
         load_game_palette_ = match_palette_;
         if (match_hud_ && !match_hud_->layout.gadgets.empty()) {

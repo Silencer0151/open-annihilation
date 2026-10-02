@@ -3,16 +3,28 @@
 
 // Textures whose size follows the window, made as one texture within the
 // renderer's texture limit and as tiles beyond it, each tile carrying a
-// one-texel gutter copied from its neighbour; and the error a failed SDL call
-// of the standard tier's presenting throws.
+// one-texel gutter copied from its neighbour; the error a failed SDL call
+// of the standard tier's presenting throws; and the accelerated tier's
+// drawing on the graphics card: the battlefield's scene magnified into the
+// window, and the interface and the 640x480 screens scaled by the
+// pixel-art or sharp-bilinear filter, through prescale targets made once
+// at their largest and redrawn only when their source changes. Every
+// failure of a call only the accelerated tier makes is an
+// AccelerationError, thrown after the render target is set back to the
+// final one, so that the caller can drop to the standard tier and present
+// the frame as it does.
 #pragma once
 
 #include "oa/app/render_policy.hpp"
+#include "oa/platform/job_pool.hpp"
+#include "oa/present/world_renderer/scene_filter.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -32,16 +44,37 @@ class PresentError : public std::runtime_error {
 /// @param what the call or texture that failed
 [[noreturn]] void throw_present_error(const std::string& what);
 
+/// A call that only the accelerated tier makes failed: the tier is dropped
+/// for the rest of the run and the frame presented as the standard tier
+/// presents it.
+class AccelerationError : public std::runtime_error {
+  public:
+
+    using std::runtime_error::runtime_error;
+};
+
+/// What the accelerated tier made and drew on the card, counted for the checks.
+struct ScaledWorldCounts {
+    uint64_t textures_created{};   ///< tile textures and prescale targets made
+    uint64_t textures_destroyed{}; ///< tile textures and prescale targets destroyed
+    uint64_t prescale_draws{};     ///< sources drawn into a prescale target
+};
+
 /// A streaming texture as one texture within the renderer's limit, or as
 /// tiles beyond it (render_policy::plan_tiles).
 ///
-/// Within the limit it makes and uses exactly the one texture today's code
-/// makes, and passes the caller's rectangles to SDL unchanged, so a renderer
-/// with no limit, such as SDL's software renderer, draws as before. Beyond
-/// it, each tile is uploaded from the part of the picture it holds, its
-/// gutters included, and drawn without its gutters, so tiles drawn 1:1 at
-/// whole-pixel places give the same pixels as one texture would. Every SDL
-/// failure throws PresentError.
+/// Within the limit it makes and uses exactly one texture, and passes the
+/// caller's rectangles to SDL unchanged, so a renderer with no limit, such
+/// as SDL's software renderer, draws as before. Beyond it, each tile is
+/// uploaded from the part of the picture it holds, its gutters included,
+/// and drawn without its gutters, each part landing where it lands in the
+/// whole, so that tiles drawn 1:1 at whole-pixel places give the same
+/// pixels as one texture would and tiles drawn scaled meet with no seam.
+///
+/// The standard tier's layers make it with ensure, and every SDL failure
+/// then throws PresentError. The accelerated tier's scene and overlay make
+/// it with create, ARGB8888 and at the largest size they are to hold, its
+/// tiles counted, and every SDL failure then throws AccelerationError.
 class TiledTexture {
   public:
 
@@ -52,11 +85,11 @@ class TiledTexture {
     /// Destroys the texture or its tiles.
     ~TiledTexture() { reset(); }
 
-    /// Makes the texture or its tiles unless they already match: a format,
-    /// size, limit or blend mode that differs makes them again. Each is a
-    /// streaming texture scaled NEAREST with the given blend mode; an
-    /// alpha format with SDL_BLENDMODE_NONE has its blending turned off,
-    /// which SDL turns on for alpha formats.
+    /// Makes the texture or its tiles for the standard tier unless they
+    /// already match: a format, size, limit or blend mode that differs makes
+    /// them again. Each is a streaming texture scaled NEAREST with the given
+    /// blend mode; an alpha format with SDL_BLENDMODE_NONE has its blending
+    /// turned off, which SDL turns on for alpha formats.
     ///
     /// Throws PresentError when SDL cannot make one.
     ///
@@ -76,10 +109,32 @@ class TiledTexture {
         SDL_BlendMode blend
     );
 
+    /// Makes the texture or its tiles for the accelerated tier, ARGB8888,
+    /// replacing any made before; each is streaming, scaled NEAREST, with
+    /// the blend mode given.
+    ///
+    /// Throws AccelerationError when a tile cannot be made; the tiles made
+    /// by then are destroyed.
+    ///
+    /// @param renderer the renderer
+    /// @param width texels across, above 0
+    /// @param height texels down, above 0
+    /// @param limit the renderer's texture limit in texels; 0 for none
+    /// @param blend SDL_BLENDMODE_NONE for an opaque picture, SDL_BLENDMODE_BLEND for an overlay
+    /// @param[in,out] counts the tiles made are counted here, and destroyed ones later
+    void create(
+        SDL_Renderer* renderer,
+        uint32_t width,
+        uint32_t height,
+        uint32_t limit,
+        SDL_BlendMode blend,
+        ScaledWorldCounts& counts
+    );
+
     /// Fills the texture through its tiles: each is locked and handed to
     /// fill with the part of the picture it holds, gutters included.
     ///
-    /// Throws PresentError when a tile cannot be locked.
+    /// Throws when a tile cannot be locked (fail).
     ///
     /// @param fill called as fill(const SDL_Rect& source, uint8_t* pixels,
     ///     int pitch) with the part of the picture in its pixels, the tile's
@@ -90,28 +145,65 @@ class TiledTexture {
             void* pixels = nullptr;
             int pitch = 0;
             if (!SDL_LockTexture(piece.texture, nullptr, &pixels, &pitch))
-                throw_present_error("SDL_LockTexture");
+                fail("SDL_LockTexture");
             fill(source_rect(piece), static_cast<uint8_t*>(pixels), pitch);
             SDL_UnlockTexture(piece.texture);
         }
     }
 
-    /// Copies a picture into the texture's tiles with SDL_UpdateTexture.
+    /// Copies rows of a picture into the texture's tiles with
+    /// SDL_UpdateTexture, across the texture's whole width; by default
+    /// every row.
     ///
-    /// Throws PresentError when SDL refuses a tile.
+    /// Throws when SDL refuses a tile (fail).
     ///
-    /// @param pixels the picture, as large as the texture, in its format
+    /// @param pixels the picture's first row, as wide as the texture, in its format
     /// @param pitch bytes from one row of the picture to the next
     /// @param bytes_per_pixel bytes of one pixel of the format
-    void update(const uint8_t* pixels, int pitch, int bytes_per_pixel);
+    /// @param first_row the first row copied
+    /// @param end_row the row past the last copied; beyond the texture's height, its height
+    void update(
+        const uint8_t* pixels,
+        int pitch,
+        int bytes_per_pixel,
+        uint32_t first_row = 0,
+        uint32_t end_row = UINT32_MAX
+    );
+
+    /// Uploads the top-left corner of an ARGB8888 texture from an RGB24
+    /// picture through the gamma table, each texel opaque.
+    ///
+    /// Only the tiles, and the parts of them, that the corner covers are
+    /// written, gutters included. Throws when a tile cannot be locked (fail).
+    ///
+    /// @param rgb the picture's first row, 3 bytes a pixel
+    /// @param rgb_pitch bytes from one row of the picture to the next
+    /// @param width columns of the corner, at most the texture's
+    /// @param height rows of the corner, at most the texture's
+    /// @param gamma the display gamma's table; null when the gamma is 1
+    /// @param pool threads to convert the rows on; null converts them on the calling thread
+    void upload_rgb24(
+        const uint8_t* rgb,
+        std::size_t rgb_pitch,
+        uint32_t width,
+        uint32_t height,
+        const std::array<uint8_t, 256>* gamma,
+        platform::job_pool::Pool* pool
+    );
+
+    /// Sets the scale mode every tile is drawn with.
+    ///
+    /// @param mode the scale mode
+    /// @return false when a tile refused it
+    bool set_scale_mode(SDL_ScaleMode mode) noexcept;
 
     /// Draws a rectangle of the texture onto one of the render target.
     ///
     /// With one texture it is one SDL_RenderTexture with the rectangles
-    /// unchanged, null included. With tiles, each tile's part of `source`
-    /// is drawn onto its part of `destination`.
+    /// unchanged, null included. With tiles, each tile's part of `source`,
+    /// its gutters left out, is drawn onto its part of `destination`.
     ///
-    /// Throws PresentError when SDL refuses a draw.
+    /// Throws when SDL refuses a draw (fail).
     ///
     /// @param renderer the renderer the texture was made on
     /// @param source the part of the picture to draw, in its pixels; null for all of it
@@ -120,13 +212,29 @@ class TiledTexture {
     ///     with tiles
     void draw(SDL_Renderer* renderer, const SDL_FRect* source, const SDL_FRect* destination) const;
 
-    /// Destroys the texture or its tiles; the next ensure makes them again.
+    /// Destroys the texture or its tiles, counting them where create made
+    /// them; the next ensure or create makes them again.
     void reset() noexcept;
 
     /// Returns how many textures hold the picture.
     ///
-    /// @return 0 before ensure, 1 within the limit, more beyond it
+    /// @return 0 before it is made, 1 within the limit, more beyond it
     [[nodiscard]] std::size_t tile_count() const noexcept { return tiles_.size(); }
+
+    /// Returns whether the texture holds tiles.
+    ///
+    /// @return true once made, until reset
+    [[nodiscard]] bool made() const noexcept { return !tiles_.empty(); }
+
+    /// Says whether the texture was made at a size and limit.
+    ///
+    /// @param width texels across
+    /// @param height texels down
+    /// @param limit the renderer's texture limit in texels; 0 for none
+    /// @return true when it holds tiles made for exactly these
+    [[nodiscard]] bool made_for(uint32_t width, uint32_t height, uint32_t limit) const noexcept {
+        return made() && grid_.width == width && grid_.height == height && limit_ == limit;
+    }
 
     /// Returns the one texture that holds the whole picture.
     ///
@@ -135,19 +243,35 @@ class TiledTexture {
         return tiles_.size() == 1 ? tiles_.front().texture : nullptr;
     }
 
+    /// Returns one tile's texture.
+    ///
+    /// @param column the tile's column
+    /// @param row the tile's row
+    /// @return the texture; null outside the grid
+    [[nodiscard]] SDL_Texture* tile_texture(uint32_t column, uint32_t row) const noexcept {
+        if (column >= grid_.columns || row >= grid_.rows)
+            return nullptr;
+        return tiles_[static_cast<std::size_t>(row) * grid_.columns + column].texture;
+    }
+
+    /// Returns how the texture is split into tiles.
+    ///
+    /// @return the grid it was made with; empty before it is made
+    [[nodiscard]] const render_policy::TileGrid& grid() const noexcept { return grid_; }
+
     /// Returns the picture's width.
     ///
-    /// @return pixels; 0 before ensure
-    [[nodiscard]] int width() const noexcept { return width_; }
+    /// @return pixels; 0 before it is made
+    [[nodiscard]] int width() const noexcept { return static_cast<int>(grid_.width); }
 
     /// Returns the picture's height.
     ///
-    /// @return pixels; 0 before ensure
-    [[nodiscard]] int height() const noexcept { return height_; }
+    /// @return pixels; 0 before it is made
+    [[nodiscard]] int height() const noexcept { return static_cast<int>(grid_.height); }
 
     /// Returns the textures' pixel format.
     ///
-    /// @return the format; SDL_PIXELFORMAT_UNKNOWN before ensure
+    /// @return the format; SDL_PIXELFORMAT_UNKNOWN before it is made
     [[nodiscard]] SDL_PixelFormat format() const noexcept { return format_; }
 
   private:
@@ -157,6 +281,29 @@ class TiledTexture {
         SDL_Texture* texture{};
         render_policy::Tile tile{};
     };
+
+    /// Makes the tiles of a grid, row after row, in a format; a tile that
+    /// cannot be made destroys those made by then and throws (fail).
+    ///
+    /// @param renderer the renderer
+    /// @param format the pixel format
+    /// @param grid the tiles, already planned; at least one
+    /// @param limit the texture limit the grid was planned for; 0 for none
+    /// @param blend how the tiles are drawn over what is under them
+    void make(
+        SDL_Renderer* renderer,
+        SDL_PixelFormat format,
+        const render_policy::TileGrid& grid,
+        uint32_t limit,
+        SDL_BlendMode blend
+    );
+
+    /// Throws the error of the tier that made the texture, with SDL's error
+    /// after what failed: AccelerationError where create made it, else
+    /// PresentError.
+    ///
+    /// @param what the call that failed
+    [[noreturn]] void fail(const std::string& what) const;
 
     /// Returns the part of the picture a tile holds, gutters included.
     ///
@@ -171,12 +318,227 @@ class TiledTexture {
         };
     }
 
-    std::vector<Piece> tiles_;
+    std::vector<Piece> tiles_; ///< row after row of the grid
+    render_policy::TileGrid grid_{};
     SDL_PixelFormat format_{SDL_PIXELFORMAT_UNKNOWN};
     SDL_BlendMode blend_{SDL_BLENDMODE_NONE};
-    int width_{};
-    int height_{};
     uint32_t limit_{}; ///< the texture limit the tiles were planned for; 0 for none
+    /// Where create counts the tiles; null for a texture ensure made, whose
+    /// failures are the standard tier's.
+    ScaledWorldCounts* counts_{};
 };
+
+/// A render target a source is drawn into NEAREST at a whole-number
+/// factor, for the sharp-bilinear filter to reduce LINEAR; ARGB8888, with
+/// no blending. It is made once at the largest size it is to hold, and the
+/// source drawn into it again only when it changed. Beyond the renderer's
+/// texture limit it is split into tiles (render_policy's plan_tiles), each
+/// with a gutter that holds its neighbour's texels, as TiledTexture is.
+class PrescaleTarget {
+  public:
+
+    PrescaleTarget() = default;
+    PrescaleTarget(const PrescaleTarget&) = delete;
+    PrescaleTarget& operator=(const PrescaleTarget&) = delete;
+
+    /// Destroys the target.
+    ~PrescaleTarget() { destroy(); }
+
+    /// Makes the target at a size, unless it was made at that size and
+    /// limit; each tile of a new target is cleared and its first pixel read
+    /// back, which must be the colour cleared.
+    ///
+    /// Throws AccelerationError, after setting the render target back to
+    /// `final_target`, when a tile cannot be made or reads back wrong; the
+    /// tiles made by then are destroyed.
+    ///
+    /// @param renderer the renderer
+    /// @param final_target the target frames are drawn into; null for the window
+    /// @param width texels across, above 0
+    /// @param height texels down, above 0
+    /// @param limit the renderer's texture limit in texels; 0 for none
+    /// @param[in,out] counts the tiles made are counted here, and destroyed ones later
+    void ensure(
+        SDL_Renderer* renderer,
+        SDL_Texture* final_target,
+        uint32_t width,
+        uint32_t height,
+        uint32_t limit,
+        ScaledWorldCounts& counts
+    );
+
+    /// Destroys the target.
+    void destroy() noexcept;
+
+    /// Returns whether the target holds tiles.
+    ///
+    /// @return true once made, until destroyed
+    [[nodiscard]] bool made() const noexcept { return !tiles_.empty(); }
+
+    /// Returns how the target is split into tiles.
+    ///
+    /// @return the grid it was made with; empty before it is made
+    [[nodiscard]] const render_policy::TileGrid& grid() const noexcept { return grid_; }
+
+    /// Returns one tile's texture.
+    ///
+    /// @param column the tile's column
+    /// @param row the tile's row
+    /// @return the texture; null outside the grid
+    [[nodiscard]] SDL_Texture* tile_texture(uint32_t column, uint32_t row) const noexcept;
+
+    /// Returns the target's width.
+    ///
+    /// @return texels across; 0 before it is made
+    [[nodiscard]] uint32_t width() const noexcept { return grid_.width; }
+
+    /// Returns the target's height.
+    ///
+    /// @return texels down; 0 before it is made
+    [[nodiscard]] uint32_t height() const noexcept { return grid_.height; }
+
+    /// Returns its pixels, charged to the prescale budget.
+    ///
+    /// @return width times height
+    [[nodiscard]] uint64_t pixels() const noexcept { return uint64_t{grid_.width} * grid_.height; }
+
+    /// The source revision drawn into it last; a new target has none.
+    uint64_t drawn_revision{~uint64_t{0}};
+    /// The factor it was drawn at last; 0 for none.
+    uint32_t drawn_factor{};
+
+  private:
+
+    render_policy::TileGrid grid_{};
+    uint32_t limit_{};                ///< the texture limit the grid was planned for; 0 for none
+    std::vector<SDL_Texture*> tiles_; ///< row after row of the grid
+    ScaledWorldCounts* counts_{};     ///< where destroyed tiles are counted
+};
+
+/// How the card scales a picture: the filter, and the prescale target's
+/// factor where the filter is sharp-bilinear.
+struct CardScale {
+    render_policy::ScaleFilter filter{render_policy::ScaleFilter::nearest};
+    uint32_t factor{1}; ///< prescale target pixels per source pixel; 1 for none
+};
+
+/// Probes whether the renderer's pixel-art scale mode works: a 2x1 black
+/// and white texture drawn at 2.5 times into a 5x1 target must read back
+/// pure black in its second pixel and a level between black and white in
+/// its third, which LINEAR and NEAREST do not give.
+///
+/// Its textures and target are destroyed when it ends, and the render
+/// target set back to `final_target`. A build of SDL without the mode
+/// answers false.
+///
+/// @param renderer the renderer
+/// @param final_target the target frames are drawn into; null for the window
+/// @return true when the mode scales as the pixel-art filter does
+[[nodiscard]] bool probe_pixelart(SDL_Renderer* renderer, SDL_Texture* final_target);
+
+/// Draws the corner of a scene the battlefield shows into the final
+/// target, magnified, clipped to the battlefield.
+///
+/// NEAREST at a whole-number scale; PIXELART; plain LINEAR; or
+/// sharp-bilinear: the corner, with one more column and row where the scene
+/// has them, drawn NEAREST into the prescale target at its factor, each of
+/// the scene's tiles into each of the target's, then that LINEAR into the
+/// destination, each of the target's tiles with its gutters left out. The
+/// scene's tiles keep the scale mode the draw sets.
+///
+/// Throws AccelerationError, after setting the render target back to
+/// `final_target`, when a call fails.
+///
+/// @param renderer the renderer
+/// @param final_target the target frames are drawn into; null for the window
+/// @param scene the scene's texture
+/// @param scene_width columns of the scene uploaded, at least `width`
+/// @param scene_height rows of the scene uploaded, at least `height`
+/// @param width columns of the corner drawn
+/// @param height rows of the corner drawn
+/// @param destination where the corner lands, in whole pixels of the final target
+/// @param clip the battlefield, in whole pixels of the final target
+/// @param scale the filter and the prescale factor
+/// @param[in,out] prescale the prescale target, made at least as large as the factor needs
+/// @param[in,out] counts the prescale draw is counted here
+void draw_scaled_world(
+    SDL_Renderer* renderer,
+    SDL_Texture* final_target,
+    TiledTexture& scene,
+    uint32_t scene_width,
+    uint32_t scene_height,
+    uint32_t width,
+    uint32_t height,
+    const SDL_Rect& destination,
+    const SDL_Rect& clip,
+    const CardScale& scale,
+    PrescaleTarget& prescale,
+    ScaledWorldCounts& counts
+);
+
+/// One part of a source texture and where it lands in the final target.
+struct SharpPart {
+    SDL_FRect source{};      ///< the part, in the source's texels
+    SDL_FRect destination{}; ///< where it lands, in the final target's coordinates
+};
+
+/// Draws parts of a source texture into the final target scaled by the
+/// card: NEAREST, PIXELART or plain LINEAR straight from the source, which
+/// is left at NEAREST after; or sharp-bilinear, the whole source drawn
+/// NEAREST into the prescale target, into each of its tiles, only when its
+/// revision or the factor changed, then each part LINEAR from it, from each
+/// tile the part covers with the tile's gutters left out.
+///
+/// Throws AccelerationError, after setting the render target back to
+/// `final_target`, when a call fails.
+///
+/// @param renderer the renderer
+/// @param final_target the target frames are drawn into; null for the window
+/// @param source the source texture, whose scale mode is NEAREST
+/// @param source_width texels across the source
+/// @param source_height texels down the source
+/// @param parts the parts drawn
+/// @param scale the filter and the prescale factor
+/// @param revision the source's revision: a new one draws it into the prescale target again
+/// @param[in,out] prescale the prescale target, made at least as large as the factor needs
+/// @param[in,out] counts the prescale draw is counted here
+void sharp_draw(
+    SDL_Renderer* renderer,
+    SDL_Texture* final_target,
+    SDL_Texture* source,
+    uint32_t source_width,
+    uint32_t source_height,
+    std::span<const SharpPart> parts,
+    const CardScale& scale,
+    uint64_t revision,
+    PrescaleTarget& prescale,
+    ScaledWorldCounts& counts
+);
+
+/// Draws a picture into a rectangle of a target as SDL's software renderer
+/// draws a texture LINEAR, so that a check can hold that renderer's
+/// read-back to it exactly: along each axis the picture is stepped through
+/// in 16.16 fixed point, a step being its texels over the rectangle's
+/// pixels, truncated, and the first sample half a step, rounded, less half
+/// a texel in; each pixel weighs the two texels around its sample in
+/// 128ths of a texel toward the second, rows first and then columns, and
+/// the sum is truncated once; and a sample before the first texel's
+/// centre, or beyond the last pair, takes the edge texel. SDL draws so on
+/// processors with SSE2 or NEON; a build of SDL without either truncates
+/// after each pass, which can give one level less. With a factor above 1
+/// the picture is first enlarged that many times by nearest replication,
+/// as the NEAREST pass of sharp-bilinear into its prescale target does.
+/// Pixels of the rectangle outside the target are left out.
+///
+/// @param source the picture, at least one pixel
+/// @param factor texels of the enlargement per picture texel, at least 1
+/// @param rectangle where the picture lands, in the target's whole pixels
+/// @param[out] target the rectangle's pixels within it written
+void software_linear_rgb24(
+    const oa::present::world_renderer::RgbSource& source,
+    uint32_t factor,
+    const SDL_Rect& rectangle,
+    const oa::present::world_renderer::RgbTarget& target
+);
 
 } // namespace oa::app

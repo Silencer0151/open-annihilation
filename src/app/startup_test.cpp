@@ -235,10 +235,12 @@ int main() {
         "--force-capable goes with --check-engine-settings"
     );
     expect(
-        rejection({"--force-capable"}) == "--force-capable needs --check-engine-settings" &&
+        rejection({"--force-capable"}) == "--force-capable is accepted only with "
+                                          "--check-render-tiers and --check-engine-settings" &&
             rejection({"--force-capable", "--check-navigation"}) ==
-                "--force-capable needs --check-engine-settings",
-        "--force-capable is refused without --check-engine-settings"
+                "--force-capable is accepted only with --check-render-tiers and "
+                "--check-engine-settings",
+        "--force-capable is refused without a check that takes it"
     );
     expect(
         rejection({"--max-fps", "1001"}) ==
@@ -503,6 +505,7 @@ int main() {
         {"--check-engine-settings"},
         {"--check-renderer-ladder"},
         {"--check-briefing-narration"},
+        {"--check-render-tiers"},
         {"--benchmark", "60"},
         {"--frames", "120"},
         {"--snapshot", "frame.ppm"},
@@ -512,6 +515,47 @@ int main() {
         scripted.push_back("--choose-game-dir");
         expect(rejection(scripted).find("--choose-game-dir opens a dialog") == 0, scripted.front());
     }
+
+    // The render tiers check draws in a window on the fixed clock, with
+    // nobody there; --force-capable goes with it alone.
+    const auto tiers = parse({"--check-render-tiers"});
+    expect(
+        tiers.check_render_tiers && tiers.fixed_clock && tiers.unattended &&
+            !tiers.headless_check && !tiers.force_capable,
+        "--check-render-tiers is a windowed, fixed-clock and unattended run"
+    );
+    expect(
+        parse({"--check-render-tiers", "--force-capable"}).force_capable,
+        "--force-capable takes the renderer as capable for the render tiers check"
+    );
+    const auto tiers_mission = parse(
+        {"--check-render-tiers", "--force-capable", "--campaign", "Arm Campaign", "--mission", "0"}
+    );
+    expect(
+        tiers_mission.check_render_tiers && !tiers_mission.headless_check &&
+            tiers_mission.campaign == "Arm Campaign" && tiers_mission.campaign_mission == 0U,
+        "the render tiers check takes a campaign mission for data with no skirmish map"
+    );
+    expect(
+        !parse({"--check-match-layers"}).check_render_tiers && !parse({}).force_capable,
+        "no render tiers check and no forced renderer unasked"
+    );
+    expect(
+        rejection({"--check-render-tiers", "--headless-check"}) ==
+            "--check-render-tiers draws in a window and cannot be used with --headless-check",
+        "the render tiers check is not headless"
+    );
+    expect(
+        rejection({"--force-capable"}) == "--force-capable is accepted only with "
+                                          "--check-render-tiers and --check-engine-settings",
+        "--force-capable alone is refused"
+    );
+    expect(
+        rejection({"--check-match-layers", "--force-capable"}) ==
+            "--force-capable is accepted only with --check-render-tiers and "
+            "--check-engine-settings",
+        "--force-capable with another check is refused"
+    );
 
     // The director view check runs headless on the fixed clock, past the
     // intro, with nobody there.
@@ -628,6 +672,7 @@ int main() {
         {"--busy-combat"},
         {"--check-navigation"},
         {"--check-match-layers"},
+        {"--check-render-tiers"},
         {"--check-director-view"},
         {"--check-director-render"},
         {"--check-interpolation"},

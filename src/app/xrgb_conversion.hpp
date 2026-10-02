@@ -4,7 +4,8 @@
 // The conversion of the game's RGB frames into the 32-bit pixels the window
 // shows (SDL_PIXELFORMAT_XRGB8888, 0xXXRRGGBB), or into the 16-bit pixels of a
 // 16-bit window (SDL_PIXELFORMAT_RGB565), through the display gamma's table
-// when the gamma is not 1, in bands of rows on the drawing threads.
+// when the gamma is not 1, in bands of rows on the drawing threads; and of
+// the pixels painted over a picture into an overlay that holds only them.
 #pragma once
 
 #include "oa/platform/job_pool.hpp"
@@ -12,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace oa::app {
 
@@ -77,6 +79,40 @@ void convert_rgb24_xrgb_rect(
     uint8_t* pixels,
     std::size_t pitch,
     const std::array<uint8_t, 256>* gamma,
+    platform::job_pool::Pool* pool
+) noexcept;
+
+/// The opaque alpha of an overlay pixel.
+inline constexpr uint32_t overlay_opaque = 0xff000000U;
+
+/// Converts what was painted over a picture into an ARGB8888 overlay, in
+/// bands of xrgb_band_rows rows: 0, transparent, where the painted picture
+/// (the canvas) equals the picture under it (the base), and the canvas's
+/// colour through the gamma table, opaque (overlay_opaque), where it does
+/// not. Notes, for each band, whether it holds an opaque pixel.
+///
+/// Every row is the same whichever thread converts it.
+///
+/// @param canvas the painted picture, `width` * 3 bytes a row, rows one after another
+/// @param base the picture it was painted over, the same size
+/// @param width pixels in a row
+/// @param height rows
+/// @param[out] pixels the overlay's rows, each at least `width` * 4 bytes, 4-byte aligned
+/// @param pitch bytes from one row of `pixels` to the next
+/// @param gamma the display gamma's table; null when the gamma is 1
+/// @param[out] opaque_bands one entry for each band of xrgb_band_rows rows, at least
+///        ceil(height / xrgb_band_rows) of them: 1 where the band holds an
+///        opaque pixel, else 0
+/// @param pool threads to convert the bands on; null converts them on the calling thread
+void convert_rgb24_overlay_argb(
+    const uint8_t* canvas,
+    const uint8_t* base,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    std::span<uint8_t> opaque_bands,
     platform::job_pool::Pool* pool
 ) noexcept;
 

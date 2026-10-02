@@ -86,8 +86,12 @@ uint8_t nearest_index(const oa::PaletteBytes& palette, uint8_t r, uint8_t g, uin
 } // namespace
 
 bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
-    if (screen_ == Screen::match && match_use_layers_)
+    if (screen_ == Screen::match && match_use_layers_) {
+        // A world the accelerated presentation scaled is drawn again as the
+        // standard tier draws it, so the picture saved is the game's own.
+        ensure_screen_world();
         compose_match_frame(surface_);
+    }
     if (surface_.width == 0 || surface_.height == 0 ||
         surface_.rgb.size() != static_cast<std::size_t>(surface_.width) * surface_.height * 3U)
         return false;

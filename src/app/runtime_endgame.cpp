@@ -174,6 +174,7 @@ void Runtime::keep_battlefield_frame() {
     // outcome's frame now.
     if (!outcome_frame_drawn_)
         render_match_surface();
+    ensure_screen_world();
     renderer::Surface frame;
     compose_match_layers(frame);
     if (frame.width == 0 || frame.height == 0 ||

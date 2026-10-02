@@ -20,6 +20,12 @@
 // written. The time of a 1080p battlefield filtered from a scene twice its
 // size, at one half and at two scales whose footprints cover three scene
 // pixels, is logged, for information only.
+//
+// The references of the graphics card's filters: the sharp-bilinear and
+// pixel-art filters copy the scene at scale 1 and are nearest replication
+// at 2, 3 and 4, where LINEAR blends; and the overlay rule keeps the picture
+// where the overlay is transparent and takes the overlay's colour where it
+// is opaque.
 #include "oa/platform/job_pool.hpp"
 #include "oa/present/world_renderer.hpp"
 #include "oa/present/world_renderer/scene_filter.hpp"
@@ -53,6 +59,7 @@ constexpr uint32_t seed_bands = 0x3C6EF372U;
 constexpr uint32_t seed_digest = 0xA54FF53AU;
 constexpr uint32_t seed_timing = 0x510E527FU;
 constexpr uint32_t seed_resample = 0x9B05688CU;
+constexpr uint32_t seed_card = 0x9B05688CU;
 
 /// Returns numerator / denominator in 16.16, rounded to the nearest.
 ///
@@ -1135,6 +1142,126 @@ void log_time_at_1080p() {
 
 } // namespace
 
+/// Checks that the sharp-bilinear and pixel-art references copy the scene
+/// at scale 1 and replicate each scene pixel into a whole block at 2, 3 and
+/// 4, as NEAREST does, while plain LINEAR blends across the blocks.
+void test_card_filters_at_whole_scales() {
+    Random random{seed_card};
+    const Picture scene = random_scene(random, 23, 17, 23);
+    for (const uint32_t scale : {1U, 2U, 3U, 4U}) {
+        const wr::ScenePlacement placement{
+            static_cast<double>(scale), static_cast<double>(scale), 0.0, 0.0
+        };
+        Picture nearest = blank(scene.width * scale, scene.height * scale, scene.width * scale, 0);
+        wr::nearest_rgb24(scene.source(), placement, nearest.target());
+        Picture sharp = blank(nearest.width, nearest.height, nearest.width, 0);
+        wr::sharp_bilinear_rgb24(scene.source(), placement, scale, sharp.target());
+        Picture pixelart = blank(nearest.width, nearest.height, nearest.width, 0);
+        wr::pixelart_rgb24(scene.source(), placement, pixelart.target());
+        Picture linear = blank(nearest.width, nearest.height, nearest.width, 0);
+        wr::bilinear_rgb24(scene.source(), placement, linear.target());
+        bool blocks = true;
+        for (uint32_t y = 0; y < nearest.height; ++y)
+            for (uint32_t x = 0; x < nearest.width; ++x)
+                for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel)
+                    blocks = blocks &&
+                             nearest.at(x, y, channel) == scene.at(x / scale, y / scale, channel);
+        OA_CHECK(blocks);
+        OA_CHECK(sharp.rgb == nearest.rgb);
+        OA_CHECK(pixelart.rgb == nearest.rgb);
+        if (scale == 1)
+            OA_CHECK(linear.rgb == scene.rgb);
+        else
+            OA_CHECK(linear.rgb != nearest.rgb);
+    }
+}
+
+/// Checks the sharp-bilinear reference between whole scales: each scene
+/// pixel is a solid block with a blended edge at most one picture pixel
+/// wide, and every blended level lies between its two neighbours'.
+void test_sharp_bilinear_between_whole_scales() {
+    // One row: a black pixel then a white one, at 2.5 with a prescale of 3.
+    Picture scene = blank(2, 1, 2, 0);
+    for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel)
+        scene.rgb[wr::area_pixel_bytes + channel] = 255;
+    Picture picture = blank(5, 1, 5, 0);
+    wr::sharp_bilinear_rgb24(scene.source(), {2.5, 1.0, 0.0, 0.0}, 3, picture.target());
+    // Pixels 0 and 1 are black, 3 and 4 white, and 2, on the edge, between.
+    OA_CHECK(picture.at(0, 0, 0) == 0 && picture.at(1, 0, 0) == 0);
+    OA_CHECK(picture.at(3, 0, 0) == 255 && picture.at(4, 0, 0) == 255);
+    OA_CHECK(picture.at(2, 0, 0) > 0 && picture.at(2, 0, 0) < 255);
+    // The pixel-art reference blends the same edge pixel alone.
+    Picture pixelart = blank(5, 1, 5, 0);
+    wr::pixelart_rgb24(scene.source(), {2.5, 1.0, 0.0, 0.0}, pixelart.target());
+    OA_CHECK(pixelart.at(0, 0, 0) == 0 && pixelart.at(1, 0, 0) == 0);
+    OA_CHECK(pixelart.at(3, 0, 0) == 255 && pixelart.at(4, 0, 0) == 255);
+    OA_CHECK(pixelart.at(2, 0, 0) > 0 && pixelart.at(2, 0, 0) < 255);
+}
+
+/// Checks the overlay rule: an opaque overlay pixel's colour replaces the
+/// picture's, and a transparent one leaves it.
+void test_overlay_rule() {
+    Random random{seed_card};
+    Picture picture = random_scene(random, 7, 5, 9);
+    const Picture before = picture;
+    std::vector<uint32_t> overlay(static_cast<std::size_t>(8) * 5, 0);
+    // Opaque pixels on the diagonal, a transparent colour beside each.
+    for (uint32_t y = 0; y < 5; ++y) {
+        overlay[static_cast<std::size_t>(y) * 8 + y] = 0xFF102030U + y;
+        overlay[static_cast<std::size_t>(y) * 8 + y + 1] = 0x00E0D0C0U;
+    }
+    wr::overlay_rgb24(picture.target(), overlay.data(), 8);
+    bool kept = true;
+    bool taken = true;
+    for (uint32_t y = 0; y < 5; ++y)
+        for (uint32_t x = 0; x < 7; ++x)
+            for (uint32_t channel = 0; channel < wr::area_pixel_bytes; ++channel) {
+                if (x == y) {
+                    const uint32_t word = 0xFF102030U + y;
+                    taken = taken && picture.at(x, y, channel) ==
+                                         static_cast<uint8_t>(word >> (16 - 8 * channel));
+                } else {
+                    kept = kept && picture.at(x, y, channel) == before.at(x, y, channel);
+                }
+            }
+    OA_CHECK(kept);
+    OA_CHECK(taken);
+    // The padding past each row is never written.
+    OA_CHECK(
+        std::equal(
+            picture.rgb.begin() + 7 * wr::area_pixel_bytes,
+            picture.rgb.begin() + 9 * wr::area_pixel_bytes,
+            before.rgb.begin() + 7 * wr::area_pixel_bytes
+        )
+    );
+}
+
+/// Checks the exact footprint average: the area pass's reference at scales
+/// at most 1, and above 1 a scene pixel's level wherever a footprint lies
+/// within it.
+void test_footprint_reference() {
+    Random random{seed_card};
+    const Picture scene = random_scene(random, 31, 19, 31);
+    for (const double scale : {0.5, 0.6, 0.75, 1.0})
+        for (uint32_t y = 0; y < 8; ++y)
+            for (uint32_t x = 0; x < 12; ++x)
+                OA_CHECK(
+                    std::abs(
+                        wr::footprint_sample_reference(
+                            scene.source(), {scale, scale, 0.0, 0.0}, x, y, 1
+                        ) -
+                        wr::area_sample_reference(scene.source(), scale, x, y, 1)
+                    ) < 1e-9
+                );
+    // At 4 every footprint lies within one scene pixel.
+    for (uint32_t y = 0; y < 16; ++y)
+        for (uint32_t x = 0; x < 16; ++x)
+            OA_CHECK(
+                wr::footprint_sample_reference(scene.source(), {4.0, 4.0, 0.0, 0.0}, x, y, 2) ==
+                static_cast<double>(scene.at(x / 4, y / 4, 2))
+            );
+}
+
 int main() {
     test_weights_are_exact();
     test_matches_slow_implementation();
@@ -1151,6 +1278,10 @@ int main() {
     test_nearest_resample_refusals();
     test_error_texts();
     test_pinned_digest();
+    test_card_filters_at_whole_scales();
+    test_sharp_bilinear_between_whole_scales();
+    test_overlay_rule();
+    test_footprint_reference();
     log_time_at_1080p();
     return oa::test::check_exit_status();
 }

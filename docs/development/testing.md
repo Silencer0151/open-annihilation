@@ -144,6 +144,13 @@ installer itself. These tests read it:
   over the demo's data, which has no skirmish or multiplayer map and no
   save and load dialog: the notices, MULTI's among them, the grayed-out
   entries and the campaign's way in and out;
+- `native-demo-render-tiers` starts the game the same way, windowed on
+  SDL's software renderer, and runs `--check-render-tiers --force-capable`
+  over the main menu and the demo's first Arm mission (`--campaign "Arm
+  Campaign" --mission 0`), as `native-render-tiers` runs it over a skirmish
+  of the installed game: the accelerated presentation's frames held to the
+  processor's composition and to that renderer's own filters. It skips with
+  the game's check on a machine under 2 GiB of memory;
 - `native-demo-campaign-ending` starts the game the same way and plays the
   demo's last Arm mission, AC03, at easy with `--give-orders`: it must be won
   without a failed tick, and its end screen must leave through the ending

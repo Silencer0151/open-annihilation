@@ -206,9 +206,80 @@ logs it.
   scene is the battlefield at the zoom, the world layer itself; drawn apart
   at the zoom it is the battlefield's size, and at another scale it covers
   the battlefield's map pixels at that scale with two more columns and
-  rows, rounded up to even sizes. `app-world-scaling` checks these by
-  table, and that over the zoom range and every window's battlefield the
-  scene holds every pixel the nearest resample reads.
+  rows, rounded up to even sizes. The accelerated presentation's own
+  (`accelerated_world_scaling`): below zoom 1 the scene is drawn at the
+  highest draw scale its scene budget allows (`accelerated_draw_scale`: the
+  zoom times the square root of the budget's scene pixels per battlefield
+  pixel and of its most scene pixels over the battlefield's, from the zoom
+  to 1; both numbers are placeholders until measured) and reduced by the
+  area pass, unless the budget is none or the zoom over the draw scale is
+  above the cut-off of 0.9, where the frame draws at the zoom; zoom 1 draws
+  as always; above it the scene is drawn at 1 and magnified, unless magnify
+  is off. `area_scale` gives the area pass's 16.16 scale, and
+  `largest_magnified_scene` the scene a magnified frame's texture is made
+  at. `app-world-scaling` checks these by table, and that over the zoom
+  range and every window's battlefield the scene holds every pixel the
+  nearest resample and the area pass read.
+- The accelerated presentation (`runtime_accelerated.cpp`,
+  `scaled_world.hpp`, `scaled_world.cpp`): a component its host switches on
+  at a rung of the step-down ladder (`switch_accelerated_presentation`);
+  nothing switches it on yet but `--check-render-tiers`, so every other
+  run, the director, headless runs and every other check draw and present
+  as the standard tier always has. Switched on, a zoomed-out match frame
+  draws its scene at the draw scale and the exact area pass reduces it into
+  the world layer on the drawing threads, which is then painted over and
+  uploaded 1:1 as always; lasers, lightning and selection lines are drawn
+  thicker in that scene, so they stay about one screen pixel thick
+  (`scene_line_thickness`). A zoomed-in frame draws its scene at 1, which is
+  uploaded to a streaming ARGB8888 texture made once at the largest size a
+  magnified frame needs, in tiles beyond the renderer's texture limit
+  (`TiledTexture`), and the card magnifies it into the battlefield
+  (`draw_scaled_world`): NEAREST at a whole-number zoom, the renderer's
+  PIXELART where it has it (`probe_pixelart`), and otherwise sharp-bilinear,
+  NEAREST into a prescale target made once at its largest within the
+  prescale budget, then LINEAR; the prescale target is split into tiles with
+  gutters beyond the renderer's texture limit, as the scene is, and each of
+  the scene's tiles is drawn into each of its tiles (`PrescaleTarget`).
+  The nearest picture of the scene is kept as
+  the base the painters after the fog paint over; what they changed goes up
+  as an overlay, transparent elsewhere, in the 32-row bands that hold it now
+  or held it last (`convert_rgb24_overlay_argb`), laid over the magnified
+  scene 1:1. A change of the window's size remakes the card's textures and
+  the overlay but keeps the base the frame being presented drew, so that
+  frame is magnified as every other. The HUD strips, the front end and the
+  loading screen are drawn by `sharp_draw`: NEAREST at a whole-number
+  scale, else PIXELART or sharp-bilinear, their prescale targets drawn
+  again when the layer's revision moved. Whatever paints a layer moves its
+  revision, and every frame the loop presents paints the HUD, and the front
+  end too unless its panel keeps the frame shown, so the target is drawn
+  again once on each such frame, and never for a present without a paint;
+  the front end's target is freed during a match. A call
+  only this tier makes that fails throws `AccelerationError`, after which
+  the tier is dropped for the run and the frame presented as the standard
+  tier presents it (`drop_acceleration`). Screenshots, film frames, the
+  load and save backdrop, the briefing's backdrop and the end screen keep
+  the standard tier's picture of the same moment (`ensure_screen_world`),
+  drawn again with the frame's counts of units drawn kept and the HUD's
+  resource readout, which saves keep in `Game.resource_readout`, not eased
+  again.
+  `app-scaled-world-software` checks the drawing on SDL's software
+  renderer against nearest replication and that renderer's own LINEAR,
+  modelled on the processor (`software_linear_rgb24`), within 2 levels,
+  scenes and prescale targets in tiles among it; `app-world-draws` checks
+  the thick lines band by band; and
+  `--check-render-tiers` (`runtime_render_tiers_check.cpp`,
+  `native-render-tiers`, with `--force-capable` on that renderer, and
+  `native-demo-render-tiers` over the demo's first Arm mission) checks the
+  presented frames of the main menu and a fight at zooms from 0.5 to 4,
+  against the references of `scene_filter.hpp` on a card and against that
+  model on SDL's software renderer; that a frame depends on none before it,
+  the first after the tier is switched on or the window resized among
+  them; that the picture kept for a reader is the standard tier's and eases
+  nothing; that a zoom ease makes no texture; and that prescale targets are
+  drawn once a painted frame; it writes pictures of one moment at zoom
+  0.5, 1 and 2.5 in both tiers. The setting, the flags, the probe's function test, the records,
+  the step-down's feed and the memory guard that would switch it on in a
+  player's game are not wired yet.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
   match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
   Game Settings sheet, the removal question) is placed as 3.1c's panel
@@ -626,11 +697,15 @@ logs it.
   `runtime_renderer.cpp` holds the runtime's side: the render events,
   present errors and rebuilds, a lost device's wait and the stall rule;
   `runtime_renderer_ladder_check.cpp` the ladder check.
-- `scaled_world.hpp`, `scaled_world.cpp`: `TiledTexture`, a window-size
+- `scaled_world.hpp`, `scaled_world.cpp`: `TiledTexture`, a streaming
   texture made as one texture within the renderer's limit and as tiles
-  with one-texel gutters beyond it, and `PresentError`;
-  `app-scaled-world-software` checks that tiles read back as one texture
-  does on SDL's software renderer.
+  with one-texel gutters beyond it, for the standard tier's window-size
+  layers and the accelerated tier's scene and overlay; `PresentError` and
+  `AccelerationError`; and the accelerated tier's drawing on the card
+  (`PrescaleTarget`, `draw_scaled_world`, `sharp_draw`, `probe_pixelart`).
+  `app-scaled-world-software` checks on SDL's software renderer that tiles
+  read back as one texture does, and the card's drawing against that
+  renderer's own filters.
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
   no SDL, no files and no clock, of which the game uses so far the walk of

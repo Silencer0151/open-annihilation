@@ -10,11 +10,21 @@
 // build type and number of threads. Beside it, the nearest resample turns a
 // scene into the picture at any other scale, nearest-pixel, with the terrain
 // fill's step.
+//
+// Beside them, the references of what the graphics card is asked to do with
+// a scene, computed on the processor in double precision: its NEAREST and
+// LINEAR scale modes, the sharp-bilinear filter (NEAREST into a prescale
+// target, then LINEAR), its pixel-art filter and the overlay laid over the
+// scaled picture; the exact footprint average they are measured against;
+// the thickness of thin lines in a reduced scene; and the measures of how
+// steady a moving picture stays. Tests and checks use the references; the
+// game draws through the card.
 
 #include "oa/platform/job_pool.hpp"
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace oa::present::world_renderer {
@@ -315,6 +325,167 @@ inline constexpr uint32_t resample_band_rows = 32;
 /// @return the average, from 0 to 255, unrounded
 [[nodiscard]] double area_sample_reference(
     const RgbSource& scene, double scale, uint32_t x, uint32_t y, uint32_t channel
+) noexcept;
+
+/// Where a scene lands on a picture: picture point (offset_x + u * scale_x,
+/// offset_y + v * scale_y) shows scene point (u, v). Pixel (x, y) of either
+/// covers [x, x + 1) by [y, y + 1), its centre at (x + 0.5, y + 0.5).
+struct ScenePlacement {
+    double scale_x{1.0};  ///< picture pixels per scene pixel across, above 0
+    double scale_y{1.0};  ///< picture pixels per scene pixel down, above 0
+    double offset_x{0.0}; ///< picture column the scene's left edge lands on
+    double offset_y{0.0}; ///< picture row the scene's top edge lands on
+};
+
+/// Draws the scene into the picture as the card's NEAREST scale mode does.
+///
+/// Each picture pixel shows the scene pixel under its centre, clamped to the
+/// scene's edge.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param[out] picture every pixel written
+void nearest_rgb24(
+    const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
+) noexcept;
+
+/// Draws the scene into the picture as the card's LINEAR scale mode does.
+///
+/// Each picture pixel is the scene interpolated linearly between the
+/// centres of the four scene pixels around its centre, clamped to the
+/// scene's edge, rounded to the nearest level with halves up.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param[out] picture every pixel written
+void bilinear_rgb24(
+    const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
+) noexcept;
+
+/// Draws the scene into the picture by the sharp-bilinear filter.
+///
+/// The scene is drawn NEAREST into a prescale target `factor` times its
+/// size, which is then drawn LINEAR into the picture: each scene pixel
+/// becomes a solid block with a blended edge one picture pixel wide. A
+/// factor of 1 is plain LINEAR; at a whole-number scale equal to the
+/// factor, with the scene's edges on pixel edges, the picture is nearest
+/// replication.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param factor the prescale target's pixels per scene pixel, at least 1
+/// @param[out] picture every pixel written
+void sharp_bilinear_rgb24(
+    const RgbSource& scene,
+    const ScenePlacement& placement,
+    uint32_t factor,
+    const RgbTarget& picture
+) noexcept;
+
+/// Draws the scene into the picture as the card's pixel-art scale mode does.
+///
+/// For each axis the picture pixel's centre falls at scene coordinate t;
+/// with b, the scene pixels a picture pixel spans, at most 1, the sample is
+/// taken between scene pixels floor(t - b/2) and the next, at the weight
+/// smoothstep(1 - b, 1, fract(t - b/2)) toward the next; scene pixels
+/// beyond the edge are the edge's. Rounded to the nearest level with halves
+/// up. At a whole-number scale with the scene's edges on pixel edges it is
+/// nearest replication.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param[out] picture every pixel written
+void pixelart_rgb24(
+    const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
+) noexcept;
+
+/// Lays an overlay over a picture: where an overlay pixel is opaque (alpha
+/// 255) its colour replaces the picture's, and elsewhere the picture shows.
+///
+/// @param[in,out] picture the picture
+/// @param overlay 0xAARRGGBB words, rows overlay_stride_pixels apart, at
+///        least the picture's size
+/// @param overlay_stride_pixels words from one overlay row's start to the next's
+void overlay_rgb24(
+    const RgbTarget& picture, const uint32_t* overlay, uint32_t overlay_stride_pixels
+) noexcept;
+
+/// Returns the exact average of one channel of the scene under a picture pixel's footprint.
+///
+/// The footprint is the scene's part the picture pixel covers; each scene
+/// pixel counts by the area of it the footprint covers, and scene pixels
+/// beyond the scene's edge are the edge's.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param x picture column
+/// @param y picture row
+/// @param channel 0 for red, 1 for green, 2 for blue
+/// @return the average, from 0 to 255, unrounded
+[[nodiscard]] double footprint_sample_reference(
+    const RgbSource& scene,
+    const ScenePlacement& placement,
+    uint32_t x,
+    uint32_t y,
+    uint32_t channel
+) noexcept;
+
+/// Returns how thick a line is drawn into a scene so that it stays about
+/// one screen pixel thick once the scene is reduced to the screen: the
+/// draw scale over the zoom, rounded to the nearest, at least 1; 1 where
+/// the scene is not reduced.
+///
+/// @param draw_scale scene pixels per map pixel
+/// @param zoom screen pixels per map pixel
+/// @return the line's thickness in scene pixels
+[[nodiscard]] int32_t scene_line_thickness(float draw_scale, float zoom) noexcept;
+
+/// Returns the light of one channel of a picture: the sum of its levels in
+/// units of a full-brightness pixel, which a thin line's picture keeps
+/// constant wherever it falls when nothing of it is lost or doubled.
+///
+/// @param picture the picture
+/// @param channel 0 for red, 1 for green, 2 for blue
+/// @return the sum of the levels over 255
+[[nodiscard]] double line_energy(const RgbSource& picture, uint32_t channel) noexcept;
+
+/// The exact values of one channel of a picture, row after row.
+struct ExactChannel {
+    std::vector<double> levels; ///< width x height levels from 0 to 255, unrounded
+    uint32_t width{};           ///< columns
+    uint32_t height{};          ///< rows
+};
+
+/// Returns the exact picture of one channel of a scene: footprint_sample_reference at every pixel.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands
+/// @param width the picture's columns
+/// @param height the picture's rows
+/// @param channel 0 for red, 1 for green, 2 for blue
+/// @return the exact levels
+[[nodiscard]] ExactChannel exact_channel(
+    const RgbSource& scene,
+    const ScenePlacement& placement,
+    uint32_t width,
+    uint32_t height,
+    uint32_t channel
+);
+
+/// Returns how much a run of frames shimmers: the mean, over each pair of
+/// consecutive frames and each pixel, of how far the pixel's change from
+/// one frame to the next departs from the change of the exact pictures of
+/// the same moments. A filter whose frames follow the exact pictures'
+/// changes, as the view moves, does not shimmer, whatever its constant
+/// blur.
+///
+/// @param frames the frames, in order, all one size
+/// @param exact the exact picture of each frame's moment, of the same size
+/// @param channel 0 for red, 1 for green, 2 for blue
+/// @return the mean departure in levels; 0 for fewer than two frames or
+///     frames and exact pictures that do not pair up
+[[nodiscard]] double shimmer(
+    std::span<const RgbSource> frames, std::span<const ExactChannel> exact, uint32_t channel
 ) noexcept;
 
 } // namespace oa::present::world_renderer

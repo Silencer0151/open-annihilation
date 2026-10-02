@@ -1,0 +1,803 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// --check-render-tiers: the accelerated presentation switched on over the
+// main menu and a skirmish, or a campaign mission, each presented frame read
+// back and compared with what the processor composes or with the card's
+// references applied to the scene; frames that depend on none before them,
+// the first after the tier is switched on or the window resized among them;
+// the standard tier's picture for the readers that keep one; and the card's
+// textures made once and its prescale targets drawn once a painted frame.
+#include "oa/app/runtime.hpp"
+
+#include "render_host.hpp"
+#include "render_run.hpp"
+#include "xrgb_conversion.hpp"
+
+#include "oa/formats/png.hpp"
+#include "oa/platform/machine.hpp"
+#include "oa/platform/render_probe.hpp"
+#include "oa/sim/unit_spawn/spawn_runtime.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <vector>
+
+namespace oa::app {
+
+namespace {
+
+namespace policy = render_policy;
+namespace wr = oa::present::world_renderer;
+
+/// Exit code of a check that skipped, which ctest reports as skipped.
+constexpr int skipped_exit_code = 77;
+
+/// A window whose chrome and front end scale by a whole number (2), and
+/// one whose chrome does not (1.6).
+constexpr int whole_scale_width = 1280;
+constexpr int whole_scale_height = 960;
+constexpr int part_scale_width = 1024;
+constexpr int part_scale_height = 768;
+
+/// Distance from the pointer that covers every cursor frame.
+constexpr int cursor_reach = 64;
+
+/// The zooms the area pass is checked at, and those the card magnifies at.
+constexpr std::array<float, 3> area_zooms{0.5F, 0.6F, 0.75F};
+constexpr std::array<float, 3> magnified_zooms{1.37F, 2.0F, 4.0F};
+/// The zoom of the frame drawn after frames between ticks, and the
+/// fractions of a tick those show.
+constexpr float history_zoom = 1.37F;
+constexpr std::array<float, 3> between_ticks{0.25F, 0.5F, 0.75F};
+/// The zoom the capture is checked at.
+constexpr float capture_zoom = 2.0F;
+/// The zoom ease: from the lowest zoom to the highest and back, each frame
+/// this many times the last.
+constexpr float ease_step = 1.0905F;
+/// The zooms the pictures for the maintainer are taken at.
+constexpr std::array<float, 3> picture_zooms{0.5F, 1.0F, 2.5F};
+/// The zooms the first frame after the tier is switched on, or after the
+/// window is resized, is checked magnified at.
+constexpr std::array<float, 2> first_frame_zooms{1.37F, 2.5F};
+/// The zooms the standard tier's picture kept for a reader is checked at:
+/// one the area pass reduces and one the card magnifies.
+constexpr std::array<float, 2> kept_picture_zooms{0.5F, 2.0F};
+/// Frames the loop presents with the HUD's prescale target counted.
+constexpr int counted_hud_frames = 3;
+/// Units each side of the fight the check draws, and the ticks it plays
+/// before its first frame, so that lasers fire and units move.
+constexpr std::size_t fight_units_per_side = 10;
+constexpr int fight_ticks = 150;
+
+/// Most a channel of a frame a graphics card scaled may differ from the
+/// reference: a card weighs a texel's neighbours at a precision of its own,
+/// as coarse as 64ths of a texel, which moves a level by up to 4 at full
+/// contrast, and rounds its own way.
+constexpr int most_card_difference = 4;
+/// Most a channel of a frame SDL's software renderer scaled may differ from
+/// that renderer's own LINEAR (software_linear_rgb24), which it equals on a
+/// processor with SSE2 or NEON; a build without either truncates twice and
+/// can give one level less.
+constexpr int most_software_difference = 2;
+/// The most the mean difference of a channel may be, on any renderer.
+constexpr double most_mean_scaled_difference = 0.5;
+/// Most a channel of the HUD may differ from the composition at a whole-number scale.
+constexpr int most_hud_difference = 1;
+
+/// A rectangle of a frame.
+struct Area {
+    int x{};
+    int y{};
+    int w{};
+    int h{};
+};
+
+/// How far two frames differ over an area.
+struct Difference {
+    int most{};
+    double mean{};
+    std::size_t pixels{}; ///< pixels compared
+};
+
+/// Compares two frames over an area, leaving out the pixels in a second area.
+///
+/// @param first a frame
+/// @param second another of the same size
+/// @param area the area compared, clipped to the frames
+/// @param left_out an area not compared
+/// @return the largest and the mean difference of a channel
+Difference compare(
+    const renderer::Surface& first,
+    const renderer::Surface& second,
+    const Area& area,
+    const Area& left_out
+) {
+    Difference difference;
+    if (first.width != second.width || first.height != second.height) {
+        difference.most = 255;
+        return difference;
+    }
+    double sum = 0.0;
+    std::size_t channels = 0;
+    const int right = std::min(area.x + area.w, static_cast<int>(first.width));
+    const int bottom = std::min(area.y + area.h, static_cast<int>(first.height));
+    for (int y = std::max(area.y, 0); y < bottom; ++y)
+        for (int x = std::max(area.x, 0); x < right; ++x) {
+            if (x >= left_out.x && x < left_out.x + left_out.w && y >= left_out.y &&
+                y < left_out.y + left_out.h)
+                continue;
+            ++difference.pixels;
+            const auto at = (static_cast<std::size_t>(y) * first.width + x) * 3U;
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                const int delta =
+                    std::abs(int{first.rgb[at + channel]} - int{second.rgb[at + channel]});
+                difference.most = std::max(difference.most, delta);
+                sum += delta;
+                ++channels;
+            }
+        }
+    difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+    return difference;
+}
+
+/// Writes a frame as a PNG file.
+///
+/// @param path the file
+/// @param frame the frame
+void write_png(const fs::path& path, const renderer::Surface& frame) {
+    std::vector<uint8_t> file;
+    const oa::formats::png::Header header{
+        frame.width, frame.height, 8, oa::formats::png::ColorType::rgb, {}
+    };
+    if (!oa::formats::png::write(oa::formats::png::Image{header, {}, frame.rgb}, &file))
+        throw std::runtime_error("render tiers check: cannot encode " + path.string());
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(
+        reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size())
+    );
+    if (!output)
+        throw std::runtime_error("render tiers check: cannot write " + path.string());
+}
+
+/// Returns a name's text for a zoom: "0.5", "1", "2.5".
+///
+/// @param zoom the zoom
+/// @return its text
+std::string zoom_text(float zoom) {
+    std::string text = std::to_string(zoom);
+    text.erase(text.find_last_not_of('0') + 1);
+    if (!text.empty() && text.back() == '.')
+        text.pop_back();
+    return text;
+}
+
+} // namespace
+
+int Runtime::check_render_tiers() {
+    const auto fail = [](const std::string& what) {
+        throw std::runtime_error("render tiers check: " + what);
+    };
+    if (sdl_.renderer == nullptr || sdl_.window == nullptr || !render_run_ ||
+        render_run_->host == nullptr)
+        fail("needs the SDL renderer and the renderer host that made it");
+    // Under the 2 GiB threshold the accelerated tier never runs, whatever
+    // the flags; on a renderer the probe rejects it runs only when forced.
+    const auto machine = oa::platform::read_machine_traits();
+    if (machine.memory < policy::smallest_accelerated_memory) {
+        std::cout << "render tiers check: skipped: the machine reports less than the 2 GiB "
+                     "threshold of memory\n";
+        return skipped_exit_code;
+    }
+    // What the renderer host found of the renderer when it made it.
+    const auto& facts = render_run_->host->facts();
+    policy::RendererFacts renderer_facts{};
+    renderer_facts.driver.software =
+        facts.renderer == oa::platform::render_probe::software_renderer;
+    renderer_facts.max_texture_size = render_texture_limit();
+    renderer_facts.adapter_known =
+        facts.adapter_state == oa::platform::render_probe::AdapterState::read;
+    renderer_facts.software_rasteriser = facts.software_rasteriser;
+    renderer_facts.virtual_adapter = facts.virtual_adapter;
+    renderer_facts.under_wine = facts.wine;
+    const auto capability = policy::assess_renderer(renderer_facts, false, false);
+    if (capability != policy::Capability::capable && !options_.force_capable) {
+        std::cout << "render tiers check: skipped: the renderer " << facts.renderer
+                  << " is not capable of the accelerated tier\n";
+        return skipped_exit_code;
+    }
+    const fs::path report_directory = "local/reports";
+    fs::create_directories(report_directory);
+    // SDL's software renderer is held to its own LINEAR exactly; a card to
+    // the references within its precision.
+    const bool software = renderer_facts.driver.software;
+    const int most_scaled_difference = software ? most_software_difference : most_card_difference;
+    const auto scaled_reference = [&](const wr::RgbSource& source,
+                                      const CardScale& card,
+                                      const SDL_Rect& rectangle,
+                                      const wr::RgbTarget& target) {
+        const wr::ScenePlacement placement{
+            static_cast<double>(rectangle.w) / source.width,
+            static_cast<double>(rectangle.h) / source.height,
+            static_cast<double>(rectangle.x),
+            static_cast<double>(rectangle.y)
+        };
+        switch (card.filter) {
+        case policy::ScaleFilter::nearest:
+            wr::nearest_rgb24(source, placement, target);
+            break;
+        case policy::ScaleFilter::pixelart:
+            // SDL's software renderer draws its pixel-art mode NEAREST.
+            if (software)
+                wr::nearest_rgb24(source, placement, target);
+            else
+                wr::pixelart_rgb24(source, placement, target);
+            break;
+        case policy::ScaleFilter::sharp_bilinear:
+            if (software)
+                software_linear_rgb24(source, card.factor, rectangle, target);
+            else
+                wr::sharp_bilinear_rgb24(source, placement, card.factor, target);
+            break;
+        case policy::ScaleFilter::linear:
+            if (software)
+                software_linear_rgb24(source, 1, rectangle, target);
+            else
+                wr::bilinear_rgb24(source, placement, target);
+            break;
+        }
+    };
+
+    // The rung every case draws at: the full scene budget with the area
+    // pass, magnify on, the chrome filtered, and the card's magnification
+    // by PIXELART where the renderer has it, else by sharp-bilinear.
+    policy::LadderState rung{};
+    rung.method = policy::ZoomOutMethod::area;
+    rung.budget = policy::SceneBudget::full;
+    rung.magnify = true;
+    rung.filtered_chrome = true;
+    rung.card =
+        oa::app::probe_pixelart(sdl_.renderer, nullptr)
+            ? policy::CardFilter::pixelart
+            : (oa::platform::light_machine(machine) || oa::platform::running_on_raspberry_pi()
+                   ? policy::CardFilter::prescale_quarter
+                   : policy::CardFilter::prescale_full);
+    rung.standard = false;
+    const auto& counts = accelerated_.counts;
+    const auto resize = [&](int width, int height) {
+        if (!SDL_SetWindowSize(sdl_.window, width, height) || !SDL_SyncWindow(sdl_.window))
+            fail(std::string("SDL_SetWindowSize: ") + SDL_GetError());
+        apply_output_mode();
+    };
+    const auto presented = [&]() {
+        renderer::Surface frame;
+        capture_frame_ = &frame;
+        render();
+        capture_frame_ = nullptr;
+        return frame;
+    };
+    const auto gamma_of = [&](std::vector<uint8_t> bytes) {
+        if (!gamma_identity_)
+            for (auto& byte : bytes)
+                byte = gamma_table_[byte];
+        return bytes;
+    };
+
+    // The main menu, letterboxed at 2.25 by the card's filter, and at 2 by
+    // NEAREST with no prescale target.
+    switch_accelerated_presentation(true, rung);
+    for (const auto& [width, height] :
+         {std::pair{kDefaultWindowWidth, kDefaultWindowHeight},
+          std::pair{whole_scale_width, whole_scale_height}}) {
+        resize(width, height);
+        const uint64_t draws_before = counts.prescale_draws;
+        const auto read = presented();
+        if (!accelerated_presentation())
+            fail("the accelerated presentation stopped over the main menu");
+        SDL_FRect letterbox{};
+        if (!SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &letterbox))
+            fail(std::string("SDL_GetRenderLogicalPresentationRect: ") + SDL_GetError());
+        const double scale = static_cast<double>(letterbox.w) / surface_.width;
+        const auto card = accelerated_card_scale(
+            scale, surface_.width, surface_.height, accelerated_.screen_prescale
+        );
+        const bool whole = std::floor(scale) == scale;
+        if (whole &&
+            (card.filter != policy::ScaleFilter::nearest || counts.prescale_draws != draws_before))
+            fail("the main menu at a whole-number scale was drawn through a prescale target");
+        const auto source_rgb = gamma_of(surface_.rgb);
+        const wr::RgbSource source{
+            source_rgb.data(), surface_.width, surface_.height, surface_.width
+        };
+        renderer::Surface reference{
+            read.width, read.height, std::vector<uint8_t>(read.rgb.size(), 0)
+        };
+        const wr::RgbTarget target{reference.rgb.data(), read.width, read.height, read.width};
+        // The read-back covers the letterbox alone.
+        scaled_reference(
+            source,
+            card,
+            {0, 0, static_cast<int>(letterbox.w), static_cast<int>(letterbox.h)},
+            target
+        );
+        if (read.width != static_cast<uint32_t>(letterbox.w) ||
+            read.height != static_cast<uint32_t>(letterbox.h))
+            fail("the main menu's read-back is not its letterbox");
+        const Area area{0, 0, static_cast<int>(read.width), static_cast<int>(read.height)};
+        const auto difference = compare(read, reference, area, {});
+        std::cout << "render tiers check: main menu at " << width << 'x' << height << ", scale "
+                  << scale << ", filter " << static_cast<int>(card.filter) << " x" << card.factor
+                  << ": most " << difference.most << ", mean " << difference.mean << '\n';
+        if (difference.pixels == 0 || difference.most > (whole ? 0 : most_scaled_difference) ||
+            difference.mean > most_mean_scaled_difference) {
+            write_png(report_directory / "native-render-tiers-menu-presented.png", read);
+            write_png(report_directory / "native-render-tiers-menu-reference.png", reference);
+            fail("the main menu's presented frame strays from the card's reference");
+        }
+    }
+
+    // A skirmish, or the campaign mission --campaign and --mission name, its
+    // loading screen letterboxed by the card's filter, each of its frames
+    // drawn into the prescale target, then drawn at a window whose chrome
+    // scales by 2.
+    resize(kDefaultWindowWidth, kDefaultWindowHeight);
+    const uint64_t draws_before_loading = counts.prescale_draws;
+    if (options_.campaign_mission)
+        std::ignore = start_headless_campaign_mission();
+    else
+        start_benchmark_skirmish();
+    if (!accelerated_presentation())
+        fail("the accelerated presentation stopped over the loading screen");
+    if (rung.card != policy::CardFilter::pixelart && counts.prescale_draws == draws_before_loading)
+        fail("the loading screen was not drawn by the card's filter");
+    std::cout << "render tiers check: the loading screen drew "
+              << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
+    switch_accelerated_presentation(false, rung);
+    resize(whole_scale_width, whole_scale_height);
+    // The cursor waits in the blank corner right of the bottom bar.
+    update_pointer(
+        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
+    );
+    uint16_t anchor = 0;
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
+            oa::world_unit_at(&match_->state(), slot.unit_index)->owner_index ==
+                match_local_player_) {
+            anchor = slot.unit_index;
+            break;
+        }
+    if (anchor == 0)
+        fail("found no local unit");
+    // A fight beside the commander, played until lasers fire, where the
+    // game's data has its units; otherwise the match's own units, played as
+    // long.
+    const bool fight = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMPW") != 0 &&
+                       oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORAK") != 0;
+    if (fight)
+        spawn_combat_armies(fight_units_per_side);
+    else
+        std::cout
+            << "render tiers check: the data has no fight's units; the match's own are drawn\n";
+    for (int tick = 0; tick < fight_ticks; ++tick)
+        step_match_simulation();
+    const auto at_zoom = [&](float zoom) {
+        match_zoom_ = match_zoom_target_ = zoom;
+        center_camera_on_unit(anchor);
+    };
+    const auto cursor = [&]() {
+        return Area{
+            static_cast<int>(match_pointer_x_) - cursor_reach,
+            static_cast<int>(match_pointer_y_) - cursor_reach,
+            2 * cursor_reach,
+            2 * cursor_reach
+        };
+    };
+    const auto battlefield = [&]() {
+        return Area{
+            match_layout_.left,
+            match_layout_.top,
+            match_layout_.battlefield_width(),
+            match_layout_.battlefield_height()
+        };
+    };
+    const auto composed = [&]() {
+        renderer::Surface frame;
+        compose_match_frame(frame);
+        return frame;
+    };
+
+    // The pictures for the maintainer: one moment at each zoom in both tiers.
+    for (const float zoom : picture_zooms)
+        for (const bool on : {false, true}) {
+            switch_accelerated_presentation(on, rung);
+            at_zoom(zoom);
+            const auto read = presented();
+            write_png(
+                report_directory /
+                    ("native-render-tiers-" + std::string(on ? "accelerated" : "standard") +
+                     "-zoom-" + zoom_text(zoom) + ".png"),
+                read
+            );
+        }
+
+    // At zoom 0.5 the area pass of the terrain drawn at one pixel per map
+    // pixel is, byte for byte, the terrain the standard tier's box filter
+    // averages.
+    {
+        switch_accelerated_presentation(false, rung);
+        at_zoom(kMinBattlefieldZoom);
+        std::ignore = presented();
+        const auto boxed = match_terrain_cache_;
+        switch_accelerated_presentation(true, rung);
+        std::ignore = presented();
+        const auto& scene = match_terrain_cache_;
+        if (accelerated_.frame.method != SceneMethod::area || accelerated_.frame.draw_scale != 1.0F)
+            fail("zoom 0.5 was not drawn at one pixel per map pixel");
+        wr::AreaPlan plan;
+        std::vector<uint8_t> averaged(boxed.rgb.size());
+        if (wr::plan_area_filter(plan, wr::area_scale_min, boxed.width, boxed.height) !=
+                wr::AreaError::none ||
+            wr::area_filter_rgb24(
+                plan,
+                {scene.rgb.data(), scene.width, scene.height, scene.width},
+                {averaged.data(), boxed.width, boxed.height, boxed.width}
+            ) != wr::AreaError::none)
+            fail("the area pass refused the terrain at zoom 0.5");
+        if (averaged != boxed.rgb)
+            fail("the area pass of the terrain at zoom 0.5 differs from the box filter's");
+        std::cout << "render tiers check: at zoom 0.5 the area pass of the terrain equals the "
+                     "box filter's, "
+                  << boxed.width << 'x' << boxed.height << '\n';
+    }
+    switch_accelerated_presentation(true, rung);
+    // Zoom 1 at a whole-number chrome scale: the frame the processor composes.
+    at_zoom(1.0F);
+    {
+        const auto read = presented();
+        const auto expected = composed();
+        if (accelerated_.frame.method != SceneMethod::none)
+            fail("zoom 1 was split from the world layer");
+        const auto world = compare(read, expected, battlefield(), cursor());
+        const auto whole =
+            compare(read, expected, {0, 0, match_layout_.width, match_layout_.height}, cursor());
+        if (world.most != 0 || whole.most > most_hud_difference) {
+            write_png(report_directory / "native-render-tiers-zoom-1-presented.png", read);
+            write_png(report_directory / "native-render-tiers-zoom-1-composed.png", expected);
+            fail("zoom 1 differs from compose_match_frame");
+        }
+    }
+    // Zoomed out: the area pass's picture, uploaded as the processor composed it.
+    for (const float zoom : area_zooms) {
+        at_zoom(zoom);
+        const auto read = presented();
+        const auto expected = composed();
+        if (accelerated_.frame.method != SceneMethod::area)
+            fail("zoom " + zoom_text(zoom) + " was not reduced by the area pass");
+        const auto difference = compare(read, expected, battlefield(), cursor());
+        std::cout << "render tiers check: zoom " << zoom_text(zoom)
+                  << " by the area pass at draw scale " << accelerated_.frame.draw_scale
+                  << ": most " << difference.most << '\n';
+        if (difference.most != 0) {
+            write_png(
+                report_directory /
+                    ("native-render-tiers-zoom-" + zoom_text(zoom) + "-presented.png"),
+                read
+            );
+            write_png(
+                report_directory /
+                    ("native-render-tiers-zoom-" + zoom_text(zoom) + "-composed.png"),
+                expected
+            );
+            fail("zoom " + zoom_text(zoom) + " differs from the area pass's composition");
+        }
+    }
+    // Zoomed in: the scene by the card's filter, then the overlay, against
+    // the references applied to the same scene. A frame read back is held
+    // to them as the frame the card magnified.
+    const auto check_magnified = [&](float zoom,
+                                     const renderer::Surface& read,
+                                     const std::string& which) {
+        if (accelerated_.frame.method != SceneMethod::magnify || !accelerated_.magnified)
+            fail(which + " at zoom " + zoom_text(zoom) + " was not magnified");
+        const uint32_t bf_w = match_world_cpu_.width;
+        const uint32_t bf_h = match_world_cpu_.height;
+        const uint32_t scene_w = match_scene_cpu_.width;
+        const uint32_t scene_h = match_scene_cpu_.height;
+        const auto corner = [&](uint32_t battlefield_extent, uint32_t scene_extent) {
+            return std::min(
+                static_cast<uint32_t>(
+                    std::ceil(static_cast<double>(battlefield_extent) / static_cast<double>(zoom))
+                ),
+                scene_extent
+            );
+        };
+        const uint32_t width = corner(bf_w, scene_w);
+        const uint32_t height = corner(bf_h, scene_h);
+        const auto card = accelerated_card_scale(
+            zoom,
+            std::min(width + 1, scene_w),
+            std::min(height + 1, scene_h),
+            accelerated_.world_prescale
+        );
+        const auto scene_rgb = gamma_of(match_scene_cpu_.rgb);
+        const wr::RgbSource source{scene_rgb.data(), width, height, scene_w};
+        renderer::Surface reference = read;
+        renderer::Surface scaled = reference;
+        scaled_reference(
+            source,
+            card,
+            {match_layout_.left,
+             match_layout_.top,
+             static_cast<int>(std::lround(static_cast<double>(width) * zoom)),
+             static_cast<int>(std::lround(static_cast<double>(height) * zoom))},
+            {scaled.rgb.data(), scaled.width, scaled.height, scaled.width}
+        );
+        // The battlefield of the reference is the scaled scene, then the
+        // overlay of what the painters changed.
+        std::vector<uint8_t> overlay(std::size_t{bf_w} * bf_h * 4U);
+        std::vector<uint8_t> bands(platform::job_pool::bands_of_rows(bf_h, xrgb_band_rows));
+        convert_rgb24_overlay_argb(
+            match_world_cpu_.rgb.data(),
+            accelerated_.base.data(),
+            bf_w,
+            bf_h,
+            overlay.data(),
+            std::size_t{bf_w} * 4U,
+            gamma_identity_ ? nullptr : &gamma_table_,
+            bands,
+            nullptr
+        );
+        renderer::Surface field{bf_w, bf_h, std::vector<uint8_t>(std::size_t{bf_w} * bf_h * 3U)};
+        for (uint32_t y = 0; y < bf_h; ++y)
+            std::copy_n(
+                scaled.rgb.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        ((static_cast<std::size_t>(y) + match_layout_.top) * scaled.width +
+                         match_layout_.left) *
+                        3U
+                    ),
+                bf_w * 3U,
+                field.rgb.begin() + static_cast<std::ptrdiff_t>(std::size_t{y} * bf_w * 3U)
+            );
+        wr::overlay_rgb24(
+            {field.rgb.data(), bf_w, bf_h, bf_w},
+            reinterpret_cast<const uint32_t*>(overlay.data()),
+            bf_w
+        );
+        for (uint32_t y = 0; y < bf_h; ++y)
+            std::copy_n(
+                field.rgb.begin() + static_cast<std::ptrdiff_t>(std::size_t{y} * bf_w * 3U),
+                bf_w * 3U,
+                reference.rgb.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        ((static_cast<std::size_t>(y) + match_layout_.top) * reference.width +
+                         match_layout_.left) *
+                        3U
+                    )
+            );
+        // The last column and row may read past the corner, which renderers
+        // clamp differently.
+        auto inner = battlefield();
+        inner.w -= 1;
+        inner.h -= 1;
+        const auto difference = compare(read, reference, inner, cursor());
+        std::cout << "render tiers check: " << which << " at zoom " << zoom_text(zoom)
+                  << " by filter " << static_cast<int>(card.filter) << " x" << card.factor
+                  << ": most " << difference.most << ", mean " << difference.mean << '\n';
+        const bool whole = std::floor(zoom) == zoom;
+        if (difference.most > (whole ? 0 : most_scaled_difference) ||
+            difference.mean > most_mean_scaled_difference) {
+            write_png(
+                report_directory /
+                    ("native-render-tiers-zoom-" + zoom_text(zoom) + "-presented.png"),
+                read
+            );
+            write_png(
+                report_directory /
+                    ("native-render-tiers-zoom-" + zoom_text(zoom) + "-reference.png"),
+                reference
+            );
+            fail(which + " at zoom " + zoom_text(zoom) + " strays from the card's reference");
+        }
+    };
+    for (const float zoom : magnified_zooms) {
+        at_zoom(zoom);
+        const auto read = presented();
+        check_magnified(zoom, read, "a magnified frame");
+        // The capture has the window's size and is the presented picture.
+        if (zoom == capture_zoom) {
+            int window_w = 0;
+            int window_h = 0;
+            SDL_GetWindowSizeInPixels(sdl_.window, &window_w, &window_h);
+            if (read.width != static_cast<uint32_t>(window_w) ||
+                read.height != static_cast<uint32_t>(window_h))
+                fail("the capture at zoom 2 is not the window's size");
+        }
+    }
+    // The very first frame after the tier is switched on, and the first
+    // after each change of the window's size, is magnified as every other.
+    for (const float zoom : first_frame_zooms) {
+        switch_accelerated_presentation(false, rung);
+        at_zoom(zoom);
+        std::ignore = presented();
+        switch_accelerated_presentation(true, rung);
+        check_magnified(zoom, presented(), "the first frame after the tier was switched on");
+    }
+    for (const float zoom : first_frame_zooms)
+        for (const auto& [width, height] :
+             {std::pair{part_scale_width, part_scale_height},
+              std::pair{whole_scale_width, whole_scale_height}}) {
+            resize(width, height);
+            update_pointer(
+                static_cast<float>(match_layout_.width - 1),
+                static_cast<float>(match_layout_.height - 1)
+            );
+            at_zoom(zoom);
+            check_magnified(
+                zoom,
+                presented(),
+                "the first frame at " + std::to_string(width) + 'x' + std::to_string(height)
+            );
+        }
+    // The standard tier's picture of the same moment, which screenshots,
+    // film frames and the backdrops keep: drawn again with the tier on, it
+    // is the standard tier's battlefield, and it changes neither the
+    // frame's counts of units drawn nor the HUD's resource readout, which
+    // saves keep.
+    for (const float zoom : kept_picture_zooms) {
+        switch_accelerated_presentation(false, rung);
+        at_zoom(zoom);
+        std::ignore = presented();
+        const auto standard = composed();
+        switch_accelerated_presentation(true, rung);
+        std::ignore = presented();
+        if (accelerated_.frame.method == SceneMethod::none)
+            fail("zoom " + zoom_text(zoom) + " was drawn as the standard tier draws it");
+        const auto draws = frame_draws_;
+        const auto readout = match_->state().game.resource_readout;
+        ensure_screen_world();
+        const auto kept = composed();
+        const auto difference = compare(kept, standard, battlefield(), cursor());
+        if (difference.pixels == 0 || difference.most != 0) {
+            write_png(
+                report_directory / ("native-render-tiers-kept-zoom-" + zoom_text(zoom) + ".png"),
+                kept
+            );
+            write_png(
+                report_directory /
+                    ("native-render-tiers-standard-kept-zoom-" + zoom_text(zoom) + ".png"),
+                standard
+            );
+            fail(
+                "the picture kept at zoom " + zoom_text(zoom) +
+                " is not the standard tier's battlefield"
+            );
+        }
+        if (frame_draws_.units_drawn != draws.units_drawn ||
+            frame_draws_.units_between_ticks != draws.units_between_ticks ||
+            frame_draws_.probe_unit != draws.probe_unit ||
+            frame_draws_.probe_drawn != draws.probe_drawn ||
+            frame_draws_.probe_x != draws.probe_x || frame_draws_.probe_z != draws.probe_z)
+            fail("drawing the kept picture changed the frame's counts of units drawn");
+        const auto& after = match_->state().game.resource_readout;
+        if (std::memcmp(&after, &readout, sizeof readout) != 0)
+            fail("drawing the kept picture eased the HUD's resource readout");
+        std::cout << "render tiers check: the picture kept at zoom " << zoom_text(zoom)
+                  << " is the standard tier's\n";
+    }
+    // History: a whole-tick frame drawn after frames between ticks shows the
+    // battlefield the one drawn before them showed.
+    {
+        at_zoom(history_zoom);
+        set_presentation_alpha(1.0F);
+        const auto before = presented();
+        for (const float fraction : between_ticks) {
+            set_presentation_alpha(fraction);
+            std::ignore = presented();
+        }
+        set_presentation_alpha(1.0F);
+        const auto after = presented();
+        // The battlefield: the HUD's resource readout eases toward the
+        // stores at every draw, whatever the tier.
+        if (compare(before, after, battlefield(), cursor()).most != 0) {
+            write_png(report_directory / "native-render-tiers-history-before.png", before);
+            write_png(report_directory / "native-render-tiers-history-after.png", after);
+            fail("a whole-tick frame's battlefield differs after frames between ticks");
+        }
+    }
+    // Needless work: at a whole-number chrome scale the HUD has no prescale
+    // target, and a zoom ease makes and destroys nothing.
+    {
+        at_zoom(kMinBattlefieldZoom);
+        std::ignore = presented();
+        if (accelerated_.hud_prescale.made())
+            fail("the HUD has a prescale target at a whole-number chrome scale");
+        const uint64_t made = counts.textures_created;
+        const uint64_t destroyed = counts.textures_destroyed;
+        std::vector<float> ease;
+        for (float zoom = kMinBattlefieldZoom; zoom < kMaxBattlefieldZoom; zoom *= ease_step)
+            ease.push_back(zoom);
+        ease.push_back(kMaxBattlefieldZoom);
+        const std::vector<float> back(ease.rbegin(), ease.rend());
+        ease.insert(ease.end(), back.begin(), back.end());
+        for (const float zoom : ease) {
+            match_zoom_ = match_zoom_target_ = zoom;
+            std::ignore = presented();
+        }
+        if (counts.textures_created != made || counts.textures_destroyed != destroyed)
+            fail(
+                "a zoom ease made " + std::to_string(counts.textures_created - made) +
+                " and destroyed " + std::to_string(counts.textures_destroyed - destroyed) +
+                " textures"
+            );
+        at_zoom(capture_zoom);
+        const uint64_t draws = counts.prescale_draws;
+        std::ignore = presented();
+        if (counts.prescale_draws != draws)
+            fail("zoom 2 drew a prescale target");
+        std::cout << "render tiers check: a zoom ease of " << ease.size()
+                  << " frames made and destroyed no texture\n";
+    }
+    // At a chrome scale of 1.6 the HUD is drawn into its prescale target
+    // once on each frame that paints the layer, which every frame the loop
+    // presents does, and on none presented again without a paint.
+    {
+        resize(part_scale_width, part_scale_height);
+        update_pointer(
+            static_cast<float>(match_layout_.width - 1),
+            static_cast<float>(match_layout_.height - 1)
+        );
+        at_zoom(1.0F);
+        std::ignore = presented();
+        if (!accelerated_.hud_prescale.made() && rung.card != policy::CardFilter::pixelart)
+            fail("the HUD has no prescale target at a chrome scale of 1.6");
+        const uint64_t draws = counts.prescale_draws;
+        for (int frame = 0; frame < counted_hud_frames; ++frame)
+            std::ignore = presented();
+        const uint64_t expected =
+            rung.card == policy::CardFilter::pixelart ? draws : draws + counted_hud_frames;
+        if (counts.prescale_draws != expected)
+            fail(
+                "the HUD was drawn into its prescale target " +
+                std::to_string(counts.prescale_draws - draws) + " times over " +
+                std::to_string(counted_hud_frames) + " frames"
+            );
+        const uint64_t painted = counts.prescale_draws;
+        present_match_layers();
+        if (counts.prescale_draws != painted)
+            fail("the HUD was drawn into its prescale target with its layer unchanged");
+    }
+    // Switched off, every frame is the standard tier's again.
+    switch_accelerated_presentation(false, rung);
+    resize(whole_scale_width, whole_scale_height);
+    for (const float zoom : {0.5F, 1.0F, 2.0F}) {
+        at_zoom(zoom);
+        const auto read = presented();
+        if (compare(read, composed(), {0, 0, match_layout_.width, match_layout_.height}, cursor())
+                .most != 0)
+            fail(
+                "a frame after the accelerated presentation was switched off differs at zoom " +
+                zoom_text(zoom)
+            );
+    }
+    std::cout << "render tiers check: the accelerated presentation draws within its references at "
+                 "every zoom, with "
+              << counts.textures_created << " textures made and " << counts.prescale_draws
+              << " prescale draws; pictures in " << report_directory.string() << '\n';
+    return 0;
+}
+
+} // namespace oa::app

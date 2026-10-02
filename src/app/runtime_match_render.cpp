@@ -865,6 +865,10 @@ void Runtime::render_match_surface() {
     // unless it is drawn apart, the scene is the world layer at the zoom.
     const auto scaling = world_scaling();
     const float draw_scale = scaling.draw_scale;
+    // What the presentation and the picture-keeping readers learn of the frame.
+    accelerated_.frame = scaling;
+    accelerated_.frame_alpha = presentation_alpha();
+    ++accelerated_.hud_revision;
     const int32_t scene_w = scaling.scene_width;
     const int32_t scene_h = scaling.scene_height;
     const auto terrain_pixels =
@@ -1672,6 +1676,14 @@ void Runtime::render_match_surface() {
     frame_draw.display = &models.display;
     frame_draw.projectile_shadow = &models.projectile_shadow;
     frame_draw.debris_view = {0, 0, vis_w - 1, vis_h - 1};
+    // A scene the area pass reduces draws its thin lines about one screen
+    // pixel thick; every other frame draws them as the game always has.
+    if (scaling.method == SceneMethod::area) {
+        frame_draw.line_thickness =
+            oa::present::world_renderer::scene_line_thickness(draw_scale, match_zoom());
+        frame_draw.bridge_line_thickness =
+            oa::present::world_renderer::scene_line_thickness(1.0F, match_zoom());
+    }
     draw_world_bands(models, frame_draw, draw_pool_.get());
     oa::present::bind_display(bound_display);
     mark_profile(OA_PROFILE_RENDER_STUFF);
@@ -1702,17 +1714,25 @@ void Runtime::render_match_surface() {
             match_world_cpu_.height,
             match_world_cpu_.width
         };
-        if (const auto error = oa::present::world_renderer::resample_nearest_rgb24(
+        if (scaling.method == SceneMethod::area)
+            area_filter_scene(world_surface);
+        else if (
+            const auto error = oa::present::world_renderer::resample_nearest_rgb24(
                 scene,
                 static_cast<float>(static_cast<double>(match_zoom()) / draw_scale),
                 picture,
                 draw_pool_.get()
             );
-            error != oa::present::world_renderer::AreaError::none)
+            error != oa::present::world_renderer::AreaError::none
+        )
             throw std::runtime_error(
                 std::string("cannot resample the battlefield's scene: ") +
                 oa::present::world_renderer::area_error_text(error)
             );
+        // The card magnifies the scene itself; what the painters change on
+        // the nearest picture is found against it, the base.
+        if (scaling.method == SceneMethod::magnify)
+            accelerated_.base.assign(match_world_cpu_.rgb.begin(), match_world_cpu_.rgb.end());
         match_scene_cpu_ = {
             world_surface.width, world_surface.height, std::move(world_surface.rgb)
         };

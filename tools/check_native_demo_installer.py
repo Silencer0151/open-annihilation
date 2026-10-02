@@ -24,10 +24,14 @@ started the same way on a fresh scratch folder: navigation
 (--check-navigation, which over data with no skirmish map walks the notices,
 the grayed-out entries and the campaign's way in and out), saved-games
 (--check-load-save, which over data with no save and load dialog checks that
-every entry to it is grayed out) or multiplayer-menu
+every entry to it is grayed out), multiplayer-menu
 (--check-multiplayer-menu, whose MULTI shows the notice for data with no
-multiplayer map). Each must end with status 0 and print the line its check
-prints when it passes.
+multiplayer map) or render-tiers (--check-render-tiers with --force-capable
+on SDL's software renderer, which switches the accelerated presentation on
+over the main menu and the demo's first Arm mission, since the demo has no
+skirmish map). Each must end with status 0 and print the line its check
+prints when it passes; a check that skips, as render-tiers does on a machine
+under 2 GiB of memory, ends with 77 and the demo check skips with it.
 
 Without OA_DEMO_INSTALLER the check prints one line and exits with 77, which
 ctest reports as skipped.
@@ -69,6 +73,8 @@ GAME_CHECKS = {
                   "LOADGAME are grayed out and take no press"),
     "multiplayer-menu": (["--check-multiplayer-menu"],
                          "multiplayer menu check: MULTI shows the notice for data with no multiplayer map"),
+    "render-tiers": (["--check-render-tiers", "--force-capable", "--campaign", "Arm Campaign", "--mission", "0"],
+                     "render tiers check: the accelerated presentation draws within its references at every zoom"),
 }
 
 
@@ -150,7 +156,10 @@ def check(native, verifier, installer, workdir):
 
 
 def game_check(native, name, installer, workdir):
-    """Runs open-annihilation's check `name` over the demo from its installer's folder; raises DemoFailure."""
+    """Runs open-annihilation's check `name` over the demo from its installer's folder.
+
+    Returns True when it passed and False when the check skipped; raises DemoFailure.
+    """
     switches, passed = GAME_CHECKS[name]
     environment = dict(os.environ, SDL_VIDEO_DRIVER="dummy", SDL_AUDIO_DRIVER="dummy",
                        SDL_RENDER_DRIVER="software")
@@ -161,8 +170,12 @@ def game_check(native, name, installer, workdir):
         errors="replace")
     output = result.stdout + result.stderr
     expect(MOUNTED in output, "open-annihilation did not mount the demo's archive", output)
+    if result.returncode == SKIP:
+        print(output, end="" if output.endswith("\n") else "\n")
+        return False
     expect(result.returncode == 0, f"open-annihilation's {name} check exited with {result.returncode}", output)
     expect(passed in output, f"open-annihilation's {name} check did not say it passed", output)
+    return True
 
 
 def main():
@@ -189,8 +202,9 @@ def main():
         try:
             if args.check == "installer":
                 check(args.native.resolve(), args.verifier.resolve(), installer.resolve(), Path(scratch))
-            else:
-                game_check(args.native.resolve(), args.check, installer.resolve(), Path(scratch))
+            elif not game_check(args.native.resolve(), args.check, installer.resolve(), Path(scratch)):
+                print(f"skipped the demo {args.check} native check: open-annihilation's check skipped")
+                return SKIP
         except DemoFailure as failure:
             print(f"FAIL {failure}")
             return 1

@@ -337,6 +337,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_render_tiers) {
+        const int status = check_render_tiers();
+        flush_preferences();
+        return status;
+    }
     if (options_.check_match_orders) {
         check_match_orders();
         flush_preferences();
@@ -868,6 +873,9 @@ void Runtime::load(Screen screen) {
 }
 
 void Runtime::rebuild_surface() {
+    // A front-end frame painted again is a new picture for its prescale
+    // target (accelerated_.screen_revision); one kept as shown is not. The
+    // loading screen's frames count their own as the sink presents them.
     if (screen_ == Screen::match) {
         refresh_filtered_terrain();
         render_match_surface();
@@ -887,11 +895,13 @@ void Runtime::rebuild_surface() {
             surface_.height = kCanvasHeight;
             surface_.rgb.assign(static_cast<std::size_t>(kCanvasWidth) * kCanvasHeight * 3U, 0);
         }
+        ++accelerated_.screen_revision;
         draw_screen_packages();
         tick_and_draw_cursor();
         return;
     }
     if (draw_end_screen_battlefield()) {
+        ++accelerated_.screen_revision;
         draw_screen_packages();
         return;
     }
@@ -899,6 +909,7 @@ void Runtime::rebuild_surface() {
     // the frame shown until it does.
     if (resources_.background.width == 0 || resources_.background.height == 0)
         return;
+    ++accelerated_.screen_revision;
     std::vector<renderer::ButtonPresentation> presentation;
     presentation.reserve(resources_.layout.gadgets.size());
     const bool keyboard = frontend_has_keyboard();

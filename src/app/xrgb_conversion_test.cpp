@@ -5,12 +5,18 @@
 // packed as 0xffRRGGBB through the gamma table, and the same bytes on pools
 // of every size; and into a 16-bit window's RGB565 pixels, each the one SDL
 // makes of the XRGB8888 pixel, on pools of every size; a rectangle of a frame
-// as the same rows and columns of the whole; and the front end's frame through
-// the gamma table as opaque ARGB8888 pixels of the corrected colours.
+// as the same rows and columns of the whole; the front end's frame through
+// the gamma table as opaque ARGB8888 pixels of the corrected colours. Rows
+// of a picture held in a wider one convert as the picture alone does,
+// opaque, so they fill ARGB8888 textures; and an overlay of what was
+// painted over a picture is transparent where nothing changed and the
+// painted colour through the gamma table, opaque, where something did, its
+// bands noted, the same on every pool.
 #include "xrgb_conversion.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -333,6 +339,155 @@ void front_end_frame_serves_as_argb() {
     }
 }
 
+void rows_of_a_wider_picture_convert_alike() {
+    std::mt19937 random(test_seed + 3);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(level / 2U + 64U);
+    // A 333x101 part of a 400-pixel-wide picture, from its 17th column.
+    constexpr uint32_t whole_width = 400;
+    constexpr uint32_t width = 333;
+    constexpr uint32_t height = 101;
+    constexpr uint32_t first_column = 17;
+    std::vector<uint8_t> whole(static_cast<std::size_t>(whole_width) * height * 3U);
+    for (auto& byte : whole)
+        byte = static_cast<uint8_t>(random());
+    std::vector<uint8_t> part(static_cast<std::size_t>(width) * height * 3U);
+    for (uint32_t y = 0; y < height; ++y)
+        std::memcpy(
+            &part[static_cast<std::size_t>(y) * width * 3U],
+            &whole[(static_cast<std::size_t>(y) * whole_width + first_column) * 3U],
+            width * 3U
+        );
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    const std::size_t pitch = static_cast<std::size_t>(width) * 4U + row_slack;
+    const std::array<uint8_t, 256>* const tables[] = {nullptr, &gamma};
+    for (const auto* table : tables) {
+        const auto expected = convert(part, width, height, table, nullptr);
+        for (job_pool::Pool* pool : {static_cast<job_pool::Pool*>(nullptr), pools.back().get()}) {
+            std::vector<uint8_t> pixels(pitch * height, untouched);
+            oa::app::convert_rgb24_xrgb_rect(
+                &whole[first_column * 3U],
+                static_cast<std::size_t>(whole_width) * 3U,
+                width,
+                height,
+                pixels.data(),
+                pitch,
+                table,
+                pool
+            );
+            CHECK(pixels == expected);
+        }
+    }
+}
+
+void overlay_holds_what_was_painted() {
+    std::mt19937 random(test_seed + 4);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(std::min<std::size_t>(255U, level + level / 4U));
+    constexpr uint32_t width = 217;
+    constexpr uint32_t height = 150; // five bands, the last a part one
+    const uint32_t bands = job_pool::bands_of_rows(height, oa::app::xrgb_band_rows);
+    std::vector<uint8_t> base(static_cast<std::size_t>(width) * height * 3U);
+    for (auto& byte : base)
+        byte = static_cast<uint8_t>(random());
+    // Paint a few pixels in the second and the last band, one of them with
+    // the colour already under it, and nothing elsewhere.
+    std::vector<uint8_t> canvas = base;
+    const auto paint = [&](uint32_t x, uint32_t y, std::array<uint8_t, 3> colour) {
+        std::memcpy(&canvas[(static_cast<std::size_t>(y) * width + x) * 3U], colour.data(), 3);
+    };
+    paint(5, 40, {1, 2, 3});
+    paint(216, 63, {200, 100, 50});
+    paint(0, 149, {9, 9, 9});
+    paint(
+        100,
+        140,
+        {base[(140U * width + 100U) * 3U],
+         base[(140U * width + 100U) * 3U + 1],
+         base[(140U * width + 100U) * 3U + 2]}
+    );
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    const std::size_t pitch = static_cast<std::size_t>(width) * 4U + row_slack;
+    const std::array<uint8_t, 256>* const tables[] = {nullptr, &gamma};
+    for (const auto* table : tables) {
+        std::vector<uint8_t> alone(pitch * height, untouched);
+        std::vector<uint8_t> alone_bands(bands, 7);
+        oa::app::convert_rgb24_overlay_argb(
+            canvas.data(),
+            base.data(),
+            width,
+            height,
+            alone.data(),
+            pitch,
+            table,
+            alone_bands,
+            nullptr
+        );
+        bool all = true;
+        uint32_t opaque = 0;
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                const auto at = (static_cast<std::size_t>(y) * width + x) * 3U;
+                const bool changed = std::memcmp(&canvas[at], &base[at], 3) != 0;
+                const auto level = [&](std::size_t index) -> uint32_t {
+                    return table != nullptr ? (*table)[canvas[index]] : canvas[index];
+                };
+                const uint32_t expected = changed ? oa::app::overlay_opaque | (level(at) << 16) |
+                                                        (level(at + 1) << 8) | level(at + 2)
+                                                  : 0U;
+                uint32_t pixel = 0;
+                std::memcpy(&pixel, &alone[y * pitch + x * 4U], 4);
+                all = all && pixel == expected;
+                opaque += changed ? 1U : 0U;
+            }
+            for (std::size_t spare = width * 4U; spare < pitch; ++spare)
+                all = all && alone[y * pitch + spare] == untouched;
+        }
+        CHECK(all);
+        CHECK(opaque == 3);
+        CHECK((alone_bands == std::vector<uint8_t>{0, 1, 0, 0, 1}));
+        for (const auto& pool : pools) {
+            std::vector<uint8_t> pixels(pitch * height, untouched);
+            std::vector<uint8_t> pool_bands(bands, 7);
+            oa::app::convert_rgb24_overlay_argb(
+                canvas.data(),
+                base.data(),
+                width,
+                height,
+                pixels.data(),
+                pitch,
+                table,
+                pool_bands,
+                pool.get()
+            );
+            CHECK(pixels == alone);
+            CHECK(pool_bands == alone_bands);
+        }
+    }
+    // Too few band entries: nothing is written.
+    std::vector<uint8_t> pixels(pitch * height, untouched);
+    std::vector<uint8_t> short_bands(bands - 1, 7);
+    oa::app::convert_rgb24_overlay_argb(
+        canvas.data(),
+        base.data(),
+        width,
+        height,
+        pixels.data(),
+        pitch,
+        nullptr,
+        short_bands,
+        nullptr
+    );
+    CHECK(pixels == std::vector<uint8_t>(pitch * height, untouched));
+    CHECK(short_bands == std::vector<uint8_t>(bands - 1, 7));
+}
+
 } // namespace
 
 int main() {
@@ -341,13 +496,16 @@ int main() {
     rgb565_is_what_sdl_makes_of_xrgb();
     rectangle_is_that_part_of_the_whole();
     front_end_frame_serves_as_argb();
+    rows_of_a_wider_picture_convert_alike();
+    overlay_holds_what_was_painted();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return EXIT_FAILURE;
     }
     std::puts(
         "xrgb conversion: every pixel packed alike on every pool, RGB565 as SDL packs it, "
-        "rectangles as the whole frame's, the front end as opaque ARGB8888"
+        "rectangles as the whole frame's, the front end as opaque ARGB8888, "
+        "overlays of what was painted"
     );
     return EXIT_SUCCESS;
 }

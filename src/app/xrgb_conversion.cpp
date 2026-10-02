@@ -79,6 +79,46 @@ void convert_rgb24_xrgb_rect(
     );
 }
 
+void convert_rgb24_overlay_argb(
+    const uint8_t* canvas,
+    const uint8_t* base,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    std::span<uint8_t> opaque_bands,
+    platform::job_pool::Pool* pool
+) noexcept {
+    const uint32_t bands = platform::job_pool::bands_of_rows(height, xrgb_band_rows);
+    if (opaque_bands.size() < bands)
+        return;
+    platform::job_pool::run_bands(pool, bands, [&](uint32_t band) {
+        const uint32_t first_row = band * xrgb_band_rows;
+        const uint32_t end_row = std::min(height, first_row + xrgb_band_rows);
+        bool opaque = false;
+        for (uint32_t y = first_row; y < end_row; ++y) {
+            auto* row = reinterpret_cast<uint32_t*>(pixels + static_cast<std::size_t>(y) * pitch);
+            const auto start = static_cast<std::size_t>(y) * width * 3U;
+            const uint8_t* painted = canvas + start;
+            const uint8_t* under = base + start;
+            for (uint32_t x = 0; x < width; ++x, painted += 3, under += 3) {
+                if (painted[0] == under[0] && painted[1] == under[1] && painted[2] == under[2]) {
+                    row[x] = 0;
+                    continue;
+                }
+                opaque = true;
+                const auto level = [gamma](uint8_t value) {
+                    return static_cast<uint32_t>(gamma != nullptr ? (*gamma)[value] : value);
+                };
+                row[x] = overlay_opaque | (level(painted[0]) << 16) | (level(painted[1]) << 8) |
+                         level(painted[2]);
+            }
+        }
+        opaque_bands[band] = opaque ? 1 : 0;
+    });
+}
+
 void pack_rgb24_rgb565_row(
     uint16_t* out, const uint8_t* rgb, int width, const std::array<uint8_t, 256>* gamma
 ) noexcept {

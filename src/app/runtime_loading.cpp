@@ -291,6 +291,7 @@ void Runtime::leave_match() {
     match_hud_cpu_ = {};
     match_world_cpu_ = {};
     destroy_match_layer_textures();
+    free_accelerated_match_textures();
     teardown_match();
     start_menu_music();
 }
