@@ -26,7 +26,7 @@ namespace {
 constexpr int kMaxPageSteps = 16;
 
 // Window sizes, smallest first.
-constexpr std::array<std::pair<int, int>, 7> kWindowSizes{{
+constexpr std::array<std::pair<int, int>, 8> kWindowSizes{{
     {640, 480},
     {1024, 768},
     {1280, 720},
@@ -34,6 +34,7 @@ constexpr std::array<std::pair<int, int>, 7> kWindowSizes{{
     {1920, 1200},
     {2560, 1440},
     {3840, 2160},
+    {5120, 2880},
 }};
 
 } // namespace
@@ -182,6 +183,42 @@ void Runtime::check_side_column() {
                 );
             match_command_ = MatchCommand::none;
             pending_build_type_ = 0;
+        }
+
+        // The commander's general page, which the ORDERS tab opens.
+        show_match_orders_page();
+        snapshot("side-column-" + size + "-orders.ppm");
+        show_match_build_page(1);
+        render_match_surface();
+
+        // A page under ORDERS and BUILD tabs opens the general page from
+        // ORDERS and comes back to its first page from BUILD.
+        const auto shown_gadget = [&](std::string_view suffix) -> const ui::gui_layout::Gadget* {
+            for (const auto& gadget : match_hud_->layout.gadgets)
+                if (gadget.common.active != 0 && gadget.common.width > 0 &&
+                    std::string_view(gadget.common.name).ends_with(suffix))
+                    return &gadget;
+            return nullptr;
+        };
+        const auto click_gadget = [&](const ui::gui_layout::Gadget& gadget) {
+            const auto point = oa::ui::display_layout::source_to_canvas(
+                match_layout_,
+                gadget.common.x + gadget.common.width / 2,
+                gadget.common.y + gadget.common.height / 2
+            );
+            click(static_cast<float>(point.x), static_cast<float>(point.y));
+        };
+        if (const auto* orders = shown_gadget("ORDERS")) {
+            click_gadget(*orders);
+            if (match_build_page_ != 0)
+                failures.push_back(size + ": ORDERS did not open the general page");
+            else if (const auto* build = shown_gadget("BUILD")) {
+                click_gadget(*build);
+                if (match_build_page_ != 1)
+                    failures.push_back(size + ": BUILD did not come back to the first page");
+            } else {
+                failures.push_back(size + ": the general page has no BUILD tab");
+            }
         }
     }
     for (const auto& [size, reachable] : reachable_by_size)

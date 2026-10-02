@@ -69,6 +69,22 @@ void Runtime::apply_output_mode() {
             ))
             throw std::runtime_error(std::string("SDL logical presentation: ") + SDL_GetError());
         ensure_texture(match_layout_.width, match_layout_.height);
+        // A build page laid out for a column of another height, or one that
+        // no longer fits, is laid out again for this one.
+        if (match_hud_ && match_build_page_ > 0 && selected_match_unit_ != 0 &&
+            match_column_rows() != match_hud_fit_rows_) {
+            const auto& gadgets = match_hud_->layout.gadgets;
+            const bool overflows = std::any_of(
+                gadgets.begin() + (gadgets.empty() ? 0 : 1),
+                gadgets.end(),
+                [&](const auto& gadget) {
+                    return gadget.common.active != 0 && gadget.common.height > 0 &&
+                           gadget.common.y + gadget.common.height > match_column_rows();
+                }
+            );
+            if (match_hud_fitted_ || overflows)
+                show_match_build_page(match_build_page_);
+        }
     } else {
         // The load and save dialogs and the in-game briefing keep the size of the
         // frame they are drawn over, and the end screen the match's size while
@@ -255,8 +271,18 @@ void Runtime::destroy_match_layer_textures() {
 std::array<Runtime::HudStrip, 3> Runtime::match_hud_strips() const {
     const int left = match_layout_.left;
     const int bar_w = match_layout_.hud_width - left;
+    // A build page laid out past 480 rows grows the HUD; the side column then
+    // shows those rows too, at the chrome's scale.
+    int column_rows = kCanvasHeight;
+    int column_height = match_layout_.hud_height;
+    if (const auto rows = static_cast<int>(match_hud_cpu_.height); rows > kCanvasHeight) {
+        column_rows = rows;
+        column_height = std::min(
+            match_layout_.height, static_cast<int>(std::lround(rows * match_layout_.scale))
+        );
+    }
     return {{
-        {0, 0, kBattlefieldLeft, kCanvasHeight, 0, 0, left, match_layout_.hud_height},
+        {0, 0, kBattlefieldLeft, column_rows, 0, 0, left, column_height},
         {kBattlefieldLeft,
          0,
          kBattlefieldWidth,

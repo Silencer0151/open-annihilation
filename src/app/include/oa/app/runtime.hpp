@@ -38,6 +38,7 @@
 #include "oa/present/world_renderer/world_overlays.hpp"
 #include "oa/sim/sprite_animation.hpp"
 #include "oa/ui/hud/boundary.hpp"
+#include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/hud/camera_scroll.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -1306,6 +1307,34 @@ class Runtime final : public menu::Host,
     /// @param layout GUI file of the panel
     /// @return false when the panel cannot be loaded, which is reported on stderr
     bool load_match_hud_layout(const std::string& layout);
+
+    /// Returns the rows of the side column, in source pixels: the window's
+    /// height at the chrome's scale, and never fewer than 480.
+    ///
+    /// @return the rows the side column can show
+    [[nodiscard]] int match_column_rows() const;
+
+    /// Lays the loaded build page out to fit the side column.
+    ///
+    /// A page that ends inside the column is left as it is. A taller one shows
+    /// part match_build_part_ of its build buttons, with its order buttons
+    /// moved up or split off under an added ORDERS tab (see
+    /// oa::ui::hud::fit_build_page), and the HUD grows past 480 rows when the
+    /// part shown still reaches below them. Records the part shown and the
+    /// number of parts.
+    void fit_match_build_page();
+
+    /// Moves and hides the loaded page's gadgets as `fit` laid them out.
+    ///
+    /// Records the part shown and the number of parts, and adds the ORDERS tab
+    /// a page split under tabs needs, beside the gadget that became its BUILD
+    /// tab, with no quick key of its own.
+    ///
+    /// @param fit the layout oa::ui::hud::fit_build_page chose
+    /// @param page the loaded page's gadgets as it laid them out, in layout order
+    void apply_build_page_fit(
+        const oa::ui::hud::BuildPageFit& fit, std::span<const oa::ui::hud::PanelGadget> page
+    );
 
     /// Opens a match dialog as the match HUD over a panel, as 3.1c's panel
     /// loader stacks a panel over the one below.
@@ -4022,7 +4051,9 @@ class Runtime final : public menu::Host,
     /// Returns the side column, top bar and bottom bar of the 640x480 HUD layer, scaled to the live
     /// layout.
     ///
-    /// The top and bottom bars hang from the column's right edge.
+    /// The top and bottom bars hang from the column's right edge. The column
+    /// shows every row of the HUD layer: 480, or more while a build page
+    /// taller than 480 rows is shown (see fit_match_build_page).
     ///
     /// @return each strip's canvas rectangle and source rectangle
     std::array<HudStrip, 3> match_hud_strips() const;
@@ -5478,9 +5509,10 @@ class Runtime final : public menu::Host,
 
     /// Checks the commander's build pages against the side column on windows of several sizes.
     ///
-    /// On each window from 640x480 to 3840x2160 a skirmish starts, the commander
+    /// On each window from 640x480 to 5120x2880 a skirmish starts, the commander
     /// is selected through SDL and NEXT walks its build pages back to the first,
-    /// each page written to local/reports/side-column-<size>-<step>.ppm. Every
+    /// each page written to local/reports/side-column-<size>-<step>.ppm and the
+    /// general page to side-column-<size>-orders.ppm. Every
     /// shown gadget must end inside the rows the side column draws, every unit
     /// button any loaded page holds must be drawn on some page of every window, and
     /// a click on the blank strip under the column must arm no build. Throws
@@ -8546,6 +8578,14 @@ class Runtime final : public menu::Host,
     // Shift held by a check for control_key_down: SDL's dummy devices hold no key.
     bool shift_held_by_check_ = false;
     int match_build_page_ = 0;
+    // A build page taller than the side column shows its build buttons in
+    // parts that PREV and NEXT step through before the next page. The part
+    // is the player's own view and is kept out of the unit's page flags.
+    int match_build_part_ = 0;           // part of the page shown, from 0
+    int match_build_part_count_ = 1;     // parts the loaded page is split into
+    uint16_t match_build_part_unit_ = 0; // unit match_build_part_ belongs to
+    int match_hud_fit_rows_ = 0;         // column rows the loaded page was laid out for
+    bool match_hud_fitted_ = false;      // the loaded page did not fit as authored
     uint16_t pending_build_type_ = 0;
     // Cursor GAF frames the order overlays draw, rendered once each.
     std::map<const oa::formats::gaf::Frame*, oa::formats::gaf::RenderedFrame>

@@ -15,6 +15,7 @@
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/surface.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
+#include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_input.hpp"
 #include "oa/platform/preferences.hpp"
@@ -1300,6 +1301,7 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
             gadget.common.y = static_cast<int16_t>(gadget.common.y + origin_y);
         }
     }
+    fit_match_build_page();
     try {
         // SIDEDATA.TDF font=console for in-game metal/energy numerals.
         constexpr std::string_view console_font = "fonts/CONSOLE.FNT";
@@ -1349,6 +1351,91 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
     }
     match_hud_focus_ = loaded_panel_focus();
     return true;
+}
+
+int Runtime::match_column_rows() const {
+    const auto scale = match_layout_.scale > 0.0 ? match_layout_.scale : 1.0;
+    const auto rows =
+        static_cast<int>(std::floor(static_cast<double>(match_layout_.height) / scale));
+    return std::max(kCanvasHeight, rows);
+}
+
+void Runtime::fit_match_build_page() {
+    namespace hud = oa::ui::hud;
+    match_hud_fitted_ = false;
+    match_build_part_count_ = 1;
+    match_hud_fit_rows_ = match_column_rows();
+    if (!match_hud_ || match_hud_->layout.gadgets.empty())
+        return;
+    auto& gadgets = match_hud_->layout.gadgets;
+    std::vector<hud::PanelGadget> page(gadgets.size());
+    for (std::size_t index = 0; index < gadgets.size(); ++index) {
+        const auto& common = gadgets[index].common;
+        page[index] = {
+            common.name.c_str(),
+            common.x,
+            common.y,
+            common.width,
+            common.height,
+            static_cast<uint8_t>(common.type),
+            static_cast<uint8_t>(common.common_attributes),
+            common.active != 0
+        };
+    }
+    const auto fit = hud::fit_build_page(page, match_hud_fit_rows_, match_build_part_);
+    if (fit.layout != hud::BuildPageLayout::as_authored)
+        apply_build_page_fit(fit, page);
+    // Rows past 480 exist only while a page shown needs them, as one that
+    // fits a tall column as authored does; the side column's blank strip
+    // below stays black, as the area under the panel is.
+    auto& background = match_hud_->background;
+    const auto rows = static_cast<uint32_t>(std::min(fit.bottom, match_hud_fit_rows_));
+    if (fit.bottom > kCanvasHeight && background.height < rows) {
+        background.rgb.resize(static_cast<std::size_t>(background.width) * rows * 3U, 0);
+        if (!background.indices.empty())
+            background.indices.resize(static_cast<std::size_t>(background.width) * rows, 0);
+        background.height = rows;
+    }
+}
+
+void Runtime::apply_build_page_fit(
+    const oa::ui::hud::BuildPageFit& fit, std::span<const oa::ui::hud::PanelGadget> page
+) {
+    namespace hud = oa::ui::hud;
+    auto& gadgets = match_hud_->layout.gadgets;
+    match_hud_fitted_ = true;
+    match_build_part_ = fit.part;
+    match_build_part_count_ = fit.part_count;
+    for (std::size_t index = 0; index < gadgets.size(); ++index) {
+        auto& common = gadgets[index].common;
+        common.x = static_cast<int16_t>(page[index].x);
+        common.y = static_cast<int16_t>(page[index].y);
+        if (!page[index].shown)
+            common.active = 0;
+    }
+    // The page split under tabs gets an ORDERS tab beside its BUILD tab, as
+    // the game's own pages have; it opens the general page.
+    if (fit.layout == hud::BuildPageLayout::build_tab && fit.build_tab > 0) {
+        const auto build_index = static_cast<std::size_t>(fit.build_tab);
+        auto orders = gadgets[build_index];
+        orders.common.name = match_side_name_prefix() + "ORDERS";
+        orders.common.x = static_cast<int16_t>(fit.orders_tab_x);
+        orders.common.y = static_cast<int16_t>(fit.orders_tab_y);
+        if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&orders.fields))
+            button->quick_key = 0;
+        const auto* art = gaf_sequence(match_hud_->sprites, orders.common.name);
+        if (art == nullptr)
+            art = gaf_sequence(match_hud_->shared_sprites, orders.common.name);
+        if (art != nullptr && !art->frames.empty()) {
+            orders.common.width = static_cast<int16_t>(art->frames.front().width);
+            orders.common.height = static_cast<int16_t>(art->frames.front().height);
+        }
+        gadgets.push_back(std::move(orders));
+        match_hud_states_.push_back(
+            build_index < match_hud_states_.size() ? match_hud_states_[build_index]
+                                                   : MatchGadgetState{}
+        );
+    }
 }
 
 void Runtime::show_match_orders_page() {

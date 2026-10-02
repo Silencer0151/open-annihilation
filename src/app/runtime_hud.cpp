@@ -8,6 +8,7 @@
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
@@ -64,6 +65,26 @@ void Runtime::show_match_build_page(int page) {
         show_match_orders_page();
         return;
     }
+    // A page too tall for the side column shows its build buttons in parts;
+    // PREV and NEXT step through them before turning the page, and going
+    // back to a page opens its last part.
+    if (match_build_part_unit_ != unit->id) {
+        match_build_part_ = 0;
+        match_build_part_unit_ = unit->id;
+    }
+    const auto previous_part = match_build_part_;
+    if (match_build_page_ > 0 && page == match_build_page_ + 1 &&
+        match_build_part_ + 1 < match_build_part_count_) {
+        ++match_build_part_;
+        page = match_build_page_;
+    } else if (match_build_page_ > 0 && page == match_build_page_ - 1 && match_build_part_ > 0) {
+        --match_build_part_;
+        page = match_build_page_;
+    } else if (page == match_build_page_ - 1) {
+        match_build_part_ = hud::kLastBuildPart;
+    } else if (page != match_build_page_) {
+        match_build_part_ = 0;
+    }
     // The build pages cycle as the game's page flags do; a type with one
     // page behaves as if it had a second, missing one.
     const auto page_count = static_cast<uint8_t>(std::max(2, builder_gui_page_count() + 1));
@@ -94,6 +115,7 @@ void Runtime::show_match_build_page(int page) {
         render_match_surface();
     } else {
         match_build_page_ = previous_page;
+        match_build_part_ = previous_part;
         show_unsupported("Build GUI " + std::string(name) + " is not available.");
     }
 }

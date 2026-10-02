@@ -667,7 +667,7 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-download-builds PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_download_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # The commander's build pages on windows from 640x480 to 3840x2160,
+      # The commander's build pages on windows from 640x480 to 5120x2880,
       # walked with NEXT through SDL input on dummy devices: each fits the
       # side column, the same build buttons are reachable on every window and
       # the strip under the column builds nothing.

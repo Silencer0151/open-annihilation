@@ -30,3 +30,25 @@ engine does, and why.
 - **Why:** a quicker way through a selection; the menu keeps its own key.
 - **Code:** `oa::app::Runtime::cycle_selected_primary`
   (`src/app/runtime_hotkeys.cpp`).
+
+## Build pages taller than the side column
+
+- **3.1c:** draws a build page's GUI file at the screen's own resolution,
+  one pixel to a pixel. A page taller than the screen, as some mods'
+  twelve-button pages are, runs off its bottom edge. The game's own pages
+  all end within 480 rows.
+- **Open Annihilation:** the side column shows as many rows as the window
+  holds at the interface's scale: 480 on a 4:3 window, 540 at 1920x1080 and
+  more on taller windows. A page that ends within them is drawn exactly as
+  authored, as every page of 3.1c and its add-ons is. A taller page shows
+  its build buttons in parts of as many rows as fit, which PREV and NEXT step
+  through before the next page. With room for three rows beside them its
+  order buttons stay on the page under the rows shown; with less, they move
+  to the general page behind an ORDERS tab beside BUILD, as the game's own
+  pages have them. The part shown is the player's own and does not change
+  the unit's build page.
+- **Why:** every build button of such a page stays in sight and in reach on
+  every window size. A hidden button can no longer take a click in the blank
+  strip under the column.
+- **Code:** `oa::ui::hud::fit_build_page` (`src/ui/hud/src/build_page_fit.cpp`),
+  `oa::app::Runtime::fit_match_build_page` (`src/app/runtime_match_menus.cpp`).
