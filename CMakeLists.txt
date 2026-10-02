@@ -238,6 +238,15 @@ add_custom_command(OUTPUT "${oa_window_icon_source}"
 add_library(oa-app-window-icon src/app/window_icon.cpp "${oa_window_icon_source}")
 add_library(oa::app::window_icon ALIAS oa-app-window-icon)
 target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-formats-png oa-options)
+# The render policy (render_policy.hpp): the walk of SDL's render drivers,
+# the tier each frame is drawn in, what a crash or a failure counts for at
+# the next start and the records that keep it, the step-down ladder, the
+# chrome's filter and the tiles of a texture larger than the renderer
+# allows, as pure functions with no SDL and no files. The game does not use
+# it yet.
+add_library(oa-app-render-policy src/app/render_policy.cpp)
+add_library(oa::app::render_policy ALIAS oa-app-render-policy)
+target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
 # The developer's video capture (--capture-video): presented frames and the
 # mix SDL plays, encoded by the ffmpeg program (docs/capture.md).
 if(OA_BUILD_PLATFORM)
@@ -331,6 +340,14 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-frame-stats-panel-test PRIVATE oa-app-headers oa-base-game-loop
     oa-ui-hud oa-ui-display-layout oa-options)
   add_test(NAME app-frame-stats-panel COMMAND oa-app-frame-stats-panel-test)
+  # The render policy's decisions by table: the tier over every input, the
+  # driver walk and its framebuffer hint, strikes and records, their values
+  # written and read back, the sentinel and the trial through a run, present
+  # stalls, the starting rung and the step-down fed synthetic frames, the
+  # chrome's filter, the prescale budget and the tile grids.
+  add_executable(oa-app-render-policy-test src/app/render_policy_test.cpp)
+  target_link_libraries(oa-app-render-policy-test PRIVATE oa-app-render-policy oa-test-support oa-options)
+  add_test(NAME app-render-policy COMMAND oa-app-render-policy-test)
   # The tests that link SDL, when it was found.
   if(TARGET SDL3::SDL3)
     # The frame's conversion into the window's 32-bit pixels: each pixel

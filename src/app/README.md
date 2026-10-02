@@ -417,6 +417,48 @@ and `app-window-icon` that the embedded one decodes.
   the window opens, with the defaults of a light machine
   (`oa/platform/machine.hpp`), the window opened at that size and full
   screen given the display mode nearest it.
+- `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
+  decisions of hardware-accelerated presentation as pure functions, with
+  no SDL, no files and no clock, which the game does not use yet. The walk
+  of SDL's render drivers in SDL's own order, skipping drivers recorded as
+  failed but never `software`, with the framebuffer hint set before
+  `software` and never empty, a second walk with the records ignored
+  whenever they would leave nothing able to present, and SDL's own call
+  under `SDL_RENDER_DRIVER` (`start_creation`, `start_rebuild`,
+  `next_attempt`); whether probe items 1 to 3 found the renderer capable
+  (`assess_renderer`, `texture_limit`); the tier each frame is drawn in,
+  standard (today's renderer) or accelerated, with the reason
+  (`decide_render_tier`): the standard tier whatever the flags on a
+  machine with under 2 GiB of physical memory, or whose memory the system
+  does not report, where a machine that reports 1.75 GiB
+  (`smallest_accelerated_memory`) counts as having 2 GiB; when the
+  start-up function test may run, never under 2 GiB; and the gate that
+  keeps a shared game or a replay from starting anything until it ends;
+  what a left-over sentinel or trial, or a failure while running, counts
+  for: a strike, and a record only the second time in a row, or at the
+  first left-over trial on Windows before Vista and on Linux, and never
+  twice from one run (`note_leftover`, `note_running_failure`); the values
+  of `renderer-state.conf`, read with corrupt ones ignored and written
+  back unchanged (`parse_records`, `format_records`), and cleared of what
+  another engine version or adapter recorded (`clear_on_machine_change`);
+  the sentinel of `renderer-sentinel.conf` and the trial through a run,
+  from `create` to `running` and each path's first frames, with none under
+  `SDL_RENDER_DRIVER` (`parse_sentinel`, `sentinel_step`); present stalls;
+  the rung a machine starts at on the step-down ladder from 2 GiB, its
+  budget sized from its processors and kind and never from its memory
+  (`start_budget`), magnify off before Vista and at budget none, and the
+  blend only above 4 GiB and never on a driver that excludes it
+  (`start_rung`); the remembered rung (`resume_rung`), and the step-down
+  itself, fed steady frames with their ticks' time taken out
+  (`feed_step_down`); the chrome's filter (`chrome_filter`) and the
+  prescale budget; and the tiles of a texture beyond the renderer's limit
+  (`plan_tiles`). The names of the drivers' graphics interfaces stay with
+  the platform: the policy takes each driver's traits (`DriverTraits`).
+  `app-render-policy` tests them all by table. The memory guard, the
+  world's scaling (`world_scaling`), the native-density rule, which needs
+  2 GiB as the accelerated tier does, and the probe's report join the
+  policy with the code that uses them; reading and writing the two files
+  is the host's.
 - Director scripts ([docs/director.md](../../docs/director.md)):
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and
