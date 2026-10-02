@@ -660,6 +660,8 @@ struct LadderState {
     bool filtered_chrome{};
     CardFilter card{CardFilter::linear};
     bool standard{}; ///< the last rung: the standard tier for the rest of the run
+
+    friend bool operator==(const LadderState&, const LadderState&) = default;
 };
 
 /// Whether a kind of machine has been run on the accelerated tier.
@@ -782,6 +784,13 @@ struct FrameSample {
     uint64_t area_ns{};     ///< the area pass's own time, part of passes_ns
     uint64_t passes_ns{};   ///< the time of the tier's own added passes
     uint32_t paced_frames_per_second{}; ///< the rate the loop paces at
+    /// The loop's allowance for a frame at the rate the step-down holds
+    /// frames to: its period and the slack the frame statistics allow, in
+    /// nanoseconds. A frame paced on time is presented on the period's grid,
+    /// so its time centres on the period with only jitter; the cost test
+    /// counts a median as over the period only past this. 0 judges against
+    /// the period alone.
+    uint64_t allowance_ns{};
     FrameKind kind{FrameKind::other};
     bool clock_behind{};  ///< the match clock runs below its requested rate
     bool idle{};          ///< paced at the idle rate
@@ -867,14 +876,24 @@ enum class StepResult : uint8_t {
 /// @return the step-down with empty pools
 [[nodiscard]] ScaleStepDown start_step_down(const LadderState& state) noexcept;
 
+/// Returns the frame rate the step-down holds frames to: the lower of the
+/// rate the loop paces at and step_target_frames_per_second.
+///
+/// @param paced_frames_per_second the rate the loop paces at; 0 for no limit
+/// @return step_target_frames_per_second for no limit or a faster loop,
+///     otherwise the paced rate, 30 at the loop's lowest, where each frame
+///     is due at the middle of a clock unit
+[[nodiscard]] uint32_t step_target_rate(uint32_t paced_frames_per_second) noexcept;
+
 /// Feeds one presented match frame to the step-down.
 ///
 /// Frames that are not steady are ignored. A sample's time is its interval
-/// less its ticks' time, judged against the period of the lower of the
-/// paced rate and step_target_frames_per_second. In the frame's pool, the
+/// less its ticks' time, judged against the period of step_target_rate's
+/// rate. In the frame's pool, the
 /// ladder steps one rung when the median over the last 3 s exceeds 1.25
-/// times the period, or exceeds the period while the tier's own passes take
-/// over a tenth of it, at most once per 10 s; and at once when the median
+/// times the period, or exceeds the frame's allowance (its period where the
+/// sample gives none) while the tier's own passes take over a tenth of the
+/// period, at most once per 10 s; and at once when the median
 /// over the last 1 s exceeds twice the period. While the match clock runs
 /// behind, any time the passes take sheds budget and magnification at
 /// once. A step empties the pool that caused it, and the ladder never steps
@@ -897,6 +916,87 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
 /// @return the rung one step down
 [[nodiscard]] LadderState
 step_down(const LadderState& state, FrameKind pool, bool blend_favoured) noexcept;
+
+/// The frame interval, in nanoseconds, from which a frame alone is taken as
+/// a wait rather than a frame's time: the loop waited for the window's
+/// focus, or a save held it. One such frame after shorter ones would fill
+/// the quick rule's second by itself; a run of them is a machine that
+/// really crawls, and feeds the step-down.
+inline constexpr uint64_t longest_fed_interval_ns = 1'000'000'000;
+
+/// What the host knows of a presented frame besides its measures.
+struct PresentedFrame {
+    RenderTier tier{RenderTier::standard}; ///< the tier that presented it
+    bool match{}; ///< a match frame, not a menu's, a loading frame or a movie's
+    /// The loop paced it, so its measures are the loop's; a check's frames,
+    /// drawn on the check's own clock, are not, unless the check forces the
+    /// measures the step-down sees.
+    bool paced{};
+    /// The interval of the frame presented before it, in nanoseconds; 0 for
+    /// none.
+    uint64_t previous_interval_ns{};
+};
+
+/// Tells whether a presented frame feeds the step-down: a match frame the
+/// accelerated tier presented and the loop paced, whose interval is under
+/// longest_fed_interval_ns, or as long as that with the frame before it as
+/// long too, so that a lone wait never counts and a sustained crawl does.
+/// Whether it is steady is feed_step_down's own test.
+///
+/// @param frame what the host knows of the frame
+/// @param sample its measures
+/// @return true when the frame's sample goes to feed_step_down; never for a
+///     frame of the standard tier
+[[nodiscard]] bool feeds_step_down(const PresentedFrame& frame, const FrameSample& sample) noexcept;
+
+/// Returns what a frame showed, for the pool its sample joins.
+///
+/// @param zoom the battlefield's zoom, screen pixels per map pixel
+/// @param reduced the area pass reduced the frame's scene
+/// @param magnified the graphics card magnified the frame's scene
+/// @return FrameKind::zoomed_out below zoom 1 with the scene reduced or
+///     magnified, FrameKind::zoomed_in above zoom 1 with it magnified,
+///     FrameKind::other otherwise
+[[nodiscard]] FrameKind frame_kind(float zoom, bool reduced, bool magnified) noexcept;
+
+/// Feeds a presented frame to the step-down (feed_step_down) when
+/// feeds_step_down says it feeds it; otherwise the ladder and its pools
+/// stay as they are.
+///
+/// @param[in,out] ladder the run's step-down
+/// @param frame what the host knows of the frame
+/// @param sample its measures
+/// @return what changed; StepResult::none for a frame that does not feed it
+StepResult feed_presented_frame(
+    ScaleStepDown& ladder, const PresentedFrame& frame, const FrameSample& sample
+) noexcept;
+
+/// A buffer of the accelerated tier's own that the memory guard may refuse
+/// before it is made (memory_guard_allows).
+enum class AcceleratedBuffer : uint8_t {
+    scene,    ///< the magnified scene's texture, with the overlay's texture and buffer
+    prescale, ///< a prescale target: the HUD's, the screens' or the scene's
+};
+
+/// Returns the rung below one that holds no such buffer, where the tier
+/// stays when the memory guard refuses to let it make one: magnify off for
+/// the scene, and the card's magnification one rung lower for a prescale
+/// target. The rung never rises.
+///
+/// @param state the rung
+/// @param buffer the buffer refused
+/// @return the rung below, or state where it makes no such buffer
+[[nodiscard]] LadderState rung_without(const LadderState& state, AcceleratedBuffer buffer) noexcept;
+
+/// Says in a few words what a step down the ladder changed, for the log.
+///
+/// @param before the rung before the step
+/// @param after the rung after it
+/// @return the change, the first in the ladder's order where several
+///     changed, but for budget none and magnify off together, as a clock
+///     running behind sheds them; "nothing changed" for the same rung
+[[nodiscard]] std::string_view
+describe_step(const LadderState& before, const LadderState& after) noexcept;
 
 // ---------------------------------------------------------------------------
 // Native pixel density
@@ -1050,6 +1150,17 @@ enum class ScaleFilter : uint8_t {
 ///     NEAREST-chrome rung; otherwise PIXELART, sharp-bilinear or plain
 ///     LINEAR, as the card's magnification says
 [[nodiscard]] ScaleFilter chrome_filter(const LadderState& state, double scale) noexcept;
+
+/// Returns how the card magnifies the battlefield's scene while the rung
+/// magnifies it. The NEAREST-chrome rung leaves it as it is: only the
+/// card's magnification lightens it.
+///
+/// @param state the rung
+/// @param zoom screen pixels per map pixel, above 1
+/// @return NEAREST in the standard tier and at a whole-number zoom;
+///     otherwise PIXELART, sharp-bilinear or plain LINEAR, as the card's
+///     magnification says
+[[nodiscard]] ScaleFilter world_filter(const LadderState& state, double zoom) noexcept;
 
 // ---------------------------------------------------------------------------
 // Tiled textures

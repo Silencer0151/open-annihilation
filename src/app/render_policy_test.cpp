@@ -14,10 +14,13 @@
 // stalls; device resets; the layers' texture formats; the starting budget,
 // the same at any memory, and the starting rung of every kind of machine,
 // with the blend only above 4 GiB; the remembered rung and the step-down
-// fed synthetic frames; the window's density over every input, never native
-// under 2 GiB and, as the game fills it today, only for --native-density;
-// the chrome's filter, at the display's scale on a window at native
-// density; the prescale budget; the
+// fed synthetic frames, the rate it holds frames to and the rules by which
+// the game feeds it its presented frames; the rung the tier stays on when
+// the memory guard refuses a buffer, and the words each step is logged
+// with; the window's density over every input, never native under 2 GiB
+// and, as the game fills it today, only for --native-density; the chrome's
+// filter, at the display's scale on a window at native density, and the
+// magnified scene's; the prescale budget; the
 // tiles of textures beyond the renderer's limit; and acting on the tier as
 // the game does: the windowless video drivers, the flags, what the host
 // does for each decision, what Off then On forgets, one frame's step with
@@ -1857,6 +1860,341 @@ void test_step_down_costs() {
     }
 }
 
+void test_step_target_rate() {
+    OA_CHECK(step_target_rate(0) == step_target_frames_per_second);
+    OA_CHECK(step_target_rate(120) == step_target_frames_per_second);
+    OA_CHECK(step_target_rate(61) == step_target_frames_per_second);
+    OA_CHECK(step_target_rate(60) == 60);
+    OA_CHECK(step_target_rate(59) == 59);
+    OA_CHECK(step_target_rate(30) == 30);
+    OA_CHECK(step_target_rate(1) == 1);
+
+    // A loop with no limit is held to 60 frames a second, as one at 120 is.
+    const LadderState top = start_rung(measured_desktop());
+    constexpr uint64_t seconds_20 = 20'000'000'000;
+    ScaleStepDown ladder = start_step_down(top);
+    FrameClock clock;
+    clock.paced = 0;
+    const uint64_t elapsed =
+        time_to_step(ladder, clock, 22 * millisecond, FrameKind::zoomed_out, seconds_20);
+    OA_CHECK(elapsed >= slow_window_ns && elapsed < slow_window_ns + 30 * millisecond);
+    ladder = start_step_down(top);
+    clock = FrameClock{};
+    clock.paced = 0;
+    OA_CHECK(time_to_step(ladder, clock, 16 * millisecond, FrameKind::other, seconds_20) == 0);
+}
+
+/// Tells whether a ladder's pools are empty.
+///
+/// @param ladder the step-down
+/// @return true when no pool holds a sample
+bool pools_empty(const ScaleStepDown& ladder) {
+    return ladder.zoomed_out.count == 0 && ladder.zoomed_in.count == 0 && ladder.other.count == 0;
+}
+
+void test_step_down_feeding() {
+    const LadderState top = start_rung(measured_desktop());
+    constexpr uint64_t seconds_20 = 20'000'000'000;
+    PresentedFrame accelerated;
+    accelerated.tier = RenderTier::accelerated;
+    accelerated.match = true;
+    accelerated.paced = true;
+
+    // Only a match frame the accelerated tier presented and the loop paced
+    // feeds it: never the standard tier's, a menu's or a check's own frame,
+    // however slow.
+    for (int variant = 0; variant < 3; ++variant) {
+        PresentedFrame frame = accelerated;
+        frame.tier = variant == 0 ? RenderTier::standard : RenderTier::accelerated;
+        frame.match = variant != 1;
+        frame.paced = variant != 2;
+        ScaleStepDown ladder = start_step_down(top);
+        FrameClock clock;
+        bool stepped = false;
+        while (clock.now_ns < seconds_20) {
+            for (const FrameKind kind :
+                 {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
+                const FrameSample sample = clock.frame(100 * millisecond, kind);
+                OA_CHECK(steady_frame(sample) && !feeds_step_down(frame, sample));
+                if (feed_presented_frame(ladder, frame, sample) != StepResult::none)
+                    stepped = true;
+            }
+        }
+        OA_CHECK(!stepped && pools_empty(ladder) && ladder.state == top);
+    }
+
+    // An interval of a second or more after a shorter one is a wait, not a
+    // frame's time; after another as long, it is.
+    {
+        FrameClock clock;
+        OA_CHECK(
+            feeds_step_down(accelerated, clock.frame(longest_fed_interval_ns - 1, FrameKind::other))
+        );
+        OA_CHECK(
+            !feeds_step_down(accelerated, clock.frame(longest_fed_interval_ns, FrameKind::other))
+        );
+        PresentedFrame after_long = accelerated;
+        after_long.previous_interval_ns = longest_fed_interval_ns;
+        OA_CHECK(
+            feeds_step_down(after_long, clock.frame(longest_fed_interval_ns, FrameKind::other))
+        );
+        after_long.previous_interval_ns = longest_fed_interval_ns - 1;
+        OA_CHECK(
+            !feeds_step_down(after_long, clock.frame(longest_fed_interval_ns, FrameKind::other))
+        );
+    }
+
+    // A lone wait of 5 s among on-time frames, as the first frame after the
+    // window regains its focus or a save, never steps, nor joins a pool.
+    {
+        ScaleStepDown ladder = start_step_down(top);
+        FrameClock clock;
+        PresentedFrame frame = accelerated;
+        for (int index = 0; index < 1000; ++index) {
+            const uint64_t interval =
+                index % 200 == 100 ? 5 * longest_fed_interval_ns : 16 * millisecond;
+            const FrameSample sample = clock.frame(interval, FrameKind::other);
+            OA_CHECK(feeds_step_down(frame, sample) == (interval < longest_fed_interval_ns));
+            OA_CHECK(feed_presented_frame(ladder, frame, sample) == StepResult::none);
+            frame.previous_interval_ns = interval;
+        }
+        OA_CHECK(ladder.state == top);
+        const SamplePool& pool = ladder.other;
+        OA_CHECK(pool.count != 0);
+        for (uint32_t index = 0; index < pool.count; ++index)
+            OA_CHECK(pool.samples[(pool.first + index) % pool_capacity].interval_us == 16'000);
+    }
+
+    // Steady frames of 1.5 s, a machine that crawls, walk the ladder to the
+    // standard tier: the first is taken as a wait, and each after it steps.
+    {
+        ScaleStepDown ladder = start_step_down(top);
+        FrameClock clock;
+        PresentedFrame frame = accelerated;
+        constexpr uint64_t crawl_ns = 1'500'000'000;
+        StepResult result = StepResult::none;
+        uint32_t frames = 0;
+        uint32_t steps = 0;
+        for (; frames < 20 && result != StepResult::standard; ++frames) {
+            result = feed_presented_frame(ladder, frame, clock.frame(crawl_ns, FrameKind::other));
+            if (frames == 0)
+                OA_CHECK(result == StepResult::none);
+            else
+                OA_CHECK(result != StepResult::none);
+            if (result != StepResult::none)
+                ++steps;
+            frame.previous_interval_ns = crawl_ns;
+        }
+        OA_CHECK(result == StepResult::standard && ladder.state.standard);
+        OA_CHECK(frames == steps + 1);
+    }
+
+    // Idle frames at 30 a second never count; the same rate at full pace,
+    // a frame each clock unit, counts against its own 33.3 ms period: 33
+    // and 34 ms frames never step, 45 ms frames (over 1.25 times it) step
+    // after 3 s.
+    for (const bool idle : {true, false}) {
+        for (const uint64_t interval : {uint64_t{34} * millisecond, uint64_t{45} * millisecond}) {
+            ScaleStepDown ladder = start_step_down(top);
+            FrameClock clock;
+            clock.paced = 30;
+            uint64_t stepped_at = 0;
+            for (int frame = 0; frame < 600 && stepped_at == 0; ++frame) {
+                const bool unit_middle = interval == 34 * millisecond && frame % 3 != 0;
+                FrameSample sample =
+                    clock.frame(unit_middle ? 33 * millisecond : interval, FrameKind::zoomed_out);
+                sample.idle = idle;
+                if (feed_presented_frame(ladder, accelerated, sample) != StepResult::none)
+                    stepped_at = clock.now_ns;
+            }
+            const bool expected = !idle && interval == 45 * millisecond;
+            OA_CHECK((stepped_at != 0) == expected);
+            if (expected)
+                OA_CHECK(
+                    stepped_at >= slow_window_ns && stepped_at < slow_window_ns + 50 * millisecond
+                );
+            if (idle)
+                OA_CHECK(pools_empty(ladder));
+        }
+    }
+
+    // A frame's ticks are taken out: 30 ms frames whose ticks took 14 ms are
+    // on time at 60 a second, the same frames without ticks slow.
+    for (const uint64_t ticks : {uint64_t{14} * millisecond, uint64_t{0}}) {
+        ScaleStepDown ladder = start_step_down(top);
+        FrameClock clock;
+        bool stepped = false;
+        while (clock.now_ns < seconds_20 && !stepped) {
+            FrameSample sample = clock.frame(30 * millisecond, FrameKind::zoomed_in);
+            sample.tick_ns = ticks;
+            stepped = feed_presented_frame(ladder, accelerated, sample) != StepResult::none;
+        }
+        OA_CHECK(stepped == (ticks == 0));
+    }
+
+    // The whole ladder, as a run that zooms out, sits at zoom 1, zooms in
+    // and back walks it: the budget twice from zoomed-out frames, NEAREST
+    // chrome and the card's two rungs from frames at zoom 1, magnify off
+    // from zoomed-in frames, and the standard tier, each described; then
+    // nothing moves it.
+    {
+        ScaleStepDown ladder = start_step_down(top);
+        ladder.state.blend_allowed = false;
+        FrameClock clock;
+
+        struct Step {
+            FrameKind kind;
+            StepResult result;
+        };
+
+        const Step steps[] = {
+            {FrameKind::zoomed_out, StepResult::stepped},
+            {FrameKind::zoomed_out, StepResult::stepped},
+            {FrameKind::other, StepResult::stepped},
+            {FrameKind::other, StepResult::stepped},
+            {FrameKind::other, StepResult::stepped},
+            {FrameKind::zoomed_in, StepResult::stepped},
+            {FrameKind::other, StepResult::standard},
+        };
+        const std::string_view expected[] = {
+            "the zoomed-out view is smoothed less",
+            "the zoomed-out view is no longer smoothed",
+            "the interface is scaled without filtering",
+            "the graphics card magnifies within a quarter of its budget",
+            "the graphics card magnifies by plain linear filtering",
+            "the graphics card no longer magnifies the battlefield",
+            "the processor draws everything for the rest of the run",
+        };
+        static_assert(std::size(steps) == std::size(expected));
+        for (std::size_t index = 0; index < std::size(steps); ++index) {
+            const LadderState before = ladder.state;
+            StepResult result = StepResult::none;
+            for (int frame = 0; frame < 100 && result == StepResult::none; ++frame)
+                result = feed_presented_frame(
+                    ladder, accelerated, clock.frame(40 * millisecond, steps[index].kind)
+                );
+            OA_CHECK(result == steps[index].result);
+            OA_CHECK(describe_step(before, ladder.state) == expected[index]);
+        }
+        OA_CHECK(ladder.state.standard && ladder.state.budget == SceneBudget::none);
+        OA_CHECK(!ladder.state.magnify && !ladder.state.filtered_chrome);
+        OA_CHECK(ladder.state.card == CardFilter::linear);
+        for (int frame = 0; frame < 100; ++frame)
+            OA_CHECK(
+                feed_presented_frame(
+                    ladder, accelerated, clock.frame(100 * millisecond, FrameKind::other)
+                ) == StepResult::none
+            );
+    }
+}
+
+void test_step_down_allowance() {
+    const LadderState top = start_rung(measured_desktop());
+    constexpr uint64_t seconds_20 = 20'000'000'000;
+    // The loop paced at 60: its period, and its allowance after a precise
+    // wait, the period and the frame statistics' half a millisecond of slack.
+    constexpr uint64_t period_ns = 16'666'666;
+    constexpr uint64_t allowance_ns = period_ns + 500'000;
+    constexpr uint64_t jitter_ns = 50'000;
+
+    // On-time frames on the pacer's grid, with no ticks, as in a paused match
+    // the player scrolls, and passes of 3 ms, over a tenth of the period:
+    // judged against the allowance they never step; against the bare period,
+    // where three frames in five run 50 us over, they would.
+    for (const FrameKind kind : {FrameKind::zoomed_in, FrameKind::zoomed_out}) {
+        for (const uint64_t allowance : {allowance_ns, uint64_t{0}}) {
+            ScaleStepDown ladder = start_step_down(top);
+            FrameClock clock;
+            bool stepped = false;
+            for (int index = 0; clock.now_ns < seconds_20 && !stepped; ++index) {
+                const uint64_t interval =
+                    index % 5 < 3 ? period_ns + jitter_ns : period_ns - jitter_ns;
+                FrameSample sample = clock.frame(interval, kind);
+                sample.allowance_ns = allowance;
+                sample.passes_ns = 3 * millisecond;
+                sample.area_ns = kind == FrameKind::zoomed_out ? sample.passes_ns : 0;
+                stepped = feed_step_down(ladder, sample) != StepResult::none;
+            }
+            OA_CHECK(stepped == (allowance == 0));
+        }
+    }
+
+    // Frames late past the allowance still step by the cost test.
+    ScaleStepDown ladder = start_step_down(top);
+    FrameClock clock;
+    StepResult result = StepResult::none;
+    while (clock.now_ns < seconds_20 && result == StepResult::none) {
+        FrameSample sample = clock.frame(18 * millisecond, FrameKind::zoomed_in);
+        sample.allowance_ns = allowance_ns;
+        sample.passes_ns = 3 * millisecond;
+        result = feed_step_down(ladder, sample);
+    }
+    OA_CHECK(result == StepResult::stepped && !ladder.state.magnify);
+}
+
+void test_frame_kind() {
+    struct Case {
+        float zoom;
+        bool reduced;
+        bool magnified;
+        FrameKind expected;
+    };
+
+    const Case cases[] = {
+        {0.5F, true, false, FrameKind::zoomed_out},
+        {0.75F, false, true, FrameKind::zoomed_out},
+        {0.5F, false, false, FrameKind::other},
+        {1.0F, true, true, FrameKind::other},
+        {2.0F, false, true, FrameKind::zoomed_in},
+        {2.0F, true, false, FrameKind::other},
+        {1.37F, false, false, FrameKind::other},
+    };
+    for (const Case& test : cases)
+        OA_CHECK(frame_kind(test.zoom, test.reduced, test.magnified) == test.expected);
+}
+
+void test_rung_without() {
+    const LadderState top = start_rung(measured_desktop());
+    // The scene: magnify off, and nothing else.
+    LadderState lowered = rung_without(top, AcceleratedBuffer::scene);
+    LadderState expected = top;
+    expected.magnify = false;
+    OA_CHECK(lowered == expected);
+    OA_CHECK(rung_without(lowered, AcceleratedBuffer::scene) == lowered);
+    // A prescale target: the card's magnification one rung lower, to plain
+    // LINEAR, which makes none; PIXELART makes none either.
+    lowered = rung_without(top, AcceleratedBuffer::prescale);
+    expected = top;
+    expected.card = CardFilter::prescale_quarter;
+    OA_CHECK(lowered == expected);
+    lowered = rung_without(lowered, AcceleratedBuffer::prescale);
+    expected.card = CardFilter::linear;
+    OA_CHECK(lowered == expected);
+    OA_CHECK(rung_without(lowered, AcceleratedBuffer::prescale) == lowered);
+    LadderState pixelart = top;
+    pixelart.card = CardFilter::pixelart;
+    OA_CHECK(rung_without(pixelart, AcceleratedBuffer::prescale) == pixelart);
+
+    // Each change is described; the shed of a clock running behind as one.
+    OA_CHECK(describe_step(top, top) == "nothing changed");
+    LadderState blend = top;
+    blend.method = ZoomOutMethod::blend;
+    OA_CHECK(describe_step(top, blend) == "the graphics card blends the zoomed-out view");
+    LadderState shed = top;
+    shed.budget = SceneBudget::none;
+    shed.magnify = false;
+    OA_CHECK(
+        describe_step(top, shed) ==
+        "the zoomed-out view is no longer smoothed and the graphics card no longer magnifies "
+        "the battlefield"
+    );
+    LadderState standard = top;
+    standard.standard = true;
+    OA_CHECK(
+        describe_step(top, standard) == "the processor draws everything for the rest of the run"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Chrome filtering and the prescale budget
 
@@ -1919,6 +2257,26 @@ void test_chrome_filter() {
     state.filtered_chrome = true;
     state.standard = true;
     OA_CHECK(chrome_filter(state, 1.25) == ScaleFilter::nearest);
+    // The magnified scene follows the card's magnification alone: the
+    // NEAREST-chrome rung leaves it as it was, so the card's rungs below it
+    // still lighten it. A whole-number zoom and the standard tier draw it
+    // NEAREST.
+    state.standard = false;
+    for (const bool filtered : {true, false}) {
+        state.filtered_chrome = filtered;
+        state.card = CardFilter::pixelart;
+        OA_CHECK(world_filter(state, 1.5) == ScaleFilter::pixelart);
+        OA_CHECK(world_filter(state, 2.0) == ScaleFilter::nearest);
+        state.card = CardFilter::prescale_full;
+        OA_CHECK(world_filter(state, 1.5) == ScaleFilter::sharp_bilinear);
+        state.card = CardFilter::prescale_quarter;
+        OA_CHECK(world_filter(state, 2.5) == ScaleFilter::sharp_bilinear);
+        state.card = CardFilter::linear;
+        OA_CHECK(world_filter(state, 1.5) == ScaleFilter::linear);
+    }
+    OA_CHECK(chrome_filter(state, 1.5) == ScaleFilter::nearest);
+    state.standard = true;
+    OA_CHECK(world_filter(state, 1.5) == ScaleFilter::nearest);
     // The period floor, with 256 MiB, draws every frame in the standard
     // tier, so its chrome at 800x600's scale of 1.25 is NEAREST, as v0.6.1's.
     TierInputs floor = accelerated_run();
@@ -2736,6 +3094,11 @@ int main() {
     test_step_down_rules();
     test_step_down_pools();
     test_step_down_costs();
+    test_step_target_rate();
+    test_step_down_feeding();
+    test_step_down_allowance();
+    test_frame_kind();
+    test_rung_without();
     test_prescale();
     test_chrome_filter();
     test_chrome_filter_at_the_display();

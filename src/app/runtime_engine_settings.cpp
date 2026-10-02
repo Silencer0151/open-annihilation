@@ -290,6 +290,7 @@ AccelerationFacts Runtime::acceleration_facts() const {
         const std::string_view renderer_name = render_run_->host->facts().renderer;
         facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
         facts.vertical_sync_refused = vertical_sync_refused_;
+        facts.slow_frames_stepped = render_run_->watch && render_run_->watch->slowed;
         if (match_) {
             const uint32_t extension = current_extension_state();
             facts.shared_game =

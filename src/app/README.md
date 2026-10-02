@@ -96,7 +96,11 @@ can change them while the game runs. `--check-renderer-ladder`
 video driver and checks that the game presents on through it;
 `--render-fault POINT[@FRAME]` narrows it to one
 (`native-renderer-ladder-create` makes every driver but software refuse at
-start).
+start). Two cases switch the accelerated tier on and run only when named:
+`--render-fault slow` (`native-renderer-ladder-slow`), slow frames walking
+the step-down to the standard tier, and `--render-fault memory`
+(`native-renderer-ladder-memory`), the memory guard refusing buffers and
+then dropping the tier; each skips under 2 GiB.
 
 Once the renderer is made, start-up describes it with the
 [render probe](../platform/render-probe/README.md) and logs one line
@@ -280,8 +284,7 @@ logs it.
   them; that the picture kept for a reader is the standard tier's and eases
   nothing; that a zoom ease makes no texture; and that prescale targets are
   drawn once a painted frame; it writes pictures of one moment at zoom
-  0.5, 1 and 2.5 in both tiers. The records, the step-down's feed and the
-  memory guard are not wired yet.
+  0.5, 1 and 2.5 in both tiers. The records are not wired yet.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
@@ -316,6 +319,49 @@ logs it.
   after the main menu and the loading screen (`native-render-tiers-density`
   on the dummy video driver, whose density is 1, and by hand on a display
   above density 1).
+- The accelerated tier's watch (`runtime_tier_watch.cpp`), made when the
+  tier first switches on in a run, so that a run on the standard tier
+  holds none of it (`AcceleratedWatch` in `render_run.hpp`). While the
+  tier draws, the memory guard samples the system's memory about once a
+  second (`watch_accelerated_memory`) and drops the tier for the rest of
+  the run when it trips, which neither Off then On nor Restore defaults
+  lifts; before the tier makes its scene and overlay or a prescale target
+  it asks the guard with a fresh sample (`accelerated_buffer_allowed`), and
+  where the guard refuses, the tier stays on the rung below, magnify off or
+  the card's magnification one rung lower (`rung_without`). Each match
+  frame the tier presents feeds the step-down (`feed_render_step_down`,
+  `feed_presented_frame`): its interval with its ticks' time taken out, its
+  draw and present measures and the tier's own passes (the area pass or
+  the nearest resample, the canvas copy, the overlay's conversion and the
+  uploads of the scene and the overlay, timed as they run), against the
+  lower of the rate the loop paces at, the lowest 30, and 60, and whether
+  it is steady, what it showed and whether the match clock runs below its
+  requested rate; the cost test takes a median as over the period only
+  past the loop's allowance, so on-time frames on the pacer's grid never
+  step. Frames of the standard tier, idle frames, a check's own frames and
+  a frame of a second or more after a shorter one, a wait for the window's
+  focus or a save, never feed it; a run of such frames, a machine that
+  really crawls, does. Each step lowers the rung for the rest of the run
+  (`lower_accelerated_rung`), freeing what the lower rung no longer draws
+  with: the scene and its terrain buffer when magnify goes off or the
+  budget falls, and the prescale targets the chrome or the card's
+  magnification no longer use, the magnified scene's only when the card's
+  magnification changes, since the NEAREST-chrome rung leaves the scene's
+  filter as it was (`world_filter`); each step is logged once. The status
+  then says the tier smooths less because frames were slow, and the last
+  step drops the tier, as the status then says, until Off then On or
+  Restore defaults starts the ladder again from the top. A later switch-on, after
+  a lost device or a shared game, keeps the rung reached. The rung is not
+  yet kept for the next start: the renderer records' `scale-level` key
+  holds it once the game reads and writes the records.
+  `--check-renderer-ladder --render-fault slow`
+  (`native-renderer-ladder-slow`) forces slow frames and sees idle frames
+  and the standard tier never feeding it, a frame's ticks taken out
+  against the loop's paced rate, each rung with what it frees and keeps,
+  the status, the drop, Off then On and a clock below its rate;
+  `--render-fault memory` (`native-renderer-ladder-memory`) forces the
+  guard's sample, which refuses each buffer and then drops the tier,
+  freeing the scene's buffers.
 - The tier each frame is drawn in (`runtime_render_tier.cpp`): at start,
   once the renderer is made, `RendererHost::decide_start_tier` fills the
   render policy's facts (the flags, the Hardware acceleration setting read
@@ -349,9 +395,11 @@ logs it.
   from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
   the tier it began with until it ends (`begin_render_tier_match`,
   `end_render_tier_match`). Switching it Off then On, or Restore defaults,
-  lets a failed function test run again and lifts a drop
-  (`take_renderer_retry`). A failed call of the accelerated tier, or a
-  renderer made again, drops it for the run. The dialog's status and
+  lets a failed function test run again, lifts a drop other than the
+  memory guard's and starts the step-down again from the top
+  (`take_renderer_retry`). A failed call of the accelerated tier, a
+  renderer made again, the memory guard and the step-down's last rung
+  drop it for the run. The dialog's status and
   locks follow these facts (`tier_acceleration_facts`); a driver that
   failed in the run locks nothing, so that the row can retry it. `+stats`
   names the tier. `native-engine-settings` turns the row On and Off
@@ -399,9 +447,9 @@ logs it.
   after it step as before, as in 3.1c. `app-match-clock` tests all of
   these, with frames across the turn from a clock just before 2^32
   milliseconds.
-- `memory_guard.hpp`, `memory_guard.cpp` (`oa-app-memory-guard`): the
-  memory guard of the accelerated tier, as a pure state machine with no
-  clock, which the game does not use yet. Handed a sample of the system's
+- `memory_guard.hpp`, `memory_guard.cpp` (part of `oa-app-render-policy`):
+  the memory guard of the accelerated tier, as a pure state machine with no
+  clock, which the tier's watch acts on (above). Handed a sample of the system's
   memory about once a second (`oa::platform::sample_system_memory`), it
   asks the tier to drop acceleration for the rest of the run when the
   process's private committed memory rises above half of physical memory,
@@ -413,12 +461,10 @@ logs it.
   `memory_guard_allows` tells whether free memory would stay at or above
   its threshold and committed memory at or under its own.
   `app-memory-guard` tests it by table, and `platform-system-memory`
-  samples the system it runs on and prints what it reports. The library,
-  its header and its test stand apart from the render policy
-  (`render_policy.hpp`, `oa-app-render-policy`) only until the code that
-  uses the guard lands: the guard then moves into the render policy's
-  files, under the `oa::app::render_policy` namespace it already uses, and
-  its cases into `app-render-policy`.
+  samples the system it runs on and prints what it reports. The guard is
+  built into the render policy's library, under the
+  `oa::app::render_policy` namespace it uses; its header, source and test
+  stay files of their own.
 - `frame_pacing.hpp`, `frame_pacing.cpp`, `frame_stats_panel.hpp`,
   `frame_stats_panel.cpp`, `runtime_frame_stats.cpp`: the
   application loop's frames, apart from the simulation's 30 ticks a second.
@@ -786,7 +832,8 @@ logs it.
   faults draw a reduction NEAREST (`FunctionTestFaults`).
   `runtime_renderer.cpp` holds the runtime's side: the render events,
   present errors and rebuilds, a lost device's wait and the stall rule;
-  `runtime_renderer_ladder_check.cpp` the ladder check.
+  `runtime_tier_watch.cpp` the accelerated tier's memory guard and
+  step-down; `runtime_renderer_ladder_check.cpp` the ladder check.
 - `scaled_world.hpp`, `scaled_world.cpp`: `TiledTexture`, a streaming
   texture made as one texture within the renderer's limit and as tiles
   with one-texel gutters beyond it, for the standard tier's window-size
@@ -805,7 +852,8 @@ logs it.
   (`step_tier`, `tier_action`, `forget_failures`, `start_function_test`),
   the shared-game gate, the starting rung, the stall rule, the count of
   device resets (`note_device_reset`), the layers' texture formats
-  (`layer_formats`) and the tiles of a texture beyond the renderer's
+  (`layer_formats`), the step-down and the rung below a buffer the memory
+  guard refuses, and the tiles of a texture beyond the renderer's
   limit. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed (`failed_driver_list` of the renderer records) but never
@@ -829,16 +877,23 @@ logs it.
   blend only above 4 GiB and never on a driver that excludes it
   (`start_rung`); the remembered rung (`resume_rung`), and the step-down
   itself, fed steady frames with their ticks' time taken out
-  (`feed_step_down`); the chrome's filter (`chrome_filter`) and the
+  (`feed_step_down`) against the lower of the loop's paced rate and 60
+  (`step_target_rate`), and only the match frames the accelerated tier
+  presented and the loop paced, never a lone wait of a second or more
+  (`feeds_step_down`, `feed_presented_frame`, `frame_kind`), each step
+  described for the log (`describe_step`); the rung the tier stays on
+  where the memory guard refuses a buffer (`rung_without`); the chrome's
+  filter (`chrome_filter`), the magnified scene's (`world_filter`) and the
   prescale budget; and the tiles of a texture beyond the renderer's limit
   (`plan_tiles`). The names of the drivers' graphics interfaces stay with
   the platform: the policy takes each driver's traits (`DriverTraits`).
   `app-render-policy` tests them all by table. What a left-over sentinel
   or trial, or a failure while running, counts for, and the sentinel and
   the trial through a run, are the renderer records' (above). The memory
-  guard, the world's scaling (`world_scaling`), the native-density rule,
-  which needs 2 GiB as the accelerated tier does, and the probe's report
-  join the policy with the code that uses them.
+  guard is built into the policy's library (above); the world's scaling
+  (`world_scaling`), the native-density rule, which needs 2 GiB as the
+  accelerated tier does, and the probe's report join the policy with the
+  code that uses them.
 - Director scripts ([docs/director.md](../../docs/director.md)):
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and

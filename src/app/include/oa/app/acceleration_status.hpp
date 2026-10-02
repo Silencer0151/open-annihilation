@@ -52,6 +52,17 @@ struct AccelerationFacts {
     /// after a call only it makes failed, or after the renderer failed and
     /// was made again.
     bool driver_failed{};
+    /// The memory guard stopped the graphics card scaling the frames for the
+    /// rest of the run, which switching the setting Off then On does not
+    /// lift.
+    bool memory_dropped{};
+    /// The step-down stopped the graphics card scaling the frames for the
+    /// rest of the run: frames were slow with it at every rung.
+    bool slow_frames_dropped{};
+    /// The step-down lowered the graphics card's rung for slow frames in
+    /// this run, short of the last; a rung lowered because the memory guard
+    /// refused a buffer does not count.
+    bool slow_frames_stepped{};
     /// Each change of the wait for the display resets the renderer's device,
     /// and the game does not yet recover a device such a reset leaves lost.
     bool vertical_sync_resets_device{};
@@ -103,7 +114,9 @@ struct AccelerationReport {
 /// that failed in this run; a renderer found unable, SDL's software
 /// renderer among them (unless --force-capable), as lacking a feature or
 /// as no usable graphics card; in use while the graphics card scales the
-/// frames, with no smoothing where it started at the lowest budget; and
+/// frames, with less smoothing once the step-down has lowered its rung for
+/// slow frames, else with no smoothing where it started at the lowest
+/// budget; and
 /// otherwise from the next start, which a renderer not yet looked at
 /// shows. Acceleration is out of reach under 2 GiB, on the environment's
 /// driver (unless --hardware-acceleration or --force-capable), or on a
@@ -128,8 +141,8 @@ struct AccelerationReport {
 /// whether the function test failed;
 /// SDL's software renderer; a drop after a driver failure; a shared game or
 /// a replay the tier waits for; whether the graphics card scales the frames
-/// now; and what it does at the rung. Vertical sync's facts are left for
-/// the caller.
+/// now; and what it does at the rung. Vertical sync's facts and whether the
+/// step-down has lowered the rung for slow frames are left for the caller.
 ///
 /// @param inputs the facts the tier is decided from
 /// @param rung the rung the accelerated tier draws at

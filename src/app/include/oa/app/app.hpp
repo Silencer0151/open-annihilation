@@ -125,6 +125,13 @@ enum class RenderFaultPoint : uint8_t {
     stall,
     /// the floating-point settings change before a present
     float_state,
+    /// frames are slow while the accelerated tier draws, so the step-down
+    /// walks its ladder to the standard tier; named alone, never part of
+    /// the run of every case
+    slow,
+    /// the memory guard refuses the accelerated tier's buffers, then drops
+    /// it; named alone, never part of the run of every case
+    memory,
 };
 
 /// The failure --render-fault forces and when.

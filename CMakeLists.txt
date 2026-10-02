@@ -225,14 +225,6 @@ add_library(oa-app-game-directory src/app/game_directory.cpp src/app/demo_instal
 add_library(oa::app::game_directory ALIAS oa-app-game-directory)
 target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256 oa-platform-preferences
   PRIVATE oa-formats-hpi oa-formats-pe oa-options)
-# The memory guard of the accelerated tier (memory_guard.hpp): the samples
-# of the system's memory judged against thresholds scaled to physical
-# memory, as a pure state machine with no clock. The game does not use it
-# yet. A library of its own only until the code that uses it lands, when
-# it joins the render policy's files.
-add_library(oa-app-memory-guard src/app/memory_guard.cpp)
-add_library(oa::app::memory_guard ALIAS oa-app-memory-guard)
-target_link_libraries(oa-app-memory-guard PUBLIC oa-app-headers oa-platform-shims PRIVATE oa-options)
 # The renderer records: what the engine has seen of each render driver on
 # this machine, and the sentinel of the stage a start has reached. Their text
 # and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
@@ -263,13 +255,17 @@ target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-format
 # the tier each frame is drawn in, what a crash or a failure counts for at
 # the next start and the records that keep it, the step-down ladder, the
 # chrome's filter and the tiles of a texture larger than the renderer
-# allows, as pure functions with no SDL and no files. The game uses its walk
-# of the render drivers, its texture limit and the tier each frame is drawn
-# in; the records, the step-down and the memory guard wait for the code that
-# acts on them.
-add_library(oa-app-render-policy src/app/render_policy.cpp)
+# allows, as pure functions with no SDL and no files; with the memory guard
+# of the accelerated tier (memory_guard.hpp), the samples of the system's
+# memory judged against thresholds scaled to physical memory, as a pure
+# state machine with no clock. The game uses its walk of the render
+# drivers, its texture limit, the tier each frame is drawn in, the
+# step-down and the memory guard; the records wait for the code that acts
+# on them.
+add_library(oa-app-render-policy src/app/render_policy.cpp src/app/memory_guard.cpp)
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
-target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers PRIVATE oa-options)
+target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers oa-platform-shims
+  PRIVATE oa-options)
 # What the settings dialog says of the renderer (acceleration_status.hpp):
 # Hardware acceleration's status and locks and Vertical sync's lock, from
 # what the run knows of its renderer, its machine and the match.
@@ -441,7 +437,8 @@ if(BUILD_TESTING)
   # committed memory, free memory held low for 3 s, the memory pressure and
   # hard page faults standing in for it, and the check before a new buffer.
   add_executable(oa-app-memory-guard-test src/app/memory_guard_test.cpp)
-  target_link_libraries(oa-app-memory-guard-test PRIVATE oa-app-memory-guard oa-test-support oa-options)
+  target_link_libraries(oa-app-memory-guard-test PRIVATE oa-app-render-policy oa-test-support
+    oa-options)
   add_test(NAME app-memory-guard COMMAND oa-app-memory-guard-test)
   # How a frame draws the battlefield: without a draw scale, and at the
   # zoom, the scene is the battlefield; at another scale it covers the
@@ -544,7 +541,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_order_panel.cpp src/app/runtime_order_check.cpp
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
-  src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp
+  src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp src/app/runtime_tier_watch.cpp
   src/app/runtime_render_tiers_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
@@ -796,6 +793,25 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-renderer-ladder native-renderer-ladder-create PROPERTIES
         TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_renderer_ladder_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:;SDL_FRAMEBUFFER_ACCELERATION=unset:")
+      # The two cases of the accelerated tier, which the check switches on
+      # over the same renderer as --hardware-acceleration and --force-capable
+      # would: slow frames, forced through the check's own interval, walk the
+      # step-down from the full budget to the standard tier, one rung a
+      # step, which the standard tier never feeds; and the memory guard,
+      # through the check's own sample of the system's memory, refuses the
+      # tier's buffers, then drops it for the run. Each skips under 2 GiB.
+      add_test(NAME native-renderer-ladder-slow COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder --render-fault slow
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-slow.conf")
+      add_test(NAME native-renderer-ladder-memory COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder --render-fault memory
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-memory.conf")
+      set_tests_properties(native-renderer-ladder-slow native-renderer-ladder-memory PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_renderer_ladder_dir}"
+        SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
         ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:;SDL_FRAMEBUFFER_ACCELERATION=unset:")
       # The first mission's briefing opened from NEWGAME.GUI with sound on the

@@ -1714,6 +1714,8 @@ void Runtime::render_match_surface() {
             match_world_cpu_.height,
             match_world_cpu_.width
         };
+        // The passes a scene drawn apart adds are timed for the step-down.
+        const auto passes_start = std::chrono::steady_clock::now();
         if (scaling.method == SceneMethod::area)
             area_filter_scene(world_surface);
         else if (
@@ -1729,10 +1731,21 @@ void Runtime::render_match_surface() {
                 std::string("cannot resample the battlefield's scene: ") +
                 oa::present::world_renderer::area_error_text(error)
             );
+        if (scaling.method == SceneMethod::area)
+            accelerated_.area_ns +=
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now() - passes_start
+                )
+                                          .count());
         // The card magnifies the scene itself; what the painters change on
         // the nearest picture is found against it, the base.
         if (scaling.method == SceneMethod::magnify)
             accelerated_.base.assign(match_world_cpu_.rgb.begin(), match_world_cpu_.rgb.end());
+        accelerated_.passes_ns +=
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now() - passes_start
+            )
+                                      .count());
         match_scene_cpu_ = {
             world_surface.width, world_surface.height, std::move(world_surface.rgb)
         };

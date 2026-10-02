@@ -323,9 +323,9 @@ int Runtime::run() {
         return 0;
     }
     if (options_.check_renderer_ladder) {
-        check_renderer_ladder();
+        const int status = check_renderer_ladder();
         flush_preferences();
-        return 0;
+        return status;
     }
     if (options_.check_briefing_narration) {
         check_briefing_narration();

@@ -2224,8 +2224,13 @@ class Runtime final : public menu::Host,
     /// Runs --check-renderer-ladder (runtime_renderer_ladder_check.cpp):
     /// forces each renderer failure the game handles, or the one
     /// --render-fault names, and checks that the game goes on presenting.
-    /// Throws std::runtime_error naming what failed.
-    void check_renderer_ladder();
+    /// Slow frames and the memory guard, which need the accelerated tier,
+    /// run only when named. Throws std::runtime_error naming what failed.
+    ///
+    /// @return 0, or 77 when the case named needs the accelerated tier and
+    ///     the machine reports under 2 GiB of memory, which ctest reports
+    ///     as skipped
+    int check_renderer_ladder();
 
     /// The cases of --check-renderer-ladder (runtime_renderer_ladder_check.cpp).
     struct RendererLadder;
@@ -2307,10 +2312,10 @@ class Runtime final : public menu::Host,
     /// director and a lost device, as render_policy::step_tier decides it:
     /// the start-up function test first where only it is missing
     /// (RendererHost::function_test_hooks), and the frame noted in a shared
-    /// game or a replay; then switches the accelerated presentation on, at
-    /// the rung the machine starts at or the one a check set
-    /// (render_tier_rung), or off, to match. A runtime without the game's
-    /// renderer keeps the standard tier.
+    /// game or a replay; then switches the accelerated presentation on, with
+    /// its watch (begin_accelerated_watch), at the rung render_tier_rung
+    /// gives, or off, to match. A runtime without the game's renderer keeps
+    /// the standard tier.
     void update_render_tier();
 
     /// Notes that a match's loading screen begins: in a shared game or a
@@ -2328,7 +2333,9 @@ class Runtime final : public menu::Host,
 
     /// Lets the tier try again, in this run, what switching Hardware
     /// acceleration Off then On or Restore defaults retries: a function test
-    /// that failed and a drop (render_policy::forget_failures).
+    /// that failed and a drop other than the memory guard's
+    /// (render_policy::forget_failures), and the step-down, which starts
+    /// again from the top at the next switch-on.
     void forget_render_failures();
 
     /// Acts on the dialog's requests to try the graphics card afresh, as
@@ -2341,7 +2348,8 @@ class Runtime final : public menu::Host,
     void take_renderer_retry(const oa::ui::engine_settings::Dialog& dialog);
 
     /// Returns the rung the accelerated presentation is switched on at: the
-    /// one a check set, else the one the machine starts at
+    /// one the step-down reached, once it has moved in the run; else the one
+    /// a check set, else the one the machine starts at
     /// (RendererHost::start_rung).
     ///
     /// @return the rung; the default rung without the game's renderer
@@ -4313,6 +4321,16 @@ class Runtime final : public menu::Host,
     /// @return true for a steady frame
     [[nodiscard]] bool present_frame_steady(uint64_t now_ns) const;
 
+    /// Returns what decides whether a frame presented now is steady, as the
+    /// facts of a step-down sample (render_policy::steady_frame): whether
+    /// the window is shown and active, the frame was paced at the idle rate,
+    /// it comes within 2 s of a resize, a mode change or a full-screen
+    /// switch, or within a match's first 5 s.
+    ///
+    /// @param now_ns the time on the steady clock, nanoseconds
+    /// @return the sample, its measures left at 0
+    [[nodiscard]] render_policy::FrameSample present_frame_facts(uint64_t now_ns) const;
+
     /// Asks the renderer's device whether it is lost, as one is on some
     /// renderers while another program holds the screen; and enters the wait
     /// for its reset when it is.
@@ -4442,6 +4460,12 @@ class Runtime final : public menu::Host,
         /// the loop presents paints but one whose panel keeps the frame shown.
         uint64_t screen_revision{};
         ScaledWorldCounts counts; ///< what the card was asked to make and draw
+        /// The time the tier's own passes took since the last match frame
+        /// was presented, in nanoseconds: the area pass or the nearest
+        /// resample, the canvas copy, the overlay's conversion and the
+        /// uploads of the scene and the overlay.
+        uint64_t passes_ns{};
+        uint64_t area_ns{}; ///< the area pass's part of passes_ns
     };
 
     /// Switches the accelerated presentation on, at a rung of the step-down
@@ -4486,18 +4510,83 @@ class Runtime final : public menu::Host,
     /// @return the scale mode
     [[nodiscard]] SDL_ScaleMode one_to_one_scale_mode() const;
 
-    /// Drops the accelerated presentation for the rest of the run after a
-    /// call only it makes failed: logs the reason once and frees every texture
-    /// and buffer it made, so that frames are presented as the standard tier
-    /// presents them, and keeps the tier standard until switching Hardware
-    /// acceleration Off then On, or Restore defaults, lifts the drop
-    /// (render_policy::Drop::driver_failure).
+    /// Drops the accelerated presentation for the rest of the run: logs the
+    /// reason once and frees every texture and buffer it made, so that frames
+    /// are presented as the standard tier presents them, and keeps the tier
+    /// standard until switching Hardware acceleration Off then On, or
+    /// Restore defaults, lifts the drop; nothing lifts the memory guard's.
+    /// A drop already noted for the run keeps its kind.
     ///
-    /// @param reason what failed
-    void drop_acceleration(const std::string& reason);
+    /// @param reason what failed or stopped it
+    /// @param drop why: by default a call only the accelerated tier makes
+    ///     failed (render_policy::Drop::driver_failure)
+    void drop_acceleration(
+        const std::string& reason, render_policy::Drop drop = render_policy::Drop::driver_failure
+    );
 
-    /// Frees every texture and buffer the accelerated presentation made.
+    /// Starts the accelerated tier's watch as the tier switches on: made on
+    /// the first switch-on of the run, with the memory guard scaled to the
+    /// machine's physical memory; the step-down starts afresh at the rung
+    /// the tier switches on at (render_tier_rung) unless it has moved in the
+    /// run; and the memory guard's watch starts again, its first sample due
+    /// at once. Without the game's renderer it does nothing.
+    void begin_accelerated_watch();
+
+    /// Samples the system's memory about once a second while the
+    /// accelerated tier draws, and drops the tier for the rest of the run
+    /// when the memory guard asks (render_policy::observe_memory,
+    /// render_policy::Drop::memory). Only the frames the loop paces are
+    /// watched, so a check's own frames keep their tier, unless the check
+    /// forces the sample (RenderRun::forced_memory).
+    void watch_accelerated_memory();
+
+    /// Tells whether the accelerated tier may make a buffer of its own now,
+    /// from a fresh sample of the system's memory
+    /// (render_policy::memory_guard_allows). Where the guard refuses, the
+    /// tier stays on the rung below for the rest of the run, which holds no
+    /// such buffer (render_policy::rung_without, lower_accelerated_rung).
+    /// The frames the loop does not pace make what they need, as before,
+    /// unless a check forces the sample.
+    ///
+    /// @param buffer what the tier would make
+    /// @param bytes its size, in bytes
+    /// @return true when it may make the buffer
+    [[nodiscard]] bool
+    accelerated_buffer_allowed(render_policy::AcceleratedBuffer buffer, uint64_t bytes);
+
+    /// Moves the accelerated presentation down to a lower rung for the rest
+    /// of the run, as the step-down or the memory guard asks: the step-down
+    /// takes the rung, the textures and targets the rung no longer draws
+    /// with are freed at once, and the step is logged once.
+    ///
+    /// @param rung the lower rung
+    /// @param cause what moved it, which begins the log line
+    void lower_accelerated_rung(const render_policy::LadderState& rung, std::string_view cause);
+
+    /// Feeds the match frame just presented to the step-down
+    /// (render_policy::feed_presented_frame): its interval, its ticks' time
+    /// taken out, its draw and present measures and the accelerated tier's
+    /// own passes, against the rate the loop paces at (frame_stats_notes),
+    /// with whether it is steady, what it showed and whether the match clock
+    /// runs below its requested rate. Only the accelerated tier's frames the
+    /// loop paces feed it, or a check's frames when it forces their interval
+    /// (RenderRun::forced_frame_ns). A step lowers the rung
+    /// (lower_accelerated_rung), and the last drops the tier for the rest of
+    /// the run (render_policy::Drop::slow_frames).
+    ///
+    /// @param present_ns the frame's present measure, nanoseconds
+    void feed_render_step_down(uint64_t present_ns);
+
+    /// Frees every texture and buffer the accelerated presentation made,
+    /// and, while it is switched on, the scene's buffers, which only it
+    /// holds at a scene's size (free_accelerated_scene_buffers).
     void free_accelerated_presentation() noexcept;
+
+    /// Frees the buffers a frame drawing its scene apart from the world
+    /// layer held at the scene's size: the scene, and the terrain filled at
+    /// it, which the next frame fills again at the size it needs. Their
+    /// memory goes back at once, which a smaller size would not give back.
+    void free_accelerated_scene_buffers() noexcept;
 
     /// Frees the accelerated presentation's match textures, prescale targets
     /// and buffers, as a match ends or the presentation is switched.
@@ -4530,17 +4619,24 @@ class Runtime final : public menu::Host,
     /// Throws AccelerationError when the card refuses one.
     void ensure_accelerated_match_textures();
 
-    /// Returns how the card scales a layer at a scale: NEAREST at a
-    /// whole-number scale, else the rung's filter, with the prescale factor
-    /// a target already made allows.
+    /// Returns how the card scales a layer at a scale by a filter: the
+    /// prescale factor a target already made allows sharp-bilinear, which
+    /// falls to plain LINEAR where it allows none.
     ///
+    /// @param filter the layer's filter at the scale: the chrome's
+    ///     (render_policy::chrome_filter) or the magnified scene's
+    ///     (render_policy::world_filter)
     /// @param scale the scale, in window pixels per layer pixel
     /// @param width the layer's width in texels
     /// @param height the layer's height in texels
     /// @param target the prescale target the layer would be drawn into
     /// @return the filter and the factor
     [[nodiscard]] CardScale accelerated_card_scale(
-        double scale, uint32_t width, uint32_t height, const PrescaleTarget& target
+        render_policy::ScaleFilter filter,
+        double scale,
+        uint32_t width,
+        uint32_t height,
+        const PrescaleTarget& target
     ) const;
 
     /// Returns the prescale factor the rung gives a layer at a scale, within

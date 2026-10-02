@@ -364,7 +364,11 @@ int Runtime::check_render_tiers() {
             fail(std::string("SDL_GetRenderLogicalPresentationRect: ") + SDL_GetError());
         const double scale = static_cast<double>(letterbox.w) / surface_.width;
         const auto card = accelerated_card_scale(
-            scale, surface_.width, surface_.height, accelerated_.screen_prescale
+            policy::chrome_filter(accelerated_.rung, scale),
+            scale,
+            surface_.width,
+            surface_.height,
+            accelerated_.screen_prescale
         );
         const bool whole = std::floor(scale) == scale;
         if (whole &&
@@ -688,6 +692,7 @@ int Runtime::check_render_tiers() {
         const uint32_t width = corner(bf_w, scene_w);
         const uint32_t height = corner(bf_h, scene_h);
         const auto card = accelerated_card_scale(
+            policy::world_filter(accelerated_.rung, zoom),
             zoom,
             std::min(width + 1, scene_w),
             std::min(height + 1, scene_h),

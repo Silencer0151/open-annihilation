@@ -256,7 +256,18 @@ walk runs:
   layers in tiles past a texture limit of 2048.
   `--render-fault POINT[@FRAME]` forces one failure alone, at a presented
   frame of its case; `native-renderer-ladder-create` makes every driver but
-  software refuse at start.
+  software refuse at start;
+- `native-renderer-ladder-slow` (`--render-fault slow`) and
+  `native-renderer-ladder-memory` (`--render-fault memory`) switch the
+  accelerated tier on, as `--hardware-acceleration` and `--force-capable`
+  would, and run only when named. The first forces the interval of each
+  frame, on a clock of its own, so that slow frames walk the step-down one
+  rung a step to the standard tier, each step logged once, and checks that
+  the standard tier and idle frames never feed it and that a frame's
+  ticks, added between frames, are taken out against the loop's paced
+  rate; the second forces the memory guard's sample of the system's
+  memory, so that the guard refuses the tier's buffers and then drops it
+  for the run. Each skips under 2 GiB.
 
 ### Other builds
 

@@ -4,10 +4,12 @@
 // The tier each frame is drawn in: decided before the frame from the facts
 // the game's renderer keeps (render_policy::step_tier), and acted on, with
 // the start-up function test run where only it is missing and the
-// accelerated presentation switched on or off to match. Off applies at
-// once; On applies at once too, except that a match played with other
-// machines or a replay, known from its loading screen, keeps the tier it
-// began with until it ends.
+// accelerated presentation switched on or off to match, its watch started
+// as it switches on (runtime_tier_watch.cpp). Off applies at once; On
+// applies at once too, except that a match played with other machines or a
+// replay, known from its loading screen, keeps the tier it began with until
+// it ends. Once the step-down has moved, the tier switches on at the rung
+// it reached.
 #include "oa/app/runtime.hpp"
 
 #include "engine_settings_state.hpp"
@@ -35,6 +37,7 @@ void Runtime::update_render_tier() {
         policy::step_tier(inputs, accelerated_.on, host.function_test_hooks());
     switch (step.action) {
     case policy::TierAction::switch_on:
+        begin_accelerated_watch();
         switch_accelerated_presentation(true, render_tier_rung());
         break;
     case policy::TierAction::switch_off:
@@ -59,13 +62,20 @@ void Runtime::end_render_tier_match() {
 }
 
 void Runtime::forget_render_failures() {
-    if (render_run_ && render_run_->host != nullptr)
-        policy::forget_failures(render_run_->host->tier_inputs());
+    if (!render_run_ || render_run_->host == nullptr)
+        return;
+    policy::forget_failures(render_run_->host->tier_inputs());
+    // The fresh try starts the step-down again from the top; the memory
+    // guard, once it has tripped, stays tripped.
+    if (render_run_->watch)
+        render_run_->watch->moved = false;
 }
 
 policy::LadderState Runtime::render_tier_rung() const {
     if (!render_run_ || render_run_->host == nullptr)
         return {};
+    if (render_run_->watch && render_run_->watch->moved)
+        return render_run_->watch->step_down.state;
     return render_run_->rung.value_or(render_run_->host->start_rung());
 }
 

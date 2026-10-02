@@ -641,6 +641,7 @@ void Runtime::finish_match_layers(
     const auto present_ns = static_cast<uint64_t>(elapsed_since(upload_start));
     frame_pacing::note_frame_measure(frame_stats_, frame_pacing::FrameMeasure::present, present_ns);
     note_present_time(present_ns);
+    feed_render_step_down(present_ns);
 }
 
 void Runtime::capture_render_target() {
@@ -778,8 +779,9 @@ void Runtime::render() {
         screen_ != Screen::match && screen_ != Screen::loading)
         apply_output_mode();
     // The frame's tier decides how its battlefield is drawn, so it comes
-    // before the frame is composed.
+    // before the frame is composed; the memory guard may drop it first.
     update_render_tier();
+    watch_accelerated_memory();
     const auto compose_start = std::chrono::steady_clock::now();
     rebuild_surface();
     const auto composed = elapsed_since(compose_start);

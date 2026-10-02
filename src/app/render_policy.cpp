@@ -810,6 +810,12 @@ ScaleStepDown start_step_down(const LadderState& state) noexcept {
     return ladder;
 }
 
+uint32_t step_target_rate(uint32_t paced_frames_per_second) noexcept {
+    if (paced_frames_per_second == 0)
+        return step_target_frames_per_second;
+    return std::min(paced_frames_per_second, step_target_frames_per_second);
+}
+
 StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noexcept {
     if (ladder.state.standard || !steady_frame(sample))
         return StepResult::none;
@@ -823,8 +829,7 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
         empty_pool(ladder.zoomed_in);
         return StepResult::shed;
     }
-    const uint32_t frames_per_second =
-        std::clamp<uint32_t>(sample.paced_frames_per_second, 1, step_target_frames_per_second);
+    const uint32_t frames_per_second = step_target_rate(sample.paced_frames_per_second);
     const uint64_t target_us =
         nanoseconds_per_second / nanoseconds_per_microsecond / frames_per_second;
     PooledSample pooled;
@@ -849,9 +854,15 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
         const uint32_t median =
             pool_median(pool, slow_window_ns / nanoseconds_per_microsecond, Figure::time, covered);
         if (covered) {
+            // A frame paced on time is presented on the period's grid, so the
+            // cost test counts a median as over the period only past the
+            // loop's allowance.
+            const uint64_t allowance_us = sample.allowance_ns != 0
+                                              ? sample.allowance_ns / nanoseconds_per_microsecond
+                                              : target_us;
             if (uint64_t{median} * 100 > target_us * slow_percent) {
                 step = true;
-            } else if (median > target_us && sample.kind != FrameKind::other) {
+            } else if (median > allowance_us && sample.kind != FrameKind::other) {
                 bool passes_covered = false;
                 const uint32_t passes = pool_median(
                     pool,
@@ -884,6 +895,67 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
     ladder.last_step_ns = sample.now_ns;
     empty_pool(pool);
     return ladder.state.standard ? StepResult::standard : StepResult::stepped;
+}
+
+bool feeds_step_down(const PresentedFrame& frame, const FrameSample& sample) noexcept {
+    // A long frame alone is a wait; after another as long, a crawl.
+    const bool timed = sample.interval_ns < longest_fed_interval_ns ||
+                       frame.previous_interval_ns >= longest_fed_interval_ns;
+    return frame.tier == RenderTier::accelerated && frame.match && frame.paced && timed;
+}
+
+FrameKind frame_kind(float zoom, bool reduced, bool magnified) noexcept {
+    if (zoom < 1.0F && (reduced || magnified))
+        return FrameKind::zoomed_out;
+    if (zoom > 1.0F && magnified)
+        return FrameKind::zoomed_in;
+    return FrameKind::other;
+}
+
+StepResult feed_presented_frame(
+    ScaleStepDown& ladder, const PresentedFrame& frame, const FrameSample& sample
+) noexcept {
+    if (!feeds_step_down(frame, sample))
+        return StepResult::none;
+    return feed_step_down(ladder, sample);
+}
+
+LadderState rung_without(const LadderState& state, AcceleratedBuffer buffer) noexcept {
+    LadderState lowered = state;
+    switch (buffer) {
+    case AcceleratedBuffer::scene:
+        lowered.magnify = false;
+        break;
+    case AcceleratedBuffer::prescale:
+        if (lowered.card == CardFilter::prescale_full ||
+            lowered.card == CardFilter::prescale_quarter)
+            lowered.card = lower_card(lowered.card);
+        break;
+    }
+    return lowered;
+}
+
+std::string_view describe_step(const LadderState& before, const LadderState& after) noexcept {
+    if (after.standard && !before.standard)
+        return "the processor draws everything for the rest of the run";
+    if (before.budget != SceneBudget::none && after.budget == SceneBudget::none && before.magnify &&
+        !after.magnify)
+        return "the zoomed-out view is no longer smoothed and the graphics card no longer "
+               "magnifies the battlefield";
+    if (before.method != after.method)
+        return "the graphics card blends the zoomed-out view";
+    if (before.budget != after.budget)
+        return after.budget == SceneBudget::none ? "the zoomed-out view is no longer smoothed"
+                                                 : "the zoomed-out view is smoothed less";
+    if (before.magnify != after.magnify)
+        return "the graphics card no longer magnifies the battlefield";
+    if (before.filtered_chrome != after.filtered_chrome)
+        return "the interface is scaled without filtering";
+    if (before.card != after.card)
+        return after.card == CardFilter::linear
+                   ? "the graphics card magnifies by plain linear filtering"
+                   : "the graphics card magnifies within a quarter of its budget";
+    return "nothing changed";
 }
 
 // ---------------------------------------------------------------------------
@@ -973,6 +1045,12 @@ ScaleFilter chrome_filter(const LadderState& state, double scale) noexcept {
         return ScaleFilter::linear;
     }
     return ScaleFilter::nearest;
+}
+
+ScaleFilter world_filter(const LadderState& state, double zoom) noexcept {
+    LadderState magnified = state;
+    magnified.filtered_chrome = true;
+    return chrome_filter(magnified, zoom);
 }
 
 // ---------------------------------------------------------------------------

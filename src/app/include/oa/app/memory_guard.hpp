@@ -13,7 +13,8 @@
 // whether a new buffer of its own would leave free memory above the
 // threshold. The constants are conservative placeholders until a run on
 // real period hardware measures them. The guard reads no clock and calls no
-// system; the game does not use it yet.
+// system: the accelerated tier's watch (runtime_tier_watch.cpp) samples the
+// system and hands it each sample.
 #pragma once
 
 #include "oa/platform/memory_status.hpp"

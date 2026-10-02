@@ -48,14 +48,20 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = AccelerationState::environment_driver;
     else if (
         capable && (facts.shared_game || facts.replay) && !facts.tier_accelerated &&
-        !facts.driver_failed
+        !facts.driver_failed && !facts.memory_dropped && !facts.slow_frames_dropped
     )
         report.status.state = AccelerationState::waiting_for_game_end;
     else if (facts.driver_failed && !facts.tier_accelerated)
         report.status.state = AccelerationState::driver_failed;
+    else if (facts.memory_dropped && !facts.tier_accelerated)
+        report.status.state = AccelerationState::too_little_memory;
+    else if (facts.slow_frames_dropped && !facts.tier_accelerated)
+        report.status.state = AccelerationState::slow_frames;
     else if (!capable)
         report.status.state =
             lacks_feature ? AccelerationState::lacks_feature : AccelerationState::no_usable_card;
+    else if (facts.tier_accelerated && facts.slow_frames_stepped)
+        report.status.state = AccelerationState::in_use_less_smoothing;
     else if (facts.tier_accelerated)
         report.status.state =
             facts.no_smoothing ? AccelerationState::in_use_no_smoothing : AccelerationState::in_use;
@@ -88,6 +94,8 @@ AccelerationFacts tier_acceleration_facts(
     facts.software_renderer = inputs.capability == Capability::software_renderer;
     facts.lacks_feature = inputs.capability == Capability::small_texture_limit || test_failed;
     facts.driver_failed = inputs.drop == render_policy::Drop::driver_failure;
+    facts.memory_dropped = inputs.drop == render_policy::Drop::memory;
+    facts.slow_frames_dropped = inputs.drop == render_policy::Drop::slow_frames;
     facts.shared_game = inputs.match.kind == render_policy::MatchKind::shared_game;
     facts.replay = inputs.match.kind == render_policy::MatchKind::replay;
     facts.tier_accelerated = tier_accelerated;

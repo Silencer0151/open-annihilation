@@ -40,6 +40,10 @@ constexpr int prescale_zoom_steps = 960;
 /// The most a prescale factor is asked for, whatever the scale.
 constexpr double most_prescale_factor = 64.0;
 
+/// Bytes a texel of the tier's textures and targets holds, and a pixel of
+/// the overlay's buffer: ARGB8888.
+constexpr uint64_t bytes_per_texel = 4;
+
 /// Returns the nanoseconds since a moment of the steady clock.
 ///
 /// @param since the moment
@@ -80,7 +84,7 @@ bool Runtime::accelerated_presentation() const noexcept {
            !options_.headless_check && director_ == nullptr;
 }
 
-void Runtime::drop_acceleration(const std::string& reason) {
+void Runtime::drop_acceleration(const std::string& reason, render_policy::Drop drop) {
     if (accelerated_.on)
         std::cout << "open-annihilation: graphics: the accelerated tier stopped (" << reason
                   << "); the processor draws everything from now on\n";
@@ -89,7 +93,7 @@ void Runtime::drop_acceleration(const std::string& reason) {
     if (render_run_ && render_run_->host != nullptr) {
         auto& inputs = render_run_->host->tier_inputs();
         if (inputs.drop == render_policy::Drop::none)
-            inputs.drop = render_policy::Drop::driver_failure;
+            inputs.drop = drop;
     }
 }
 
@@ -116,9 +120,20 @@ void Runtime::free_accelerated_match_textures() noexcept {
 
 void Runtime::free_accelerated_presentation() noexcept {
     free_accelerated_match_textures();
+    // Only the presentation holds the scene's buffers at a scene's size; the
+    // standard tier's stay as they are.
+    if (accelerated_.on)
+        free_accelerated_scene_buffers();
     accelerated_.screen_prescale.destroy();
     accelerated_.frame = {};
     accelerated_.magnified = false;
+}
+
+void Runtime::free_accelerated_scene_buffers() noexcept {
+    match_scene_cpu_ = {};
+    match_terrain_cache_ = {};
+    terrain_cache_cam_x_ = ~0u;
+    terrain_cache_zoom_ = -1.0F;
 }
 
 void Runtime::area_filter_scene(const wr::Surface& scene) {
@@ -145,9 +160,12 @@ uint32_t Runtime::accelerated_prescale_factor(
 }
 
 CardScale Runtime::accelerated_card_scale(
-    double scale, uint32_t width, uint32_t height, const PrescaleTarget& target
+    policy::ScaleFilter filter,
+    double scale,
+    uint32_t width,
+    uint32_t height,
+    const PrescaleTarget& target
 ) const {
-    const auto filter = policy::chrome_filter(accelerated_.rung, scale);
     if (filter != policy::ScaleFilter::sharp_bilinear)
         return {filter, 1};
     // The factor the scale asks for, falling to what the target holds.
@@ -188,15 +206,17 @@ void Runtime::ensure_accelerated_match_textures() {
         policy::chrome_filter(state.rung, chrome) == policy::ScaleFilter::sharp_bilinear) {
         const uint32_t factor = accelerated_prescale_factor(chrome, hud_w, hud_h, 0);
         if (factor > 1 && (state.hud_prescale.width() < factor * hud_w ||
-                           state.hud_prescale.height() < factor * hud_h))
-            state.hud_prescale.ensure(
-                sdl_.renderer,
-                nullptr,
-                std::max(state.hud_prescale.width(), factor * hud_w),
-                std::max(state.hud_prescale.height(), factor * hud_h),
-                limit,
-                state.counts
-            );
+                           state.hud_prescale.height() < factor * hud_h)) {
+            const uint32_t target_w = std::max(state.hud_prescale.width(), factor * hud_w);
+            const uint32_t target_h = std::max(state.hud_prescale.height(), factor * hud_h);
+            if (accelerated_buffer_allowed(
+                    policy::AcceleratedBuffer::prescale,
+                    uint64_t{target_w} * target_h * bytes_per_texel
+                ))
+                state.hud_prescale.ensure(
+                    sdl_.renderer, nullptr, target_w, target_h, limit, state.counts
+                );
+        }
     }
     if (!state.rung.magnify)
         return;
@@ -204,6 +224,14 @@ void Runtime::ensure_accelerated_match_textures() {
     const auto largest = largest_magnified_scene(battlefield_width, battlefield_height);
     const auto scene_w = static_cast<uint32_t>(largest.width);
     const auto scene_h = static_cast<uint32_t>(largest.height);
+    // The scene's texture, the overlay's and the overlay's buffer, unless
+    // the memory guard refuses them: the tier then stays at magnify off.
+    if ((!state.scene.made() || !state.overlay_texture.made()) &&
+        !accelerated_buffer_allowed(
+            policy::AcceleratedBuffer::scene,
+            (uint64_t{scene_w} * scene_h + 2 * uint64_t{bf_w} * bf_h) * bytes_per_texel
+        ))
+        return;
     if (!state.scene.made())
         state.scene.create(
             sdl_.renderer, scene_w, scene_h, limit, SDL_BLENDMODE_NONE, state.counts
@@ -245,7 +273,10 @@ void Runtime::ensure_accelerated_match_textures() {
     const policy::PrescaleBudget left{
         policy::prescale_budget(state.rung.card), state.hud_prescale.pixels()
     };
-    if (widest != 0 && uint64_t{widest} * tallest + left.charged <= left.limit)
+    if (widest != 0 && uint64_t{widest} * tallest + left.charged <= left.limit &&
+        accelerated_buffer_allowed(
+            policy::AcceleratedBuffer::prescale, uint64_t{widest} * tallest * bytes_per_texel
+        ))
         state.world_prescale.ensure(sdl_.renderer, nullptr, widest, tallest, limit, state.counts);
 }
 
@@ -287,6 +318,9 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     const auto upload_start = std::chrono::steady_clock::now();
     upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
     if (magnified) {
+        // The scene's upload and the overlay's conversion and upload are the
+        // tier's own passes, timed for the step-down.
+        const auto passes_start = std::chrono::steady_clock::now();
         state.scene.upload_rgb24(
             match_scene_cpu_.rgb.data(),
             std::size_t{match_scene_cpu_.width} * 3U,
@@ -334,6 +368,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         }
         state.uploaded_bands = state.opaque_bands;
         state.overlay_uploaded = true;
+        state.passes_ns += static_cast<uint64_t>(nanoseconds_since(passes_start));
     } else {
         upload_rgb24_tiles(match_world_tex_, match_world_cpu_, gamma);
     }
@@ -365,6 +400,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         match_hud_cpu_.height,
         strips,
         accelerated_card_scale(
+            policy::chrome_filter(state.rung, match_layout_.scale * density),
             match_layout_.scale * density,
             match_hud_cpu_.width,
             match_hud_cpu_.height,
@@ -400,6 +436,8 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             static_cast<int>(std::lround(static_cast<double>(width) * zoom)),
             static_cast<int>(std::lround(static_cast<double>(height) * zoom))
         };
+        // The magnified scene's filter, chosen on its scale at the display.
+        const double scene_scale = world_display_scale(frame, zoom, density);
         draw_scaled_world(
             sdl_.renderer,
             nullptr,
@@ -411,7 +449,8 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
             destination,
             battlefield,
             accelerated_card_scale(
-                world_display_scale(frame, zoom, density),
+                policy::world_filter(state.rung, scene_scale),
+                scene_scale,
                 std::min(width + 1, scene_w),
                 std::min(height + 1, scene_h),
                 state.world_prescale
@@ -443,7 +482,14 @@ void Runtime::draw_accelerated_screen(
     auto& state = accelerated_;
     if (policy::chrome_filter(state.rung, scale) == policy::ScaleFilter::sharp_bilinear) {
         const uint32_t factor = accelerated_prescale_factor(scale, w, h, 0);
-        if (factor > 1)
+        // A target of a new size is made only where the memory guard allows it.
+        const bool made = state.screen_prescale.made() &&
+                          state.screen_prescale.width() == factor * w &&
+                          state.screen_prescale.height() == factor * h;
+        if (factor > 1 && (made || accelerated_buffer_allowed(
+                                       policy::AcceleratedBuffer::prescale,
+                                       uint64_t{factor * w} * (factor * h) * bytes_per_texel
+                                   )))
             state.screen_prescale.ensure(
                 sdl_.renderer, nullptr, factor * w, factor * h, state.texture_limit, state.counts
             );
@@ -459,7 +505,9 @@ void Runtime::draw_accelerated_screen(
         w,
         h,
         {&whole, 1},
-        accelerated_card_scale(scale, w, h, state.screen_prescale),
+        accelerated_card_scale(
+            policy::chrome_filter(state.rung, scale), scale, w, h, state.screen_prescale
+        ),
         revision,
         state.screen_prescale,
         state.counts

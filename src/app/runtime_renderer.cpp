@@ -219,7 +219,7 @@ bool Runtime::render_fault_due(RenderFaultPoint point) {
     return true;
 }
 
-bool Runtime::present_frame_steady(uint64_t now_ns) const {
+render_policy::FrameSample Runtime::present_frame_facts(uint64_t now_ns) const {
     const auto& run = *render_run_;
     render_policy::FrameSample sample;
     const SDL_WindowFlags flags = sdl_.window != nullptr ? SDL_GetWindowFlags(sdl_.window) : 0;
@@ -231,7 +231,11 @@ bool Runtime::present_frame_steady(uint64_t now_ns) const {
                       full_screen_switch_.awaiting_shown;
     sample.match_warming =
         screen_ == Screen::match && now_ns - run.screen_since_ns < match_warming_ns;
-    return render_policy::steady_frame(sample);
+    return sample;
+}
+
+bool Runtime::present_frame_steady(uint64_t now_ns) const {
+    return render_policy::steady_frame(present_frame_facts(now_ns));
 }
 
 void Runtime::note_present_time(uint64_t present_ns) {
@@ -244,6 +248,23 @@ void Runtime::note_present_time(uint64_t present_ns) {
     const uint64_t now = steady_now_ns();
     const uint64_t interval = run.last_present_ns != 0 ? now - run.last_present_ns : 0;
     run.last_present_ns = now;
+    // What the step-down measures between two presents, once the
+    // accelerated tier has run: the interval and the one before it, the
+    // ticks run between them and the draw measure.
+    if (run.watch) {
+        auto& watch = *run.watch;
+        watch.previous_interval_ns = watch.frame_interval_ns;
+        watch.frame_interval_ns = interval;
+        watch.frame_ticks_ns =
+            phase_times_.simulation > watch.ticks_seen_ns
+                ? static_cast<uint64_t>(phase_times_.simulation - watch.ticks_seen_ns)
+                : 0;
+        watch.frame_draw_ns = phase_times_.compose > watch.draw_seen_ns
+                                  ? static_cast<uint64_t>(phase_times_.compose - watch.draw_seen_ns)
+                                  : 0;
+        watch.ticks_seen_ns = phase_times_.simulation;
+        watch.draw_seen_ns = phase_times_.compose;
+    }
     // A lost device's presents show nothing and say nothing of the driver.
     if (run.device_lost)
         return;
