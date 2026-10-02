@@ -11,9 +11,8 @@
 # except the branding's at the end, which is not under the project's
 # licence.
 #
-# The paths name the engine's own directories only: the projects nested in
-# this tree keep their own terms. '*' matches within one directory and '**'
-# across directories.
+# The paths name the engine's own directories only. '*' matches within one
+# directory and '**' across directories.
 #
 # The file is written in the REUSE specification's format (version 1), but
 # licensing-check is what the engine holds its files to. The tree does not

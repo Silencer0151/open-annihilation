@@ -48,8 +48,7 @@
 # tools/layout/files/); files renamed within a module keep their names in
 # its CMakeLists.txt; a module's project() takes the module's name
 # (oa_<group>_<module>); hand-written edits are in tools/layout/patches.txt.
-# A project that holds a rename record (a renames.tsv) keeps that
-# directory as it is.
+# A project's directory that --leave names stays as it is.
 #
 # Layer order (tools/check_layout.py): core, base, platform and formats,
 # data, sim, present/audio/media, ui, app. A module's group is the first

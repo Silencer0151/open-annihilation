@@ -445,12 +445,7 @@ void check_director_options(Options& options) {
                    "extension of this build replays;\n"
                    "--render-script renders a director script, or a bundle of one and "
                    "its recording, to video (docs/director.md).\n"
-                << extension_text(
-                       extension,
-                       ExtensionText::usage_note,
-                       "This release has no multiplayer; --check-multiplayer-menu checks "
-                       "the message box MULTI opens instead.\n"
-                   );
+                << extension_text(extension, ExtensionText::usage_note, "");
             std::exit(0);
         } else if (argument.starts_with("--")) {
             ArgumentCursor cursor{argc, argv, &index, argument};
@@ -479,7 +474,7 @@ void check_director_options(Options& options) {
         throw std::runtime_error(extension_text(
             extension,
             ExtensionText::register_switch,
-            "-r registers the game for multiplayer, which this release does not include"
+            "-r registers the game for multiplayer, which this game does not need"
         ));
     case oa::app::command_line::Status::line_too_long:
         throw std::runtime_error("the game switches exceed the command-line limit");

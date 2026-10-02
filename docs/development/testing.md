@@ -136,10 +136,9 @@ installer itself. These tests read it:
 - `native-demo-navigation`, `native-demo-saved-games` and
   `native-demo-multiplayer-menu` start the game the same way and run its
   `--check-navigation`, `--check-load-save` and `--check-multiplayer-menu`
-  over the demo's data, which has no skirmish map and no save and load
-  dialog: the notices, the grayed-out entries and the campaign's way in and
-  out. The last is registered only with the default extension, since an
-  extension that offers multiplayer checks its own screens;
+  over the demo's data, which has no skirmish or multiplayer map and no
+  save and load dialog: the notices, MULTI's among them, the grayed-out
+  entries and the campaign's way in and out;
 - `native-demo-campaign-ending` starts the game the same way and plays the
   demo's last Arm mission, AC03, at easy with `--give-orders`: it must be won
   without a failed tick, and its end screen must leave through the ending
@@ -159,6 +158,36 @@ installer itself. These tests read it:
 Without `OA_DEMO_INSTALLER` each reports skipped, under
 `OA_REQUIRE_GAME_DATA` too, since the demo is optional. `demo-installer`
 covers the same code over a synthetic installer and runs everywhere.
+
+### Network play
+
+Network play is always built and tested. Its tests are `network`, the
+`net-*` tests of the wire and protocol, the session and its loopback over
+sockets, the records, the match, the multiplayer frontend states, the
+console commands, sync, messages and the launch switches, `tad-format` and
+`demo-playback` for recorded games, `ui-multiplayer-*` for the multiplayer
+screens, and `netgame-*` for its options, launch, close handlers, traffic
+overlay and the `Runtime` names it uses; those ending in `-data` read the
+installation and skip without it. Over the installation `OA_GAME_DIR`
+names, these run the game headless:
+
+- `native-net-loopback` (`--net-loopback-check N`) hosts and joins a match
+  in one process over 127.0.0.1 and compares both worlds after N ticks;
+  `native-net-loopback-watcher` has the joiner watch, and
+  `native-net-loopback-computer` and `native-net-loopback-computer-watcher`
+  have the host seat a computer player that builds, is given a squad and
+  attacks;
+- `native-multiplayer-menu` (`--check-multiplayer-menu`) clicks MULTI and
+  checks the multiplayer screens;
+- `native-recording-hook` (`--check-recording-hook`) checks that the game
+  declines bytes that are no recording and refuses a truncated one;
+- `native-host-not-found` (`tools/check_native_host_not_found.py`) checks
+  a joiner whose host is never listed: "Host not found.  Exiting...", and
+  the game leaves 4 s later.
+
+`open-annihilation --play-demo FILE.tad` replays a recorded game through
+the path a watching machine receives a match on; with `--headless-check`
+and `--match-ticks N` it replays without a window.
 
 ### Other builds
 
@@ -209,12 +238,13 @@ covers the same code over a synthetic installer and runs everywhere.
 ### What CI runs
 
 Continuous integration builds the tree on macOS, Windows and Linux, starts
-`open-annihilation` on each, runs
-every test that needs no game data, and runs the suite once more under
+`open-annihilation` on each, runs every test that needs no game data,
+network play's among them, and runs the suite once more under
 AddressSanitizer and UndefinedBehaviorSanitizer and once with the recorder
-test extensions (`-DOA_RECORD_EXTENSION_HOOKS=ON`). CI has no game installation: the game-data tests and the
-native checks run only on contributors' machines, so run them before asking
-for review.
+test extensions registered beside network play
+(`-DOA_RECORD_EXTENSION_HOOKS=ON`). CI has no game installation: the
+game-data tests and the native checks run only on contributors' machines,
+so run them before asking for review.
 
 ## Kinds of test
 
@@ -323,8 +353,7 @@ int main() {
 State expected values plainly: as constants in the test, as values read from
 the game data of the installation, or as behaviour ("the second save loads
 into the same state as the first"). A reader must be able to see where every
-expected value comes from. Suites built on recorded data live outside this
-repository; never copy their inputs or expected values into a test here.
+expected value comes from.
 
 ### Pinned values
 

@@ -24,8 +24,8 @@ jobs:
       # The layout of the sources, with the clang-format release that
       # tools/format/requirements.txt pins, and the copyright and licence
       # every file states. The format-check and licensing-check tests run
-      # the same checks in ctest on the macOS and Linux jobs (the Windows
-      # job runs no ctest); format-check skips where that release is not
+      # the same checks in ctest on the macOS, Linux and Windows jobs;
+      # format-check skips where that release is not
       # installed, which is everywhere this step has not run.
       - name: Format and licence checks
         if: runner.os == 'Linux'
@@ -79,16 +79,17 @@ jobs:
       - name: Synthetic conformance and platform smoke tests
         run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error
 
-  # oa-game linked with the two test extensions of tests/extension: the
-  # recorder, which fills every hook of the extension table with a recorder
-  # and adds a Runtime member through the members header, and the follower
-  # built on it, which the engine combines with it. CI has no game
-  # installation, so this job checks the option hooks of both, a start
-  # refused for a hook one extension at most may fill, the hook list, the
-  # members mechanism's build and the layout check; extension-hooks-game,
-  # which finds a dropped or misordered call of any other hook, skips here
-  # and runs only where OA_GAME_DIR names an installation (a local or
-  # private run). The rest of the suite runs as in the build job.
+  # The engine with oa-game linked to the two test extensions of
+  # tests/extension beside network play's: the recorder, which fills every
+  # hook of the extension table that network play leaves to others with a
+  # recorder and adds a Runtime member through OA_RUNTIME_EXTENSION_MEMBERS,
+  # and the follower built on it, which the engine combines with both.
+  # CI has no game installation, so this job checks the option hooks of the
+  # three extensions, a start refused for a hook one extension at most may
+  # fill, the hook list, the members mechanism's build and the layout check;
+  # extension-hooks-game, which finds a dropped or misordered call of any
+  # other hook, skips here and runs only where OA_GAME_DIR names an
+  # installation. The rest of the suite runs as in the build job.
   extension-recorder:
     name: extension recorder (ubuntu-latest)
     runs-on: ubuntu-latest

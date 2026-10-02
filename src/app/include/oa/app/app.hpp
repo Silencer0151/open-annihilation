@@ -39,8 +39,6 @@ constexpr int kBattlefieldTop = 32;
 constexpr int kBattlefieldBottom = 32;
 constexpr int kBattlefieldWidth = kCanvasWidth - kBattlefieldLeft;
 constexpr int kBattlefieldHeight = kCanvasHeight - kBattlefieldTop - kBattlefieldBottom;
-// The message box MULTI opens when the extension leaves multiplayer unavailable.
-constexpr std::string_view kMultiplayerUnavailable = "Multiplayer not available in this release.";
 constexpr std::size_t kDefaultCampaignTicks = 3000; // headless --mission without --match-ticks
 constexpr uint16_t kSkirmishUnitsPerPlayer = 250;
 constexpr float kMinBattlefieldZoom = 0.5F;
@@ -233,9 +231,9 @@ struct Options {
     // factory build button's right click.
     bool check_pointer_interfaces = false;
     // Clicks MULTI on the main menu through the SDL presenter and checks
-    // what it reaches: the message box saying multiplayer is not available,
-    // closed by OK and by Enter, or the extension's own check when it has a
-    // check_multiplayer_menu hook.
+    // what it reaches: network play's check of the multiplayer screens (the
+    // check_multiplayer_menu hook); over game data with no multiplayer map,
+    // the missing-content notice, closed by OK and by Enter.
     bool check_multiplayer_menu = false;
     // Plays the headless skirmish's first ticks in director mode, drawn and
     // again undrawn, and checks the two reach one world, that director frames

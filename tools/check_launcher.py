@@ -98,7 +98,8 @@ def check(root, source):
     env = dict(clean_env, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
                LAUNCH_RECORD=str(record), OA_BUILD_DIR=str(root / "build"))
     options = ["--campaign", "Arm Campaign", "--mission", "0", "--match-ticks", "60",
-               "--resolution", "1280x720", "--load", "a save.sav", "--debug-order-lines"]
+               "--resolution", "1280x720", "--load", "a save.sav", "--play-demo", "a game.tad",
+               "--net-loopback-check", "300", "--debug-order-lines"]
     # The stock macOS bash is 3.2, where an empty array under set -u is unbound.
     shell = "/bin/bash" if Path("/bin/bash").exists() else "bash"
     run_sh = [shell, str(repo / "run.sh")]

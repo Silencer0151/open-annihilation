@@ -4,8 +4,8 @@ Every document in the repository, by what you want to do.
 
 ## Installing and playing
 
-- [README.md](../README.md): what Open Annihilation is, its settings and
-  playing the free demo.
+- [README.md](../README.md): what Open Annihilation is, its settings,
+  multiplayer and playing the free demo.
 - Installation guides, step by step: downloading the release, getting the
   game data from your copy of Total Annihilation, and starting the game.
   - [macOS](installation/macos.md)
@@ -33,7 +33,8 @@ Every document in the repository, by what you want to do.
   covers.
 - [development/testing.md](development/testing.md): running the tests and
   checks, and writing a new test: the kinds of test, the installed game
-  (`OA_GAME_DIR`), pinned values and malformed input.
+  (`OA_GAME_DIR`), network play's tests, pinned values and malformed
+  input.
 - [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
   rules it points to are in [development/conventions.md](development/conventions.md).
 - [development/releasing.md](development/releasing.md): building, signing,
@@ -121,7 +122,8 @@ Platform and application:
 - [user preferences](../src/platform/preferences/README.md),
   [job pool](../src/platform/job-pool/README.md).
 - [src/app](../src/app/README.md): the game application, `open-annihilation`,
-  adding a screen or overlay, and the extension table.
+  adding a screen or overlay, the extension table, and network play's
+  place in the game.
 
 Modules without a README are described by the comments at the top of their
 public headers.

@@ -57,7 +57,12 @@ folder and plays that, checking it again on later starts.
   --preferences-file PATH  Use an explicit preferences profile (useful for testing)
   --data-dir PATH     Unpack the demo's game data here instead of the per-user
                       data folder (useful for testing)
-  -h, --help          Show this help
+  --help              Show this help
+
+Network play:
+  --net-loopback-check N  Host and join a match in one process and compare both
+                      worlds after N ticks
+  --play-demo FILE.tad  Replay a recorded game through the network receive path
 
 A game started for play writes its output to the logs folder in the
 per-user folder (see README.md), not to this terminal; checks and other
@@ -78,7 +83,7 @@ require_value() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) usage; exit 0 ;;
+        --help) usage; exit 0 ;;
         --movie) require_value "$@"; movie="$2"; shift 2 ;;
         --game-dir) require_value "$@"; game_dir="$2"; option_install=1; shift 2 ;;
         --choose-game-dir) choose_game_dir=1; player_args+=("$1"); shift ;;

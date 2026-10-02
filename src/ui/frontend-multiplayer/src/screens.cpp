@@ -1,0 +1,2643 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Multiplayer screens: resources, input routing, dialogs and drawing.
+#include "oa/ui/frontend_multiplayer/screens.hpp"
+
+#include "oa/data/campaign/campaign_assets.hpp"
+#include "oa/data/defs/unit_header.hpp"
+#include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/frontend_renderer/scroll_bars.hpp"
+#include "oa/ui/gui_input/scroll_bar.hpp"
+#include "oa/ui/gui_input.hpp"
+#include "oa/ui/gui_layout/gui_gadget.hpp"
+#include "oa/data/defs/asset_files.hpp"
+#include "oa/data/defs/unit_header.hpp"
+#include "oa/data/campaign/map_catalog.hpp"
+#include "oa/netgame/sync/map_hash.hpp"
+#include "oa/netgame/sync/unit_checksum.hpp"
+#include "oa/formats/ota.hpp"
+#include "oa/data/unit_definitions.hpp"
+#include "oa/present/model/mesh_raster.hpp"
+#include "oa/present/palette_tables.hpp"
+#include "oa/present/surface.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+namespace oa::ui::frontend_multiplayer {
+
+namespace {
+
+namespace renderer = oa::ui::frontend_renderer;
+using app::ScreenContext;
+using app::ScreenInput;
+using app::ScreenInputKind;
+
+constexpr const char* kGuiPalette = "palettes/guipal.pal";
+constexpr const char* kCommonGaf = "anims/commongui.gaf";
+constexpr int32_t kCanvasWidth = 640;
+constexpr int32_t kCanvasHeight = 480;
+constexpr uint32_t kTicksPerSecond = 30;
+constexpr uint32_t kDoubleClickMs = 400;
+constexpr uint32_t kLocalVersionMajor = 3; // TA 3.1
+constexpr uint32_t kLocalVersionMinor = 1;
+constexpr uint16_t kDefaultMaxUnits = 250;
+constexpr uint16_t kMachineMemoryMb = 256; // stand-in for the physical memory probe
+constexpr uint32_t kSdlKeyReturn = 0x0d;
+constexpr uint32_t kSdlKeyEscape = 0x1b;
+constexpr uint32_t kSdlKeyBackspace = 0x08;
+constexpr uint32_t kSdlKeyUp = 0x40000052;
+constexpr uint32_t kSdlKeyDown = 0x40000051;
+constexpr uint8_t kSdlRightButton = 3;
+constexpr uint8_t kMenuTickFlag = 1;
+// The frontend signal a state starts with.
+constexpr uint8_t kSignalInitialize = 0;
+
+struct Resources {
+    renderer::ScreenResources screen;
+    ui::gui_layout::Layout source;
+    Panel panel;
+    int16_t offset_x = 0;
+    int16_t offset_y = 0;
+    bool loaded = false;
+    int32_t hovered = kNoControl;
+    int32_t pressed = kNoControl;
+    /// The slider or slider arrow the pointer holds down.
+    oa::ui::gui_input::ScrollHold hold;
+    /// The game palette's gray table, built the first time a grayed control is drawn.
+    std::vector<uint8_t> gray_table;
+};
+
+struct MapInfo {
+    std::string name, description, size;
+    int32_t memory = 0;
+};
+
+struct UnitStore {
+    std::vector<std::string> names, sides, unit_names;
+    std::vector<LobbyUnit> units;
+    const oa::AssetStore* assets = nullptr; // the install the table was read from
+    bool loaded = false;
+};
+
+struct Ui {
+    std::unique_ptr<Game> game = std::make_unique<Game>();
+    Lobby lobby{};
+    LoopbackNet loopback{};
+    bool custom_net = false;
+    LobbyNet bound_net{};
+    StartHandler start_handler = nullptr;
+    void* start_context = nullptr;
+    // The launch the lobby reads; it survives multiplayer_reset.
+    LaunchLink launch_link{};
+    // The game's translation of interface texts; it survives multiplayer_reset.
+    TextTranslation translation{};
+    // The last text LobbyServices::translate gave.
+    std::string translated;
+    ConnectState connect{};
+    RestrictPanel restrict {};
+    MapSelect mapselect;
+    Resources base;
+    Resources modal;
+    ModalKind modal_kind = ModalKind::none;
+    /// The dialog TIMEOUT.GUI opened over, back in front once it closes.
+    Resources covered;
+    /// Which dialog TIMEOUT.GUI covers; none when it opened over the battle room.
+    ModalKind covered_kind = ModalKind::none;
+    /// The player timeout the battle room's game takes, in seconds.
+    int32_t player_timeout_seconds = kDefaultPlayerTimeoutSeconds;
+    std::string message;
+    std::vector<MapInfo> maps;
+    int32_t map = -1;
+    bool maps_loaded = false;
+    // The map context (Game.game_options) the content hash is computed from.
+    data::campaign::CampaignFile map_context{};
+    data::campaign::MapList map_list{};
+    oa::netgame::sync::MapHashCache map_hashes{};
+    UnitStore units;
+    // Pictures the restriction panel loaded (handle = index + 1) and the
+    // file services its picture paths use.
+    std::vector<std::unique_ptr<Image>> pictures;
+    data::campaign::CampaignFiles picture_files{};
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ScreenContext* ctx = nullptr;
+    uint32_t last_click_ms = 0;
+    int32_t last_click_index = kNoControl;
+    bool in_lobby = false;
+    app::ScreenId screen = 0;
+    // One of these screens is on screen: set as each is entered, cleared as
+    // it is left and as the battle room hands over to the match loader.
+    bool showing = false;
+    // A request to close the window asked for the exit confirmation, which
+    // the screen's next tick opens.
+    bool exit_confirm_requested = false;
+
+    Ui() {
+        data::campaign::campaign_file_init(&map_context);
+        map_context.kind = data::campaign::SessionKind::multiplayer;
+    }
+
+    ~Ui() {
+        data::campaign::map_clear_list_cache(map_list, &map_context);
+        oa::netgame::sync::map_destroy_hash_cache(map_hashes);
+    }
+
+    Ui(const Ui&) = delete;
+    Ui& operator=(const Ui&) = delete;
+};
+
+Ui& ui() {
+    static auto state = std::make_unique<Ui>();
+    return *state;
+}
+
+// The clock multiplayer_bind_clock bound; it survives multiplayer_reset.
+LobbyClock g_clock{};
+
+uint32_t elapsed_ms() {
+    if (g_clock.now_ms != nullptr)
+        return g_clock.now_ms(g_clock.context);
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - ui().start
+    )
+                                     .count());
+}
+
+// ---------------------------------------------------------------------------
+// Boundaries bound to the application
+
+void service_play_sound(void*, const char* name) {
+    if (ui().ctx != nullptr && ui().ctx->services != nullptr &&
+        ui().ctx->services->play_sound != nullptr)
+        app::screen_play_sound(ui().ctx, name);
+}
+
+void service_message(void*, const char* text) {
+    ui().message = text != nullptr ? text : "";
+}
+
+uint32_t service_tick(void*) {
+    return elapsed_ms() * kTicksPerSecond / 1000U;
+}
+
+uint32_t service_milliseconds(void*) {
+    return elapsed_ms();
+}
+
+/// Translates interface text through the bound translation (LobbyServices::translate).
+///
+/// @param text text to translate
+/// @return its translation, valid until the next call, or null without a
+///         translation or when it fails
+const char* service_translate(void*, const char* text) {
+    auto& state = ui();
+    if (text == nullptr || state.translation.translate == nullptr)
+        return nullptr;
+    try {
+        state.translated = state.translation.translate(state.translation.context, text);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+    return state.translated.c_str();
+}
+
+bool service_disc_present(void*) {
+    return true; // the installed data stands in for the game disc
+}
+
+oa_ref32 service_load_picture(void*, const char* path, int32_t* width, int32_t* height) {
+    auto& state = ui();
+    if (state.ctx == nullptr || state.ctx->assets == nullptr)
+        return 0;
+    std::unique_ptr<Image> image;
+    try {
+        image = std::make_unique<Image>(decode_pcx(state.ctx->assets->read(path).bytes));
+    } catch (const std::exception&) {
+        return 0;
+    }
+    *width = static_cast<int32_t>(image->width);
+    *height = static_cast<int32_t>(image->height);
+    auto free = std::find(state.pictures.begin(), state.pictures.end(), nullptr);
+    if (free == state.pictures.end())
+        free = state.pictures.insert(state.pictures.end(), nullptr);
+    *free = std::move(image);
+    return static_cast<oa_ref32>(free - state.pictures.begin() + 1);
+}
+
+void service_free_picture(void*, oa_ref32 picture) {
+    auto& pictures = ui().pictures;
+    if (picture != 0 && picture <= pictures.size())
+        pictures[picture - 1].reset();
+}
+
+int32_t service_display_modes(void*, DisplayMode* out, int32_t capacity) {
+    constexpr DisplayMode kModes[] = {
+        {640, 480, 8},
+        {800, 600, 8},
+        {1024, 768, 8},
+        {1152, 864, 8},
+        {1280, 1024, 8},
+        {1600, 1200, 8}
+    };
+    const auto count = std::min<int32_t>(capacity, static_cast<int32_t>(std::size(kModes)));
+    for (int32_t index = 0; index < count; ++index)
+        out[index] = kModes[index];
+    return count;
+}
+
+data::campaign::CampaignFiles map_files() {
+    return data::campaign::campaign_asset_files(*ui().ctx->assets);
+}
+
+void load_maps() {
+    auto& state = ui();
+    if (state.maps_loaded || state.ctx == nullptr || state.ctx->assets == nullptr)
+        return;
+    state.maps_loaded = true;
+    auto& assets = *state.ctx->assets;
+    char* names = nullptr;
+    const auto count = data::campaign::map_build_multiplayer_list(
+        state.map_list, map_files(), {}, &names, false, false
+    );
+    const char* name = names;
+    for (int32_t index = 0; name != nullptr && index < count;
+         ++index, name += std::strlen(name) + 1) {
+        try {
+            const auto bytes = assets.read(std::string("maps/") + name + ".ota").bytes;
+            const auto parsed = oa::formats::ota::parse(
+                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())
+            );
+            if (!parsed.ok())
+                continue;
+            MapInfo info;
+            info.name = name;
+            info.description = parsed.metadata->mission_description;
+            info.size = parsed.metadata->map_size;
+            info.memory = map_memory_mb(
+                static_cast<int32_t>(assets.file_size(std::string("maps/") + name + ".tnt"))
+            );
+            state.maps.push_back(std::move(info));
+        } catch (const std::exception&) {
+        }
+    }
+    std::free(names);
+    std::sort(state.maps.begin(), state.maps.end(), [](const MapInfo& a, const MapInfo& b) {
+        return a.name < b.name;
+    });
+    if (!state.maps.empty() && state.map < 0)
+        state.map = 0;
+}
+
+const MapInfo* current_map() {
+    auto& state = ui();
+    load_maps();
+    if (state.map < 0 || static_cast<std::size_t>(state.map) >= state.maps.size())
+        return nullptr;
+    return &state.maps[static_cast<std::size_t>(state.map)];
+}
+
+// Binds the map context to the selected map; null when none is selected.
+data::campaign::CampaignFile* bound_map_context() {
+    auto& state = ui();
+    const auto* map = current_map();
+    if (map == nullptr)
+        return nullptr;
+    const char* bound = data::campaign::campaign_mission_name(&state.map_context);
+    if (oa::formats::tdf::compare_nocase(bound, map->name.c_str()) != 0) {
+        const auto files = map_files();
+        const data::campaign::CampaignEnv env{&files, nullptr, 0, 0};
+        data::campaign::campaign_select_mission(&state.map_context, &env, map->name.c_str());
+    }
+    return &state.map_context;
+}
+
+// A map counts as selected once the map context holds its map file.
+bool maps_selected(void*) {
+    const auto* context = bound_map_context();
+    return context != nullptr && data::campaign::campaign_mission_file_size(context) != 0;
+}
+
+const char* maps_name(void*) {
+    const auto* map = current_map();
+    return map != nullptr ? map->name.c_str() : "";
+}
+
+bool maps_select(void*, const char* name) {
+    auto& state = ui();
+    load_maps();
+    for (std::size_t index = 0; index < state.maps.size(); ++index)
+        if (name != nullptr && state.maps[index].name == name) {
+            state.map = static_cast<int32_t>(index);
+            return true;
+        }
+    return false;
+}
+
+uint32_t maps_hash(void*) {
+    auto* context = bound_map_context();
+    if (context == nullptr)
+        return 0;
+    const auto files = map_files();
+    return oa::netgame::sync::map_compute_content_hash(*context, files, ui().map_hashes);
+}
+
+int32_t maps_memory(void*) {
+    const auto* map = current_map();
+    return map != nullptr ? map->memory : 0;
+}
+
+const char* maps_description(void*) {
+    const auto* map = current_map();
+    return map != nullptr ? map->description.c_str() : "";
+}
+
+const char* maps_size(void*) {
+    const auto* map = current_map();
+    return map != nullptr ? map->size.c_str() : "";
+}
+
+int32_t maps_count(void*) {
+    load_maps();
+    return static_cast<int32_t>(ui().maps.size());
+}
+
+const char* maps_at(void*, int32_t index) {
+    auto& maps = ui().maps;
+    return index >= 0 && static_cast<std::size_t>(index) < maps.size()
+               ? maps[static_cast<std::size_t>(index)].name.c_str()
+               : nullptr;
+}
+
+bool maps_read(void*, const char* path, uint32_t offset, void* out, uint32_t size) {
+    auto* ctx = ui().ctx;
+    if (ctx == nullptr || ctx->assets == nullptr)
+        return false;
+    try {
+        return ctx->assets->read_chunk(path, offset, std::span(static_cast<uint8_t*>(out), size));
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// The unit table header pass over every installed FBI: the FBI
+// hash that keys a unit between machines, its weapon checksum and its unit
+// name, beside the name, side, costs and restriction bits the battle room
+// shows.
+void load_units(const oa::AssetStore& assets) {
+    auto& store = ui().units;
+    auto& state = ui();
+    if (store.loaded)
+        return;
+    store.loaded = true;
+    store.assets = &assets;
+
+    struct Loaded {
+        std::string name, side, unit_name;
+        float metal, energy;
+        uint32_t flags, hash, weapon_checksum;
+    };
+
+    const auto files = oa::data::defs::asset_store_files(&assets);
+    oa::data::defs::WeaponTdfSet weapon_files{};
+    oa::data::defs::weapon_tdf_set_init(&weapon_files);
+    (void)oa::data::defs::load_weapon_tdf_set(&files, nullptr, false, &weapon_files);
+    const oa::data::defs::UnitHeaderSources header_sources{
+        "",
+        &weapon_files,
+        static_cast<int8_t>(kLocalVersionMajor),
+        static_cast<int8_t>(kLocalVersionMinor),
+        false,
+        false
+    };
+    std::vector<Loaded> loaded;
+    for (const auto& path : assets.list_effective("units", ".fbi")) {
+        try {
+            const auto bytes = assets.read(path).bytes;
+            const auto parsed = oa::data::unit_definitions::load_fbi(
+                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path
+            );
+            if (!parsed)
+                continue;
+            auto header = std::make_unique<oa::UnitDef>();
+            bool refused = false;
+            if (!oa::data::defs::load_unit_header(
+                    &files, path.c_str(), *header, header_sources, &refused
+                ))
+                continue;
+            const auto& unit = parsed.value;
+            loaded.push_back(
+                {unit.display_name,
+                 unit.side,
+                 std::string(
+                     header->unit_name, ::strnlen(header->unit_name, sizeof header->unit_name)
+                 ),
+                 static_cast<float>(unit.build_cost_metal),
+                 static_cast<float>(unit.build_cost_energy),
+                 oa::data::unit_definitions::pack_unit_abilities(unit),
+                 header->fbi_hash,
+                 header->weapon_checksum}
+            );
+        } catch (const std::exception&) {
+        }
+    }
+    oa::data::defs::weapon_tdf_set_free(&weapon_files);
+    store.names.reserve(loaded.size() + 1);
+    store.sides.reserve(loaded.size() + 1);
+    store.unit_names.reserve(loaded.size() + 1);
+    store.names.emplace_back();
+    store.sides.emplace_back();
+    store.unit_names.emplace_back();
+    for (const auto& unit : loaded) {
+        store.names.push_back(unit.name);
+        store.sides.push_back(unit.side);
+        store.unit_names.push_back(unit.unit_name);
+    }
+    store.units.push_back(LobbyUnit{"", "", 0, 0, 0, 0, "", 0, 0});
+    for (std::size_t index = 0; index < loaded.size(); ++index)
+        store.units.push_back(
+            LobbyUnit{
+                store.names[index + 1].c_str(),
+                store.sides[index + 1].c_str(),
+                loaded[index].energy,
+                loaded[index].metal,
+                loaded[index].flags,
+                loaded[index].hash,
+                store.unit_names[index + 1].c_str(),
+                0,
+                loaded[index].weapon_checksum
+            }
+        );
+    state.lobby.units = store.units.data();
+    state.lobby.unit_count = static_cast<int32_t>(store.units.size());
+}
+
+// The installed files behind a unit's content checksum.
+class UnitFileReader final : public oa::data::unit_definitions::CatalogAssetReader {
+  public:
+
+    explicit UnitFileReader(const oa::AssetStore& assets) : assets_(assets) {}
+
+    oa::data::unit_definitions::Result<std::vector<std::string>>
+    list_effective(std::string_view directory, std::string_view extension) const override {
+        try {
+            return {assets_.list_effective(directory, extension), {}};
+        } catch (const std::exception& error) {
+            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
+        }
+    }
+
+    oa::data::unit_definitions::Result<std::string> read(std::string_view path) const override {
+        try {
+            const auto bytes = assets_.read(path).bytes;
+            return {std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), {}};
+        } catch (const std::exception& error) {
+            return {{}, {oa::data::unit_definitions::ErrorCode::io, 0, error.what()}};
+        }
+    }
+
+  private:
+
+    const oa::AssetStore& assets_;
+};
+
+void load_units() {
+    auto* ctx = ui().ctx;
+    if (ctx != nullptr && ctx->assets != nullptr)
+        load_units(*ctx->assets);
+}
+
+uint32_t service_unit_checksum(void*, const LobbyUnit& unit) {
+    const auto* assets = ui().units.assets;
+    if (assets == nullptr || unit.unit_name == nullptr)
+        return unit.content_checksum;
+    const UnitFileReader reader(*assets);
+    const auto mixed = oa::netgame::sync::mix_unit_file_checksum(
+        reader, unit.unit_name, unit.content_checksum, unit.weapon_checksum
+    );
+    return mixed ? mixed.value : unit.content_checksum;
+}
+
+bool settings_read(void*, char* out, std::size_t capacity) {
+    auto* ctx = ui().ctx;
+    if (ctx == nullptr || ctx->services == nullptr || ctx->services->read_string == nullptr)
+        return false;
+    return ctx->services->read_string(ctx->host, "multiplayer", "tcpaddr", out, capacity) != 0;
+}
+
+void settings_write(void*, const char* address) {
+    auto* ctx = ui().ctx;
+    if (ctx != nullptr && ctx->services != nullptr && ctx->services->write_string != nullptr)
+        ctx->services->write_string(ctx->host, "multiplayer", "tcpaddr", address);
+}
+
+bool settings_user(void*, char* out, std::size_t capacity) {
+    const char* user = std::getenv("USER");
+    if (user == nullptr || *user == '\0')
+        return false;
+    std::snprintf(out, capacity, "%s", user);
+    return true;
+}
+
+/// Binds the lobby to the screens' transport, services, map list and units.
+///
+/// A lobby with no game is reset first. The unit limits, the canvas size and
+/// the side count (2, ARM and CORE) get their defaults where the game has none.
+void bind_boundaries() {
+    auto& state = ui();
+    auto& lobby = state.lobby;
+    if (lobby.game == nullptr) {
+        loopback_reset(state.loopback);
+        lobby_reset(lobby, *state.game);
+    }
+    lobby.net = state.custom_net ? state.bound_net : loopback_lobby_net(state.loopback);
+    if (state.ctx != nullptr && state.ctx->assets != nullptr)
+        state.picture_files = data::campaign::campaign_asset_files(*state.ctx->assets);
+    lobby.services = {
+        nullptr,
+        service_play_sound,
+        service_message,
+        service_tick,
+        service_disc_present,
+        service_display_modes,
+        nullptr,
+        service_unit_checksum,
+        service_load_picture,
+        service_free_picture,
+        &state.picture_files,
+        service_milliseconds,
+        service_translate
+    };
+    lobby.maps = {
+        nullptr,
+        maps_selected,
+        maps_name,
+        maps_select,
+        maps_hash,
+        maps_memory,
+        maps_description,
+        maps_size,
+        maps_count,
+        maps_at,
+        [](void*) -> const data::campaign::CampaignFile* { return bound_map_context(); },
+        maps_read
+    };
+    lobby.local_version_major = kLocalVersionMajor;
+    lobby.local_version_minor = kLocalVersionMinor;
+    lobby.launch_link = state.launch_link;
+    lobby.option_4 = state.launch_link.block != nullptr && state.launch_link.block->tournament != 0;
+    if (state.units.loaded) {
+        lobby.units = state.units.units.data();
+        lobby.unit_count = static_cast<int32_t>(state.units.units.size());
+    }
+    state.connect.settings = {nullptr, settings_read, settings_write, settings_user};
+    if (lobby_max_units_default(*state.game) == 0)
+        lobby_max_units_default(*state.game) = kDefaultMaxUnits;
+    if (lobby_max_units(*state.game) == 0)
+        lobby_max_units(*state.game) = kDefaultMaxUnits;
+    if (static_cast<int32_t>(lobby_screen_width(*state.game)) == 0) {
+        lobby_screen_width(*state.game) = kCanvasWidth;
+        lobby_screen_height(*state.game) = kCanvasHeight;
+    }
+    if (state.game->side_count == 0)
+        state.game->side_count = 2; // ARM and CORE
+    state.game->player_timeout_seconds = state.player_timeout_seconds;
+}
+
+// ---------------------------------------------------------------------------
+// Resources and panels
+
+bool load(
+    Resources& out,
+    ScreenContext* ctx,
+    const char* layout,
+    const char* background,
+    const char* sprites
+) {
+    out = Resources{};
+    if (ctx == nullptr || ctx->assets == nullptr)
+        return false;
+    try {
+        out.screen = renderer::load_screen(
+            *ctx->assets, {layout, background, kGuiPalette, sprites, kCommonGaf}
+        );
+    } catch (const std::exception& error) {
+        ui().message = std::string("Cannot load ") + layout + ": " + error.what();
+        return false;
+    }
+    out.source = out.screen.layout;
+    panel_load(out.panel, layout, out.source);
+    out.panel.line_height = static_cast<int16_t>(formats::fnt::line_height(out.screen.font));
+    // Lists and sliders are readied as the panel's first draw readies them
+    // (lists trimmed, arrows added, range set from the art) before the
+    // screen fills them and sets their values.
+    panel_bind_lists(out.panel);
+    // A panel's own SLIDERS art is in the GAF named after its GUI file, as in
+    // 3.1c; the GAF the screen was loaded with counts only when it is that one.
+    const bool own = renderer::gaf_named_after(layout, sprites != nullptr ? sprites : "");
+    panel_bind_sliders(
+        out.panel,
+        renderer::scroll_art(own ? &out.screen.sprites : nullptr, out.screen.shared_sprites)
+    );
+    out.loaded = true;
+    return true;
+}
+
+// Places a stacked panel: its own background image when given, otherwise a
+// darkened copy of the screen below, with the panel rectangle filled.
+bool load_modal(
+    ScreenContext* ctx,
+    ModalKind kind,
+    const char* layout,
+    const char* background,
+    const char* sprites
+) {
+    auto& state = ui();
+    const char* base_background = background != nullptr ? background : "bitmaps/selconnect2.pcx";
+    if (!load(state.modal, ctx, layout, base_background, sprites))
+        return false;
+    state.modal_kind = kind;
+    auto& panel = state.modal.panel;
+    const auto& root = panel.controls[0];
+    const int32_t width = root.width;
+    const int32_t height = root.height;
+    const bool full_screen = width >= kCanvasWidth && height >= kCanvasHeight;
+    state.modal.offset_x = full_screen ? 0 : root.x;
+    state.modal.offset_y = full_screen ? 0 : root.y;
+    auto& image = state.modal.screen.background;
+    if (full_screen || !state.base.loaded)
+        return true;
+    if (background == nullptr) {
+        // Dialog without its own art: dim the rectangle it covers.
+        image = state.base.screen.background;
+        for (int32_t y = std::max(0, static_cast<int32_t>(root.y));
+             y < root.y + height && y < static_cast<int32_t>(image.height);
+             ++y)
+            for (int32_t x = std::max(0, static_cast<int32_t>(root.x));
+                 x < root.x + width && x < static_cast<int32_t>(image.width);
+                 ++x) {
+                auto* pixel = &image.rgb
+                                   [(static_cast<std::size_t>(y) * image.width +
+                                     static_cast<std::size_t>(x)) *
+                                    3U];
+                for (int channel = 0; channel < 3; ++channel)
+                    pixel[channel] = static_cast<uint8_t>(pixel[channel] / 4);
+            }
+        return true;
+    }
+    // Own art: the panel occupies the top-left root-sized corner of the
+    // image; centre that corner over the screen below.
+    auto composed = state.base.screen.background;
+    const auto copy_width = std::min<uint32_t>(image.width, static_cast<uint32_t>(width));
+    const auto copy_height = std::min<uint32_t>(image.height, static_cast<uint32_t>(height));
+    state.modal.offset_x =
+        static_cast<int16_t>((kCanvasWidth - static_cast<int32_t>(copy_width)) / 2);
+    state.modal.offset_y =
+        static_cast<int16_t>((kCanvasHeight - static_cast<int32_t>(copy_height)) / 2);
+    for (uint32_t y = 0; y < copy_height; ++y)
+        for (uint32_t x = 0; x < copy_width; ++x) {
+            const auto dx = static_cast<uint32_t>(std::max<int16_t>(0, state.modal.offset_x)) + x;
+            const auto dy = static_cast<uint32_t>(std::max<int16_t>(0, state.modal.offset_y)) + y;
+            if (dx >= composed.width || dy >= composed.height)
+                continue;
+            std::memcpy(
+                &composed.rgb[(dy * composed.width + dx) * 3U],
+                &image.rgb[(y * image.width + x) * 3U],
+                3
+            );
+        }
+    composed.palette = image.palette;
+    image = std::move(composed);
+    return true;
+}
+
+/// Closes the stacked dialog, and the one TIMEOUT.GUI covers with it.
+void close_modal() {
+    auto& state = ui();
+    state.modal = Resources{};
+    state.modal_kind = ModalKind::none;
+    state.covered = Resources{};
+    state.covered_kind = ModalKind::none;
+}
+
+/// Closes TIMEOUT.GUI or the exit confirmation, bringing back the dialog it covered, and has the
+/// battle room refreshed.
+void close_timeout() {
+    auto& state = ui();
+    state.modal = std::move(state.covered);
+    state.modal_kind = state.covered_kind;
+    state.covered = Resources{};
+    state.covered_kind = ModalKind::none;
+    if (state.lobby.game != nullptr)
+        state.lobby.game->gui_flags |= kMenuTickFlag;
+}
+
+/// Opens TIMEOUT.GUI for a stalled player over whatever is in front.
+///
+/// A dialog already open stays loaded behind it and is back in front once
+/// it closes.
+///
+/// @param ctx Screen context of the running frontend.
+/// @param player_id The stalled player.
+void open_timeout(ScreenContext* ctx, uint32_t player_id) {
+    auto& state = ui();
+    auto covered = std::move(state.modal);
+    const auto covered_kind = state.modal_kind;
+    state.modal = Resources{};
+    state.modal_kind = ModalKind::none;
+    if (!load_modal(ctx, ModalKind::timeout, "guis/timeout.gui", nullptr, kCommonGaf) ||
+        !timeout_open(state.lobby, state.modal.panel, player_id)) {
+        state.modal = std::move(covered);
+        state.modal_kind = covered_kind;
+        return;
+    }
+    state.covered = std::move(covered);
+    state.covered_kind = covered_kind;
+}
+
+/// Opens the exit confirmation (YESORNO.GUI) over whatever is in front.
+///
+/// A dialog already open stays loaded behind it and is back in front once
+/// No closes it; TIMEOUT.GUI closes first, and the stall scan opens it again
+/// over the confirmation while its player stays silent. The wait for the
+/// host pauses under the confirmation, and its countdown, shown again as the
+/// wait goes on, gives way to it.
+///
+/// @param ctx Screen context of the running frontend.
+void open_exit_confirm(ScreenContext* ctx) {
+    auto& state = ui();
+    if (state.modal_kind == ModalKind::exit_confirm)
+        return;
+    if (state.connect.host_waiting)
+        state.message.clear();
+    if (state.modal_kind == ModalKind::timeout)
+        close_timeout();
+    auto covered = std::move(state.modal);
+    const auto covered_kind = state.modal_kind;
+    state.modal = Resources{};
+    state.modal_kind = ModalKind::none;
+    if (!load_modal(ctx, ModalKind::exit_confirm, "guis/yesorno.gui", nullptr, kCommonGaf)) {
+        state.modal = std::move(covered);
+        state.modal_kind = covered_kind;
+        return;
+    }
+    exit_confirm_open(state.lobby, state.modal.panel);
+    state.covered = std::move(covered);
+    state.covered_kind = covered_kind;
+}
+
+Resources& front() {
+    auto& state = ui();
+    return state.modal_kind != ModalKind::none && state.modal.loaded ? state.modal : state.base;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+
+std::string_view template_name(const Resources& res, const Control& control) {
+    if (control.source < 0 || static_cast<std::size_t>(control.source) >= res.source.gadgets.size())
+        return {};
+    return res.source.gadgets[static_cast<std::size_t>(control.source)].common.name;
+}
+
+const formats::gaf::Sequence*
+find_sequence(const formats::gaf::Archive& archive, std::string_view name) {
+    for (const auto& sequence : archive.sequences)
+        if (sequence.name.size() == name.size() &&
+            std::equal(name.begin(), name.end(), sequence.name.begin(), [](char a, char b) {
+                return std::toupper(static_cast<unsigned char>(a)) ==
+                       std::toupper(static_cast<unsigned char>(b));
+            }))
+            return &sequence;
+    return nullptr;
+}
+
+// Frames of a shared button sequence come in groups of four, one group per
+// size; a button takes the group closest to its own size.
+constexpr std::size_t kButtonStateFrames = 4;
+// A size difference no group of frames reaches.
+constexpr int32_t kNoSizeMatch = 1000;
+// A staged button held down shows its sequence's last frame but one.
+constexpr std::size_t kHeldStageFromEnd = 2;
+// A grayed button shows the frame two past its normal one.
+constexpr std::size_t kGrayedFrameOffset = 2;
+// A staged button with this attribute, one stage or the caption "Off|On"
+// takes the two-lamp art.
+constexpr uint32_t kTwoLampAttribute = 0x4000;
+constexpr std::string_view kTwoLampCaption = "Off|On";
+constexpr std::string_view kPlainButtonArt = "BUTTONS0";
+constexpr std::string_view kCheckboxArt = "CHECKBOX";
+constexpr std::string_view kStageArtPrefix = "stagebuttn";
+// A control copied from a template named LOGO<x> shows a player's colour:
+// frame `stage` of LOGOS.GAF's 32xlogos.
+constexpr std::string_view kColorTemplatePrefix = "LOGO";
+constexpr std::string_view kColorArt = "32xlogos";
+// The light table holds one row of 256 palette entries per light level.
+constexpr std::size_t kLightLevels = 32;
+constexpr std::size_t kPaletteEntries = 256;
+// A button's lit art is kept in the screen's GAF under the button's name and this suffix.
+constexpr std::string_view kLitArtSuffix = "+lit";
+
+/// Tells whether a name starts with a prefix, ignoring ASCII case.
+///
+/// @param name name tested
+/// @param prefix prefix looked for
+/// @return true when `name` starts with `prefix`
+bool starts_with_nocase(std::string_view name, std::string_view prefix) {
+    return name.size() >= prefix.size() &&
+           std::equal(prefix.begin(), prefix.end(), name.begin(), [](char a, char b) {
+               return std::toupper(static_cast<unsigned char>(a)) ==
+                      std::toupper(static_cast<unsigned char>(b));
+           });
+}
+
+/// The GAF sequence a button's art comes from.
+struct ButtonArt {
+    const formats::gaf::Sequence* sequence{}; ///< null when the button is drawn without art
+    std::size_t base{};                       ///< first frame of the button's size group
+    renderer::SpriteOverride binding;         ///< the archive and name of `sequence`
+    /// True when the renderer finds the sequence only when it is told
+    /// `binding`. A renderer told the sequence counts frames from 0, and one
+    /// that finds it itself from `base`.
+    bool named{};
+};
+
+/// Returns the first frame of the group of four whose size is closest to a gadget's.
+///
+/// @param sequence sequence searched, four frames to a size
+/// @param width gadget width in pixels
+/// @param height gadget height in pixels
+/// @return the group's first frame; 0 when no group comes within 1000 pixels
+std::size_t
+closest_size_group(const formats::gaf::Sequence& sequence, int32_t width, int32_t height) {
+    std::size_t best = 0;
+    int32_t best_difference = kNoSizeMatch;
+    for (std::size_t index = 0; index < sequence.frames.size(); index += kButtonStateFrames) {
+        const auto& frame = sequence.frames[index];
+        const int32_t difference = std::abs(width - static_cast<int32_t>(frame.width)) +
+                                   std::abs(height - static_cast<int32_t>(frame.height));
+        if (difference < best_difference) {
+            best = index;
+            best_difference = difference;
+        }
+    }
+    return best;
+}
+
+/// Finds the art a button is drawn with.
+///
+/// A row copied from a template keeps the template's own sequence, from the
+/// screen's GAF and then the shared one. A checkbox-art button with no
+/// sequence of its own shows the shared CHECKBOX art, as in 3.1c, unless
+/// it steps a scroll bar or names its own GAF file. Every other button takes
+/// the renderer's own lookup: its name in the screen's GAF, then in the shared
+/// one, then the shared BUTTONS0, CHECKBOX or stagebuttn art closest to its
+/// size, none for a button that flips or holds.
+///
+/// @param res screen resources
+/// @param gadget the composed gadget, named after the control
+/// @param source name of the layout gadget the control was copied from
+/// @param with_sprites false to leave out the art the renderer must be told of
+/// @return the art; no sequence when the button is drawn without one
+ButtonArt button_art(
+    const Resources& res,
+    const ui::gui_layout::Gadget& gadget,
+    std::string_view source,
+    bool with_sprites
+) {
+    const auto& screen = res.screen.sprites;
+    const auto& shared = res.screen.shared_sprites;
+    const std::string_view name = gadget.common.name;
+    if (with_sprites && source != name) {
+        if (const auto* own = find_sequence(screen, source); own != nullptr && !own->frames.empty())
+            return {own, 0, {renderer::SpriteArchive::screen, std::string(source)}, true};
+        if (const auto* own = find_sequence(shared, source); own != nullptr && !own->frames.empty())
+            return {own, 0, {renderer::SpriteArchive::shared, std::string(source)}, true};
+    }
+    if (const auto* own = find_sequence(screen, name))
+        return {own, 0, {renderer::SpriteArchive::screen, std::string(name)}, false};
+    if (const auto* own = find_sequence(shared, name))
+        return {own, 0, {renderer::SpriteArchive::shared, std::string(name)}, false};
+    const auto attributes = static_cast<uint32_t>(gadget.common.attributes);
+    if (with_sprites && (attributes & kAttributeCheckbox) != 0 &&
+        (attributes & ui::gui_layout::attribute::scroll_step_mask) == 0 &&
+        !gadget.common.gaf_file) {
+        const auto* checkbox = find_sequence(shared, kCheckboxArt);
+        if (checkbox == nullptr || checkbox->frames.empty())
+            return {};
+        return {
+            checkbox,
+            closest_size_group(*checkbox, gadget.common.width, gadget.common.height),
+            {renderer::SpriteArchive::shared, std::string(kCheckboxArt)},
+            true
+        };
+    }
+    constexpr uint32_t kRendererSkips =
+        ui::gui_layout::attribute::checkbox | ui::gui_layout::attribute::text_list;
+    if ((attributes & kRendererSkips) != 0)
+        return {};
+    std::string fallback(kPlainButtonArt);
+    const auto* fields = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields);
+    if ((attributes & kAttributeCheckbox) != 0) {
+        fallback = kCheckboxArt;
+    } else if (fields != nullptr && fields->stages != 0) {
+        const bool two_lamps = fields->text == kTwoLampCaption || fields->stages == 1 ||
+                               (attributes & kTwoLampAttribute) != 0;
+        fallback = std::string(kStageArtPrefix) + std::to_string(two_lamps ? 1 : fields->stages);
+    }
+    const auto* art = find_sequence(shared, fallback);
+    if (art == nullptr || art->frames.empty())
+        return {};
+    return {
+        art,
+        closest_size_group(*art, gadget.common.width, gadget.common.height),
+        {renderer::SpriteArchive::shared, fallback},
+        false
+    };
+}
+
+/// Returns the frame of its art a button shows.
+///
+/// A staged button shows the frame of its stage, or its sequence's last frame
+/// but one while it is held with the pointer over it; grayed, it shows its
+/// stage, which the renderer darkens. A checkbox-art button shows its size
+/// group's first frame, or the next while checked; grayed, the frame two
+/// further on, not darkened. Any other button shows its group's first frame,
+/// the next while held, or the one two further on when grayed. Each is kept
+/// within the sequence.
+///
+/// @param control the button
+/// @param art the button's art, with at least one frame
+/// @param held true while the button is held down with the pointer over it
+/// @return the frame's index in the sequence
+std::size_t button_frame(const Control& control, const ButtonArt& art, bool held) {
+    const auto count = art.sequence->frames.size();
+    std::size_t frame = art.base;
+    if (control.stages != 0) {
+        frame = !control.grayed && held && control.stages < count ? count - kHeldStageFromEnd
+                                                                  : control.stage;
+    } else if ((control.attributes & kAttributeCheckbox) != 0) {
+        const std::size_t checked = control.value != 0 ? 1 : 0;
+        frame += control.grayed ? std::min(checked + kGrayedFrameOffset, count - 1) : checked;
+    } else if (control.grayed) {
+        frame += kGrayedFrameOffset;
+    } else if (held) {
+        frame += 1;
+    }
+    return std::min(frame, count - 1);
+}
+
+/// Remaps a frame's drawn pixels, and its layers', through one row of the light table.
+///
+/// @param[in,out] frame frame to light
+/// @param row the light table's row for the level, one entry per palette index
+void light_frame(formats::gaf::Frame& frame, std::span<const uint8_t> row) {
+    for (std::size_t at = 0; at < frame.pixels.size() && at < frame.coverage.size(); ++at)
+        if (frame.coverage[at] != 0)
+            frame.pixels[at] = row[frame.pixels[at]];
+    for (auto& layer : frame.layers)
+        light_frame(layer, row);
+}
+
+/// Keeps a copy of a frame lit at a light level in the screen's GAF.
+///
+/// @param[in,out] res screen resources; the copy replaces the button's earlier one
+/// @param name the button's name
+/// @param frame the frame the button shows, copied before the GAF changes
+/// @param level light level, 1..31
+/// @return the copy's sequence name; empty without a whole light table
+std::string
+keep_lit_frame(Resources& res, std::string_view name, formats::gaf::Frame frame, uint8_t level) {
+    const auto& table = res.screen.light_table;
+    if (table.size() != kLightLevels * kPaletteEntries || level >= kLightLevels)
+        return {};
+    light_frame(frame, std::span(table).subspan(level * kPaletteEntries, kPaletteEntries));
+    std::string lit_name = std::string(name) + std::string(kLitArtSuffix);
+    auto& sequences = res.screen.sprites.sequences;
+    auto kept = std::find_if(
+        sequences.begin(), sequences.end(), [&](const formats::gaf::Sequence& sequence) {
+            return sequence.name == lit_name;
+        }
+    );
+    if (kept == sequences.end()) {
+        sequences.emplace_back();
+        kept = std::prev(sequences.end());
+        kept->name = lit_name;
+    }
+    kept->frames.clear();
+    kept->frames.push_back(std::move(frame));
+    return lit_name;
+}
+
+// ---------------------------------------------------------------------------
+// Grayed controls
+
+using renderer::GrayedPaint;
+using renderer::IndexedRect;
+
+/// Returns the palettes and tables a screen's grayed controls are drawn with (renderer::grayed_paint).
+///
+/// @param[in,out] res screen resources; keeps the gray table
+/// @return the palettes and tables
+GrayedPaint grayed_paint(Resources& res) {
+    return renderer::grayed_paint(res.screen, res.gray_table);
+}
+
+/// A grayed button with art, which render() grays and shades once the
+/// renderer has drawn it.
+struct GrayedButton {
+    std::size_t order{}; ///< the button's place among the composed layout's gadgets
+    int32_t left{};      ///< the button's left column on the screen
+    int32_t top{};       ///< the button's top row on the screen
+    int32_t width{};     ///< the width of the frame it shows
+    int32_t height{};    ///< the height of the frame it shows
+};
+
+/// Tells whether a grayed button with art is grayed and shaded over its
+/// rectangle, as 3.1c draws every one but a button that cycles its frames
+/// and a CHECKBOX-art button that neither has stages nor steps a scroll bar.
+///
+/// @param control the grayed button
+/// @return true when the button is grayed and shaded
+bool grayed_art_shaded(const Control& control) {
+    namespace attribute = ui::gui_layout::attribute;
+    if ((control.attributes & attribute::cycle_frames) != 0)
+        return false;
+    return control.stages != 0 || (control.attributes & attribute::scroll_step_mask) != 0 ||
+           (control.attributes & kAttributeCheckbox) == 0;
+}
+
+/// Returns the archive a sprite override names.
+///
+/// @param res screen resources
+/// @param archive the archive named
+/// @return the screen's own GAF, the shared one or the global one
+const formats::gaf::Archive& sprite_archive(const Resources& res, renderer::SpriteArchive archive) {
+    switch (archive) {
+    case renderer::SpriteArchive::shared:
+        return res.screen.shared_sprites;
+    case renderer::SpriteArchive::global:
+        return res.screen.global_sprites;
+    case renderer::SpriteArchive::screen:
+        break;
+    }
+    return res.screen.sprites;
+}
+
+/// Puts back the colours a picture drew over part of a grayed rectangle.
+///
+/// A hot surface given a picture at run time is drawn over its rectangle, as
+/// the renderer draws it: a frame of the rectangle's size unscaled, and any
+/// other stretched. Where it covers the grayed rectangle, the colours drawn
+/// before the rectangle was grayed come back.
+///
+/// @param[in,out] surface the drawn screen
+/// @param res screen resources
+/// @param gadget a gadget the renderer drew after the grayed button
+/// @param presentations the presentations the screen was drawn with
+/// @param rect the grayed rectangle
+/// @param drawn the rectangle's colours before it was grayed, three bytes a pixel
+void keep_picture(
+    renderer::Surface& surface,
+    const Resources& res,
+    const ui::gui_layout::Gadget& gadget,
+    std::span<const renderer::ButtonPresentation> presentations,
+    const IndexedRect& rect,
+    std::span<const uint8_t> drawn
+) {
+    if (gadget.common.active == 0 ||
+        gadget.common.type != ui::gui_layout::GadgetType::hot_surface || gadget.common.width <= 0 ||
+        gadget.common.height <= 0)
+        return;
+    const auto state = std::find_if(
+        presentations.begin(),
+        presentations.end(),
+        [&](const renderer::ButtonPresentation& presentation) {
+            return presentation.name.size() == gadget.common.name.size() &&
+                   starts_with_nocase(presentation.name, gadget.common.name);
+        }
+    );
+    if (state == presentations.end() || !state->sprite.has_value() || !state->gaf_frame.has_value())
+        return;
+    const auto* sequence =
+        find_sequence(sprite_archive(res, state->sprite->archive), state->sprite->sequence);
+    if (sequence == nullptr || *state->gaf_frame >= sequence->frames.size())
+        return;
+    const auto rendered = formats::gaf::render_normal(sequence->frames[*state->gaf_frame]);
+    if (!rendered.ok() || rendered.frame->width == 0 || rendered.frame->height == 0)
+        return;
+    const auto& picture = *rendered.frame;
+    const int32_t width = gadget.common.width;
+    const int32_t height = gadget.common.height;
+    for (int32_t row = 0; row < rect.height; ++row)
+        for (int32_t column = 0; column < rect.width; ++column) {
+            const int32_t across = rect.left + column - gadget.common.x;
+            const int32_t down = rect.top + row - gadget.common.y;
+            if (across < 0 || down < 0 || across >= width || down >= height)
+                continue;
+            const auto from =
+                static_cast<std::size_t>(down) * picture.height / static_cast<std::size_t>(height) *
+                    picture.width +
+                static_cast<std::size_t>(across) * picture.width / static_cast<std::size_t>(width);
+            if (picture.coverage[from] == 0)
+                continue;
+            const auto at = static_cast<std::size_t>(row * rect.width + column) * 3U;
+            std::memcpy(
+                &surface.rgb
+                     [(static_cast<std::size_t>(rect.top + row) * surface.width +
+                       static_cast<std::size_t>(rect.left + column)) *
+                      3U],
+                &drawn[at],
+                3
+            );
+        }
+}
+
+/// Grays and shades each grayed button with art over its frame's rectangle, as 3.1c draws it.
+///
+/// The renderer draws such a button as it would an enabled one, caption
+/// included, and its rectangle is grayed and shaded here once the screen is
+/// drawn. A picture drawn after the button keeps its colours where it covers
+/// the rectangle, since it lies over the grayed button.
+///
+/// @param[in,out] surface the drawn screen
+/// @param[in,out] res screen resources; the gray table is built on first use
+/// @param grayed the grayed buttons, in the order they are drawn
+/// @param presentations the presentations the screen was drawn with
+void gray_buttons(
+    renderer::Surface& surface,
+    Resources& res,
+    std::span<const GrayedButton> grayed,
+    std::span<const renderer::ButtonPresentation> presentations
+) {
+    if (grayed.empty())
+        return;
+    const auto paint = grayed_paint(res);
+    if (paint.shade_palette == nullptr)
+        return;
+    const auto& gadgets = res.screen.layout.gadgets;
+    for (const auto& button : grayed) {
+        const auto rect = renderer::read_indices(
+            surface, *paint.shade_palette, button.left, button.top, button.width, button.height
+        );
+        std::vector<uint8_t> drawn(rect.pixels.size() * 3U);
+        for (int32_t row = 0; row < rect.height; ++row)
+            std::memcpy(
+                &drawn[static_cast<std::size_t>(row * rect.width) * 3U],
+                &surface.rgb
+                     [(static_cast<std::size_t>(rect.top + row) * surface.width +
+                       static_cast<std::size_t>(rect.left)) *
+                      3U],
+                static_cast<std::size_t>(rect.width) * 3U
+            );
+        renderer::gray_and_shade(surface, paint, rect);
+        for (std::size_t later = button.order + 1; later < gadgets.size(); ++later)
+            keep_picture(surface, res, gadgets[later], presentations, rect, drawn);
+    }
+}
+
+/// Builds a button's presentation: its condition, caption stage and frame.
+///
+/// A grayed button with art that 3.1c grays and shades is presented as an
+/// enabled one showing its grayed frame, and listed for render() to gray
+/// and shade once it is drawn.
+///
+/// @param[in,out] res screen resources; a lit button's art is kept in its GAF
+/// @param index the control's index
+/// @param gadget the composed gadget
+/// @param order the gadget's place among the composed layout's gadgets
+/// @param with_sprites false to leave out the art the renderer must be told of
+/// @param[in,out] grayed the grayed buttons render() grays and shades; the button is added
+/// @return the presentation
+renderer::ButtonPresentation button_presentation(
+    Resources& res,
+    int32_t index,
+    const ui::gui_layout::Gadget& gadget,
+    std::size_t order,
+    bool with_sprites,
+    std::vector<GrayedButton>& grayed
+) {
+    const auto& control = res.panel.controls[static_cast<std::size_t>(index)];
+    renderer::ButtonPresentation presentation;
+    presentation.name = gadget.common.name;
+    // A button shows itself held only while the pointer that pressed it is over it.
+    const bool held = index == res.pressed && res.pressed == res.hovered;
+    if (control.grayed)
+        presentation.condition = renderer::ButtonCondition::disabled;
+    else if (held)
+        presentation.condition = renderer::ButtonCondition::pressed;
+    else if (index == res.hovered)
+        presentation.condition = renderer::ButtonCondition::hovered;
+    if (control.stages > 1)
+        presentation.text_stage = control.stage;
+    const auto art = button_art(res, gadget, template_name(res, control), with_sprites);
+    if (art.sequence == nullptr || art.sequence->frames.empty())
+        return presentation;
+    const auto frame = button_frame(control, art, held);
+    // A stage before the button's size group is reached by telling the
+    // renderer the sequence; without sprites it shows the group's first frame.
+    if (art.named || (with_sprites && frame < art.base)) {
+        presentation.sprite = art.binding;
+        presentation.gaf_frame = frame;
+    } else {
+        presentation.gaf_frame = frame >= art.base ? frame - art.base : 0;
+    }
+    if (control.grayed && grayed_art_shaded(control) &&
+        grayed_paint(res).shade_palette != nullptr) {
+        const auto& shown =
+            art.sequence->frames
+                [presentation.sprite.has_value() ? frame : art.base + *presentation.gaf_frame];
+        presentation.condition = renderer::ButtonCondition::normal;
+        grayed.push_back(
+            {order,
+             gadget.common.x,
+             gadget.common.y,
+             static_cast<int32_t>(shown.width),
+             static_cast<int32_t>(shown.height)}
+        );
+    }
+    if (with_sprites && control.light_level != 0) {
+        const auto lit = keep_lit_frame(
+            res, gadget.common.name, art.sequence->frames[frame], control.light_level
+        );
+        if (!lit.empty()) {
+            presentation.sprite = renderer::SpriteOverride{renderer::SpriteArchive::screen, lit};
+            presentation.gaf_frame = 0;
+        }
+    }
+    return presentation;
+}
+
+/// Builds the presentation of a hot surface or image that shows a picture.
+///
+/// A hot surface copied from a LOGO<x> template shows frame `stage` of the
+/// player colours, and any other the frame `stage` of the sequence named after
+/// its template in the screen's GAF. A raw frame is stretched over the
+/// rectangle; any other is drawn at its own size from the rectangle's top-left
+/// corner. An image shows frame 0 of the sequence named after its template in
+/// the screen's GAF, then the shared one, at its own size. A missing sequence
+/// or a frame past its end shows nothing.
+///
+/// @param res screen resources
+/// @param control the hot surface or image
+/// @param[in,out] gadget the composed gadget; an image becomes a hot surface,
+///        and one drawn at its frame's size takes that size
+/// @return the presentation, or none when nothing is shown
+std::optional<renderer::ButtonPresentation>
+picture_presentation(const Resources& res, const Control& control, ui::gui_layout::Gadget& gadget) {
+    const auto source = template_name(res, control);
+    const formats::gaf::Sequence* sequence = nullptr;
+    renderer::SpriteOverride sprite{renderer::SpriteArchive::screen, std::string(source)};
+    std::size_t frame = control.stage;
+    bool own_size = true;
+    if (control.type == ControlType::hot_surface) {
+        if (starts_with_nocase(source, kColorTemplatePrefix)) {
+            sequence = find_sequence(res.screen.global_sprites, kColorArt);
+            sprite = {renderer::SpriteArchive::global, std::string(kColorArt)};
+        } else {
+            sequence = find_sequence(res.screen.sprites, source);
+        }
+        if (sequence != nullptr && frame < sequence->frames.size()) {
+            const auto& shown = sequence->frames[frame];
+            own_size = shown.compressed || !shown.layers.empty();
+        }
+    } else {
+        frame = 0;
+        sequence = find_sequence(res.screen.sprites, source);
+        if (sequence == nullptr) {
+            sequence = find_sequence(res.screen.shared_sprites, source);
+            sprite.archive = renderer::SpriteArchive::shared;
+        }
+    }
+    if (sequence == nullptr || frame >= sequence->frames.size())
+        return std::nullopt;
+    gadget.common.type = ui::gui_layout::GadgetType::hot_surface;
+    if (own_size) {
+        gadget.common.width = static_cast<int16_t>(sequence->frames[frame].width);
+        gadget.common.height = static_cast<int16_t>(sequence->frames[frame].height);
+    }
+    renderer::ButtonPresentation presentation;
+    presentation.name = gadget.common.name;
+    presentation.sprite = std::move(sprite);
+    presentation.gaf_frame = frame;
+    return presentation;
+}
+
+/// Composes the front panel's layout and presentations for the renderer.
+///
+/// @param[in,out] res screen resources; the composed layout replaces the last
+/// @param[out] buttons the buttons' and pictures' presentations
+/// @param[out] lists the list boxes' presentations
+/// @param[out] grayed the grayed buttons render() grays and shades once they are drawn
+/// @param with_sprites false to leave out the art the renderer must be told of
+void compose_layout(
+    Resources& res,
+    std::vector<renderer::ButtonPresentation>& buttons,
+    std::vector<renderer::ListPresentation>& lists,
+    std::vector<GrayedButton>& grayed,
+    bool with_sprites
+) {
+    auto& panel = res.panel;
+    auto& layout = res.screen.layout;
+    layout.gadgets.clear();
+    for (int32_t index = 0; index < panel.count; ++index) {
+        const auto& control = panel.controls[static_cast<std::size_t>(index)];
+        if (control.source < 0 ||
+            static_cast<std::size_t>(control.source) >= res.source.gadgets.size())
+            continue;
+        auto gadget = res.source.gadgets[static_cast<std::size_t>(control.source)];
+        gadget.common.name = std::string(control_name(control));
+        const int16_t dx = index == 0 ? 0 : res.offset_x;
+        const int16_t dy = index == 0 ? 0 : res.offset_y;
+        gadget.common.x = static_cast<int16_t>(control.x + dx);
+        gadget.common.y = static_cast<int16_t>(control.y + dy);
+        gadget.common.width = control.width;
+        gadget.common.height = control.height;
+        gadget.common.active = static_cast<int8_t>(control.active);
+        const std::string text(control_text(control));
+        if (control.type == ControlType::label &&
+            gadget.common.type == ui::gui_layout::GadgetType::button) {
+            gadget.common.type = ui::gui_layout::GadgetType::label;
+            gadget.fields = ui::gui_layout::LabelFields{text, text, ""};
+        } else if (auto* button = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields)) {
+            button->text = text;
+        } else if (auto* label = std::get_if<ui::gui_layout::LabelFields>(&gadget.fields)) {
+            label->text = text;
+        } else if (
+            auto* list = std::get_if<ui::gui_layout::ListBoxFields>(&gadget.fields);
+            list != nullptr && control.list_item_height != 0
+        ) {
+            // A list is drawn at the pitch its rows are picked and scrolled by.
+            list->item_height = control.list_item_height;
+        }
+        if (index > 0 && control.type == ControlType::button && control.active != 0)
+            buttons.push_back(
+                button_presentation(res, index, gadget, layout.gadgets.size(), with_sprites, grayed)
+            );
+        if (index > 0 && with_sprites && control.active != 0 &&
+            (control.type == ControlType::hot_surface || control.type == ControlType::image))
+            if (auto picture = picture_presentation(res, control, gadget))
+                buttons.push_back(std::move(*picture));
+        if (control.type == ControlType::list_box && !control.items.empty())
+            lists.push_back(
+                {gadget.common.name,
+                 std::span<const std::string>(control.items),
+                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_first)),
+                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_selection))}
+            );
+        layout.gadgets.push_back(std::move(gadget));
+    }
+}
+
+/// Draws text in a font, clipped to a box, in the screen's palette.
+///
+/// @param[in,out] surface image drawn on
+/// @param res screen resources
+/// @param font font the text is drawn in
+/// @param text text drawn
+/// @param x left of the box in pixels
+/// @param y top of the box in pixels
+/// @param width box width in pixels
+/// @param height box height in pixels
+void draw_text_in(
+    renderer::Surface& surface,
+    const Resources& res,
+    const formats::fnt::Font& font,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height
+) {
+    if (surface.width == 0 || width <= 0 || height <= 0)
+        return;
+    const auto& palette = res.screen.background.palette.has_value() ? *res.screen.background.palette
+                                                                    : res.screen.gui_palette;
+    std::vector<uint8_t> pixels(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0
+    );
+    std::vector<uint8_t> coverage(pixels.size(), 0);
+    formats::fnt::IndexedSurface target{
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        static_cast<std::size_t>(width),
+        pixels,
+        coverage
+    };
+    (void)formats::fnt::raster_text(target, font, text, 0, 0);
+    for (int32_t row = 0; row < height; ++row)
+        for (int32_t column = 0; column < width; ++column) {
+            const auto at = static_cast<std::size_t>(row * width + column);
+            if (coverage[at] == 0)
+                continue;
+            const auto px = x + column;
+            const auto py = y + row;
+            if (px < 0 || py < 0 || px >= static_cast<int32_t>(surface.width) ||
+                py >= static_cast<int32_t>(surface.height))
+                continue;
+            auto* out = &surface.rgb
+                             [(static_cast<std::size_t>(py) * surface.width +
+                               static_cast<std::size_t>(px)) *
+                              3U];
+            const auto index = static_cast<std::size_t>(pixels[at]) * 4U;
+            out[0] = palette[index];
+            out[1] = palette[index + 1];
+            out[2] = palette[index + 2];
+        }
+}
+
+/// Draws text in the screen's GUI font, clipped to a box, as draw_text_in does.
+///
+/// @param[in,out] surface image drawn on
+/// @param res screen resources
+/// @param text text drawn
+/// @param x left of the box in pixels
+/// @param y top of the box in pixels
+/// @param width box width in pixels
+/// @param height box height in pixels
+void draw_text(
+    renderer::Surface& surface,
+    const Resources& res,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height
+) {
+    draw_text_in(surface, res, res.screen.font, text, x, y, width, height);
+}
+
+/// Draws each seated player's game version over the player's colour square, as 3.1c does.
+///
+/// Every slot held by the local player, a computer player or a remote player
+/// shows "major.minor" from its lobby block in the label font, centred on its
+/// LOGO<slot> rectangle whether or not the square shows. The rectangle's
+/// right and bottom edges are its last column and row, and halves are
+/// truncated toward zero.
+///
+/// @param[in,out] surface image drawn on
+/// @param res the battle room's resources
+/// @param lobby lobby whose slots are shown
+void draw_player_versions(renderer::Surface& surface, const Resources& res, Lobby& lobby) {
+    if (lobby.game == nullptr)
+        return;
+    const auto& font = res.screen.label_font;
+    const int32_t text_height = formats::fnt::line_height(font);
+    for (int32_t slot = 0; slot < kSlotCount; ++slot) {
+        const auto& player = slot_player(lobby, slot);
+        if (player.status != kSlotLocal && player.status != kSlotComputer &&
+            player.status != kSlotRemote)
+            continue;
+        char name[16];
+        std::snprintf(name, sizeof(name), "LOGO%d", static_cast<int>(slot));
+        const auto* logo = panel_control(res.panel, name);
+        const auto* info = player_info(lobby, player);
+        if (logo == nullptr || info == nullptr)
+            continue;
+        char text[16];
+        std::snprintf(text, sizeof(text), "%d.%d", info->version_major, info->version_minor);
+        const auto text_width = static_cast<int32_t>(formats::fnt::measure_text(font, text));
+        const int32_t left = logo->x + res.offset_x;
+        const int32_t top = logo->y + res.offset_y;
+        const int32_t right = left + logo->width - 1;
+        const int32_t bottom = top + logo->height - 1;
+        draw_text_in(
+            surface,
+            res,
+            font,
+            text,
+            (left + right - text_width) / 2,
+            (top + bottom - text_height) / 2,
+            text_width,
+            text_height
+        );
+    }
+}
+
+void fill(
+    renderer::Surface& surface,
+    int32_t x,
+    int32_t y,
+    int32_t width,
+    int32_t height,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b
+) {
+    for (int32_t py = std::max(0, y);
+         py < std::min<int32_t>(y + height, static_cast<int32_t>(surface.height));
+         ++py)
+        for (int32_t px = std::max(0, x);
+             px < std::min<int32_t>(x + width, static_cast<int32_t>(surface.width));
+             ++px) {
+            auto* out = &surface.rgb
+                             [(static_cast<std::size_t>(py) * surface.width +
+                               static_cast<std::size_t>(px)) *
+                              3U];
+            out[0] = r;
+            out[1] = g;
+            out[2] = b;
+        }
+}
+
+renderer::Surface render(Resources& res) {
+    std::vector<renderer::ButtonPresentation> buttons;
+    std::vector<renderer::ListPresentation> lists;
+    std::vector<GrayedButton> grayed;
+    for (const bool sprites : {true, false}) {
+        buttons.clear();
+        lists.clear();
+        grayed.clear();
+        compose_layout(res, buttons, lists, grayed, sprites);
+        try {
+            auto surface = renderer::render_screen(res.screen, buttons, lists);
+            gray_buttons(surface, res, grayed, buttons);
+            return surface;
+        } catch (const std::exception&) {
+        }
+    }
+    try {
+        return renderer::render_screen(res.screen, {}, {});
+    } catch (const std::exception&) {
+        return {
+            static_cast<uint32_t>(kCanvasWidth),
+            static_cast<uint32_t>(kCanvasHeight),
+            std::vector<uint8_t>(kCanvasWidth * kCanvasHeight * 3, 0)
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pictures
+
+// A hot surface without art or a picture is filled with this GUI palette colour.
+constexpr size_t kBlankPictureColor = 7;
+// Bytes from a texture's first pixel that the quad sampler may read.
+constexpr size_t kPictureTextureWindowBytes = 0x10000;
+
+/// Tells whether a hot surface shows art, which the renderer draws.
+///
+/// @param res screen resources
+/// @param control the hot surface
+/// @return true for a player colour square, or a sequence named after its
+///         template in the screen's GAF
+bool hot_surface_has_art(const Resources& res, const Control& control) {
+    const auto source = template_name(res, control);
+    return starts_with_nocase(source, kColorTemplatePrefix) ||
+           find_sequence(res.screen.sprites, source) != nullptr;
+}
+
+/// Draws a picture over its hot surface's rectangle, one texel in from its edges, as 3.1c does.
+///
+/// The picture is stretched from texel (1, 1) to its far edges over every
+/// pixel of the rectangle but its last column and row, which keep what was
+/// drawn under them.
+///
+/// @param[in,out] surface the drawn screen
+/// @param palette the palette the picture's indices select from
+/// @param control the hot surface and its picture
+/// @param x the rectangle's left column on the screen
+/// @param y the rectangle's top row on the screen
+void draw_picture(
+    renderer::Surface& surface,
+    const PaletteBytes& palette,
+    const Control& control,
+    int32_t x,
+    int32_t y
+) {
+    const int32_t width = control.width;
+    const int32_t height = control.height;
+    const int32_t picture_width = control.picture_width;
+    const int32_t picture_height = control.picture_height;
+    if (width < 2 || height < 2 || picture_width < 2 || picture_height < 2 ||
+        picture_width > std::numeric_limits<uint16_t>::max() ||
+        picture_height > std::numeric_limits<uint16_t>::max() ||
+        control.picture.size() / static_cast<size_t>(picture_width) <
+            static_cast<size_t>(picture_height))
+        return;
+    std::vector<uint8_t> texels(std::max(control.picture.size(), kPictureTextureWindowBytes), 0);
+    std::copy(control.picture.begin(), control.picture.end(), texels.begin());
+    oa::Sprite texture{};
+    texture.width = static_cast<uint16_t>(picture_width);
+    texture.height = static_cast<uint16_t>(picture_height);
+    texture.encoding = OA_SPRITE_RAW;
+    texture.data = texels.data();
+    auto face = present::create_surface(width, height);
+    const present::PolygonVertex quad[4] = {
+        {0, 0}, {width - 1, 0}, {width - 1, height - 1}, {0, height - 1}
+    };
+    const present::model::TexturePoint uv[4] = {
+        {1, 1},
+        {picture_width - 1, 1},
+        {picture_width - 1, picture_height - 1},
+        {1, picture_height - 1}
+    };
+    present::model::texture_quad(&face.surface, &texture, quad, uv);
+    for (int32_t row = 0; row < height - 1; ++row)
+        for (int32_t column = 0; column < width - 1; ++column) {
+            const int32_t px = x + column;
+            const int32_t py = y + row;
+            if (px < 0 || py < 0 || px >= static_cast<int32_t>(surface.width) ||
+                py >= static_cast<int32_t>(surface.height))
+                continue;
+            const auto index = face.pixels
+                                   [static_cast<size_t>(row) * static_cast<size_t>(width) +
+                                    static_cast<size_t>(column)];
+            std::memcpy(
+                &surface
+                     .rgb[(static_cast<size_t>(py) * surface.width + static_cast<size_t>(px)) * 3U],
+                &palette[static_cast<size_t>(index) * 4U],
+                3
+            );
+        }
+}
+
+/// Draws the hot surfaces that have no art, as 3.1c draws them.
+///
+/// One with a picture shows it (draw_picture); one without is filled with
+/// the GUI palette's colour 7, matched to the screen's palette. MAPPIC is the
+/// only such surface in the multiplayer screens.
+///
+/// @param[in,out] surface the drawn screen
+/// @param res screen resources
+void draw_pictures(renderer::Surface& surface, const Resources& res) {
+    const auto& screen = res.screen;
+    const auto& palette =
+        screen.background.palette.has_value() ? *screen.background.palette : screen.gui_palette;
+    const auto& panel = res.panel;
+    for (int32_t index = 1; index < panel.count; ++index) {
+        const auto& control = panel.controls[static_cast<size_t>(index)];
+        if (control.type != ControlType::hot_surface || control.active == 0 || control.width <= 0 ||
+            control.height <= 0 || hot_surface_has_art(res, control))
+            continue;
+        const int32_t x = control.x + res.offset_x;
+        const int32_t y = control.y + res.offset_y;
+        if (!control.picture.empty()) {
+            draw_picture(surface, palette, control, x, y);
+            continue;
+        }
+        const auto blank = remap_palette(screen.gui_palette, palette)[kBlankPictureColor];
+        const auto* rgb = &palette[static_cast<size_t>(blank) * 4U];
+        fill(surface, x, y, control.width, control.height, rgb[0], rgb[1], rgb[2]);
+    }
+}
+
+void draw_text_boxes(renderer::Surface& surface, Resources& res) {
+    auto& panel = res.panel;
+    for (int32_t index = 1; index < panel.count; ++index) {
+        const auto& control = panel.controls[static_cast<std::size_t>(index)];
+        if (control.type != ControlType::text_box || control.active == 0)
+            continue;
+        std::string text(control_text(control));
+        if (index == panel.focus && ((elapsed_ms() / 500U) & 1U) == 0)
+            text += '_';
+        draw_text(
+            surface,
+            res,
+            text,
+            control.x + res.offset_x + 3,
+            control.y + res.offset_y + 3,
+            control.width - 4,
+            control.height - 2
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sliders
+
+/// Draws a screen's bound sliders and their arrows as 3.1c draws them (renderer::draw_scroll_bar).
+///
+/// @param[in,out] surface image drawn on
+/// @param[in,out] res screen resources; the gray table is built on first use
+void draw_sliders(renderer::Surface& surface, Resources& res) {
+    const auto& screen = res.screen;
+    const auto paint = grayed_paint(res);
+    auto& panel = res.panel;
+    for (int32_t index = 1; index < panel.count; ++index) {
+        auto& control = panel.controls[static_cast<std::size_t>(index)];
+        if (control.type != ControlType::slider)
+            continue;
+        const auto& bar = slider_bar(control);
+        renderer::draw_scroll_bar(
+            surface,
+            paint,
+            renderer::scroll_art_sequence(&screen.sprites, screen.shared_sprites, bar.art),
+            bar,
+            res.offset_x,
+            res.offset_y,
+            res.hold.bar == index ? res.hold.part : oa::ui::gui_input::ScrollPart::none
+        );
+    }
+}
+
+void draw_message(renderer::Surface& surface, const Resources& res) {
+    const auto& text = ui().message;
+    if (text.empty())
+        return;
+    constexpr int32_t width = 400, height = 60;
+    const int32_t x = (kCanvasWidth - width) / 2, y = (kCanvasHeight - height) / 2;
+    fill(surface, x - 1, y - 1, width + 2, height + 2, 160, 160, 160);
+    fill(surface, x, y, width, height, 16, 16, 24);
+    draw_text(surface, res, text, x + 10, y + 10, width - 20, 20);
+    draw_text(surface, res, "OK", x + width / 2 - 8, y + height - 22, 40, 20);
+}
+
+// ---------------------------------------------------------------------------
+// Input
+
+void dispatch(ScreenContext* ctx);
+
+/// Returns the current tick of the lobby's 30 Hz clock, which held sliders and arrows run on.
+///
+/// @return the tick
+uint32_t ui_tick() {
+    const auto& services = ui().lobby.services;
+    return services.tick != nullptr ? services.tick(services.context) : service_tick(nullptr);
+}
+
+/// Brings a slider's group in line with it and runs its handler, once its
+/// knob moved or its arrow stepped it, as 3.1c does.
+///
+/// The lists the slider scrolls follow its knob first. A slider with a
+/// handler then runs it, and one that notifies its panel is clicked for the
+/// panel's handler, as RESTRICT2's are; a list's scroll bar has neither.
+///
+/// @param ctx screen context of the running frontend
+/// @param[in,out] res the front screen's resources
+/// @param index the slider, or kNoControl for none
+void notify_slider(ScreenContext* ctx, Resources& res, int32_t index) {
+    auto& panel = res.panel;
+    if (index <= 0 || index >= panel.count)
+        return;
+    panel.dirty = true;
+    panel_sync_group(panel, index);
+    auto& slider = panel.controls[static_cast<std::size_t>(index)];
+    if (slider.on_change != nullptr) {
+        slider.on_change(panel, &ui().lobby);
+        return;
+    }
+    if (slider.notifies_panel && panel_press(panel, index))
+        dispatch(ctx);
+}
+
+/// Runs the handler a screen gives a list for a new selection, as 3.1c runs it.
+///
+/// SELMAP's MAPNAMES previews the map now selected, without telling the
+/// other players, and SELGAME's columns refresh JOINGAME and WATCH for the
+/// game now selected. No other list has one.
+///
+/// @param[in,out] res the front screen's resources
+/// @param index the list
+void list_changed(Resources& res, int32_t index) {
+    auto& state = ui();
+    if (&res == &state.modal && state.modal_kind == ModalKind::selmap) {
+        if (index == panel_find(res.panel, "MAPNAMES"))
+            mapselect_preview(state.lobby, state.mapselect, res.panel);
+    } else if (&res == &state.base && state.screen == kScreenGameList) {
+        game_list_refresh_join(state.lobby, state.connect, res.panel);
+    }
+}
+
+/// Scrolls a list a row for a notch of the mouse wheel over it, its scroll bar or an arrow.
+///
+/// 3.1c reads no wheel. A list whose group follows it scrolls within its
+/// pages and its knob follows. Otherwise a list's scroll bar steps its knob
+/// once, as its arrow would, and its handler runs, which keeps RESTRICT2's
+/// count sliders on the rows it shows. The wheel moves no other slider.
+///
+/// @param ctx screen context of the running frontend
+/// @param[in,out] res the front screen's resources
+/// @param hit the control under the pointer, or kNoControl
+/// @param back true for a notch toward the list's start
+void wheel_list(ScreenContext* ctx, Resources& res, int32_t hit, bool back) {
+    auto& panel = res.panel;
+    if (hit == kNoControl)
+        return;
+    const auto index = hit;
+    const auto type = panel.controls[static_cast<std::size_t>(index)].type;
+    const auto list = type == ControlType::list_box
+                          ? index
+                          : panel_group_member(panel, index, ControlType::list_box);
+    if (list == kNoControl)
+        return;
+    if (panel_scroll_list(panel, list, back ? -1 : 1) ||
+        panel.controls[static_cast<std::size_t>(list)].list_item_height != 0)
+        return;
+    const auto bar =
+        type == ControlType::slider ? index : panel_group_member(panel, list, ControlType::slider);
+    if (bar == kNoControl)
+        return;
+    auto& slider = slider_bar(panel.controls[static_cast<std::size_t>(bar)]);
+    if (!oa::ui::gui_input::scroll_takes_input(slider))
+        return;
+    oa::ui::gui_input::scroll_step(slider, !back);
+    notify_slider(ctx, res, bar);
+}
+
+bool click(ScreenContext* ctx, int32_t index, int32_t x, int32_t y, uint8_t button) {
+    auto& res = front();
+    auto& panel = res.panel;
+    // A double click is two presses in a row: every press, on any control
+    // or on none, becomes the press the next one pairs with.
+    const auto previous_index = ui().last_click_index;
+    const auto previous_ms = ui().last_click_ms;
+    ui().last_click_index = index;
+    ui().last_click_ms = elapsed_ms();
+    if (index <= 0 || index >= panel.count)
+        return false;
+    auto& control = panel.controls[static_cast<std::size_t>(index)];
+    if (control.grayed)
+        return false;
+    bool activate = true;
+    if (control.type == ControlType::text_box) {
+        panel.focus = index;
+        activate = false;
+    } else if (control.type == ControlType::list_box) {
+        const auto press = panel_press_list(panel, index, y);
+        if (press == ListPress::missed)
+            return false;
+        const bool again = previous_index == index && press == ListPress::same &&
+                           ui().last_click_ms - previous_ms < kDoubleClickMs;
+        if (press == ListPress::changed)
+            list_changed(res, index);
+        // Only a second press on the selected row starts the list's action:
+        // one press on a SELGAME column selects that game without joining it.
+        activate = again;
+    } else if (control.type == ControlType::slider) {
+        // A click on a slider is a press and a release at one point: an
+        // arrow's press steps the knob, a press on the bar steps it on release.
+        notify_slider(ctx, res, slider_press(panel, res.hold, index, x, y, ui_tick()));
+        notify_slider(ctx, res, slider_release(panel, res.hold, x, y));
+        return true;
+    }
+    if (!activate)
+        return true;
+    if (!panel_press(panel, index, button))
+        return false;
+    (void)ctx;
+    dispatch(ctx);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Screen flows
+
+/// Returns to the main menu, as a launched game leaves the game list or the battle room.
+///
+/// Application mode 1 is asked for, the frontend state becomes the main
+/// menu with the initialize signal, and a frontend pass runs it: the main
+/// menu asks for the return after a launch (step return_after_launch) when
+/// the frontend's queries call for it, or opens itself.
+///
+/// @param ctx Screen context of the running frontend.
+void return_to_main_menu(ScreenContext* ctx) {
+    const auto& link = ui().launch_link;
+    if (link.request_app_mode != nullptr)
+        link.request_app_mode(link.context, kAppModeFrontend);
+    const auto* services = ctx->services;
+    if (services == nullptr)
+        return;
+    if (services->set_frontend_state != nullptr)
+        services->set_frontend_state(ctx->host, kStateMainMenu);
+    if (services->set_frontend_signal != nullptr)
+        services->set_frontend_signal(ctx->host, kSignalInitialize);
+    if (services->run_frontend != nullptr)
+        services->run_frontend(ctx->host);
+    else
+        app::screen_request(ctx, kScreenMainMenu);
+}
+
+/// Leaves the game and ends the program through the launch's link.
+///
+/// @param with_reason whether the local player's disconnect reason shows first
+void leave_game(bool with_reason) {
+    const auto& link = ui().launch_link;
+    if (link.leave_game != nullptr)
+        link.leave_game(link.context, with_reason);
+}
+
+/// Turns the platform's text input on or off through the host.
+///
+/// The text boxes (the TCP address, names and passwords, the battle room's
+/// chat) take typed characters only as text events, which the platform
+/// sends only while text input is on.
+///
+/// @param ctx Screen context of the running frontend.
+/// @param enabled True to turn it on.
+void set_text_input(ScreenContext* ctx, bool enabled) {
+    if (ctx != nullptr && ctx->services != nullptr && ctx->services->set_text_input != nullptr)
+        ctx->services->set_text_input(ctx->host, enabled ? 1 : 0);
+}
+
+void apply_lobby_action(ScreenContext* ctx, LobbyAction action) {
+    auto& state = ui();
+    auto& lobby = state.lobby;
+    switch (action) {
+    case LobbyAction::leave:
+        lobby_leave_battleroom(lobby);
+        if (lobby.net.leave != nullptr)
+            lobby.net.leave(lobby.net.context);
+        state.in_lobby = false;
+        close_modal();
+        // A launched battle goes back to the main menu, and from there on to
+        // the return after a launch.
+        if (lobby_launch_active(lobby))
+            return_to_main_menu(ctx);
+        else
+            app::screen_request(ctx, kScreenGameList);
+        break;
+    case LobbyAction::start:
+        if (state.start_handler == nullptr) {
+            app::screen_status(
+                ctx, "Multiplayer match start is not connected to the match loader yet."
+            );
+            break;
+        }
+        state.in_lobby = false;
+        close_modal();
+        // The match loader takes over from here; the chat line turns text
+        // input back on when it opens. The engine shows the loading screen
+        // and the match without leaving this screen, so it no longer counts
+        // as showing, and a close request left for its tick goes with it.
+        set_text_input(ctx, false);
+        state.showing = false;
+        state.exit_confirm_requested = false;
+        state.start_handler(state.start_context, lobby);
+        break;
+    case LobbyAction::select_map:
+        if (load_modal(
+                ctx,
+                ModalKind::selmap,
+                "guis/selmap.gui",
+                "bitmaps/dselectmap2.pcx",
+                "anims/skirmish.gaf"
+            ) &&
+            !mapselect_open(lobby, state.mapselect, state.modal.panel))
+            close_modal();
+        break;
+    case LobbyAction::view_map:
+        if (load_modal(
+                ctx, ModalKind::viewmap, "guis/viewmap.gui", "bitmaps/dviewmap.pcx", kCommonGaf
+            ))
+            viewmap_open(lobby, state.modal.panel);
+        break;
+    case LobbyAction::restrictions:
+        load_units();
+        if (load_modal(
+                ctx,
+                ModalKind::restrict,
+                "guis/restrict2.gui",
+                "bitmaps/unitrestrict5x.pcx",
+                kCommonGaf
+            ))
+            restrict_open(lobby, state.restrict, state.modal.panel);
+        break;
+    case LobbyAction::confirm_reject:
+        if (load_modal(ctx, ModalKind::confirm, "guis/yesorno.gui", nullptr, kCommonGaf))
+            confirm_open(lobby, state.modal.panel, lobby.confirm_slot);
+        break;
+    case LobbyAction::none:
+        break;
+    }
+}
+
+/// Goes on with the chosen provider: TCP.GUI for TCP/IP, the service at once for IPX and the others.
+///
+/// @param ctx Screen context of the running frontend.
+void open_chosen_provider(ScreenContext* ctx) {
+    auto& state = ui();
+    auto& connect = state.connect;
+    const auto kind = provider_kind(connect.providers[connect.provider].guid);
+    if (kind == ProviderKind::tcpip) {
+        app::screen_request(ctx, kScreenTcp);
+    } else if (kind == ProviderKind::ipx || kind == ProviderKind::other) {
+        app::screen_request(
+            ctx, connect_open_service(state.lobby, connect, "") ? kScreenGameList : kScreenProviders
+        );
+    } else {
+        state.message = "Modem and serial connections are not available in this build.";
+    }
+}
+
+/// Carries out what the game list asked for.
+///
+/// @param ctx Screen context of the running frontend.
+/// @param action the game list's action
+void apply_game_list_action(ScreenContext* ctx, ConnectAction action) {
+    auto& state = ui();
+    if (action == ConnectAction::providers)
+        app::screen_request(ctx, kScreenProviders);
+    else if (action == ConnectAction::main_menu)
+        return_to_main_menu(ctx);
+    else if (action == ConnectAction::leave_game)
+        leave_game(true);
+    else if (action == ConnectAction::new_game)
+        app::screen_request(ctx, kScreenNewGame);
+    else if (
+        (action == ConnectAction::join || action == ConnectAction::watch) &&
+        connect_join(state.lobby, state.connect, action == ConnectAction::watch)
+    ) {
+        state.in_lobby = false;
+        app::screen_request(ctx, kScreenBattleroom);
+    }
+}
+
+/// Creates the game NEWMULTI accepted and opens the battle room.
+///
+/// @param ctx Screen context of the running frontend.
+void host_new_game(ScreenContext* ctx) {
+    auto& state = ui();
+    if (connect_host(state.lobby, state.connect)) {
+        state.in_lobby = false;
+        app::screen_request(ctx, kScreenBattleroom);
+    } else {
+        state.message = "The game could not be created.";
+    }
+}
+
+void dispatch(ScreenContext* ctx) {
+    auto& state = ui();
+    auto& lobby = state.lobby;
+    auto& connect = state.connect;
+    if (state.modal_kind != ModalKind::none) {
+        auto& panel = state.modal.panel;
+        bool closed = false;
+        switch (state.modal_kind) {
+        case ModalKind::tcp: {
+            const auto action = tcp_handle_event(lobby, connect, panel);
+            if (action == ConnectAction::providers) {
+                close_modal();
+                app::screen_request(ctx, kScreenProviders);
+            } else if (action == ConnectAction::game_list) {
+                close_modal();
+                app::screen_request(ctx, kScreenGameList);
+            }
+            return;
+        }
+        case ModalKind::confirm:
+            closed = confirm_handle_event(lobby, panel);
+            break;
+        case ModalKind::viewmap:
+            closed = viewmap_handle_event(lobby, panel);
+            break;
+        case ModalKind::selmap:
+            closed = mapselect_handle_event(lobby, state.mapselect, panel);
+            break;
+        case ModalKind::restrict: {
+            const auto action = restrict_handle_event(lobby, state.restrict, panel);
+            if (action == RestrictAction::load_list || action == RestrictAction::save_list)
+                state.message = "Restriction lists are loaded and saved by the options package.";
+            if (action == RestrictAction::close) {
+                restrict_close(lobby, state.restrict);
+                closed = true;
+            }
+            break;
+        }
+        case ModalKind::timeout:
+            closed = timeout_handle_event(lobby, panel);
+            break;
+        case ModalKind::exit_confirm: {
+            const auto answer = exit_confirm_handle_event(lobby, panel);
+            if (answer == ExitConfirmAnswer::leave)
+                leave_game(false);
+            closed = answer == ExitConfirmAnswer::closed;
+            break;
+        }
+        case ModalKind::none:
+            break;
+        }
+        if (closed && (state.modal_kind == ModalKind::timeout ||
+                       state.modal_kind == ModalKind::exit_confirm)) {
+            close_timeout();
+        } else if (closed) {
+            close_modal();
+            lobby.game->gui_flags |= kMenuTickFlag;
+        }
+        return;
+    }
+    auto& panel = state.base.panel;
+    switch (state.screen) {
+    case kScreenProviders: {
+        const auto action = providers_handle_event(lobby, connect, panel);
+        if (action == ConnectAction::main_menu) {
+            app::screen_request(ctx, kScreenMainMenu);
+        } else if (action == ConnectAction::options) {
+            app::screen_request(ctx, kScreenOptions);
+        } else if (action == ConnectAction::provider) {
+            open_chosen_provider(ctx);
+        }
+        break;
+    }
+    case kScreenGameList:
+        apply_game_list_action(ctx, game_list_handle_event(lobby, connect, panel));
+        break;
+    case kScreenNewGame: {
+        const auto action = new_game_handle_event(lobby, connect, panel);
+        if (action == ConnectAction::game_list)
+            app::screen_request(ctx, kScreenGameList);
+        else if (action == ConnectAction::host)
+            host_new_game(ctx);
+        break;
+    }
+    case kScreenBattleroom:
+        apply_lobby_action(ctx, lobby_handle_event(lobby, panel));
+        break;
+    default:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen hooks
+
+/// Binds the frontend to a screen being entered and turns text input on for its text boxes.
+///
+/// @param ctx Screen context of the running frontend.
+void begin(ScreenContext* ctx) {
+    ui().ctx = ctx;
+    ui().showing = true;
+    bind_boundaries();
+    set_text_input(ctx, true);
+}
+
+void enter_providers(ScreenContext* ctx, void*) {
+    begin(ctx);
+    auto& state = ui();
+    state.screen = kScreenProviders;
+    close_modal();
+    if (load(state.base, ctx, "guis/selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf")) {
+        providers_open(state.lobby, state.connect, state.base.panel);
+        oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
+        // A launch names its transport: the selection goes on with it.
+        if (providers_take_launch(state.lobby, state.connect))
+            open_chosen_provider(ctx);
+    }
+}
+
+void enter_tcp(ScreenContext* ctx, void*) {
+    begin(ctx);
+    auto& state = ui();
+    state.screen = kScreenTcp;
+    if (!state.base.loaded || state.base.panel.name[0] == '\0' ||
+        std::string_view(state.base.panel.name.data()) != "guis/selprov.gui") {
+        if (load(
+                state.base, ctx, "guis/selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf"
+            )) {
+            providers_open(state.lobby, state.connect, state.base.panel);
+            oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
+        }
+    }
+    if (!load_modal(ctx, ModalKind::tcp, "guis/tcp.gui", nullptr, "anims/selprov.gaf"))
+        return;
+    tcp_open(state.lobby, state.connect, state.modal.panel);
+    if (!state.connect.launch_address_used)
+        return;
+    // The launch's address is accepted at once; while a launch is
+    // active ENDMULTI.GUI stands over the panel until the game list opens.
+    const auto action = tcp_accept_launch_address(state.lobby, state.connect, state.modal.panel);
+    if (lobby_launch_active(state.lobby)) {
+        close_modal();
+        (void)load_modal(ctx, ModalKind::tcp, "guis/endmulti.gui", nullptr, "anims/selprov.gaf");
+    }
+    app::screen_request(
+        ctx, action == ConnectAction::game_list ? kScreenGameList : kScreenProviders
+    );
+}
+
+void enter_game_list(ScreenContext* ctx, void*) {
+    begin(ctx);
+    auto& state = ui();
+    state.screen = kScreenGameList;
+    close_modal();
+    if (!load(state.base, ctx, "guis/selgame.gui", "bitmaps/selectgame2x.pcx", "anims/selgame.gaf"))
+        return;
+    if (!game_list_open(state.lobby, state.connect, state.base.panel)) {
+        app::screen_request(ctx, kScreenProviders);
+        return;
+    }
+    oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
+    connect_show_error_text(state.lobby, state.connect);
+}
+
+void enter_new_game(ScreenContext* ctx, void*) {
+    begin(ctx);
+    auto& state = ui();
+    state.screen = kScreenNewGame;
+    close_modal();
+    if (load(state.base, ctx, "guis/newmulti.gui", "bitmaps/createnew.pcx", "anims/selgame.gaf")) {
+        new_game_open(state.lobby, state.connect, state.base.panel);
+        oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
+        if (state.connect.host_at_once)
+            host_new_game(ctx);
+    }
+}
+
+void enter_battleroom(ScreenContext* ctx, void*) {
+    begin(ctx);
+    auto& state = ui();
+    state.screen = kScreenBattleroom;
+    close_modal();
+    if (!load(state.base, ctx, "guis/lounge2.gui", "bitmaps/battleroom.pcx", "anims/lounge2.gaf"))
+        return;
+    load_maps();
+    load_units();
+    local_info(state.lobby).memory_mb = kMachineMemoryMb;
+    lobby_enter_battleroom(state.lobby, state.base.panel);
+    oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
+    state.in_lobby = true;
+}
+
+/// Closes any stacked dialog and turns text input off as a multiplayer screen is left.
+///
+/// The next multiplayer screen turns it on again as it is entered.
+///
+/// @param ctx Screen context of the running frontend.
+/// @param state Screen state (unused).
+void leave_screen(ScreenContext* ctx, void* /*state*/) {
+    close_modal();
+    set_text_input(ctx, false);
+    ui().showing = false;
+    ui().exit_confirm_requested = false;
+}
+
+int screen_event(ScreenContext* ctx, void*) {
+    auto& state = ui();
+    state.ctx = ctx;
+    const auto* input = ctx->input;
+    if (input == nullptr)
+        return 0;
+    // The wait for the host, and the "Host not found" text that ends it,
+    // take every input while no exit confirmation is up.
+    if (state.screen == kScreenGameList &&
+        (state.connect.host_waiting || state.connect.host_not_found_exiting) &&
+        state.modal_kind != ModalKind::exit_confirm)
+        return 1;
+    auto& res = front();
+    auto& panel = res.panel;
+    const auto px = static_cast<int32_t>(input->x) - res.offset_x;
+    const auto py = static_cast<int32_t>(input->y) - res.offset_y;
+    switch (input->kind) {
+    case ScreenInputKind::pointer_move:
+        res.hovered = panel_hit(panel, px, py);
+        oa::ui::gui_input::scroll_move(res.hold, px, py);
+        return 1;
+    case ScreenInputKind::pointer_down:
+        if (!state.message.empty())
+            return 1;
+        res.pressed = panel_hit(panel, px, py);
+        res.hovered = res.pressed;
+        // A press anywhere but on a list, including on no control, ends a
+        // pair of list presses.
+        if (res.pressed == kNoControl ||
+            panel.controls[static_cast<std::size_t>(res.pressed)].type != ControlType::list_box)
+            ui().last_click_index = kNoControl;
+        notify_slider(ctx, res, slider_press(panel, res.hold, res.pressed, px, py, ui_tick()));
+        return 1;
+    case ScreenInputKind::pointer_up: {
+        const auto pressed = res.pressed;
+        res.pressed = kNoControl;
+        // A held slider or arrow takes the release; an arrow is never clicked.
+        if (res.hold.bar != oa::ui::gui_input::kNoScrollBar) {
+            notify_slider(ctx, res, slider_release(panel, res.hold, px, py));
+            return 1;
+        }
+        if (!state.message.empty()) {
+            state.message.clear();
+            return 1;
+        }
+        const auto hit = panel_hit(panel, px, py);
+        if (hit != kNoControl && hit == pressed)
+            (void)click(ctx, hit, px, py, input->button == kSdlRightButton ? 2 : 1);
+        return 1;
+    }
+    case ScreenInputKind::wheel:
+        if (state.message.empty() && input->wheel_y != 0)
+            wheel_list(ctx, res, panel_hit(panel, px, py), input->wheel_y > 0);
+        return 1;
+    case ScreenInputKind::text:
+        if (input->text != nullptr)
+            multiplayer_type(ctx, input->text);
+        return 1;
+    case ScreenInputKind::key_down:
+        if (!state.message.empty()) {
+            if (input->key == kSdlKeyReturn || input->key == kSdlKeyEscape)
+                state.message.clear();
+            return 1;
+        }
+        if (input->key == kSdlKeyBackspace && panel.focus > 0 && panel.focus < panel.count) {
+            auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
+            std::string text(control_text(control));
+            if (!text.empty())
+                text.pop_back();
+            set_control_text(control, text);
+            return 1;
+        }
+        if (input->key == kSdlKeyReturn && panel.focus > 0 && panel.focus < panel.count) {
+            if (panel_press(panel, panel.focus))
+                dispatch(ctx);
+            return 1;
+        }
+        // Up and Down move a focused list's selection a row and run its
+        // handler for a new selection, as 3.1c does; they never click it.
+        if ((input->key == kSdlKeyUp || input->key == kSdlKeyDown) && panel.focus > 0 &&
+            panel.focus < panel.count) {
+            const auto& focused = panel.controls[static_cast<std::size_t>(panel.focus)];
+            if (focused.type == ControlType::list_box && focused.list_item_height != 0) {
+                panel_step_list(panel, panel.focus, input->key == kSdlKeyDown);
+                list_changed(res, panel.focus);
+            }
+            return 1;
+        }
+        if (input->key == kSdlKeyEscape) {
+            for (const char* name : {"PREVMENU", "PREV", "CANCEL", "Cancel", "CHOICE2", "OK"})
+                if (panel_find(panel, name) != kNoControl) {
+                    (void)multiplayer_click(ctx, name);
+                    break;
+                }
+        }
+        return 1;
+    default:
+        return 1;
+    }
+}
+
+void screen_tick(ScreenContext* ctx, void*) {
+    auto& state = ui();
+    state.ctx = ctx;
+    if (state.exit_confirm_requested) {
+        state.exit_confirm_requested = false;
+        open_exit_confirm(ctx);
+    }
+    if (auto& res = front(); res.loaded)
+        notify_slider(ctx, res, slider_hold_tick(res.panel, res.hold, ui_tick()));
+    if (state.screen == kScreenGameList && state.base.loaded &&
+        state.modal_kind == ModalKind::none) {
+        apply_game_list_action(ctx, game_list_tick(state.lobby, state.connect, state.base.panel));
+        return;
+    }
+    if (state.screen != kScreenBattleroom || !state.in_lobby)
+        return;
+    auto& lobby = state.lobby;
+    if (state.modal_kind == ModalKind::restrict)
+        restrict_tick(lobby, state.restrict, state.modal.panel);
+    if (state.modal_kind == ModalKind::timeout && timeout_tick(lobby, state.modal.panel))
+        close_timeout();
+    const auto lobby_front = state.modal_kind == ModalKind::none      ? LobbyFront::battleroom
+                             : state.modal_kind == ModalKind::viewmap ? LobbyFront::view_map
+                                                                      : LobbyFront::dialog;
+    apply_lobby_action(
+        ctx,
+        lobby_tick(
+            lobby,
+            state.base.panel,
+            lobby_front,
+            lobby_front == LobbyFront::view_map ? &state.modal.panel : nullptr
+        )
+    );
+    // TIMEOUT.GUI follows the pump's stall scan: it opens for the player the
+    // scan names unless it is already open, and closes once the scan names
+    // no one.
+    if (state.in_lobby) {
+        const auto stalled = lobby.stalled_player;
+        const bool open = state.modal_kind == ModalKind::timeout;
+        if (open && stalled == 0)
+            close_timeout();
+        else if (!open && stalled != 0 && slot_for_player_id(lobby, stalled) >= 0)
+            open_timeout(ctx, stalled);
+    }
+    // A client leaves the battle room when the host's 0x08 arrives.
+    if (state.in_lobby && state.start_handler != nullptr && lobby.game != nullptr &&
+        (local_info(lobby).role & kRoleHost) == 0 &&
+        (local_info(lobby).options & option::started) != 0)
+        apply_lobby_action(ctx, LobbyAction::start);
+}
+
+void screen_draw(ScreenContext* ctx, void*) {
+    auto& state = ui();
+    state.ctx = ctx;
+    if (ctx->surface == nullptr || !state.base.loaded)
+        return;
+    auto& res = front();
+    auto surface = render(res);
+    draw_pictures(surface, res);
+    draw_sliders(surface, res);
+    if (&res == &state.base && state.screen == kScreenBattleroom)
+        draw_player_versions(surface, res, state.lobby);
+    if (&res != &state.base)
+        draw_text_boxes(surface, state.base);
+    draw_text_boxes(surface, res);
+    draw_message(surface, res);
+    *ctx->surface = std::move(surface);
+}
+
+void add(app::ScreenRegistry* registry, app::ScreenId id, const char* name, app::ScreenFn enter) {
+    app::ScreenDesc desc{};
+    desc.id = id;
+    desc.name = name;
+    desc.enter = enter;
+    desc.leave = leave_screen;
+    desc.event = screen_event;
+    desc.tick = screen_tick;
+    desc.draw = screen_draw;
+    (void)app::screen_register(registry, &desc);
+}
+
+} // namespace
+
+void multiplayer_bind_launch_link(const LaunchLink& link) noexcept {
+    ui().launch_link = link;
+    ui().lobby.launch_link = link;
+}
+
+void multiplayer_bind_translation(const TextTranslation& translation) noexcept {
+    ui().translation = translation;
+}
+
+bool multiplayer_showing() noexcept {
+    return ui().showing;
+}
+
+bool multiplayer_request_exit_confirm() noexcept {
+    auto& state = ui();
+    if (!state.showing)
+        return false;
+    state.exit_confirm_requested = true;
+    return true;
+}
+
+void multiplayer_bind_start(StartHandler handler, void* context) noexcept {
+    ui().start_handler = handler;
+    ui().start_context = context;
+}
+
+void multiplayer_bind_net(const LobbyNet& net) noexcept {
+    ui().bound_net = net;
+    ui().custom_net = true;
+    ui().lobby.net = net;
+}
+
+void multiplayer_bind_player_timeout(int32_t seconds) noexcept {
+    auto& state = ui();
+    state.player_timeout_seconds = seconds > 0 ? seconds : kDefaultPlayerTimeoutSeconds;
+    state.game->player_timeout_seconds = state.player_timeout_seconds;
+}
+
+Lobby& multiplayer_lobby() noexcept {
+    return ui().lobby;
+}
+
+LoopbackNet& multiplayer_loopback() noexcept {
+    return ui().loopback;
+}
+
+ConnectState& multiplayer_connect() noexcept {
+    return ui().connect;
+}
+
+Panel& multiplayer_panel() noexcept {
+    return front().panel;
+}
+
+const ui::gui_layout::Layout& multiplayer_screen_layout() noexcept {
+    return ui().base.source;
+}
+
+Panel* multiplayer_modal() noexcept {
+    return ui().modal_kind == ModalKind::none ? nullptr : &ui().modal.panel;
+}
+
+ModalKind multiplayer_modal_kind() noexcept {
+    return ui().modal_kind;
+}
+
+Game& multiplayer_game() noexcept {
+    return *ui().game;
+}
+
+void multiplayer_reload_unit_headers(ScreenContext* ctx) {
+    auto& state = ui();
+    auto* previous = state.ctx;
+    state.ctx = ctx;
+    const oa::data::defs::UnitHeaderLoader loader{nullptr, [](void*, Game* game) {
+                                                      auto& units = ui().units;
+                                                      units = UnitStore{};
+                                                      load_units();
+                                                      game->unit_def_count =
+                                                          static_cast<int32_t>(units.units.size());
+                                                  }};
+    oa::data::defs::reload_unit_headers(state.game.get(), loader);
+    state.ctx = previous;
+}
+
+RestrictPanel& multiplayer_restrict() noexcept {
+    return ui().restrict;
+}
+
+LobbyUnit* multiplayer_units(const oa::AssetStore& assets, int32_t* count) noexcept {
+    try {
+        load_units(assets);
+    } catch (const std::exception&) {
+    }
+    auto& units = ui().units.units;
+    *count = static_cast<int32_t>(units.size());
+    return units.data();
+}
+
+uint32_t multiplayer_unit_checksum(void* context, const LobbyUnit& unit) noexcept {
+    try {
+        return service_unit_checksum(context, unit);
+    } catch (const std::exception&) {
+        return unit.content_checksum;
+    }
+}
+
+const std::string& multiplayer_message() noexcept {
+    return ui().message;
+}
+
+bool multiplayer_click(ScreenContext* ctx, const char* name, uint8_t button) noexcept {
+    ui().ctx = ctx;
+    if (!ui().message.empty()) {
+        ui().message.clear();
+        return true;
+    }
+    auto& res = front();
+    const auto index = panel_find(res.panel, name);
+    if (index == kNoControl)
+        return false;
+    const auto& control = res.panel.controls[static_cast<std::size_t>(index)];
+    return click(ctx, index, control.x + control.width / 2, control.y + 3, button);
+}
+
+void multiplayer_type(ScreenContext* ctx, const char* text) noexcept {
+    ui().ctx = ctx;
+    auto& panel = front().panel;
+    if (panel.focus <= 0 || panel.focus >= panel.count || text == nullptr)
+        return;
+    auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
+    if (control.type != ControlType::text_box)
+        return;
+    std::string value(control_text(control));
+    const std::size_t limit =
+        control.value > 0 ? static_cast<std::size_t>(control.value) : kControlTextBytes - 1;
+    for (const char* at = text; *at != '\0'; ++at)
+        if (static_cast<unsigned char>(*at) >= 0x20 && static_cast<unsigned char>(*at) < 0x7f &&
+            value.size() < limit)
+            value.push_back(*at);
+    set_control_text(control, value);
+    panel.dirty = true;
+}
+
+void multiplayer_bind_clock(const LobbyClock& clock) noexcept {
+    g_clock = clock;
+}
+
+void multiplayer_reset() noexcept {
+    auto& state = ui();
+    const bool custom = state.custom_net;
+    const auto net = state.bound_net;
+    state.game = std::make_unique<Game>();
+    state.lobby = Lobby{};
+    state.lobby.launch_link = state.launch_link;
+    state.connect = ConnectState{};
+    state.restrict = RestrictPanel{};
+    state.mapselect = MapSelect{};
+    state.base = Resources{};
+    close_modal();
+    state.message.clear();
+    state.in_lobby = false;
+    state.custom_net = custom;
+    state.bound_net = net;
+    loopback_reset(state.loopback);
+}
+
+} // namespace oa::ui::frontend_multiplayer
+
+namespace oa::app {
+
+void register_multiplayer_screens(ScreenRegistry* registry) {
+    using namespace oa::ui::frontend_multiplayer;
+    add(registry, kScreenProviders, "mp_providers", enter_providers);
+    add(registry, kScreenTcp, "mp_tcp", enter_tcp);
+    add(registry, kScreenGameList, "mp_game_list", enter_game_list);
+    add(registry, kScreenNewGame, "mp_new_game", enter_new_game);
+    add(registry, kScreenBattleroom, "mp_battleroom", enter_battleroom);
+}
+
+} // namespace oa::app

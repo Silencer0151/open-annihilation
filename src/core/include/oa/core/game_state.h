@@ -127,9 +127,11 @@ typedef struct Game {
      * files and the other players are checked against; the engine keeps the
      * version as constants. Zero-initialised and never read. */
     uint8_t version_block[0x14];
-    /* Multiplayer session settings, the session's player limit among them. */
-    uint8_t session_description[0x4bd];
-    uint8_t block_after_session_description[0x1c]; /* zero-initialised and never read */
+    /* Multiplayer session settings; the transport session name begins them. */
+    uint8_t session_description[0x485];
+    int32_t session_player_limit;                   /* the session's player limit */
+    uint8_t block_after_session_player_limit[0x34]; /* zero-initialised and never read */
+    uint8_t block_after_session_description[0x1c];  /* zero-initialised and never read */
     /* Nonzero once the "Compression" console command has turned compression off. */
     uint32_t compression_off;
     /* ? Ends with the start of the GUI context the panels draw through: its
@@ -480,6 +482,8 @@ OA_ASSERT_SIZE(RadarHotUnit, 0xa);
 OA_ASSERT_SIZE(Game, 0x3924d);
 OA_ASSERT_OFFSET(Game, version_block, 0x0);
 OA_ASSERT_OFFSET(Game, session_description, 0x14);
+OA_ASSERT_OFFSET(Game, session_player_limit, 0x499);
+OA_ASSERT_OFFSET(Game, block_after_session_player_limit, 0x49d);
 OA_ASSERT_OFFSET(Game, block_after_session_description, 0x4d1);
 OA_ASSERT_OFFSET(Game, compression_off, 0x4ed);
 OA_ASSERT_OFFSET(Game, gui_context_block, 0x4f1);

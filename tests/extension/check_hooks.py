@@ -5,26 +5,29 @@
 """Check that open-annihilation calls the hooks of its extension tables.
 
 Runs an open-annihilation built with the recorder test extensions
-(-DOA_RECORD_EXTENSION_HOOKS=ON) and reads the counts each run leaves in its
---record-hooks file. Every run must record at least the calls RUNS lists for
-it; a hook recorded with an enumerator ("frame pump") names that call only.
-The follower, the extension built on the recorder, counts its own calls as
-"follower.<hook>": across the runs of a set it must be called for every hook
-the recorder is called for, but the two it does not fill, and at each point
+(-DOA_RECORD_EXTENSION_HOOKS=ON), which the game lists after network play's
+extension, and reads the counts each run leaves in its --record-hooks file.
+Every run must record at least the calls RUNS lists for it; a hook recorded
+with an enumerator ("frame pump") names that call only. The follower, the
+extension built on the recorder, counts its own calls as "follower.<hook>":
+across the runs of a set it must be called for every hook the recorder is
+called for, but the Runtime member only the recorder has, and at each point
 where the combined table calls the two in a set order it counts
 "follower.order <hook>" when the order held and "follower.misordered <hook>"
 when it did not, which fails the run. --runs picks the runs:
 
-  options  the option hooks, without game data: --help, the -r switch, an
-           unknown option, a game directory that does not exist and a
-           follower that fills frontend_game too, which stops the start;
+  options  the option hooks, without game data: --help, the -r switch
+           (whose refusal is network play's), an unknown option, a game
+           directory that does not exist and a follower that fills
+           frontend_game beside network play, which stops the start;
   game     the rest, over the installation OA_GAME_DIR names: a headless
            skirmish, the headless --check-navigation run (whose speed keys
            reach speed_changed and whose menus app_mode_set), a headless run
            the recorder takes to drive the check host without a window
            (--record-check-host), and interactive main menu frames,
-           --check-multiplayer-menu (after which the recorder drives a round
-           of the main menu through the check host), --check-match-dialogs
+           --check-multiplayer-menu (network play's walk of the multiplayer
+           screens, after which the recorder drives a round of the main menu
+           through the check host), --check-match-dialogs
            (whose close requests reach close_requested and whose GAME slider
            speed_changed), a --generate-script run whose recording no
            extension replays (open_recording) and a run the recorder ends through
@@ -36,11 +39,13 @@ when it did not, which fails the run. --runs picks the runs:
 
 HOOKS must name the hooks src/app/include/oa/app/extension.hpp declares, in its order.
 With every run of both sets, each of them is reached except those UNREACHED
-lists, which only a shared match or a run these sets do not make reaches;
-so are match_event's left, results_reported and watching_kept, which these
-runs do not ask for. A new hook must be added to the recorder, to the
-follower (or, when one extension at most may fill it, to
-FOLLOWER_UNFILLED), to HOOKS and to a run here or to UNREACHED.
+lists, which only a shared match or a run these sets do not make reaches,
+and those NETWORK_PLAY_ONLY lists, which one extension at most may fill and
+network play fills, so neither test extension does; so are match_event's
+left, results_reported and watching_kept, which these runs do not ask for.
+A new hook must be added to the recorder and the follower (or, when one
+extension at most may fill it and network play does, to
+NETWORK_PLAY_ONLY), to HOOKS and to a run here or to UNREACHED.
 """
 import argparse
 import os
@@ -74,9 +79,11 @@ HOOKS = [
     "draw_match_hud", "draw_match_overlay", "pause_changed", "load_progress", "team_panel_host",
     "close_requested", "return_label", "speed_changed", "app_mode_set", "open_recording",
 ]
-# The hooks one extension at most may fill, which the follower leaves to the
-# recorder, and what the recorder alone records.
-FOLLOWER_UNFILLED = {"frontend_game", "frontend_states", "runtime_member"}
+# The hooks one extension at most may fill, which network play fills and
+# neither test extension does.
+NETWORK_PLAY_ONLY = {"frontend_game", "frontend_states"}
+# What the recorder alone records.
+FOLLOWER_UNFILLED = {"runtime_member"}
 # The follower's usage note, which --help prints in place of the engine's.
 FOLLOWER_NOTE = "The recorder test extensions record every hook's calls."
 # The environment variable that has the follower fill frontend_game too.
@@ -124,21 +131,20 @@ RUNS = {
              "follower.order take_option"],
             output=["usage: open-annihilation", FOLLOWER_NOTE]),
         Run("register-switch", ["-r"], ["switch_handler", "text register_switch"],
-            status=1, output="registers the game for multiplayer"),
+            status=1, output="-r registers the game as a DirectPlay application"),
         Run("unknown-option", ["--not-an-option"], [], at_least={"take_option": 2}, status=1,
             output="unknown option: --not-an-option"),
         Run("missing-game-dir", ["--game-dir", "{scratch}/no-such-game"],
             ["switch_handler", "check_options"], status=1, output="game directory does not exist"),
         Run("double-frontend-game", ["--help"], [], status=1,
-            output="the extensions oa-extension-recorder and oa-extension-recorder-follower both fill "
+            output="the extensions oa-app-netgame and oa-extension-recorder-follower both fill "
                    "frontend_game, which one extension at most may fill",
             environment={DOUBLE_FRONTEND_GAME: "1"}),
     ],
     "game": [
         Run("headless-skirmish",
             ["--game-dir", "{game}", "--skip-intro", "--mute", "--headless-check", "--match-ticks", "60"],
-            ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "frontend_states",
-             "frontend_game", "run_mode start",
+            ["startup", "runtime_member", "register_screens", "ready", "frontend_entry", "run_mode start",
              "run_mode headless_first", "run_mode headless", "match_game", "match_event torn_down",
              "draw_loading", "draw_match_hud", "draw_match_overlay", "state", "load_progress",
              "team_panel_host", "return_label", "keep_stored_password", "follower.order startup",
@@ -292,7 +298,7 @@ def main():
     if args.runs == "game":
         # The option runs reach the option hooks; together they reach the rest.
         options = {key.split(" ", 1)[0] for run in RUNS["options"] for key in [*run.expected, *run.at_least]}
-        missing = sorted(set(HOOKS) - reached - options - set(UNREACHED))
+        missing = sorted(set(HOOKS) - reached - options - set(UNREACHED) - NETWORK_PLAY_ONLY)
         for hook in missing:
             print(f"check_hooks: no run reached {hook}; add a run that does, or list it in UNREACHED")
         failed = failed or bool(missing)

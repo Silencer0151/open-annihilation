@@ -73,6 +73,12 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Cmd+,**. See
 [Settings](../../README.md#settings).
 
+With the macOS firewall on, the first time you host or join a multiplayer
+game macOS asks whether Open Annihilation may accept incoming network
+connections: click **Allow**. A firewall between the players must let
+through UDP port 47624, which other computers use to find a hosted game,
+TCP ports 2300 to 2400 and UDP ports 2350 to 2400.
+
 ## Where it keeps its files
 
 Your settings, the log files (in `logs`) and the unpacked demo are in

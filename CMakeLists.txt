@@ -292,21 +292,24 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-frame-stats-panel-test PRIVATE oa-app-headers oa-base-game-loop
     oa-ui-hud oa-ui-display-layout oa-options)
   add_test(NAME app-frame-stats-panel COMMAND oa-app-frame-stats-panel-test)
-  # The frame's conversion into the window's 32-bit pixels: each pixel
-  # packed through the gamma table, rows of any width, and the same bytes on
-  # pools of 2, 3, 4 and 8 threads as on the calling thread alone.
-  add_executable(oa-app-xrgb-conversion-test src/app/xrgb_conversion_test.cpp
-    src/app/xrgb_conversion.cpp)
-  target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool SDL3::SDL3
-    oa-options)
-  add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
-  # Alt+Enter: the key, the mode it asks for while the window is still
-  # switching, and a window of SDL's dummy video driver switched and back.
-  add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
-  target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
-  add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
-  set_tests_properties(app-full-screen PROPERTIES TIMEOUT 60
-    ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+  # The tests that link SDL, when it was found.
+  if(TARGET SDL3::SDL3)
+    # The frame's conversion into the window's 32-bit pixels: each pixel
+    # packed through the gamma table, rows of any width, and the same bytes
+    # on pools of 2, 3, 4 and 8 threads as on the calling thread alone.
+    add_executable(oa-app-xrgb-conversion-test src/app/xrgb_conversion_test.cpp
+      src/app/xrgb_conversion.cpp)
+    target_link_libraries(oa-app-xrgb-conversion-test PRIVATE oa-platform-job-pool SDL3::SDL3
+      oa-options)
+    add_test(NAME app-xrgb-conversion COMMAND oa-app-xrgb-conversion-test)
+    # Alt+Enter: the key, the mode it asks for while the window is still
+    # switching, and a window of SDL's dummy video driver switched and back.
+    add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
+    target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
+    add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
+    set_tests_properties(app-full-screen PROPERTIES TIMEOUT 60
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+  endif()
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
@@ -665,9 +668,8 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-pointer-interfaces PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pointer_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # MULTI clicked through SDL input opens the one-line "not available"
-      # message box, which OK and Enter close over the main menu; an extension
-      # that offers multiplayer checks its own screens instead. Scribbled
+      # --check-multiplayer-menu: MULTI clicked through SDL input opens the
+      # multiplayer screens, which network play's check walks. Scribbled
       # frees turn a focus handed back to a closed window into a fault.
       set(oa_multiplayer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/multiplayer-menu")
       file(MAKE_DIRECTORY "${oa_multiplayer_check_dir}")
@@ -798,11 +800,10 @@ if(OA_BUILD_PLATFORM)
         --native $<TARGET_FILE:oa-game> --verifier $<TARGET_FILE:oa-demo-installer-test>
         --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
       # oa-game's own checks over the demo, started the same way: the
-      # navigation check's notices, grayed-out entries and campaign, and the
-      # grayed-out save and load entries. MULTI's notice, which an extension
-      # replaces with its own screens, is checked once the extensions are
-      # known (cmake/OaExtensions.cmake).
-      set(oa_demo_game_checks navigation saved-games)
+      # navigation check's notices, grayed-out entries and campaign, the
+      # grayed-out save and load entries, and the notice MULTI shows over
+      # data with no multiplayer map.
+      set(oa_demo_game_checks navigation saved-games multiplayer-menu)
       foreach(check IN LISTS oa_demo_game_checks)
         add_test(NAME native-demo-${check} COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_demo_installer.py"
@@ -958,6 +959,31 @@ if(TARGET oa-game)
   target_sources(oa-game PRIVATE src/app/runtime_dialog_checks.cpp)
 endif()
 
+# Network play: the multiplayer screens, the network session and match, the
+# .tad recording format and its playback, and oa-game's extension
+# oa-app-netgame, which takes the 3.1c network switches -e -h -n -p -t the
+# game otherwise refuses. Its Runtime members
+# (src/app/include/oa/app/netgame_runtime_members.hpp) are part of Runtime in
+# every build. Registered before any other extension, so that the others
+# come after it in the extension list.
+add_subdirectory(src/formats/tad)
+add_subdirectory(src/ui/frontend-multiplayer)
+add_subdirectory(src/netgame)
+add_subdirectory(src/session/demo)
+add_subdirectory(src/app/netgame)
+if(TARGET oa-app-netgame)
+  oa_add_extension(oa-app-netgame INIT oa_extension_init_netgame SWITCHES ehnpt)
+endif()
+# The tests' view of the installation network play's tests read
+# (oa/test/netgame_installs.hpp), and network play's launch bound to a
+# record, for tests that check what a caller of network play's API asked
+# of it (oa/test/netgame_launch_record.hpp).
+add_library(oa-netgame-test-installs INTERFACE)
+target_link_libraries(oa-netgame-test-installs INTERFACE oa-test-game-data oa-formats-hpi)
+add_library(oa-netgame-test-launch STATIC tests/support/src/netgame_launch_record.cpp)
+target_include_directories(oa-netgame-test-launch PUBLIC tests/support/include)
+target_link_libraries(oa-netgame-test-launch PUBLIC oa-app-netgame-launch PRIVATE oa-app-netgame-launch-binding)
+
 # A project that adds this engine with add_subdirectory registers its
 # extension libraries with oa_add_extension afterwards
 # (cmake/OaExtensions.cmake); a library that includes runtime.hpp links
@@ -965,7 +991,7 @@ endif()
 # OA_RUNTIME_EXTENSION_MEMBERS, the absolute path of a header of members
 # runtime.hpp includes inside class Runtime. It is frozen: it may only shrink
 # (tools/check_runtime_surface.py) until hooks and declared headers replace
-# it. oa-game's own sources and, through the SDK, the extension's see the
+# it. oa-game's own sources and, through the SDK, the extensions' see the
 # same Runtime; a unit that sees another fails to link
 # (src/app/extension_members.cpp). tests/extension checks that it does, and
 # holds the recorder test extensions, which name their own members header
@@ -981,9 +1007,8 @@ if(TARGET oa-game)
     set(oa_runtime_members_definition "OA_RUNTIME_EXTENSION_MEMBERS=\"${OA_RUNTIME_EXTENSION_MEMBERS}\"")
   endif()
   # What an extension library compiles and links against: extension.hpp,
-  # and, while an extension adds Runtime members, runtime.hpp with the
-  # libraries oa-game's own sources use (those above and the frontend
-  # dialogs).
+  # and runtime.hpp with the libraries oa-game's own sources use (those
+  # above and the frontend dialogs).
   add_library(oa-extension-sdk INTERFACE)
   add_library(oa::extension-sdk ALIAS oa-extension-sdk)
   target_link_libraries(oa-extension-sdk INTERFACE oa-app-headers)

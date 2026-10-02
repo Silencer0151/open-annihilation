@@ -6,13 +6,12 @@ computer players, simulation, unit scripts, rendering, sound and save/load,
 matching the 3.1c game's behaviour and its save files. Intro, menus and first
 gameplay are checkpoints, not completion.
 
-This repository is the engine alone. Multiplayer is not part of it:
-extension libraries add optional features through the hook table in
-`src/app/include/oa/app/extension.hpp`, and engine code never refers to any particular
-extension. Projects that build on the engine, such as an extension or suites
-built on recorded data, live in their own repositories. Checkouts of them may
-sit inside this tree, each with its own `AGENTS.md`; follow that file when
-you work there.
+Network play is part of the engine: the multiplayer screens, the network
+session and match, and the playback of recorded games, always built into the
+game and plugged in through the hook table in
+`src/app/include/oa/app/extension.hpp`. Other extension libraries may add
+optional features through the same table; engine code never refers to an
+extension that is not part of the engine.
 
 Keep `./run.sh` as the user's entry point for inspecting actual progress. It
 must build current source and launch the current native application, stop on
@@ -40,10 +39,6 @@ as they bind people, and this file adds only how agents work.
   integrator, and never commit on behalf of another agent. Do not push or
   rewrite shared branches unless asked.
 - Delegate independent tasks when useful.
-- Before renaming or moving an identifier or a file, read the `AGENTS.md` of
-  every checkout nested in this tree: some keep track of engine names and
-  paths and say what a rename or move must update. Do what it says in the
-  same change, and run that checkout's checks before committing.
 - Automated checks never open a window: run the game (`open-annihilation`,
   built by the `oa-game` target) headless, or with
   `SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy`.

@@ -78,6 +78,13 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
 [Settings](../../README.md#settings).
 
+The first time you host or join a multiplayer game, Windows Defender
+Firewall may ask whether Open Annihilation may communicate on networks:
+allow it, at least on private networks. On Windows XP, a security alert
+may ask the same: click **Unblock**. A firewall between the players must
+let through UDP port 47624, which other computers use to find a hosted
+game, TCP ports 2300 to 2400 and UDP ports 2350 to 2400.
+
 ## Windows XP and older computers
 
 - On a computer with a single processor, no SSE2 or less than 512 MB of

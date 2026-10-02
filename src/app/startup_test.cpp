@@ -216,7 +216,7 @@ int main() {
     expect(parse({"-s", "-w"}).launch.system_sound == 1, "the other game switches still apply");
     expect(
         rejection({"-rkey"}) ==
-            "-r registers the game for multiplayer, which this release does not include",
+            "-r registers the game for multiplayer, which this game does not need",
         "-r without an extension"
     );
 

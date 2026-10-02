@@ -678,18 +678,21 @@ class Runtime final : public menu::Host,
     /// again. Throws std::runtime_error on a failure.
     void check_kill_board();
 
-    /// Checks MULTI on the main menu, twice.
+    /// Checks MULTI on the main menu.
     ///
-    /// MULTI opens MSGBOX.GUI over the main menu with the one line saying
-    /// multiplayer is not available, and the box's OK (first round) or Enter
-    /// (second) closes it with the main menu still up; over game data with no
-    /// multiplayer map it opens the missing-content notice instead. --snapshot
-    /// takes the first round's frames as <stem>-box.ppm and <stem>-closed.ppm.
-    /// An extension with a check_multiplayer_menu hook runs that instead.
+    /// The extensions' check_multiplayer_menu hooks check the multiplayer
+    /// screens MULTI opens (network play's walks them). Over game data with
+    /// no multiplayer map, where MULTI asks no extension, the engine checks
+    /// the missing-content notice MULTI shows instead
+    /// (check_multiplayer_unavailable).
     void check_multiplayer_menu();
 
-    /// Runs the engine's own check of MULTI's "not available" message box, which
-    /// check_multiplayer_menu runs without an extension check.
+    /// Checks MULTI over game data with no multiplayer map, twice.
+    ///
+    /// MULTI shows the missing-content notice over the main menu, and its
+    /// OK (first round) or Enter (second) closes it with the main menu still
+    /// up. --snapshot takes the first round's frames as <stem>-box.ppm and
+    /// <stem>-closed.ppm. Data with a multiplayer map fails the check.
     void check_multiplayer_unavailable();
 
     /// Sends the multiplayer check a left-button pointer event at a canvas point through the SDL
@@ -1052,9 +1055,11 @@ class Runtime final : public menu::Host,
     friend struct BuiltinScreens;
     // The check host's entries (check_host.hpp, runtime_check_host.cpp).
     friend struct CheckHostAccess;
-    // Defined by the one extension that adds Runtime members, whose hooks
-    // reach the runtime through it; to be replaced by hooks and declared
-    // headers (src/app/README.md).
+    // Defined by network play's extension (src/app/netgame/extension.cpp),
+    // whose hooks reach the runtime through it; to be replaced by hooks and
+    // declared headers (src/app/README.md). An extension outside the engine
+    // that adds members through OA_RUNTIME_EXTENSION_MEMBERS declares a
+    // friend of its own there.
     friend struct RuntimeExtension;
 
     /// Registers the screen packages of screens.inc and the extension's.
@@ -3348,8 +3353,7 @@ class Runtime final : public menu::Host,
     /// Leaves the match: tells the extension and resets the match view, zoom, caches, layers, chat
     /// and selection state.
     void leave_match();
-    // End-of-game screen over the finished match and the game reporter
-    // (runtime_endgame.cpp).
+    // End-of-game screen over the finished match (runtime_endgame.cpp).
     struct EndgameState;
 
     /// Frees an end-screen state.
@@ -4137,9 +4141,9 @@ class Runtime final : public menu::Host,
     /// Activates the selected gadget of the current screen through its menu handler, then runs the
     /// frontend dispatcher when the menu asked for a new state.
     ///
-    /// MULTI asks the extension what to do (Extension::select_multiplayer);
-    /// without an answer it only says multiplayer is unavailable and the main
-    /// menu stays up. With no map holding a multiplayer schema, MULTI and
+    /// MULTI asks the extensions what to do (Extension::select_multiplayer);
+    /// without an answer it does nothing and the main menu stays up. With no
+    /// map holding a multiplayer schema, MULTI and
     /// SINGLE.GUI's Skirmish show the missing-content notice instead. The
     /// frontend mode tick runs its unit header step before each dispatcher
     /// pass; dispatching every frame
@@ -8418,11 +8422,14 @@ class Runtime final : public menu::Host,
     bool cursors_loaded_ = false;
     bool menu_music_playing_ = false;
     std::unique_ptr<MusicHost, void (*)(MusicHost*) noexcept> music_{nullptr, destroy_music_host};
+    // Network play's members; frozen, and only to shrink (src/app/README.md).
+    // Declared after match_, they go before the match they bind.
+#include "netgame_runtime_members.hpp"
 #ifdef OA_RUNTIME_EXTENSION_MEMBERS
-    // The members of the one extension that adds any, from the header its
-    // project names in OA_RUNTIME_EXTENSION_MEMBERS; frozen, and only to
-    // shrink (src/app/README.md). Declared after match_, they go
-    // before the match they bind.
+    // The members of the one extension outside the engine that adds any,
+    // from the header its project names in OA_RUNTIME_EXTENSION_MEMBERS;
+    // frozen, and only to shrink (src/app/README.md). Declared after match_,
+    // they go before the match they bind.
 #include OA_RUNTIME_EXTENSION_MEMBERS
 #endif
     std::unique_ptr<SaveLoadState, void (*)(SaveLoadState*) noexcept> saveload_{

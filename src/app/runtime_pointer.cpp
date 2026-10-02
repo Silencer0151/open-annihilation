@@ -22,9 +22,6 @@ namespace oa::app {
 
 namespace {
 
-// Wraps kMultiplayerUnavailable to a single COMIX line; the box then fits it.
-constexpr int32_t kMultiplayerUnavailableWidth = 0x140;
-
 /// Moves a pick candidate of another machine's player to where the frame
 /// last drawn showed it, on its playout (mirrored_pose).
 ///
@@ -123,9 +120,10 @@ void Runtime::activate() {
         screen_ == Screen::skirmish || screen_ == Screen::map_selection)
         step_released_button_stage();
     if (screen_ == Screen::main_menu) {
-        // MULTI is the extension's to answer: it may take the game over, or
-        // let the menu step into the multiplayer states. Without an answer
-        // MULTI only says multiplayer is not available; the main menu stays up.
+        // MULTI is the extensions' to answer (network play's, unless another
+        // takes it first): one may take the game over, or let the menu step
+        // into the multiplayer states. Without an answer the main menu stays
+        // up and MULTI does nothing.
         if (button_result(menu::MenuHandle{kFrontendMenuHandle}, menu::Button::multiplayer) != 0 &&
             eligible_map_names_.empty()) {
             // Game data with no multiplayer map offers no multiplayer at all.
@@ -138,17 +136,8 @@ void Runtime::activate() {
                 extension_.select_multiplayer == nullptr
                     ? MultiplayerSelection::unavailable
                     : extension_.select_multiplayer(extension_.context, *this);
-            if (selection == MultiplayerSelection::frontend) {
+            if (selection == MultiplayerSelection::frontend)
                 menu::handle_event(state_, event, *this);
-            } else if (selection != MultiplayerSelection::taken) {
-                play_menu_sound(menu::Sound::big_button);
-                show_frontend_message(
-                    kMultiplayerUnavailable,
-                    kMultiplayerUnavailableWidth,
-                    entry::message_show_ok,
-                    entry::message_fit_width
-                );
-            }
         } else {
             menu::handle_event(state_, event, *this);
         }

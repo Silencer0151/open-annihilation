@@ -97,7 +97,7 @@
   },
   "src/sim/match-runtime": {
    "doc-block": 166,
-   "flags-raw-mask": 81,
+   "flags-raw-mask": 80,
    "member-initializer": 4,
    "tier-heap-container": 65,
    "tier-throw": 124,

@@ -3,8 +3,9 @@
 
 # oa-doc-check: Clang reads the /// blocks of the engine's public headers.
 #
-# Each header under an include/ directory of src/, and each header of src/app
-# that oa-extension-sdk publishes to an extension, is compiled on its own in
+# Each header under an include/ directory of src/ (network play's Runtime
+# members, a part of class Runtime, through runtime.hpp), and each header of
+# src/app that oa-extension-sdk publishes to an extension, is compiled on its own in
 # a generated source that includes it, with the usage requirements of every
 # library in the tree. Clang's documentation warnings are errors there: a
 # @param that names no parameter, @return on a function returning void, a
@@ -42,6 +43,9 @@ function(oa_add_documentation_check)
     "${PROJECT_SOURCE_DIR}/src/*.h" "${PROJECT_SOURCE_DIR}/src/*.hpp")
   list(FILTER headers INCLUDE REGEX "/include/")
   list(FILTER headers EXCLUDE REGEX "(^|/)tests/")
+  # Network play's Runtime members are part of class Runtime, not a header
+  # of their own: they are read where runtime.hpp includes them.
+  list(FILTER headers EXCLUDE REGEX "^src/app/include/oa/app/netgame_runtime_members\\.hpp$")
   if(TARGET oa-extension-sdk)
     file(GLOB app_headers CONFIGURE_DEPENDS RELATIVE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src/app/*.hpp")
     list(APPEND headers ${app_headers})

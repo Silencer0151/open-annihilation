@@ -39,11 +39,8 @@ against a checkout and performs it:
              and stage it all. The projects that build on the engine are
              rewritten in the same pass (their includes, targets,
              namespaces, identifiers and the engine paths they name; their
-             own paths, their JSON data and any rename record stay). With
-             --rename-record, every moved file the record names and every
-             renamed namespace and identifier is added to its renames.tsv,
-             and the --relocate-with script is run on the staged tree; a
-             project that holds a record refuses --apply without it. The
+             own paths, their JSON data and the directories --leave names
+             stay). The
              pass is computed and every patch matched in memory first, so a
              table or patch that no longer fits the tree stops it before any
              file changes. On a tree already laid out it changes nothing.
@@ -69,11 +66,9 @@ and oa-<group>[-part].
 A project that builds on the engine is a directory below the root whose
 CMakeLists.txt calls project() and takes OA_ENGINE_DIR; --tree adds one
 kept elsewhere. Each may be its own Git repository. A directory of such a
-project that holds a rename record (a renames.tsv), or that --rename-record
-names, is never rewritten: its files are the record's data.
+project that --leave names is never rewritten.
 """
 import argparse
-import csv
 import json
 import posixpath
 import re
@@ -102,9 +97,6 @@ TEXT_SUFFIXES = {".py", ".sh", ".md", ".txt", ".json", ".yml", ".yaml", ".cmake"
 # The files whose paths --check reads for names of files and directories the
 # pass removes: scripts, build files and data that name paths as strings.
 SCANNED_SUFFIXES = {".py", ".json", ".cmake", ".sh", ".yml", ".yaml"}
-# A rename record: the table of renamed files and names that a project keeps
-# beside the data it maps. Its directory is never rewritten.
-RECORD_TABLE = "renames.tsv"
 # A path joined from quoted pieces: "src" / "app" / "x.hpp" or "src", "app".
 PIECES_RE = re.compile(r"""(["'])[\w.-]+\1(?:\s*[/,]\s*(["'])[\w.-]+\2)+""")
 PIECE_RE = re.compile(r"""["']([\w.-]+)["']""")
@@ -235,10 +227,8 @@ class Area:
         self.files = files
         self.file_set = set(files)
         self.dirs = directories_of(files)
-        # Directories holding a rename record, relative to the root: their
-        # files are the record's data and are never rewritten.
-        self.record_dirs = sorted(posixpath.dirname(path) for path in files
-                                  if posixpath.basename(path) == RECORD_TABLE)
+        # Directories the pass leaves as they are, relative to the root.
+        self.left_dirs = []
 
     def read(self, path):
         """Read one tracked file."""
@@ -248,9 +238,9 @@ class Area:
         """Whether a path names one of this tree's own files or directories."""
         return path in self.file_set or path in self.dirs
 
-    def in_record(self, path):
-        """Whether a file lies in a rename record's directory."""
-        return any(path.startswith(folder + "/") if folder else True for folder in self.record_dirs)
+    def is_left(self, path):
+        """Whether a file lies in a directory the pass leaves as it is."""
+        return any(path.startswith(folder + "/") if folder else True for folder in self.left_dirs)
 
 
 def builds_on_engine(text):
@@ -273,14 +263,14 @@ def find_areas(args):
     for extra in args.tree or ():
         root = Path(extra).resolve()
         areas[str(root)] = Area(str(root), root)
-    if args.rename_record:
-        record = Path(args.rename_record).resolve()
+    for left in args.leave or ():
+        left = Path(left).resolve()
         for area in areas.values():
-            if area.name != ENGINE and (record == area.root or area.root in record.parents):
-                folder = record.relative_to(area.root).as_posix()
+            if area.name != ENGINE and (left == area.root or area.root in left.parents):
+                folder = left.relative_to(area.root).as_posix()
                 folder = "" if folder == "." else folder
-                if folder not in area.record_dirs:
-                    area.record_dirs.append(folder)
+                if folder not in area.left_dirs:
+                    area.left_dirs.append(folder)
     return areas
 
 
@@ -376,14 +366,10 @@ class Plan:
         return self.tool_dir is not None and path.startswith(self.tool_dir + "/")
 
     def rewrites(self, area, path):
-        """Whether the pass rewrites a file's text: not this tool's files, not a keep row's, not a rename record's."""
+        """Whether the pass rewrites a file's text: not this tool's files, not a keep row's, not a left directory's."""
         if area.name == ENGINE:
             return not self.is_tool_file(path) and longest_prefix(path, self.keeps) is None
-        return not area.in_record(path)
-
-    def record_dirs(self):
-        """Return the rename records the trees hold, as paths."""
-        return [area.root / folder for area in self.areas.values() for folder in area.record_dirs]
+        return not area.is_left(path)
 
     # -- state ----------------------------------------------------------------------
 
@@ -650,7 +636,7 @@ class Plan:
     # -- namespaces -------------------------------------------------------------------------
 
     def rewritten_areas(self):
-        """Return the trees whose files the pass reads and rewrites (a rename record's files aside)."""
+        """Return the trees whose files the pass reads and rewrites (left directories aside)."""
         return list(self.areas.values())
 
     def compute_namespaces(self):
@@ -1065,7 +1051,7 @@ def build(plan, files_dir=FILES):
         work.put(ENGINE, path, text)
 
     # 3. Text: includes, namespaces, identifiers, targets and paths, in
-    # every tree; a project's JSON data and its rename record stay.
+    # every tree; a project's JSON data and its left directories stay.
     identifiers = plan.identifiers
     for area in plan.rewritten_areas():
         name = area.name
@@ -1081,7 +1067,7 @@ def build(plan, files_dir=FILES):
             if kind is None:
                 continue
             if name != ENGINE and kind == "json":
-                continue  # a project's recorded data never changes
+                continue  # a project's JSON data never changes
             text = work.get(name, path)
             if kind == "c":
                 text, count = plan.rewrite_includes(area, path, text, own_index)
@@ -1296,86 +1282,6 @@ def dump(plan, work, folder):
         target.write_text(text)
 
 
-# ---- the rename record -----------------------------------------------------------
-
-
-def record_rows(plan, record):
-    """Return the renames.tsv rows of this pass that the record lacks.
-
-    File rows cover the moved files that the record's other tables name
-    (their file and current_file columns); namespace rows rename one
-    component of a qualified name (match_runtime -> sim::match_runtime,
-    scoped to the parent namespace, or to the module directory when nested
-    namespaces with rows of their own stay); a split's rows come first,
-    scoped to the files that now hold its names, so they win; identifier
-    rows carry the table's scope.
-    """
-    named = set()
-    for table in sorted(record.glob("*.tsv")):
-        if table.name == "renames.tsv":
-            continue
-        with open(table, newline="") as handle:
-            for row in csv.DictReader(handle, delimiter="\t"):
-                for column in ("file", "current_file"):
-                    if row.get(column):
-                        named.add(row[column])
-    existing = set()
-    renames = record / "renames.tsv"
-    if renames.is_file():
-        for line in renames.read_text().splitlines()[1:]:
-            existing.add(tuple(line.split("\t")[:3]))
-    rows = []
-    for old, new in sorted(plan.moves.items()):
-        if old in named:
-            rows.append((old, new, "file", posixpath.dirname(old)))
-    for row in plan.by_kind["split"]:
-        old = row.old.split("::")
-        new = row.new.split("::")
-        if new[:len(old) - 1] != old[:-1]:
-            continue
-        scopes = sorted({plan.new_home(scope) for scope in row.scope.split(",") if scope})
-        rows.append((old[-1], "::".join(new[len(old) - 1:]), "namespace", ",".join(scopes)))
-    kept = {row.old for row in plan.by_kind["namespace"] if (row.new or row.old) == row.old}
-    for row in plan.by_kind["namespace"]:
-        old = row.old.split("::")
-        new = (row.new or row.old).split("::")
-        if old == new or new[:len(old) - 1] != old[:-1]:
-            continue
-        scope = "::".join(old[:-1])
-        if any(child.startswith(row.old + "::") for child in kept):
-            scope = plan.namespace_homes.get(tuple(old), scope)
-        rows.append((old[-1], "::".join(new[len(old) - 1:]), "namespace", scope))
-    for row in plan.by_kind["identifier"]:
-        kind = "type" if row.old[:1].isupper() else "field" if row.old.endswith("_") else "function"
-        rows.append((row.old, row.new, kind, row.scope))
-    return [row for row in rows if tuple(row[:3]) not in existing]
-
-
-def update_record(plan, record, relocate):
-    """Append this pass's rows to the record's renames.tsv, run the relocation at the staged tree, stage both."""
-    rows = record_rows(plan, record)
-    renames = record / "renames.tsv"
-    if rows:
-        with open(renames, "a") as handle:
-            for row in rows:
-                handle.write("\t".join(row) + "\n")
-    print(f"layout: {len(rows)} rows added to {renames}")
-    record_repo = Path(git(record, "rev-parse", "--show-toplevel").strip()).resolve()
-    git(record_repo, "add", "--", str(renames))
-    if relocate is None:
-        return 0
-    tree = git(plan.engine.repo, "write-tree").strip()
-    result = subprocess.run([sys.executable, str(relocate), "relocate", "--repo", str(plan.engine.repo), "--head",
-                             tree, "--out", str(record)], capture_output=True, text=True)
-    sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    changed = git(record_repo, "status", "--porcelain", "--", str(record)).split("\n")
-    for line in changed:
-        if line.strip():
-            git(record_repo, "add", "--", str(record_repo / line[3:].strip()))
-    return result.returncode
-
-
 # ---- propose and map ------------------------------------------------------------------
 
 
@@ -1512,9 +1418,8 @@ def main(argv=None):
     parser.add_argument("--root", default=str(HERE.parents[1]), help="the engine checkout (default: this one)")
     parser.add_argument("--tree", action="append", help="another project that builds on the engine (repeatable)")
     parser.add_argument("--patches", action="append", help="another patch file to apply (repeatable)")
-    parser.add_argument("--rename-record", help="a directory whose renames.tsv records renamed files and names")
-    parser.add_argument("--relocate-with", help="a script run as `SCRIPT relocate --repo ENGINE --head TREE --out "
-                                                "RECORD_DIR` after the record is updated")
+    parser.add_argument("--leave", action="append",
+                        help="a directory of a project that builds on the engine, left as it is (repeatable)")
     parser.add_argument("--verbose", action="store_true", help="print every note")
     parser.add_argument("--dump", help="with --check: write every file the pass changes or adds, at its new path, "
                                        "below this directory (for writing post patches)")
@@ -1546,14 +1451,6 @@ def main(argv=None):
             for line in propose(plan):
                 print(line)
             return 0
-        records = plan.record_dirs()
-        record = Path(args.rename_record).resolve() if args.rename_record else None
-        for found in records:
-            if found != record:
-                message = f"{found} holds a rename record; pass --rename-record {found}"
-                if args.apply:
-                    raise LayoutError(message + " so that the pass is recorded there")
-                print(f"layout: note: {message} to --apply (its files are left alone either way)")
         if args.apply and not args.allow_dirty:
             for area in plan.areas.values():
                 if git(area.root, "status", "--porcelain", "--untracked-files=no", "--", ".").strip():
@@ -1574,12 +1471,6 @@ def main(argv=None):
         if args.check:
             return 0
         write_pass(plan, work)
-        if args.rename_record:
-            status = update_record(plan, Path(args.rename_record).resolve(),
-                                   Path(args.relocate_with).resolve() if args.relocate_with else None)
-            if status != 0:
-                print("layout: the relocation failed; see above (the pass is staged)", file=sys.stderr)
-                return status
         print("layout: done; the pass is staged")
         return 0
     except LayoutError as error:

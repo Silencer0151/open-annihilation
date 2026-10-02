@@ -1,0 +1,460 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Unit-content sync table behind the battleroom and the restriction panel.
+#include "oa/ui/frontend_multiplayer/lobby.hpp"
+
+#include "oa/netgame/player_slots.hpp"
+#include "oa/netgame/records.hpp"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <utility>
+
+namespace oa::ui::frontend_multiplayer {
+
+namespace {
+
+constexpr uint8_t kSubtypeGreeting = 0;
+constexpr uint8_t kSubtypeDefCount = 1;
+constexpr uint8_t kSubtypeChecksum = 2;
+constexpr uint8_t kSubtypeVerdict = 3;
+constexpr uint8_t kSubtypeReceived = 4;
+constexpr uint32_t kDisabledByDefaultLimit = 0;
+constexpr int32_t kUnlimited = -1;
+constexpr int32_t kChecksumsPerTick = 4;
+constexpr uint32_t kUnknownChecksum = 0;
+
+const UnitSyncRecord* find(const UnitSync& sync, uint32_t key) noexcept {
+    for (int32_t index = 0; index < sync.record_count; ++index)
+        if (sync.records[index].key == key)
+            return &sync.records[index];
+    return nullptr;
+}
+
+UnitSyncRecord* find(UnitSync& sync, uint32_t key) noexcept {
+    return const_cast<UnitSyncRecord*>(find(std::as_const(sync), key));
+}
+
+// The side flags are read as 16-bit words: local with local_high, remote with remote_high.
+bool both_sides(const UnitSyncRecord& record) noexcept {
+    const auto local = static_cast<uint16_t>(record.local | record.local_high << 8);
+    const auto remote = static_cast<uint16_t>(record.remote | record.remote_high << 8);
+    return local != 0 && remote != 0;
+}
+
+UnitSyncRecord* upsert(UnitSync& sync, uint32_t key) noexcept {
+    if (auto* existing = find(sync, key))
+        return existing;
+    if (sync.record_count >= static_cast<int32_t>(kMaxSyncUnits))
+        return nullptr;
+    auto& record = sync.records[sync.record_count++];
+    record = UnitSyncRecord{};
+    record.key = key;
+    return &record;
+}
+
+uint32_t load_u32(const uint8_t* bytes) noexcept {
+    uint32_t value = 0;
+    std::memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
+// A peer the host still waits on: seated, not defeated and not played
+// by the computer. Peers without a slot are not waited on.
+bool peer_waited_on(Lobby& lobby, uint32_t player_id) noexcept {
+    auto* player = netgame::player_of_id(*lobby.game, player_id);
+    if (player == nullptr || slot_remote_defeated(lobby, *player))
+        return false;
+    return player->in_use == 0 || player->status != kSlotComputer;
+}
+
+// Peers from version 1.2 on (PlayerSetupInfo.version_major and
+// version_minor) have their checksums compared.
+bool reports_checksums(const PlayerSetupInfo& info) noexcept {
+    return info.version_major >= 2 || (info.version_major == 1 && info.version_minor >= 2);
+}
+
+// Index of a key among the peer's reported ones, or received when absent.
+uint32_t reported_index(const UnitSyncPeer& peer, uint32_t key) noexcept {
+    uint32_t index = 0;
+    while (index < peer.received && peer.keys[index] != key)
+        ++index;
+    return index;
+}
+
+// Reported its unit count, sent every checksum and acknowledged every verdict.
+bool peer_complete(const UnitSyncPeer& peer) noexcept {
+    return peer.expected != 0 && peer.received == peer.expected && peer.sent == peer.acknowledged;
+}
+
+/// Returns the player id of the first host-flagged slot, an open slot included.
+///
+/// @param lobby Lobby state.
+/// @return The id, or no_player_id when no slot is flagged host or the flagged slot is free.
+uint32_t host_player_id(Lobby& lobby) noexcept {
+    for (uint8_t slot = 0; slot < kSlotCount; ++slot) {
+        const auto* info = slot_info(lobby, slot);
+        if (info != nullptr && (info->role & kRoleHost) != 0)
+            return netgame::player_slot_id(*lobby.game, slot);
+    }
+    return netgame::no_player_id;
+}
+
+// One 14-byte 0x1a record {subtype, key, value} to a player.
+void send_handshake(
+    Lobby& lobby, uint32_t to, uint8_t subtype, uint32_t key, uint32_t value
+) noexcept {
+    netgame::UnitDefHandshakeRecord record{};
+    record.subtype = subtype;
+    record.key = key;
+    record.value = value;
+    uint8_t wire[14];
+    std::size_t written = 0;
+    if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+        unit_sync_send(lobby, to, wire);
+}
+
+} // namespace
+
+void unit_sync_create(Lobby& lobby, bool host) noexcept {
+    auto& sync = lobby.sync;
+    sync = UnitSync{};
+    sync.host = host;
+    for (int32_t type = 1; type < lobby.unit_count; ++type) {
+        const auto& unit = lobby.units[type];
+        auto* record = upsert(sync, unit.fbi_hash);
+        if (record == nullptr)
+            return;
+        record->checksum = 0;
+        record->local = 1;
+        record->remote = host ? 1 : 0;
+        record->limit = (unit.abilities & kUnitDisabledDefault) != 0
+                            ? static_cast<int32_t>(kDisabledByDefaultLimit)
+                            : kUnlimited;
+    }
+}
+
+void unit_sync_destroy(Lobby& lobby) noexcept {
+    lobby.sync = UnitSync{};
+}
+
+void unit_sync_send(Lobby& lobby, uint32_t player_id, const uint8_t* record) noexcept {
+    const auto to = lobby.sync.host ? player_id : host_player_id(lobby);
+    if (to == netgame::no_player_id)
+        return;
+    uint8_t wire[14];
+    std::memcpy(wire, record, sizeof(wire));
+    std::memset(wire + 2, 0, 4);
+    if (lobby.net.send != nullptr)
+        lobby.net.send(lobby.net.context, to, wire, sizeof(wire));
+}
+
+void unit_sync_send_verdict(
+    Lobby& lobby, UnitSyncPeer& peer, const UnitSyncRecord& record
+) noexcept {
+    if (lobby.sync.finished)
+        return;
+    netgame::UnitDefHandshakeRecord verdict{};
+    verdict.subtype = kSubtypeVerdict;
+    verdict.key = record.key;
+    verdict.value = static_cast<uint32_t>(record.local) |
+                    static_cast<uint32_t>(record.remote) << 8 |
+                    static_cast<uint32_t>(static_cast<uint16_t>(record.limit)) << 16;
+    uint8_t wire[14];
+    std::size_t written = 0;
+    if (netgame::encode_record(verdict, wire, sizeof(wire), &written) != netgame::WireError::ok)
+        return;
+    unit_sync_send(lobby, peer.player_id, wire);
+    ++peer.sent;
+}
+
+void unit_sync_relay(Lobby& lobby, uint32_t key) noexcept {
+    auto& sync = lobby.sync;
+    if (sync.finished)
+        return;
+    if (sync.host) {
+        if (const auto* record = find(sync, key))
+            for (int32_t index = 0; index < sync.peer_count; ++index)
+                unit_sync_send_verdict(lobby, sync.peers[index], *record);
+    }
+    for (int32_t index = 0; index < sync.pending_count; ++index)
+        if (sync.pending[index] == key)
+            return;
+    if (sync.pending_count < static_cast<int32_t>(kMaxSyncUnits))
+        sync.pending[sync.pending_count++] = key;
+}
+
+void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) noexcept {
+    auto& sync = lobby.sync;
+    const uint8_t subtype = record[1];
+    if (subtype >= netgame::handshake_subtype_limit || sync.finished)
+        return;
+    ++sync.records_handled;
+    const auto key = load_u32(record + 6);
+    if (!sync.host) {
+        if (subtype != kSubtypeVerdict)
+            return;
+        auto* entry = upsert(sync, key);
+        if (entry == nullptr)
+            return;
+        entry->checksum = 0;
+        entry->local = record[10];
+        entry->local_high = 0;
+        entry->remote = record[11];
+        entry->remote_high = 0;
+        int16_t limit = 0;
+        std::memcpy(&limit, record + 12, sizeof(limit));
+        entry->limit = limit;
+        unit_sync_relay(lobby, key);
+        return;
+    }
+    const auto sender = slot_player(lobby, from_slot).player_id;
+    UnitSyncPeer* peer = nullptr;
+    for (int32_t index = 0; index < sync.peer_count; ++index)
+        if (sync.peers[index].player_id == sender)
+            peer = &sync.peers[index];
+    if (peer == nullptr)
+        return;
+    const auto value = load_u32(record + 10);
+    if (subtype == kSubtypeDefCount) {
+        peer->expected = value;
+    } else if (subtype == kSubtypeChecksum) {
+        if (reported_index(*peer, key) != peer->received || peer->received >= kMaxSyncUnits)
+            return;
+        peer->keys[peer->received] = key;
+        peer->checksums[peer->received] = value;
+        ++peer->received;
+        unit_sync_update_record(lobby, key, value);
+    } else if (subtype == kSubtypeReceived && peer->acknowledged < value) {
+        peer->acknowledged = value;
+    }
+}
+
+void unit_sync_update_record(Lobby& lobby, uint32_t key, uint32_t checksum) noexcept {
+    auto& sync = lobby.sync;
+    auto* record = sync.finished ? nullptr : find(sync, key);
+    if (record == nullptr)
+        return;
+    uint8_t everyone = 1;
+    if (checksum != kUnknownChecksum) {
+        if (record->checksum == kUnknownChecksum && lobby.unit_count > 1)
+            for (int32_t type = 1; type < lobby.unit_count; ++type)
+                if (lobby.units[type].fbi_hash == key) {
+                    record->checksum = unit_sync_content_checksum(lobby, lobby.units[type]);
+                    break;
+                }
+        if (checksum != record->checksum)
+            everyone = 0;
+    }
+    for (int32_t index = 0; everyone != 0 && index < sync.peer_count; ++index) {
+        const auto& peer = sync.peers[index];
+        bool compare = false;
+        if (checksum != kUnknownChecksum) {
+            const auto* player = netgame::player_of_id(*lobby.game, peer.player_id);
+            if (player == nullptr)
+                break;
+            const auto* info = player_info(lobby, *player);
+            compare = info != nullptr && reports_checksums(*info);
+        }
+        const auto at = reported_index(peer, key);
+        if (at == peer.received || (compare && peer.checksums[at] != checksum)) {
+            everyone = 0;
+            break;
+        }
+    }
+    record->remote = everyone;
+    record->remote_high = 0;
+    unit_sync_relay(lobby, key);
+}
+
+void unit_sync_tick(Lobby& lobby) noexcept {
+    auto& sync = lobby.sync;
+    if (sync.finished)
+        return;
+    if (!sync.host) {
+        if (sync.records_handled == 0)
+            return;
+        if (sync.next_unit >= lobby.unit_count) {
+            send_handshake(lobby, host_player_id(lobby), kSubtypeReceived, 0, sync.records_handled);
+            return;
+        }
+        if (sync.next_unit == 0) {
+            if (host_player_id(lobby) != netgame::no_player_id) {
+                send_handshake(
+                    lobby,
+                    host_player_id(lobby),
+                    kSubtypeDefCount,
+                    0,
+                    static_cast<uint32_t>(lobby.unit_count - 1)
+                );
+                sync.next_unit = 1;
+            }
+            return;
+        }
+        for (int32_t sent = 0; sent < kChecksumsPerTick && sync.next_unit < lobby.unit_count;
+             ++sent) {
+            auto& unit = lobby.units[sync.next_unit];
+            const auto checksum = unit_sync_content_checksum(lobby, unit);
+            send_handshake(lobby, host_player_id(lobby), kSubtypeChecksum, unit.fbi_hash, checksum);
+            ++sync.next_unit;
+        }
+        return;
+    }
+    bool roster_changed = false;
+    for (int32_t index = 0; index < sync.peer_count;) {
+        const auto* player = netgame::player_of_id(*lobby.game, sync.peers[index].player_id);
+        if (player != nullptr && slot_remote_playing(lobby, *player)) {
+            ++index;
+            continue;
+        }
+        for (int32_t later = index + 1; later < sync.peer_count; ++later)
+            sync.peers[later - 1] = sync.peers[later];
+        --sync.peer_count;
+        roster_changed = true;
+    }
+    for (int32_t slot = 0; slot < kSlotCount && sync.peer_count < kSlotCount; ++slot) {
+        auto& player = slot_player(lobby, slot);
+        if (!slot_remote_playing(lobby, player))
+            continue;
+        bool known = false;
+        for (int32_t index = 0; index < sync.peer_count && !known; ++index)
+            known = sync.peers[index].player_id == player.player_id;
+        if (known)
+            continue;
+        auto& peer = sync.peers[sync.peer_count++];
+        peer = UnitSyncPeer{};
+        peer.player_id = player.player_id;
+        send_handshake(lobby, peer.player_id, kSubtypeGreeting, 0, 0);
+        ++peer.sent;
+        roster_changed = true;
+    }
+    if (roster_changed)
+        for (int32_t index = 0; index < sync.record_count; ++index)
+            unit_sync_update_record(lobby, sync.records[index].key, kUnknownChecksum);
+}
+
+uint32_t unit_sync_content_checksum(Lobby& lobby, LobbyUnit& unit) noexcept {
+    if (unit.content_checksum == kUnknownChecksum && lobby.services.unit_checksum != nullptr)
+        unit.content_checksum = lobby.services.unit_checksum(lobby.services.context, unit);
+    return unit.content_checksum;
+}
+
+bool unit_sync_pop_changed(Lobby& lobby, UnitSyncRecord* out) noexcept {
+    auto& sync = lobby.sync;
+    if (sync.pending_count == 0)
+        return false;
+    const auto key = sync.pending[0];
+    std::memmove(
+        sync.pending,
+        sync.pending + 1,
+        sizeof(sync.pending[0]) * static_cast<std::size_t>(sync.pending_count - 1)
+    );
+    --sync.pending_count;
+    if (const auto* record = find(sync, key))
+        *out = *record;
+    else
+        *out = UnitSyncRecord{key, 0, 0, 0, 0, 0, 0};
+    return true;
+}
+
+bool unit_sync_lookup(Lobby& lobby, uint32_t key, UnitSyncRecord* out) noexcept {
+    const auto* record = find(lobby.sync, key);
+    *out = record != nullptr ? *record : UnitSyncRecord{key, 0, 0, 0, 0, 0, 0};
+    return out->local != 0 && out->remote != 0;
+}
+
+bool unit_sync_set_enabled(Lobby& lobby, uint32_t key, bool enabled) noexcept {
+    auto* record = find(lobby.sync, key);
+    if (record == nullptr)
+        return false;
+    record->local = enabled ? 1 : 0;
+    unit_sync_relay(lobby, key);
+    return record->local != 0 && record->remote != 0;
+}
+
+void unit_sync_set_limit(Lobby& lobby, uint32_t key, int32_t limit) noexcept {
+    auto* record = find(lobby.sync, key);
+    if (record == nullptr)
+        return;
+    record->limit = limit;
+    unit_sync_relay(lobby, key);
+}
+
+void unit_sync_mark_units(const UnitSync& sync, UnitDef* records, uint32_t count) noexcept {
+    if (sync.finished)
+        return;
+    for (uint32_t type = 1; type < count; ++type) {
+        auto& unit = records[type];
+        const auto* record = find(sync, unit.fbi_hash);
+        unit.flags &= ~OA_UNIT_DEF_FLAG_AVAILABLE;
+        if (record == nullptr) {
+            unit.player_limit = 0;
+            continue;
+        }
+        if (both_sides(*record))
+            unit.flags |= OA_UNIT_DEF_FLAG_AVAILABLE;
+        unit.player_limit = record->limit;
+    }
+}
+
+bool unit_sync_complete(Lobby& lobby) noexcept {
+    auto& sync = lobby.sync;
+    if (sync.finished || !sync.host)
+        return true;
+    for (int32_t index = 0; index < sync.peer_count; ++index) {
+        const auto& peer = sync.peers[index];
+        if (!peer_waited_on(lobby, peer.player_id))
+            continue;
+        if (!peer_complete(peer))
+            return false;
+    }
+    return true;
+}
+
+bool unit_sync_peer_complete(Lobby& lobby, uint32_t player_id) noexcept {
+    auto& sync = lobby.sync;
+    if (!sync.host)
+        return false;
+    if (sync.finished || !peer_waited_on(lobby, player_id))
+        return true;
+    for (int32_t index = 0; index < sync.peer_count; ++index)
+        if (sync.peers[index].player_id == player_id)
+            return peer_complete(sync.peers[index]);
+    return false;
+}
+
+const char* unit_sync_diagnostic(Lobby& lobby, char* out, std::size_t capacity) noexcept {
+    auto& sync = lobby.sync;
+    if (!sync.host)
+        return nullptr;
+    for (int32_t index = 0; index < sync.peer_count; ++index) {
+        const auto& peer = sync.peers[index];
+        if (peer.expected == 0)
+            return "No units_expected sent from player";
+        if (peer.received != peer.expected) {
+            std::snprintf(
+                out,
+                capacity,
+                "expected %d units, got %d",
+                static_cast<int>(peer.expected),
+                static_cast<int>(peer.received)
+            );
+            return out;
+        }
+        if (peer.sent != peer.acknowledged) {
+            std::snprintf(
+                out,
+                capacity,
+                "packets sent=%d  ackd=%d",
+                static_cast<int>(peer.sent),
+                static_cast<int>(peer.acknowledged)
+            );
+            return out;
+        }
+    }
+    return "OK";
+}
+
+} // namespace oa::ui::frontend_multiplayer

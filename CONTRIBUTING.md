@@ -49,7 +49,7 @@ aims to match the 3.1c game's behaviour and its save files: campaigns,
 skirmish, computer players, simulation, unit scripts, rendering, sound and
 save/load.
 
-It is a work in progress. The frontend, skirmish and campaign matches run,
+It is a work in progress. The frontend, skirmish, campaign and network matches run,
 with land units, ships, submarines, hovercraft, aircraft and transports; some
 parts of the game are still missing, and unsupported actions report their
 status instead of failing silently.
@@ -68,9 +68,11 @@ status instead of failing silently.
   mixer, speech, CD music and the intro movies.
 - **Frontend:** main menu, options, skirmish, campaign and briefings, the
   in-game interface and console, and saving and loading a running game.
-- **Multiplayer:** not part of the engine. Choosing MULTI hands over to the
-  linked extension (`select_multiplayer` in the extension table); without
-  one, it explains that multiplayer is not available in this build.
+- **Network play:** the multiplayer lobby and battle room over TCP/IP, the
+  network session and the networked match, and the replay of recorded
+  games (`.tad`). It is always built and plugs into the game through the
+  extension table. It speaks the 3.1c game's own protocol, so players of the
+  original game can join in.
 
 ## Requirements
 
@@ -160,8 +162,9 @@ takes the `OA_GAME_DIR` environment variable and passes it on as
 remembered folder: it needs `--game-dir PATH`, or a `--preferences-file`
 that holds a folder.
 `./run.sh --help` lists the options, including `--skip-intro`, `--mute`,
-headless checks (`--headless-check`, `--match-ticks N`,
-`--campaign NAME --mission N`) and snapshots.
+`--headless-check` and snapshots, and network play's
+`--play-demo FILE.tad`, which replays a recorded game, and
+`--net-loopback-check N`, which hosts and joins a match in one process.
 
 `oa-tool` inspects game archives:
 
@@ -184,13 +187,13 @@ oa-tool decode-pcx INPUT.pcx OUTPUT.ppm|OUTPUT.png
 | `src/data` | Game data read through the formats: definitions, campaigns, savegames |
 | `src/sim` | Simulation |
 | `src/present`, `src/audio`, `src/media` | Presentation and sound |
-| `src/ui` | Interface |
+| `src/ui`, `src/netgame`, `src/session` | Interface, with the multiplayer screens; network play's session and match; the playback of recorded games |
 | `src/app` | The game application, `open-annihilation` (the `oa-game` target) |
 | `tools` | Bootstrap, launcher and check scripts, `oa-tool` and the `oa-platform` probe |
 | `docs` | The conventions, the testing guide and the index of every document |
 | `branding` | The Open Annihilation icon and the icons made from it (`tools/make_icons.py`); not under the project's licence (see [COPYRIGHT](COPYRIGHT)) |
 
-A module uses modules of its own group and of the groups above it in this
+A module uses modules of its own row and of the rows above it in this
 table, except that the platform layer and the formats do not use each other
 and the simulation does not use the platform layer. The `engine-layout`
 test (`tools/check_layout.py`) holds the tree to this order.
@@ -199,12 +202,12 @@ test (`tools/check_layout.py`) holds the tree to this order.
 
 The game takes optional features through a table of function pointers,
 `src/app/include/oa/app/extension.hpp`, which each extension library fills
-once at startup. A project that adds the engine with `add_subdirectory`
-registers its extension libraries with `oa_add_extension`
-(`cmake/OaExtensions.cmake`), and the engine combines their tables; with
-none registered those features are unavailable.
-[src/app/README.md](src/app/README.md) describes the table and how it
-changes.
+once at startup. Network play is one: the engine always registers its
+library, `oa-app-netgame`. A project that adds the engine with
+`add_subdirectory` registers its own extension libraries with
+`oa_add_extension` (`cmake/OaExtensions.cmake`), and the engine combines
+their tables. [src/app/README.md](src/app/README.md) describes the table and
+how it changes.
 
 ## Documenting code
 

@@ -1,7 +1,7 @@
 # src/app
 
-The game application: the native runtime that hosts the frontend and
-offline match. The `oa-game` target builds it as `open-annihilation`
+The game application: the native runtime that hosts the frontend and the
+match, and, in `netgame/`, network play. The `oa-game` target builds it as `open-annihilation`
 (`open-annihilation.exe` on Windows).
 
 ## The built game
@@ -439,8 +439,9 @@ progress, the team panels' host (a tournament game withholds CONTROL),
 requests to close the window, the label a match's return names in its
 menus, whether the preferences keep the stored password, recordings to
 replay, console commands and checks. Each such library is an extension.
-The project that builds the game registers it after adding the engine,
-with the function that fills its table:
+The engine registers its own, network play ([below](#network-play)); a
+project that builds the game registers further ones after adding the
+engine, each with the function that fills its table:
 
 ```cmake
 oa_add_extension(<target> INIT <function> [SWITCHES <letters>] [GAME_FILES <COMMAND ...>])
@@ -460,10 +461,8 @@ list first, since it builds on those before it; answers are combined; and
 `frontend_game`, `frontend_states` and each entry of the hosts the
 extensions fill belong to one extension at most, so that a second one
 stops the start or the call with a message naming both. Every hook no
-extension fills keeps the engine's behaviour, the game without
-multiplayer, which is the whole game when no extension is registered. A
-reserved game switch no extension takes is refused as "not handled by
-this build". An extension that includes `runtime.hpp` builds against
+extension fills keeps the engine's behaviour. A reserved game switch no
+extension takes is refused as "not handled by this build". An extension that includes `runtime.hpp` builds against
 `oa::extension-sdk`, the include directories and libraries an extension
 may use; one that needs only the table links `oa::app::headers`. An
 exception a hook throws ends the game except on the paths
@@ -497,16 +496,17 @@ and only the one that takes the recording fills the caller's.
 extensions, and `tests/extension/` tests the boundary itself.
 `extension-layout-mismatch` links a unit that sees `Runtime` with members
 `oa-game` does not have and expects the link to fail. A build configured
-with `-DOA_RECORD_EXTENSION_HOOKS=ON` registers two test extensions: the
-recorder, which fills every hook with a recorder and adds one `Runtime`
-member, and the follower, whose library links the recorder's and which
-fills every hook but `frontend_game` and `frontend_states`; the follower
-is registered first and listed second. `extension-hooks-options` and, over
-the installed game, `extension-hooks-game` check that the game calls
+with `-DOA_RECORD_EXTENSION_HOOKS=ON` registers two test extensions after
+network play: the recorder, which fills every hook with a recorder but
+`frontend_game` and `frontend_states`, which network play fills, and adds
+one `Runtime` member, and the follower, whose library links the
+recorder's and which fills the same hooks; the follower is registered
+before the recorder and listed after it. `extension-hooks-options` and,
+over the installed game, `extension-hooks-game` check that the game calls
 every hook of both but `disconnect_text`, which only a shared match
 reaches (of `match_event`'s events they see `finished`, `torn_down` and
 `results_released`), in the order the rules set, and that a follower that
-fills `frontend_game` too stops the start; the navigation check's Pause
+fills `frontend_game` beside network play stops the start; the navigation check's Pause
 key reaches `pause_changed`, its speed keys `speed_changed` and its menus
 `app_mode_set`, a skirmish's loading `load_progress`, `team_panel_host` and
 `return_label`, its preferences write `keep_stored_password`,
@@ -517,10 +517,10 @@ With `--record-quit STATUS` the recorder keeps the screen services an
 overlay is given, stops the sounds, plays BGM on the alternate route,
 asks for a frontend pass and ends the run through `quit`, which must exit
 with STATUS. The recorder drives the check host too, through its entries
-alone: after the engine's `--check-multiplayer-menu` check it clicks MULTI,
-closes the box it opens with Return and clicks it again, with the cursor,
-the clock, a composed frame, a sound's file and the preferences checked on
-the way; and with `--record-check-host` it takes the headless run for the
+alone: after network play's `--check-multiplayer-menu` check it clicks
+MULTI twice, taking it over each time (`select_multiplayer` answers
+`taken`) so that the main menu stays up, with the cursor, the clock, a
+composed frame, a sound's file and the preferences checked on the way; and with `--record-check-host` it takes the headless run for the
 entries that work without a window, down to a close request, which ends
 the run, and a frame, which needs the window. The navigation check itself puts probes in place of the
 hooks to check what the engine does with their answers: a close request
@@ -530,8 +530,7 @@ starts and quit leaving a match, with the preferences open over it,
 first. CI builds that configuration as a job of its own, but has no game
 installation: there `extension-hooks-game` skips, and only the option
 hooks and the hook list are checked. The rest of the hook coverage runs
-only where `OA_GAME_DIR` is set, locally or in a private run; run it there
-before an extension moves its engine pin.
+only where `OA_GAME_DIR` is set; run it there before changing the table.
 
 A check an extension runs, from `run_mode` or `check_multiplayer_menu`,
 drives the running game through the check host (`check_host.hpp`), as the
@@ -555,21 +554,54 @@ headers. When it needs something the table does not offer, add a hook or
 declare a header for it here; never give it a new `Runtime` member or
 friend, or another of `Runtime`'s private names.
 
-Until hooks and declared headers cover everything, one extension may still
-add members to `Runtime`: the project that adds the engine names a header
-of them in the `OA_RUNTIME_EXTENSION_MEMBERS` CMake variable, the engine
-compiles `oa-game` and, through the SDK, the extension with that
-definition, `runtime.hpp` includes the header inside the class, and the
-extension's `RuntimeExtension`, a friend of `Runtime`, turns its hooks into
-calls on those members. A unit compiled without the definition, or with it
-where `oa-game` has none, fails to link (`extension_members.cpp`). That
-mechanism is frozen: `tools/check_runtime_surface.py` holds the header's
-declarations, which must be plain declarations with no preprocessor
-directive, and the private `Runtime` names the extension uses, each with
-its number of uses, to `tools/runtime-surface-baseline.json`, which may
-only shrink, and the mechanism goes away once they are gone. The engine's
+Network play's own members, `include/oa/app/netgame_runtime_members.hpp`,
+are part of `Runtime` like any other member group: `runtime.hpp` always
+includes them, and network play's `RuntimeExtension`, a friend of
+`Runtime`, turns its hooks into calls on them. They are frozen until hooks
+and declared headers cover everything: `tools/check_runtime_surface.py`
+(`netgame-runtime-surface`) holds the header's declarations, which must be
+plain declarations with no preprocessor directive, and the private
+`Runtime` names network play uses, each with its number of uses, to
+`tools/runtime-surface-baseline.json`, which may only shrink. The engine's
 `runtime-surface-names` test fails when a change to `runtime.hpp` leaves
 the baseline naming something that is no longer a private name of
 `Runtime`. Renaming one of those names replaces the old name with the new
 one in the baseline, keeping its uses, in the same change: the one addition
 the baseline takes. Removing one, or making it public, drops it.
+
+One extension that is not part of the engine may still add members to
+`Runtime`: the build names its header in the `OA_RUNTIME_EXTENSION_MEMBERS`
+CMake variable, and the engine compiles `oa-game` and, through the SDK, the
+extension with that definition; `runtime.hpp` includes the header inside
+the class. That header declares the extension's own friend of `Runtime`,
+under a name other than `RuntimeExtension`, which is network play's: two
+definitions of one friend in one game do not link as two. A unit compiled
+without the definition, or with it where `oa-game` has none, fails to link
+(`extension_members.cpp`). In the engine's own tree only the recorder test
+extension (`tests/extension`) uses it, beside network play, with its
+friend `RecorderExtension`.
+
+## Network play
+
+`netgame/` is network play's extension, `oa-app-netgame`, which the engine
+always builds and registers. It takes the 3.1c network switches
+`-e -h -n -p -t`, binds the network session (`src/netgame`) to the
+multiplayer screens (`src/ui/frontend-multiplayer`), launches the
+match from the battle room and runs it over the network, and replays
+recorded games (`.tad`, `src/formats/tad` and `src/session/demo`) through
+`open_recording` and `--play-demo FILE.tad`. Its long options include
+`--net-loopback-check N`, which hosts and joins a match in one process
+over 127.0.0.1 and compares both worlds after N ticks,
+`--check-recording-hook` and `--check-host-not-found`;
+`--check-multiplayer-menu` runs its check of the multiplayer screens.
+MULTI on the main menu asks the extensions (`select_multiplayer`), and
+network play answers by moving the frontend to its multiplayer states;
+when no extension answers, MULTI does nothing. Over game data with no
+multiplayer map, such as the 1997 demo's, MULTI asks no extension and
+shows the missing-content notice, and `--check-multiplayer-menu` checks
+that notice instead.
+Extensions built on network play use its own table,
+`oa/app/netgame/extension_api.hpp`, numbered by
+`OA_NET_EXTENSION_API_VERSION`.
+[docs/development/testing.md](../../docs/development/testing.md#network-play)
+lists its tests.

@@ -1,0 +1,4488 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Battleroom rules and map previews with the loopback net, and (with --data)
+// against the installed game's LOUNGE2.GUI and SELGAME.GUI layouts.
+#include "oa/formats/gaf.hpp"
+#include "oa/netgame/records.hpp"
+#include "oa/ui/frontend_multiplayer/connect.hpp"
+#include "oa/ui/frontend_multiplayer/dialogs.hpp"
+#include "oa/ui/frontend_multiplayer/lobby.hpp"
+#include "oa/ui/frontend_multiplayer/restrict.hpp"
+#include "oa/test/game_assets.hpp"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace mp = oa::ui::frontend_multiplayer;
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, const char* what) {
+    if (!condition) {
+        std::fprintf(stderr, "FAILED: %s\n", what);
+        ++failures;
+    }
+}
+
+uint32_t clock_ticks = 1000;
+/// The installed game's SLIDERS art, which the lounge's sliders are bound
+/// with; none without --data.
+oa::ui::gui_input::ScrollArtFrames slider_art;
+std::string last_message;
+std::vector<std::string> sounds;
+std::string map_name = "Coast To Coast";
+
+uint32_t tick(void*) {
+    return clock_ticks;
+}
+
+void message(void*, const char* text) {
+    last_message = text;
+}
+
+void sound(void*, const char* name) {
+    sounds.emplace_back(name);
+}
+
+bool disc(void*) {
+    return true;
+}
+
+// The launch a test lobby reads, whether it is active, and the
+// texts of the joins it asked for that failed.
+oa::ui::frontend_multiplayer::launch::LaunchBlock launch_block{};
+bool active_launch = false;
+std::vector<std::string> failed_joins;
+std::string saved_address;
+int32_t address_saves = 0;
+
+bool test_launched(void*) {
+    return active_launch;
+}
+
+void test_join_failed(void*, const char* text) {
+    failed_joins.emplace_back(text);
+}
+
+bool read_saved_address(void*, char* out, std::size_t capacity) {
+    std::snprintf(out, capacity, "%s", "192.168.0.9");
+    return true;
+}
+
+void write_saved_address(void*, const char* address) {
+    saved_address = address;
+    ++address_saves;
+}
+
+/// Returns the launch link over the test's block and flags.
+///
+/// @return the link
+mp::LaunchLink launch_link() {
+    mp::LaunchLink link{};
+    link.block = &launch_block;
+    link.launch_active = test_launched;
+    link.join_failed = test_join_failed;
+    return link;
+}
+
+/// Starts a test with an empty launch block and no active launch.
+void reset_launch() {
+    launch_block = oa::ui::frontend_multiplayer::launch::LaunchBlock{};
+    active_launch = false;
+    failed_joins.clear();
+    saved_address.clear();
+    address_saves = 0;
+}
+
+bool selected(void*) {
+    return !map_name.empty();
+}
+
+const char* name(void*) {
+    return map_name.c_str();
+}
+
+bool select_map(void*, const char* value) {
+    map_name = value;
+    return true;
+}
+
+uint32_t hash(void*) {
+    return 0x1234;
+}
+
+int32_t memory(void*) {
+    return 32;
+}
+
+/// Returns the lobby services the tests give every lobby: the sound, message,
+/// clock and disc stubs above, nothing else.
+///
+/// @return the services
+mp::LobbyServices test_services() {
+    mp::LobbyServices services{};
+    services.play_sound = sound;
+    services.message = message;
+    services.tick = tick;
+    services.disc_present = disc;
+    return services;
+}
+
+/// Returns the map list the tests give a lobby that picks maps: one selected
+/// map by name, with its content hash and memory.
+///
+/// @return the map list
+mp::LobbyMaps test_maps() {
+    mp::LobbyMaps maps{};
+    maps.selected = selected;
+    maps.name = name;
+    maps.select = select_map;
+    maps.content_hash = hash;
+    maps.memory_mb = memory;
+    return maps;
+}
+
+/// Reads a GUI layout file of the installed game.
+///
+/// @param assets the installed game's store
+/// @param name file name under guis/
+/// @return the bytes, or empty when nothing provides the file
+std::vector<uint8_t> read_gui(const oa::AssetStore& assets, const char* name) {
+    return oa::test::read_game_file(assets, std::string("guis/") + name);
+}
+
+struct Fixture {
+    std::unique_ptr<oa::Game> game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::Panel panel;
+    oa::ui::gui_layout::Layout layout;
+
+    explicit Fixture(
+        const oa::ui::gui_layout::Layout& lounge,
+        const mp::LaunchLink* online = nullptr,
+        bool host = true
+    )
+        : layout(lounge) {
+        mp::loopback_reset(loopback);
+        mp::lobby_reset(lobby, *game);
+        if (online != nullptr) {
+            lobby.launch_link = *online;
+            lobby.option_4 = online->block != nullptr && online->block->tournament != 0;
+        }
+        lobby.net = mp::loopback_lobby_net(loopback);
+        lobby.services = test_services();
+        lobby.maps = test_maps();
+        lobby.local_version_major = 3;
+        game->session_flags |= 1;
+        mp::lobby_max_units(*game) = 250;
+        mp::lobby_max_units_default(*game) = 250;
+        game->side_count = 2;
+        loopback.opened = true;
+        game->players[0].player_id = 0x100;
+        mp::lobby_seat_local(lobby, 0, host, "Host");
+        mp::panel_load(panel, "guis/lounge2.gui", layout);
+        mp::panel_bind_sliders(panel, slider_art);
+        mp::lobby_enter_battleroom(lobby, panel);
+    }
+
+    void join(uint32_t id, const char* player) {
+        mp::LobbyEvent event{};
+        event.kind = mp::LobbyEventKind::player_joined;
+        event.player_id = id;
+        std::snprintf(event.name, sizeof(event.name), "%s", player);
+        expect(mp::lobby_apply_event(lobby, event), "join event applies");
+        mp::unit_sync_tick(lobby); // the host greets the new peer on its next frame
+        mp::lobby_update_status(lobby, panel);
+    }
+
+    void remote_info(uint32_t id, uint16_t options, uint8_t color) {
+        const auto slot = mp::slot_for_player_id(lobby, id);
+        mp::PlayerSetupInfo info{};
+        info.options = options;
+        info.color = color;
+        info.state = mp::kInfoStatePlaying;
+        info.status = mp::status::has_disc;
+        info.version_major = 3;
+        oa::netgame::PlayerInfoRecord record{};
+        std::memcpy(record.info_head, &info, sizeof(record.info_head));
+        record.player_id = id;
+        std::memcpy(
+            record.info_tail,
+            reinterpret_cast<const uint8_t*>(&info) + oa::netgame::player_info_tail_offset,
+            sizeof(record.info_tail)
+        );
+        mp::LobbyEvent event{};
+        event.kind = mp::LobbyEventKind::record;
+        event.player_id = id;
+        std::size_t written = 0;
+        (void)oa::netgame::encode_record(record, event.data, sizeof(event.data), &written);
+        event.size = static_cast<uint16_t>(written);
+        expect(mp::lobby_apply_event(lobby, event), "player info applies");
+        expect(mp::slot_info(lobby, slot)->color == color, "player info colour copied");
+        mp::lobby_update_status(lobby, panel);
+    }
+
+    void synced(uint32_t id) {
+        const auto slot = static_cast<uint8_t>(mp::slot_for_player_id(lobby, id));
+        for (const uint8_t subtype : {1, 2}) {
+            uint8_t record[14] = {0x1a, subtype};
+            record[10] = 1;
+            mp::unit_sync_receive(lobby, record, slot);
+        }
+        // The peer acknowledges everything the host sent it.
+        for (int32_t index = 0; index < lobby.sync.peer_count; ++index)
+            if (lobby.sync.peers[index].player_id == id) {
+                uint8_t record[14] = {0x1a, 4};
+                const auto sent = lobby.sync.peers[index].sent;
+                std::memcpy(record + 10, &sent, sizeof sent);
+                mp::unit_sync_receive(lobby, record, slot);
+            }
+    }
+
+    bool press(const char* control, uint8_t button = 1) {
+        if (!mp::panel_press(panel, control, button))
+            return false;
+        (void)mp::lobby_handle_event(lobby, panel);
+        return true;
+    }
+
+    int32_t sent_of(oa::netgame::RecordType type) const {
+        int32_t count = 0;
+        for (int32_t index = 0; index < loopback.sent_count; ++index)
+            if (loopback.sent[index][0] == static_cast<uint8_t>(type))
+                ++count;
+        return count;
+    }
+};
+
+void test_rows_and_colors(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    expect(mp::panel_find(f.panel, "PLAYER9") != mp::kNoControl, "rows cloned for slot 9");
+    expect(mp::panel_find(f.panel, "TEAMICONS9") != mp::kNoControl, "team icon row cloned");
+    const auto* own = mp::panel_control(f.panel, "PLAYER0");
+    expect(own != nullptr && own->type == mp::ControlType::label, "local player row is a label");
+    expect(mp::panel_text(f.panel, "PLAYER0") == "Host", "local name shown");
+    expect(mp::panel_text(f.panel, "PLAYER3") == "UNUSED", "open slot reads UNUSED");
+    const auto* p1 = mp::panel_control(f.panel, "PLAYER1");
+    const auto* p0y = mp::panel_control(f.panel, "READY0");
+    const auto* p1y = mp::panel_control(f.panel, "READY1");
+    expect(
+        p1 != nullptr && p0y != nullptr && p1y != nullptr && p1y->y - p0y->y == mp::kRowPitch,
+        "rows are 20 pixels apart"
+    );
+    expect(mp::local_info(f.lobby).color == 0, "host takes the first colour");
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    expect(mp::lobby_next_free_color(f.lobby) == 2, "next free colour skips used ones");
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(mp::panel_text(f.panel, "PLAYER1") == "Guest", "remote row shows its name");
+    expect(mp::panel_text(f.panel, "PING1") != "n/a", "playing remote shows a ping");
+    expect(f.sent_of(oa::netgame::RecordType::player_info) > 0, "host broadcast its player info");
+}
+
+void test_side_and_watch(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    auto& info = mp::local_info(f.lobby);
+    expect(info.side == 0, "side starts at ARM");
+    expect(f.press("SIDE0"), "SIDE0 clickable");
+    expect(info.side == 1, "SIDE cycles to CORE");
+    info.options &= static_cast<uint16_t>(~mp::option::watching_allowed);
+    expect(f.press("SIDE0"), "SIDE0 clickable again");
+    expect(
+        info.side == 0 && (info.options & mp::option::watcher) == 0,
+        "wrap without watching resets side"
+    );
+    info.options |= mp::option::watching_allowed;
+    (void)f.press("SIDE0");
+    (void)f.press("SIDE0");
+    expect((info.options & mp::option::watcher) != 0, "wrap with watching allowed makes a watcher");
+    mp::lobby_update_side_button(f.lobby, f.panel, 0);
+    expect(mp::panel_control(f.panel, "SIDE0")->stage == 2, "watcher shows side stage 2");
+    (void)f.press("SIDE0");
+    expect(
+        (info.options & mp::option::watcher) == 0 && info.side == 0,
+        "leaving watch returns to side 0"
+    );
+}
+
+void test_teams_and_alliances(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    auto& me = mp::local_player(f.lobby);
+    expect(f.press("ALLY1"), "ALLY1 clickable");
+    expect(me.alliance[1] == 1, "ally toggles on");
+    expect(f.sent_of(oa::netgame::RecordType::alliance) == 1, "alliance record sent to the remote");
+    expect(
+        std::strstr(mp::lobby_chat_line(*f.game, 0), "allied with Guest") != nullptr,
+        "alliance announced"
+    );
+    (void)f.press("ALLY1");
+    expect(me.alliance[1] == 0, "ally toggles off");
+
+    expect(f.press("TEAMICONS0"), "TEAMICONS0 clickable");
+    expect(mp::lobby_player_team(me) == 0, "no team -> team 0 wraps from 5");
+    mp::lobby_player_team(mp::slot_player(f.lobby, 1)) = 0;
+    mp::lobby_update_ally_matrix(f.lobby);
+    expect(
+        me.alliance[1] == 1 && mp::lobby_player_allied_back(me)[1] == 1, "team mates ally both ways"
+    );
+    expect(mp::team_member_count(f.lobby, 0) == 2, "team count includes both");
+    expect(mp::lobby_all_on_one_team(f.lobby), "all players on one team detected");
+    mp::lobby_update_team_icons(f.lobby, f.panel);
+    expect(mp::panel_control(f.panel, "TEAMICONS0")->stage == 0, "shared team icon stage team*2");
+    (void)f.press("TEAMICONS0");
+    expect(mp::lobby_player_team(me) == 1, "team advances");
+    mp::lobby_update_team_icons(f.lobby, f.panel);
+    expect(mp::panel_control(f.panel, "TEAMICONS0")->stage == 3, "lone team icon stage team*2+1");
+    for (int i = 0; i < 4; ++i)
+        (void)f.press("TEAMICONS0");
+    expect(mp::lobby_player_team(me) == mp::kNoTeam, "team wraps to none after 4");
+}
+
+void test_options_and_sliders(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    auto& info = mp::local_info(f.lobby);
+    const uint16_t before = info.options & mp::option::commander_mask;
+    expect(before == 0, "commander continues by default");
+    (void)f.press("COMMANDER");
+    expect((info.options & mp::option::commander_mask) == 0x800, "commander -> game ends");
+    (void)f.press("COMMANDER");
+    expect((info.options & mp::option::commander_mask) == 0x1000, "commander -> deathmatch");
+    (void)f.press("COMMANDER");
+    expect((info.options & mp::option::commander_mask) == 0, "commander wraps");
+    (void)f.press("LOSTYPE");
+    expect((info.options & 0x600) == 0x600, "LOS permanent -> true");
+    (void)f.press("LOSTYPE");
+    expect((info.options & 0x600) == 0x200, "LOS true -> circular");
+    (void)f.press("LOSTYPE");
+    expect((info.options & 0x600) == 0, "LOS circular -> permanent");
+    mp::lobby_update_option_buttons(f.lobby, f.panel);
+    expect(mp::panel_control(f.panel, "LOSTYPE")->stage == 2, "permanent LOS stage 2");
+    (void)f.press("GAMEOPEN");
+    expect((info.options & mp::option::game_closed) != 0, "GAMEOPEN closes the game");
+    (void)f.press("GAMEOPEN");
+    expect((info.options & mp::option::game_closed) == 0, "GAMEOPEN reopens");
+    (void)f.press("CHEATING");
+    expect((info.options & mp::option::cheats_allowed) != 0, "cheats toggle");
+
+    auto* metal = mp::panel_control(f.panel, "METAL");
+    expect(metal != nullptr && metal->scroll.maximum == 0x2711, "METAL maximum 10001");
+    expect(info.metal_hundreds == 10, "metal starts at 1000");
+    // 2549 puts the knob at step 23 of 87, which stands for 2643.
+    oa::ui::gui_input::scroll_set_value(metal->scroll, 2549);
+    mp::lobby_on_metal(f.panel, &f.lobby);
+    expect(metal->scroll.knob == 23, "2549 metal takes the knob to step 23");
+    expect(info.metal_hundreds == 26, "metal rounds down to hundreds");
+    expect(mp::panel_text(f.panel, "METALTEXT") == "2600", "METALTEXT shows rounded metal");
+    oa::ui::gui_input::scroll_set_value(metal->scroll, 50000);
+    mp::lobby_on_metal(f.panel, &f.lobby);
+    expect(info.metal_hundreds == 100, "metal clamps to the slider maximum");
+    auto* units = mp::panel_control(f.panel, "MAXUNITS");
+    oa::ui::gui_input::scroll_set_value(units->scroll, 0);
+    mp::lobby_on_max_units(f.panel, &f.lobby);
+    expect(info.max_units == 20, "MAXUNITS floor 20");
+    oa::ui::gui_input::scroll_set_value(units->scroll, 230);
+    mp::lobby_on_max_units(f.panel, &f.lobby);
+    expect(info.max_units == 250, "MAXUNITS top is the game limit");
+    expect(mp::panel_text(f.panel, "MAXUNITSTEXT") == "250", "MAXUNITSTEXT follows");
+}
+
+/// Returns SLIDERS frame sizes laid out as COMMONGUI.GAF's: a vertical
+/// bar's art from frame 0 and a horizontal bar's from frame 10, each a
+/// 16-pixel track, a 10-pixel knob and two 9-pixel arrows with held faces.
+///
+/// @return the 20 frame sizes
+std::vector<oa::ui::gui_input::ScrollFrame> shared_slider_frames() {
+    std::vector<oa::ui::gui_input::ScrollFrame> frames(20);
+    for (int base : {0, 10}) {
+        const bool across = base == 10;
+        for (int frame = 0; frame < 3; ++frame)
+            frames[static_cast<std::size_t>(base + frame)] = {16, 16};
+        for (int frame = 3; frame < 6; ++frame)
+            frames[static_cast<std::size_t>(base + frame)] = {10, 10};
+        for (int frame = 6; frame < 10; ++frame)
+            frames[static_cast<std::size_t>(base + frame)] =
+                across ? oa::ui::gui_input::ScrollFrame{9, 16}
+                       : oa::ui::gui_input::ScrollFrame{16, 9};
+    }
+    return frames;
+}
+
+/// Builds a panel of sliders: METAL as LOUNGE2.GUI has it, a vertical bar, a
+/// vertical bar that scrolls a list in its group, and an item after them.
+///
+/// @return the layout
+oa::ui::gui_layout::Layout sliders_layout() {
+    namespace gui = oa::ui::gui_layout;
+    const auto gadget = [](gui::GadgetType type,
+                           const char* name,
+                           uint8_t group,
+                           int16_t x,
+                           int16_t y,
+                           int16_t width,
+                           int16_t height,
+                           int32_t attributes) {
+        gui::Gadget made;
+        made.common.type = type;
+        made.common.name = name;
+        made.common.association = group;
+        made.common.x = x;
+        made.common.y = y;
+        made.common.width = width;
+        made.common.height = height;
+        made.common.attributes = attributes;
+        made.common.active = 1;
+        if (type == gui::GadgetType::scroll_bar)
+            made.fields = gui::ScrollBarFields{106, 22, 0, 10, "", ""};
+        return made;
+    };
+    gui::Layout layout;
+    layout.gadgets.push_back(gadget(gui::GadgetType::panel, "sliders.GUI", 0, 0, 0, 640, 480, 0));
+    layout.gadgets.push_back(gadget(gui::GadgetType::scroll_bar, "METAL", 30, 510, 24, 120, 16, 1));
+    layout.gadgets.push_back(
+        gadget(gui::GadgetType::scroll_bar, "UPDOWN", 7, 100, 100, 20, 120, 2)
+    );
+    layout.gadgets.push_back(gadget(gui::GadgetType::list_box, "ROWS", 1, 200, 100, 100, 190, 1));
+    layout.gadgets.push_back(
+        gadget(gui::GadgetType::scroll_bar, "SLIDER", 1, 300, 100, 16, 190, 2)
+    );
+    layout.gadgets.push_back(gadget(gui::GadgetType::label, "", 0, 0, 0, 10, 10, 0));
+    return layout;
+}
+
+/// Checks how panel_bind_sliders binds a panel's sliders to the engine's bars.
+void test_slider_binding() {
+    oa::ui::gui_input::ScrollArtFrames art;
+    art.shared = shared_slider_frames();
+    mp::Panel panel;
+    mp::panel_load(panel, "sliders", sliders_layout());
+    const auto loaded = panel.count;
+    expect(
+        mp::panel_control(panel, "METAL")->scroll.maximum == 22,
+        "a slider's maximum is its GUI thickness"
+    );
+    mp::panel_bind_sliders(panel, art);
+    expect(panel.count == loaded, "the arrows are the bars' own, not controls");
+
+    const auto metal_index = mp::panel_find(panel, "METAL");
+    const auto* metal = mp::panel_control(panel, "METAL");
+    expect(
+        metal->x == 519 && metal->y == 24 && metal->width == 102 && metal->height == 16 &&
+            metal->scroll.rect.x == 519 && metal->scroll.rect.width == 102,
+        "a horizontal slider lies between its arrows"
+    );
+    expect(
+        metal->scroll.range == 88 && metal->scroll.knob_size == 10 &&
+            metal->scroll.art == oa::ui::gui_input::ScrollArt::shared &&
+            metal->scroll.art_base == 10,
+        "a horizontal bar takes the shared art from frame 10 and 88 steps"
+    );
+    const auto& back_arrow = metal->scroll.back_arrow;
+    const auto& forward_arrow = metal->scroll.forward_arrow;
+    expect(
+        back_arrow.x == 510 && back_arrow.y == 24 && back_arrow.width == 9 &&
+            back_arrow.height == 16 && forward_arrow.x == 621 && forward_arrow.y == 24 &&
+            forward_arrow.width == 9 && forward_arrow.height == 16,
+        "the arrows sit at the bar's start and end"
+    );
+    expect(
+        mp::panel_hit(panel, 512, 30) == metal_index, "an arrow takes the pointer for its slider"
+    );
+    panel.controls[static_cast<std::size_t>(metal_index)].active = 0;
+    expect(mp::panel_hit(panel, 512, 30) == mp::kNoControl, "a hidden slider's arrows are hidden");
+    panel.controls[static_cast<std::size_t>(metal_index)].active = 1;
+
+    const auto* updown = mp::panel_control(panel, "UPDOWN");
+    expect(
+        updown->x == 100 && updown->y == 109 && updown->width == 16 && updown->height == 102 &&
+            updown->scroll.range == 106 && updown->scroll.art_base == 0 &&
+            updown->scroll.back_arrow.y == 100 && updown->scroll.forward_arrow.y == 211,
+        "a vertical bar takes the art from frame 0, its width and the room between its arrows"
+    );
+    const auto* listed = mp::panel_control(panel, "SLIDER");
+    expect(
+        listed->scroll.art == oa::ui::gui_input::ScrollArt::shared && listed->y == 109 &&
+            listed->height == 172 && listed->scroll.knob == 0 &&
+            listed->scroll.back_arrow.y == 100 && listed->scroll.forward_arrow.y == 281,
+        "a slider that scrolls a list is bound between its arrows as any vertical bar"
+    );
+    expect(
+        listed->active == 0 && mp::panel_hit(panel, 305, 104) == mp::kNoControl &&
+            mp::panel_hit(panel, 305, 150) == mp::kNoControl,
+        "a list's scroll bar and its arrows are hidden until the list is filled"
+    );
+    expect(!listed->notifies_panel, "a list's scroll bar does not click its panel");
+
+    mp::Panel bare;
+    mp::panel_load(bare, "sliders", sliders_layout());
+    mp::panel_bind_sliders(bare, {});
+    const auto* bare_metal = mp::panel_control(bare, "METAL");
+    expect(
+        bare_metal->scroll.art == oa::ui::gui_input::ScrollArt::none &&
+            bare_metal->scroll.range == 114 && bare_metal->x == 510,
+        "without art a slider has no arrows and its longer side less 6 steps"
+    );
+}
+
+/// Checks the pointer on a bound slider and its arrows: drags, steps toward
+/// the pointer, and the arrows' steps and repeat.
+void test_slider_input() {
+    oa::ui::gui_input::ScrollArtFrames art;
+    art.shared = shared_slider_frames();
+    mp::Panel panel;
+    mp::panel_load(panel, "sliders", sliders_layout());
+    mp::panel_bind_sliders(panel, art);
+    const auto index = mp::panel_find(panel, "METAL");
+    auto& metal = panel.controls[static_cast<std::size_t>(index)];
+    // A press on an arrow is a press on its slider where the arrow is.
+    const auto back = index;
+    const auto forward = index;
+    metal.scroll.knob = 9;
+    oa::ui::gui_input::ScrollHold hold;
+    uint32_t tick = 500;
+
+    // A press on the knob drags it pixel for pixel, once an update, however
+    // often the pointer moves in between; the release lands on it.
+    const int32_t knob_x = metal.x + metal.scroll.knob + 5;
+    expect(
+        mp::slider_press(panel, hold, index, knob_x, 32, tick) == mp::kNoControl,
+        "a press moves nothing"
+    );
+    expect(hold.bar == index && hold.dragging, "a press on the knob drags it");
+    for (const int32_t moved : {5, 12, 20})
+        oa::ui::gui_input::scroll_move(hold, knob_x + moved, 5);
+    expect(metal.scroll.knob == 9, "the pointer's moves alone leave the knob");
+    expect(
+        mp::slider_hold_tick(panel, hold, tick) == index && metal.scroll.knob == 29,
+        "the next update moves the knob to the pointer, once"
+    );
+    expect(
+        mp::slider_hold_tick(panel, hold, tick) == mp::kNoControl &&
+            mp::slider_hold_tick(panel, hold, tick + 1) == mp::kNoControl &&
+            metal.scroll.knob == 29,
+        "a dragged knob does not creep"
+    );
+    expect(
+        mp::slider_release(panel, hold, knob_x + 20, 5) == mp::kNoControl &&
+            metal.scroll.knob == 29,
+        "released on the knob, it stays"
+    );
+    expect(hold.bar == mp::kNoControl, "the release ends the hold");
+    (void)mp::slider_press(panel, hold, index, metal.x + metal.scroll.knob + 3, 32, tick);
+    oa::ui::gui_input::scroll_move(hold, 700, 32);
+    expect(
+        mp::slider_hold_tick(panel, hold, tick) == index && metal.scroll.knob == 87,
+        "a drag stops at the last step"
+    );
+    oa::ui::gui_input::scroll_move(hold, 0, 32);
+    expect(
+        mp::slider_hold_tick(panel, hold, tick) == index && metal.scroll.knob == 0,
+        "and at the first"
+    );
+    // Released before the knob, the release steps it toward the pointer.
+    expect(
+        mp::slider_release(panel, hold, 0, 32) == mp::kNoControl && metal.scroll.knob == 0,
+        "the knob stays at the first step"
+    );
+    // A drag moved and released between two updates ends where it was last
+    // updated, and the release steps it once toward the pointer.
+    (void)mp::slider_press(panel, hold, index, metal.x + metal.scroll.knob + 3, 32, tick);
+    oa::ui::gui_input::scroll_move(hold, metal.x + 30, 32);
+    expect(
+        mp::slider_release(panel, hold, metal.x + 30, 32) == index && metal.scroll.knob == 1,
+        "the release does not drag"
+    );
+
+    // A press on the track holds it: one step toward the pointer each tick,
+    // and one more on release.
+    metal.scroll.knob = 40;
+    expect(
+        mp::slider_press(panel, hold, index, 610, 30, tick) == mp::kNoControl && !hold.dragging,
+        "a press on the track does not drag"
+    );
+    expect(
+        mp::slider_hold_tick(panel, hold, tick) == mp::kNoControl && metal.scroll.knob == 40,
+        "no step in the tick of the press"
+    );
+    for (uint32_t step = 1; step <= 5; ++step) {
+        expect(
+            mp::slider_hold_tick(panel, hold, tick + step) == index, "a held track steps each tick"
+        );
+        expect(mp::slider_hold_tick(panel, hold, tick + step) == mp::kNoControl, "and once a tick");
+    }
+    expect(metal.scroll.knob == 45, "five ticks, five steps toward the pointer");
+    expect(
+        mp::slider_release(panel, hold, 610, 30) == index && metal.scroll.knob == 46,
+        "the release steps once more"
+    );
+    (void)mp::slider_press(panel, hold, index, 520, 30, tick);
+    expect(
+        mp::slider_release(panel, hold, 520, 30) == index && metal.scroll.knob == 45,
+        "a quick click before the knob steps back once"
+    );
+
+    // An arrow steps at once, then after 15 ticks once a tick; its handler runs even at the end.
+    tick = 700;
+    expect(
+        mp::slider_press(panel, hold, forward, 625, 30, tick) == index && metal.scroll.knob == 46,
+        "a forward arrow steps at once"
+    );
+    int32_t steps = 0;
+    for (uint32_t step = 0; step < 15; ++step)
+        if (mp::slider_hold_tick(panel, hold, tick + step) != mp::kNoControl)
+            ++steps;
+    expect(steps == 0 && metal.scroll.knob == 46, "a held arrow waits 15 ticks");
+    expect(
+        mp::slider_hold_tick(panel, hold, tick + 15) == index && metal.scroll.knob == 47,
+        "then repeats"
+    );
+    expect(mp::slider_hold_tick(panel, hold, tick + 15) == mp::kNoControl, "once a tick");
+    expect(
+        mp::slider_hold_tick(panel, hold, tick + 16) == index && metal.scroll.knob == 48,
+        "every tick"
+    );
+    expect(
+        mp::slider_release(panel, hold, 625, 30) == mp::kNoControl && hold.bar == mp::kNoControl,
+        "an arrow's release does nothing"
+    );
+    metal.scroll.knob = 0;
+    expect(
+        mp::slider_press(panel, hold, back, 512, 30, tick) == index && metal.scroll.knob == 0,
+        "a back arrow at the start still runs the handler"
+    );
+    (void)mp::slider_release(panel, hold, 512, 30);
+    metal.scroll.knob = 87;
+    expect(
+        mp::slider_press(panel, hold, forward, 625, 30, tick) == index && metal.scroll.knob == 87,
+        "a forward arrow at the end still runs the handler"
+    );
+
+    // A slider grayed while held lets go.
+    metal.grayed = true;
+    expect(
+        mp::slider_hold_tick(panel, hold, tick + 40) == mp::kNoControl &&
+            hold.bar == mp::kNoControl,
+        "a grayed slider ends the hold"
+    );
+    expect(
+        mp::slider_press(panel, hold, forward, 625, 30, tick) == mp::kNoControl &&
+            metal.scroll.knob == 87,
+        "a grayed slider's arrow ignores a press"
+    );
+    metal.grayed = false;
+    const auto listed = mp::panel_find(panel, "SLIDER");
+    expect(
+        mp::slider_press(panel, hold, listed, 305, 150, tick) == mp::kNoControl &&
+            hold.bar == mp::kNoControl,
+        "a hidden scroll bar is not held"
+    );
+}
+
+/// Builds a panel of lists: ROWS and NAMES scrolled by SLIDER in group 1,
+/// CHAT alone in group 2, and EMPTY with BAR3 in group 3. ROWS takes the focus.
+///
+/// @return the layout
+oa::ui::gui_layout::Layout lists_layout() {
+    namespace gui = oa::ui::gui_layout;
+    const auto gadget = [](gui::GadgetType type,
+                           const char* name,
+                           uint8_t group,
+                           int16_t x,
+                           int16_t y,
+                           int16_t width,
+                           int16_t height,
+                           int32_t attributes) {
+        gui::Gadget made;
+        made.common.type = type;
+        made.common.name = name;
+        made.common.association = group;
+        made.common.x = x;
+        made.common.y = y;
+        made.common.width = width;
+        made.common.height = height;
+        made.common.attributes = attributes;
+        made.common.active = 1;
+        if (type == gui::GadgetType::scroll_bar)
+            made.fields = gui::ScrollBarFields{106, 22, 0, 10, "", ""};
+        else if (type == gui::GadgetType::list_box)
+            made.fields = gui::ListBoxFields{};
+        return made;
+    };
+    gui::Layout layout;
+    auto root = gadget(gui::GadgetType::panel, "lists.GUI", 0, 0, 0, 640, 480, 0);
+    gui::PanelFields fields;
+    fields.default_focus = "ROWS";
+    root.fields = fields;
+    layout.gadgets.push_back(root);
+    layout.gadgets.push_back(gadget(gui::GadgetType::list_box, "ROWS", 1, 200, 100, 100, 190, 1));
+    layout.gadgets.push_back(gadget(gui::GadgetType::list_box, "NAMES", 1, 100, 100, 90, 190, 1));
+    layout.gadgets.push_back(
+        gadget(gui::GadgetType::scroll_bar, "SLIDER", 1, 300, 100, 16, 190, 2)
+    );
+    layout.gadgets.push_back(gadget(gui::GadgetType::list_box, "CHAT", 2, 0, 300, 100, 96, 1));
+    layout.gadgets.push_back(gadget(gui::GadgetType::list_box, "EMPTY", 3, 400, 100, 90, 190, 1));
+    layout.gadgets.push_back(gadget(gui::GadgetType::scroll_bar, "BAR3", 3, 500, 100, 16, 190, 2));
+    return layout;
+}
+
+/// Returns count rows named by their number.
+std::vector<std::string> numbered_rows(int32_t count) {
+    std::vector<std::string> rows;
+    for (int32_t row = 0; row < count; ++row)
+        rows.push_back(std::to_string(row));
+    return rows;
+}
+
+/// Checks the lists and the scroll bar that scrolls them: the first draw's
+/// trim, filling, the knob's size and range, the two-way link between knob
+/// and rows, a screen's pick, the keys, presses and the wheel's scroll.
+void test_list_scrolling() {
+    oa::ui::gui_input::ScrollArtFrames art;
+    art.shared = shared_slider_frames();
+    mp::Panel panel;
+    mp::panel_load(panel, "lists", lists_layout());
+    const auto rows_index = mp::panel_find(panel, "ROWS");
+    const auto names_index = mp::panel_find(panel, "NAMES");
+    const auto bar_index = mp::panel_find(panel, "SLIDER");
+    const auto chat_index = mp::panel_find(panel, "CHAT");
+    expect(panel.focus == rows_index, "the GUI's defaultfocus takes the focus");
+    panel.line_height = 14;
+    auto& rows = panel.controls[static_cast<std::size_t>(rows_index)];
+    auto& names = panel.controls[static_cast<std::size_t>(names_index)];
+    auto& bar = panel.controls[static_cast<std::size_t>(bar_index)];
+    auto& chat = panel.controls[static_cast<std::size_t>(chat_index)];
+    rows.list_first = 3;
+    rows.list_selection = 4;
+    mp::panel_bind_lists(panel);
+    mp::panel_bind_sliders(panel, art);
+    expect(
+        rows.height == 176 && chat.height == 96 && rows.list_first == 0 && rows.list_selection == 0,
+        "the first draw trims each list to whole 16-pixel rows and shows its first row"
+    );
+    expect(bar.y == 109 && bar.height == 172 && bar.active == 0, "the bar is bound and hidden");
+    expect(
+        mp::panel_group_member(panel, rows_index, mp::ControlType::slider) == bar_index &&
+            mp::panel_group_member(panel, bar_index, mp::ControlType::list_box) == rows_index &&
+            mp::panel_group_member(panel, chat_index, mp::ControlType::slider) == mp::kNoControl,
+        "a list's scroll bar shares its group"
+    );
+
+    // Eleven 15-pixel rows fit in 176 pixels; twelve do not.
+    mp::panel_fill_list(panel, "ROWS", numbered_rows(11));
+    expect(
+        rows.list_item_height == 15 && rows.list_last_first == 0 && bar.active == 0,
+        "rows that fit leave the bar hidden"
+    );
+    bar.scroll.knob = 5;
+    mp::panel_fill_list(panel, "ROWS", numbered_rows(12));
+    mp::panel_fill_list(panel, "NAMES", numbered_rows(12));
+    expect(
+        bar.active != 0 && rows.list_last_first == 1 && bar.scroll.knob_size == 154 &&
+            bar.scroll.range == 15,
+        "rows that overflow show the bar with a knob of 11/12 of 169 pixels and 15 steps"
+    );
+    expect(bar.scroll.knob == 5, "filling a list leaves the knob where it was");
+    expect(
+        mp::panel_hit(panel, 305, 104) != mp::kNoControl, "a shown bar's arrows take the pointer"
+    );
+    bar.scroll.knob = 0;
+    oa::ui::gui_input::ScrollHold hold;
+    const auto forward = bar_index;
+    expect(
+        mp::slider_press(panel, hold, forward, 305, 285, 100) == bar_index && bar.scroll.knob == 1,
+        "the down arrow steps the knob"
+    );
+    (void)mp::slider_release(panel, hold, 305, 285);
+    mp::panel_sync_group(panel, bar_index);
+    expect(rows.list_first == 0 && names.list_first == 0, "one step of 14 does not scroll a row");
+    bar.scroll.knob = 14;
+    mp::panel_sync_group(panel, bar_index);
+    expect(
+        rows.list_first == 1 && names.list_first == 1 && rows.list_selection == 0,
+        "the last step shows the last page and keeps the selection"
+    );
+
+    // A hundred rows: 11 on a page, the last page from row 89, a knob of
+    // 11/100 of 169 pixels and 151 steps.
+    mp::panel_fill_list(panel, "ROWS", numbered_rows(100));
+    mp::panel_fill_list(panel, "NAMES", numbered_rows(100));
+    expect(
+        rows.list_last_first == 89 && bar.scroll.knob_size == 18 && bar.scroll.range == 151,
+        "a hundred rows size the knob"
+    );
+    bar.scroll.knob = 40;
+    mp::panel_sync_group(panel, bar_index);
+    expect(rows.list_first == 23 && names.list_first == 23, "the knob shows 89 * 40 / 150 rows on");
+    mp::panel_select_list_row(panel, "ROWS", 30);
+    expect(
+        rows.list_selection == 30 && rows.list_first == 23 && bar.scroll.knob == 40,
+        "a pick on the page does not scroll"
+    );
+    mp::panel_select_list_row(panel, "ROWS", 60);
+    expect(
+        rows.list_selection == 60 && rows.list_first == 60 && bar.scroll.knob == 101,
+        "a pick off the page scrolls to it and moves the knob to 151 * 60 / 89"
+    );
+    mp::panel_select_list_row(panel, "ROWS", 95);
+    expect(
+        rows.list_first == 89 && bar.scroll.knob == 151,
+        "a pick on the last page stops at it, the knob one past its last step"
+    );
+
+    // Up and Down move a row and scroll at the page's edges; the group follows.
+    rows.list_first = 40;
+    rows.list_selection = 50;
+    mp::panel_step_list(panel, rows_index, true);
+    expect(
+        rows.list_selection == 51 && rows.list_first == 41 && names.list_first == 41 &&
+            names.list_selection == 51 && bar.scroll.knob == 69,
+        "Down past the page's last row scrolls a row and the knob follows"
+    );
+    mp::panel_step_list(panel, rows_index, false);
+    expect(
+        rows.list_selection == 50 && rows.list_first == 41, "Up on the page moves the selection"
+    );
+    rows.list_selection = 41;
+    mp::panel_step_list(panel, rows_index, false);
+    expect(rows.list_selection == 40 && rows.list_first == 40, "Up past the top scrolls back");
+    rows.list_first = 89;
+    rows.list_selection = 99;
+    mp::panel_step_list(panel, rows_index, true);
+    expect(rows.list_selection == 99 && rows.list_first == 89, "Down stops at the last row");
+    rows.list_first = 0;
+    rows.list_selection = 0;
+    mp::panel_step_list(panel, rows_index, false);
+    expect(rows.list_selection == 0 && rows.list_first == 0, "Up stops at the first row");
+    rows.list_selection = 60;
+    mp::panel_step_list(panel, rows_index, true);
+    expect(
+        rows.list_selection == 60 && rows.list_first == 60,
+        "a selection off the page is brought into view first"
+    );
+
+    // A press selects the row under the pointer, focuses the list and gives the group its row.
+    panel.focus = mp::kNoControl;
+    expect(
+        mp::panel_press_list(panel, rows_index, 148) == mp::ListPress::changed &&
+            rows.list_selection == 63 && names.list_selection == 63 && panel.focus == rows_index,
+        "a press selects its row for the whole group and focuses the list"
+    );
+    expect(
+        mp::panel_press_list(panel, rows_index, 150) == mp::ListPress::same, "again, the same row"
+    );
+    expect(
+        mp::panel_press_list(panel, rows_index, 272) == mp::ListPress::changed &&
+            rows.list_selection == 70,
+        "a press on the page's last pixels selects its last row"
+    );
+    expect(
+        mp::panel_press_list(panel, rows_index, 273) == mp::ListPress::missed &&
+            mp::panel_press_list(panel, rows_index, 101) == mp::ListPress::missed &&
+            rows.list_selection == 70,
+        "a press on the list's edge misses"
+    );
+    mp::panel_fill_list(panel, "ROWS", numbered_rows(3));
+    expect(bar.active == 0, "three rows hide the bar again");
+    expect(
+        mp::panel_press_list(panel, rows_index, 190) == mp::ListPress::changed &&
+            rows.list_selection == 2 && names.list_selection == 2,
+        "a press below the last row selects the last row"
+    );
+    names.list_first = 0;
+    expect(
+        mp::panel_press_list(panel, names_index, 102 + 15 * 10) == mp::ListPress::changed &&
+            names.list_selection == 10 && rows.list_selection == 2,
+        "the group takes a row no further than its own last"
+    );
+    expect(
+        mp::panel_press_list(panel, chat_index, 303) == mp::ListPress::missed &&
+            panel.focus == names_index,
+        "a press on an empty list misses and keeps the focus"
+    );
+    mp::panel_set_items(panel, "CHAT", {"hello"});
+    expect(
+        mp::panel_press_list(panel, chat_index, 303) == mp::ListPress::same &&
+            panel.focus == chat_index,
+        "a press on a list with no scroll bar focuses it too"
+    );
+
+    // The wheel's scroll stays within the pages, even for an empty list.
+    mp::panel_fill_list(panel, "ROWS", numbered_rows(100));
+    rows.list_first = 88;
+    expect(
+        mp::panel_scroll_list(panel, rows_index, 1) && rows.list_first == 89 &&
+            bar.scroll.knob == 151 && names.list_first == 89,
+        "the wheel scrolls a row and the knob and group follow"
+    );
+    expect(
+        !mp::panel_scroll_list(panel, rows_index, 1) && rows.list_first == 89,
+        "not past the last page"
+    );
+    rows.list_first = 0;
+    expect(
+        !mp::panel_scroll_list(panel, rows_index, -1) && rows.list_first == 0,
+        "nor before the first"
+    );
+    mp::panel_fill_list(panel, "EMPTY", {});
+    const auto empty_index = mp::panel_find(panel, "EMPTY");
+    const auto& empty = panel.controls[static_cast<std::size_t>(empty_index)];
+    expect(
+        empty.list_last_first == -1 && mp::panel_control(panel, "BAR3")->active == 0 &&
+            !mp::panel_scroll_list(panel, empty_index, 1) &&
+            !mp::panel_scroll_list(panel, empty_index, -1) && empty.list_first == 0,
+        "an empty list neither shows its bar nor scrolls"
+    );
+    expect(
+        !mp::panel_scroll_list(panel, chat_index, 1) && chat.list_first == 0,
+        "the wheel leaves a list with no pitch alone"
+    );
+}
+
+/// Checks LOUNGE2's sliders once bound with the installed art: their
+/// geometry, their starting values and an arrow step's player info.
+void test_lounge_sliders(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    const auto index = mp::panel_find(f.panel, "METAL");
+    const auto* metal = mp::panel_control(f.panel, "METAL");
+    expect(
+        metal != nullptr && metal->x == 519 && metal->y == 24 && metal->width == 102 &&
+            metal->scroll.range == 88 && metal->scroll.knob_size == 10,
+        "METAL lies between its arrows with 88 steps"
+    );
+    if (metal == nullptr)
+        return;
+    const auto& back_arrow = metal->scroll.back_arrow;
+    const auto& forward_arrow = metal->scroll.forward_arrow;
+    expect(
+        back_arrow.x == 510 && back_arrow.y == 24 && back_arrow.width == 9 &&
+            back_arrow.height == 16,
+        "METAL's back arrow"
+    );
+    expect(
+        forward_arrow.x == 621 && forward_arrow.y == 24 && forward_arrow.width == 9 &&
+            forward_arrow.height == 16,
+        "METAL's forward arrow"
+    );
+    const auto forward = index;
+    const auto* energy = mp::panel_control(f.panel, "ENERGY");
+    const auto* units = mp::panel_control(f.panel, "MAXUNITS");
+    expect(
+        metal->scroll.knob == 9 && mp::panel_text(f.panel, "METALTEXT") == "1000",
+        "metal starts at 1000 with the knob at step 9"
+    );
+    expect(
+        energy != nullptr && energy->scroll.knob == 9 &&
+            mp::panel_text(f.panel, "ENERGYTEXT") == "1000",
+        "energy starts at 1000 with the knob at step 9"
+    );
+    expect(
+        units != nullptr && units->scroll.range == 88 && units->scroll.knob == 87 &&
+            mp::panel_text(f.panel, "MAXUNITSTEXT") == "250",
+        "max units starts at 250 with the knob at the last step"
+    );
+
+    auto& info = mp::local_info(f.lobby);
+    oa::ui::gui_input::ScrollHold hold;
+    const auto sent = f.sent_of(oa::netgame::RecordType::player_info);
+    const auto stepped = mp::slider_press(f.panel, hold, forward, 625, 30, clock_ticks);
+    expect(stepped == index, "the forward arrow steps METAL");
+    if (stepped == index)
+        metal->on_change(f.panel, &f.lobby);
+    (void)mp::slider_release(f.panel, hold, 625, 30);
+    expect(
+        metal->scroll.knob == 10 && mp::panel_text(f.panel, "METALTEXT") == "1100" &&
+            info.metal_hundreds == 11,
+        "one step forward gives 1100 metal"
+    );
+    expect(f.sent_of(oa::netgame::RecordType::player_info) == sent + 1, "one player info is sent");
+
+    // Every knob position stands for a value a 3.1c host can send.
+    auto sample = *metal;
+    for (int16_t knob = 0; knob < sample.scroll.range; ++knob) {
+        sample.scroll.knob = knob;
+        expect(
+            oa::ui::gui_input::scroll_value(sample.scroll) / 100 != 7,
+            "no knob position gives 700 metal"
+        );
+    }
+}
+
+void test_ready_and_start(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    expect(!mp::lobby_ready_to_start(f.lobby), "no remote players: not ready");
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    mp::lobby_player_count(*f.game) = 2;
+    expect(f.press("READY0"), "READY0 clickable");
+    expect((mp::local_info(f.lobby).options & mp::option::ready) != 0, "local ready bit set");
+    expect(!mp::lobby_ready_to_start(f.lobby), "remote not ready yet");
+    f.remote_info(0x200, mp::option::ready, 1);
+    expect(mp::lobby_ready_to_start(f.lobby), "all ready");
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(!mp::panel_control(f.panel, "START")->active, "START hidden until units are synced");
+    f.synced(0x200);
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(!mp::panel_control(f.panel, "START")->grayed, "START enabled once everyone is ready");
+    last_message.clear();
+    mp::lobby_player_team(mp::local_player(f.lobby)) = 2;
+    mp::lobby_player_team(mp::slot_player(f.lobby, 1)) = 2;
+    expect(mp::panel_press(f.panel, "START"), "START pressable");
+    expect(
+        mp::lobby_handle_event(f.lobby, f.panel) == mp::LobbyAction::none, "same team blocks start"
+    );
+    expect(
+        last_message == "Can not start game with all players on the same team.", "same team message"
+    );
+    mp::lobby_player_team(mp::slot_player(f.lobby, 1)) = mp::kNoTeam;
+    (void)mp::panel_press(f.panel, "START");
+    expect(mp::lobby_handle_event(f.lobby, f.panel) == mp::LobbyAction::start, "START accepted");
+    expect((mp::local_info(f.lobby).options & mp::option::started) != 0, "started flag set");
+    expect(f.game->frontend_pending_signal == 0x11, "start signal raised");
+
+    Fixture g(lounge);
+    for (int i = 0; i < 4; ++i)
+        g.join(0x300 + static_cast<uint32_t>(i), "P");
+    for (int i = 0; i < 4; ++i)
+        g.remote_info(
+            0x300 + static_cast<uint32_t>(i), mp::option::ready, static_cast<uint8_t>(i + 1)
+        );
+    for (int slot = 1; slot < 5; ++slot)
+        mp::slot_info(g.lobby, slot)->status = 0;
+    mp::lobby_player_count(*g.game) = 5;
+    for (int i = 0; i < 4; ++i)
+        g.synced(0x300 + static_cast<uint32_t>(i));
+    (void)g.press("READY0");
+    g.game->gui_flags |= 1;
+    (void)mp::lobby_tick(g.lobby, g.panel);
+    last_message.clear();
+    (void)mp::panel_press(g.panel, "START");
+    (void)mp::lobby_handle_event(g.lobby, g.panel);
+    expect(
+        last_message == "There are not enough game CDs present to play", "five players need two CDs"
+    );
+}
+
+/// Builds a battle room layout of its own: one row of READY, LOGO and CD
+/// templates, a picture surface that takes no clicks, and START, SYNCHING and
+/// the closed doors over them in LOUNGE2.GUI's rectangles and index order.
+///
+/// @return the layout
+oa::ui::gui_layout::Layout doors_layout() {
+    namespace gui = oa::ui::gui_layout;
+    const auto gadget = [](gui::GadgetType type,
+                           const char* name,
+                           int16_t x,
+                           int16_t y,
+                           int16_t width,
+                           int16_t height,
+                           int32_t attributes,
+                           bool active) {
+        gui::Gadget made;
+        made.common.type = type;
+        made.common.name = name;
+        made.common.x = x;
+        made.common.y = y;
+        made.common.width = width;
+        made.common.height = height;
+        made.common.attributes = attributes;
+        made.common.active = active ? 1 : 0;
+        return made;
+    };
+    const auto button = [&](const char* name,
+                            int16_t x,
+                            int16_t y,
+                            int16_t width,
+                            int16_t height,
+                            int32_t attributes,
+                            const char* text,
+                            bool grayed) {
+        auto made = gadget(gui::GadgetType::button, name, x, y, width, height, attributes, true);
+        gui::ButtonFields fields;
+        fields.text = text;
+        fields.grayed_out = grayed;
+        made.fields = fields;
+        return made;
+    };
+    const auto surface = [&](const char* name,
+                             int16_t x,
+                             int16_t y,
+                             int16_t width,
+                             int16_t height,
+                             bool active,
+                             bool hot) {
+        auto made = gadget(gui::GadgetType::hot_surface, name, x, y, width, height, 0, active);
+        made.fields = gui::HotSurfaceFields{hot};
+        return made;
+    };
+    gui::Layout layout;
+    layout.gadgets.push_back(
+        gadget(gui::GadgetType::panel, "lounge2.GUI", 0, 0, 640, 480, 0, true)
+    );
+    layout.gadgets.push_back(button("READYx", 479, 71, 16, 16, 0x8a, "", false));
+    layout.gadgets.push_back(button("START", 522, 437, 96, 31, 0x10002, "Start Game", false));
+    layout.gadgets.push_back(surface("LOGOx", 179, 71, 16, 16, true, true));
+    layout.gadgets.push_back(surface("PICTURE", 300, 150, 100, 100, true, false));
+    layout.gadgets.push_back(button("SYNCHING", 522, 437, 96, 31, 18, "Synching", true));
+    layout.gadgets.push_back(surface("battlestart", 508, 437, 125, 30, false, false));
+    layout.gadgets.push_back(gadget(gui::GadgetType::image, "CDx", 105, 71, 16, 16, 0, false));
+    return layout;
+}
+
+/// Returns the control under a control's centre.
+///
+/// @param panel panel searched
+/// @param name the control whose centre is taken
+/// @return the index panel_hit finds there
+int32_t hit_centre(const mp::Panel& panel, const char* name) {
+    const auto* control = mp::panel_control(panel, name);
+    if (control == nullptr)
+        return mp::kNoControl;
+    return mp::panel_hit(panel, control->x + control->width / 2, control->y + control->height / 2);
+}
+
+/// Checks that only hot surfaces take clicks.
+void test_hot_surfaces() {
+    mp::Panel panel;
+    mp::panel_load(panel, "doors", doors_layout());
+    expect(mp::panel_control(panel, "LOGOx")->hot, "a hot surface loads hot");
+    expect(!mp::panel_control(panel, "PICTURE")->hot, "a surface with hotornot=0 loads not hot");
+    expect(
+        hit_centre(panel, "PICTURE") == mp::kNoControl, "a surface that is not hot is never hit"
+    );
+    expect(!mp::panel_press(panel, "PICTURE"), "a surface that is not hot cannot be pressed");
+    expect(
+        hit_centre(panel, "LOGOx") == mp::panel_find(panel, "LOGOx"), "a hot surface takes clicks"
+    );
+    expect(mp::panel_press(panel, "LOGOx"), "a hot surface can be pressed");
+}
+
+/// Checks START behind its doors.
+///
+/// The closed doors take START's clicks until everyone is first ready; then
+/// SYNCHING stands in for START until the units are synced.
+void test_start_doors(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    auto& panel = f.panel;
+    const auto start = mp::panel_find(panel, "START");
+    const auto synching = mp::panel_find(panel, "SYNCHING");
+    const auto doors_index = mp::panel_find(panel, "battlestart");
+    expect(
+        start != mp::kNoControl && start < synching && synching < doors_index,
+        "START, SYNCHING and the doors keep LOUNGE2's order"
+    );
+    auto* doors = mp::panel_control(panel, "battlestart");
+    auto* start_button = mp::panel_control(panel, "START");
+    const auto start_attributes = start_button->attributes;
+    expect(
+        doors->active != 0 && doors->hot && doors->stage == 0,
+        "the battle room opens with its doors closed and taking clicks"
+    );
+    expect(hit_centre(panel, "START") == doors_index, "the closed doors take clicks over START");
+    sounds.clear();
+    expect(f.press("battlestart"), "the closed doors are pressed");
+    expect(sounds.empty(), "a press on the closed doors does nothing");
+    expect(
+        hit_centre(panel, "LOGO0") == mp::panel_find(panel, "LOGO0") &&
+            mp::panel_control(panel, "LOGO0")->hot,
+        "the colour square takes clicks while the host is not ready"
+    );
+
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, mp::option::ready, 1);
+    mp::lobby_player_count(*f.game) = 2;
+    expect(f.press("READY0"), "READY0 clickable");
+    mp::lobby_update_status(f.lobby, f.panel);
+    const auto color = mp::local_info(f.lobby).color;
+    expect(!f.press("LOGO0"), "the colour square ignores clicks while the host is ready");
+    expect(
+        hit_centre(panel, "LOGO0") != mp::panel_find(panel, "LOGO0"),
+        "the colour square is not hit while the host is ready"
+    );
+    expect(mp::local_info(f.lobby).color == color, "a ready host keeps its colour");
+    sounds.clear();
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(mp::lobby_ready_to_start(f.lobby), "everyone is ready");
+    expect(!doors->hot && doors->stage == 1, "the doors stop taking clicks and start to open");
+    expect(sounds.size() == 1 && sounds[0] == "Options", "the doors open with the Options sound");
+    expect(
+        start_button->active == 0 && mp::panel_control(panel, "SYNCHING")->active != 0,
+        "SYNCHING stands in for START until the units are synced"
+    );
+    expect(hit_centre(panel, "START") == synching, "SYNCHING takes the click over START");
+    expect(!mp::panel_press(panel, synching), "the grayed SYNCHING button ignores it");
+
+    f.synced(0x200);
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(
+        start_button->active != 0 && !start_button->grayed && hit_centre(panel, "START") == start,
+        "START takes clicks once everyone is ready and the units are synced"
+    );
+    expect(start_button->attributes == start_attributes, "START keeps its attributes");
+    expect(
+        start_button->light_level == (clock_ticks & 0x1fU),
+        "START is lit at the tick's low five bits"
+    );
+
+    sounds.clear();
+    for (int step = 0; step < 12; ++step) {
+        clock_ticks += 4;
+        (void)mp::lobby_tick(f.lobby, f.panel);
+    }
+    expect(doors->stage == 8, "the doors open to their last frame");
+    expect(sounds.size() == 1 && sounds[0] == "Panel", "the half-open doors play the Panel sound");
+    (void)f.press("READY0");
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(start_button->grayed, "START grays again when a player is no longer ready");
+    expect(
+        !doors->hot && doors->stage == 8 && hit_centre(panel, "START") == start,
+        "the doors stay open and out of the way"
+    );
+}
+
+/// Checks each seated row's Go? light, colour square and CD icon.
+void test_row_indicators(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    const auto* ready0 = mp::panel_control(f.panel, "READY0");
+    const auto* ready1 = mp::panel_control(f.panel, "READY1");
+    expect(
+        ready0 != nullptr && ready0->active != 0 && ready0->value == 0 && !ready0->grayed,
+        "the host's Go? light is dark and clickable"
+    );
+    expect(
+        ready1 != nullptr && ready1->active != 0 && ready1->value == 0 && ready1->grayed,
+        "a remote Go? light is grayed"
+    );
+    const auto* logo0 = mp::panel_control(f.panel, "LOGO0");
+    const auto* logo1 = mp::panel_control(f.panel, "LOGO1");
+    expect(
+        logo0 != nullptr && logo0->active != 0 && logo0->stage == mp::local_info(f.lobby).color &&
+            logo0->hot,
+        "the host's colour square shows its colour"
+    );
+    expect(logo1 != nullptr && logo1->active != 0 && logo1->stage == 1, "a remote colour square");
+    expect(mp::panel_control(f.panel, "CD0")->active != 0, "the host shows its CD");
+    expect(mp::panel_control(f.panel, "CD1")->active != 0, "a remote player with a CD shows it");
+    expect(mp::panel_control(f.panel, "CD2")->active == 0, "an open slot shows no CD");
+    f.remote_info(0x200, mp::option::ready, 1);
+    expect(ready1->value == 1 && ready1->grayed, "a ready remote lights its grayed Go? light");
+    mp::slot_info(f.lobby, 1)->status = 0;
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(
+        mp::panel_control(f.panel, "CD1")->active == 0, "a remote player without a CD shows none"
+    );
+    expect(f.press("READY0"), "READY0 clickable");
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(ready0->value == 1 && !ready0->grayed, "the host's Go? light is lit");
+    expect(!logo0->hot && !logo1->hot, "no colour square takes clicks while the host is ready");
+}
+
+void test_slot_cycle(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    f.loopback.next_player_id = 0x101; // fixture manually seated the host at 0x100
+    auto& slot = mp::slot_player(f.lobby, 2);
+    expect(f.press("PLAYER2"), "PLAYER2 clickable");
+    expect(slot.status == mp::kSlotBlocked, "host click blocks an open slot");
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(mp::panel_text(f.panel, "PLAYER2") == "[BLOCKED]", "blocked slot label");
+    expect(f.press("PLAYER2"), "PLAYER2 clickable when blocked");
+    // The computer stays pending until the session announces its arrival.
+    expect(
+        slot.status == mp::kSlotComputer && slot.in_use == 0,
+        "computer waits for its session arrival"
+    );
+    const auto count_before = f.game->player_count;
+    mp::LobbyEvent arrival{};
+    expect(
+        f.lobby.net.receive(f.lobby.net.context, &arrival) &&
+            mp::lobby_apply_event(f.lobby, arrival),
+        "computer session arrival"
+    );
+    expect(f.game->player_count == count_before + 1, "computer arrival counts once");
+    expect(
+        mp::slot_info(f.lobby, 2)->state == mp::kSlotComputer,
+        "computer arrival keeps its controller"
+    );
+    expect(
+        slot.status == mp::kSlotComputer && slot.in_use != 0,
+        "blocked slot becomes a computer player"
+    );
+    expect(mp::slot_info(f.lobby, 2)->color == 1, "computer takes the next colour");
+    expect(f.press("PLAYER3"), "PLAYER3 clickable");
+    expect(f.press("PLAYER3"), "PLAYER3 clickable again");
+    expect(
+        mp::slot_player(f.lobby, 3).status == mp::kSlotOpen, "only one computer player is added"
+    );
+    clock_ticks += 0x1f;
+    expect(f.press("PLAYER2"), "PLAYER2 clickable as computer");
+    expect(slot.status == mp::kSlotOpen && slot.in_use == 0, "old computer slot is rejected");
+    expect(f.sent_of(oa::netgame::RecordType::reject) >= 1, "reject record sent");
+    auto& info = mp::local_info(f.lobby);
+    info.options |= mp::option::game_closed;
+    last_message.clear();
+    (void)f.press("PLAYER4");
+    (void)f.press("PLAYER4");
+    expect(
+        last_message == "Can't add another player when game is closed.",
+        "closed game refuses players"
+    );
+}
+
+void test_chat_and_leave(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    f.panel.focus = mp::panel_find(f.panel, "MESSAGE");
+    mp::panel_set_text(f.panel, "MESSAGE", "hello");
+    (void)f.press("MESSAGE");
+    expect(
+        std::strcmp(mp::lobby_chat_line(*f.game, 0), "<Host> hello") == 0, "chat line formatted"
+    );
+    expect(mp::panel_text(f.panel, "MESSAGE").empty(), "message box cleared");
+    expect(f.sent_of(oa::netgame::RecordType::chat) == 1, "chat record sent");
+    mp::LobbyEvent chat{};
+    chat.kind = mp::LobbyEventKind::record;
+    oa::netgame::ChatRecord record{};
+    std::snprintf(record.text, sizeof(record.text), "%s", "<Guest> hi");
+    std::size_t written = 0;
+    (void)oa::netgame::encode_record(record, chat.data, sizeof(chat.data), &written);
+    chat.size = static_cast<uint16_t>(written);
+    (void)mp::lobby_apply_event(f.lobby, chat);
+    mp::lobby_update_status(f.lobby, f.panel);
+    const auto* output = mp::panel_control(f.panel, "OUTPUT");
+    expect(
+        output != nullptr && output->items.size() == 2 && output->items[1] == "<Guest> hi",
+        "OUTPUT lists chat"
+    );
+    (void)mp::panel_press(f.panel, "PREVMENU");
+    expect(mp::lobby_handle_event(f.lobby, f.panel) == mp::LobbyAction::leave, "PREVMENU leaves");
+}
+
+/// Checks that a host browsing SELMAP's maps behind the battle room tells the others nothing.
+///
+/// A highlighted map is selected on the host's machine, so its map no
+/// longer matches the one it announced; the battle room's status, which
+/// would report the missing map, waits until the battle room is in front.
+void test_browsing_behind_a_dialog(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    const auto committed = map_name;
+    f.lobby.maps.content_hash = [](void*) {
+        return map_name == "Coast To Coast" ? 0x1234U : 0x5678U;
+    };
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    auto& mine = mp::local_info(f.lobby);
+    mine.options |= mp::option::ready;
+    const std::string label(mp::panel_text(f.panel, "MAPNAME"));
+    f.lobby.next_stats_tick = clock_ticks + 100;
+    const auto sent = f.loopback.sent_count;
+    const auto chat_head = mp::lobby_chat_head(*f.game);
+
+    // SELMAP previews another map on the host's machine only.
+    (void)select_map(nullptr, "Acid Pools");
+    expect(!mp::lobby_has_host_map(f.lobby), "the previewed map is not the one announced");
+    for (int frame = 0; frame < 3; ++frame)
+        (void)mp::lobby_tick(f.lobby, f.panel, mp::LobbyFront::dialog);
+    expect(f.loopback.sent_count == sent, "browsing behind a dialog sends nothing");
+    expect(
+        mp::lobby_chat_head(*f.game) == chat_head && (mine.options & mp::option::ready) != 0 &&
+            mp::panel_text(f.panel, "MAPNAME") == label,
+        "the host stays ready and the battle room still names the chosen map"
+    );
+
+    // PREVMENU puts the chosen map back before the battle room is in front again.
+    (void)select_map(nullptr, committed.c_str());
+    f.game->gui_flags |= 1;
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(
+        f.loopback.sent_count == sent && (mine.options & mp::option::ready) != 0 &&
+            mp::panel_text(f.panel, "MAPNAME") == label,
+        "back in front, the battle room finds nothing to report"
+    );
+
+    // With the battle room in front, the same preview is reported as a missing map.
+    (void)select_map(nullptr, "Acid Pools");
+    (void)mp::lobby_tick(f.lobby, f.panel);
+    expect(
+        f.sent_of(oa::netgame::RecordType::chat) > 0 && (mine.options & mp::option::ready) == 0,
+        "in front, the battle room reports a map the host lacks and clears its ready mark"
+    );
+    map_name = committed;
+}
+
+void test_client_rules(const oa::ui::gui_layout::Layout& lounge) {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services = test_services();
+    lobby.maps = test_maps();
+    game->players[0].player_id = 0x200;
+    mp::lobby_seat_local(lobby, 0, false, "Guest");
+    mp::LobbyEvent host{};
+    host.kind = mp::LobbyEventKind::player_joined;
+    host.player_id = 0x100;
+    std::snprintf(host.name, sizeof(host.name), "%s", "Host");
+    (void)mp::lobby_apply_event(lobby, host);
+    auto* host_info = mp::slot_info(lobby, 1);
+    host_info->role = mp::kRoleHost;
+    host_info->max_units = 180;
+    host_info->version_major = 3;
+    host_info->version_minor = 1;
+    host_info->map_hash = 0x9999;
+    mp::Panel panel;
+    mp::panel_load(panel, "guis/lounge2.gui", lounge);
+    mp::panel_bind_sliders(panel, slider_art);
+    mp::lobby_enter_battleroom(lobby, panel);
+    expect(mp::panel_control(panel, "COMMANDER")->grayed, "client cannot change host options");
+    expect(mp::panel_control(panel, "METAL")->grayed, "client cannot move sliders");
+    // The locked sliders and their arrows ignore the pointer.
+    for (const char* name : {"METAL", "ENERGY", "MAXUNITS"}) {
+        const auto index = mp::panel_find(panel, name);
+        expect(index != mp::kNoControl, "the lounge has its sliders");
+        if (index == mp::kNoControl)
+            continue;
+        auto& slider = panel.controls[static_cast<std::size_t>(index)];
+        const auto knob = slider.scroll.knob;
+        const auto& forward = slider.scroll.forward_arrow;
+        oa::ui::gui_input::ScrollHold hold;
+        expect(
+            forward.width != 0 && mp::panel_hit(panel, forward.x + 4, forward.y + 8) == index,
+            "a locked slider's arrow is still shown"
+        );
+        expect(
+            mp::slider_press(panel, hold, index, forward.x + 4, forward.y + 8, clock_ticks) ==
+                    mp::kNoControl &&
+                hold.bar == mp::kNoControl,
+            "a locked slider's arrow ignores a press"
+        );
+        expect(
+            mp::slider_press(panel, hold, index, slider.x + 90, slider.y + 8, clock_ticks) ==
+                    mp::kNoControl &&
+                hold.bar == mp::kNoControl &&
+                mp::slider_release(panel, hold, slider.x + 90, slider.y + 8) == mp::kNoControl,
+            "a locked slider ignores a press on its track"
+        );
+        expect(slider.scroll.knob == knob, "a locked slider's knob stays");
+    }
+    expect(mp::panel_text(panel, "MAP") == "View Map", "client map button views");
+    expect(!mp::lobby_has_host_map(lobby), "map hash mismatch detected");
+    mp::lobby_on_max_units(panel, &lobby);
+    expect(mp::local_info(lobby).max_units == 180, "client adopts host max units");
+    mp::lobby_update_status(lobby, panel);
+    expect(mp::panel_control(panel, "MAP")->grayed, "client without the host map cannot view it");
+    host_info->map_hash = 0x1234;
+    mp::lobby_update_status(lobby, panel);
+    (void)mp::panel_press(panel, "MAP");
+    expect(
+        mp::lobby_handle_event(lobby, panel) == mp::LobbyAction::view_map, "client MAP opens view"
+    );
+    // The client shows the host's metal after its own slider's round trip.
+    std::snprintf(host_info->map_name, sizeof(host_info->map_name), "%s", map_name.c_str());
+    host_info->metal_hundreds = 8;
+    game->gui_flags |= 1;
+    (void)mp::lobby_tick(lobby, panel);
+    expect(mp::panel_text(panel, "METALTEXT") == "800", "a host's 800 metal shows as 800");
+}
+
+template <class Record>
+mp::LobbyEvent record_event(uint32_t from, const Record& record) {
+    mp::LobbyEvent event{};
+    event.kind = mp::LobbyEventKind::record;
+    event.player_id = from;
+    std::size_t written = 0;
+    (void)oa::netgame::encode_record(record, event.data, sizeof(event.data), &written);
+    event.size = static_cast<uint16_t>(written);
+    return event;
+}
+
+oa::netgame::MachineGroupRequestRecord
+group_request(uint8_t assign, uint32_t player, uint32_t same_machine) {
+    oa::netgame::MachineGroupRequestRecord request{};
+    request.assign = assign;
+    request.player_id = player;
+    request.same_machine_id = same_machine;
+    return request;
+}
+
+// The index of the last sent record of a type, or -1.
+int32_t last_sent(const mp::LoopbackNet& loopback, oa::netgame::RecordType type) {
+    for (int32_t index = loopback.sent_count - 1; index >= 0; --index)
+        if (loopback.sent[index][0] == static_cast<uint8_t>(type))
+            return index;
+    return -1;
+}
+
+void join_remote(mp::Lobby& lobby, uint32_t id) {
+    mp::LobbyEvent event{};
+    event.kind = mp::LobbyEventKind::player_joined;
+    event.player_id = id;
+    (void)mp::lobby_apply_event(lobby, event);
+}
+
+int alliance_notices = 0;
+
+// Alliances over a computer, a remote and a received 0x23: a
+// computer target mirrors both tables; a remote target is told, with the
+// both-sides word set; a received record with that word set fills the
+// local target's two entries, and the sender's own entry is kept as sent.
+void test_alliance_relation() {
+    using oa::netgame::RecordType;
+    constexpr uint32_t kHost = 0x100, kGuest = 0x200;
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services.notify = [](void*, int32_t event) {
+        if (event == 4)
+            ++alliance_notices;
+    };
+    game->session_flags |= 1;
+    game->players[0].player_id = kHost;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    join_remote(lobby, kGuest);
+    auto& me = mp::local_player(lobby);
+    const auto guest_slot = mp::slot_for_player_id(lobby, kGuest);
+    expect(guest_slot > 0, "guest seated");
+    if (guest_slot <= 0)
+        return;
+    auto& guest = mp::slot_player(lobby, guest_slot);
+    auto& computer = game->players[5];
+    computer.index = 5;
+    computer.in_use = 1;
+    computer.status = mp::kSlotComputer;
+
+    alliance_notices = 0;
+    mp::lobby_set_alliance(lobby, me, computer, 1, false);
+    expect(
+        me.alliance[5] == 1 && mp::lobby_player_allied_back(me)[5] == 1 &&
+            mp::lobby_player_allied_back(computer)[0] == 1 && computer.alliance[0] == 1,
+        "a computer target mirrors both tables"
+    );
+    expect(alliance_notices == 1, "each change is reported as event 4");
+
+    mp::lobby_set_alliance(lobby, me, guest, 1, true);
+    const auto index = last_sent(loopback, RecordType::alliance);
+    oa::netgame::AllianceRecord sent{};
+    expect(
+        index >= 0 &&
+            oa::netgame::decode_record(loopback.sent[index], loopback.sent_size[index], &sent) ==
+                oa::netgame::WireError::ok &&
+            sent.player_id_a == kHost && sent.player_id_b == kGuest && sent.value == 1 &&
+            sent.both_sides == 1,
+        "a remote target is told, both sides included"
+    );
+    expect(mp::lobby_player_allied_back(me)[guest_slot] == 1, "both sides set the mirror entry");
+
+    me.alliance[guest_slot] = 0;
+    mp::lobby_player_allied_back(me)[guest_slot] = 0;
+    guest.alliance[0] = 0;
+    oa::netgame::AllianceRecord received{};
+    received.player_id_a = kGuest;
+    received.player_id_b = kHost;
+    received.value = 1;
+    received.both_sides = 1;
+    expect(mp::lobby_apply_event(lobby, record_event(kGuest, received)), "0x23 applies");
+    expect(
+        mp::lobby_player_allied_back(me)[guest_slot] == 1 && me.alliance[guest_slot] == 1 &&
+            guest.alliance[0] == 1,
+        "a received both-sides alliance fills both local entries and the sender's"
+    );
+}
+
+// Machine groups (requests 0x21, replies 0x22 and the broadcast fan-out):
+// the host settles every machine's group and
+// answers each request with a broadcast 0x22; once a group seats two
+// players every broadcast goes once to each other machine.
+void test_machine_groups() {
+    using oa::netgame::RecordType;
+    constexpr uint32_t kHost = 0x100, kGuest = 0x200, kGuestComputer = 0x201, kThird = 0x300;
+    constexpr uint32_t kNone = 0xffffffffU;
+    {
+        auto game = std::make_unique<oa::Game>();
+        mp::Lobby lobby{};
+        mp::LoopbackNet loopback{};
+        mp::loopback_reset(loopback);
+        mp::lobby_reset(lobby, *game);
+        lobby.net = mp::loopback_lobby_net(loopback);
+        game->session_flags |= 1;
+        game->players[0].player_id = kHost;
+        mp::lobby_seat_local(lobby, 0, true, "Host");
+        for (const auto id : {kGuest, kGuestComputer, kThird})
+            join_remote(lobby, id);
+        mp::lobby_send_player_info(lobby);
+        expect(game->players[0].machine_group == 1, "the host's own slot takes group 1");
+        expect(last_sent(loopback, RecordType::machine_group_request) < 0, "the host asks nobody");
+
+        const auto answered = [&](uint32_t player, uint8_t group) {
+            const auto index = last_sent(loopback, RecordType::machine_group_reply);
+            oa::netgame::MachineGroupReplyRecord reply{};
+            return index >= 0 &&
+                   oa::netgame::decode_record(
+                       loopback.sent[index], loopback.sent_size[index], &reply
+                   ) == oa::netgame::WireError::ok &&
+                   reply.player_id == player && reply.machine_group == group;
+        };
+        expect(
+            mp::lobby_apply_event(lobby, record_event(kGuest, group_request(1, kGuest, kNone))),
+            "a new machine gets a group"
+        );
+        expect(answered(kGuest, 2), "the first free group after the host's is 2");
+        expect(loopback.sent_to[loopback.sent_count - 1] == 0, "the answer goes to all players");
+        expect(
+            mp::lobby_apply_event(
+                lobby, record_event(kGuest, group_request(1, kGuestComputer, kGuest))
+            ),
+            "a computer player joins its human's group"
+        );
+        expect(answered(kGuestComputer, 2), "the computer shares group 2");
+        expect(
+            mp::lobby_apply_event(lobby, record_event(kThird, group_request(1, kThird, kNone))),
+            "third machine"
+        );
+        expect(answered(kThird, 3), "the third machine takes group 3");
+        expect(mp::free_machine_group(*game) == 4, "group 4 is the next free one");
+        expect(game->shared_machines == 0, "sharing is counted at the end of a pump");
+        mp::note_shared_machines(*game);
+        expect(game->shared_machines == 1, "group 2 seats two players");
+
+        const auto sent_before = loopback.sent_count;
+        expect(
+            !mp::lobby_apply_event(lobby, record_event(kThird, group_request(1, kThird, kNone))),
+            "a player with a group keeps it"
+        );
+        expect(loopback.sent_count == sent_before, "nothing answers a repeated request");
+        expect(
+            mp::lobby_apply_event(
+                lobby, record_event(kThird, group_request(0, kGuestComputer, kNone))
+            ),
+            "a query is answered"
+        );
+        expect(
+            loopback.sent_count == sent_before + 2 && loopback.sent_to[sent_before] == kGuest &&
+                loopback.sent_to[sent_before + 1] == kThird && answered(kGuestComputer, 2),
+            "a broadcast goes once to each other machine"
+        );
+
+        // The host's slot table: ids of seated slots, 0 open, -1 closed.
+        mp::slot_set_status(lobby, mp::slot_player(lobby, 5), mp::kSlotBlocked);
+        mp::lobby_send_slot_table(lobby);
+        const uint32_t expected[mp::kSlotCount] = {
+            kHost, kGuest, kGuestComputer, kThird, 0, kNone, 0, 0, 0, 0
+        };
+        expect(std::memcmp(game->slot_table, expected, sizeof(expected)) == 0, "table filled");
+        const auto table = last_sent(loopback, RecordType::slot_table);
+        oa::netgame::SlotTableRecord record{};
+        expect(
+            table >= 0 &&
+                oa::netgame::decode_record(
+                    loopback.sent[table], loopback.sent_size[table], &record
+                ) == oa::netgame::WireError::ok &&
+                std::memcmp(record.slot_ids, expected, sizeof(expected)) == 0,
+            "slot table sent as 0x26"
+        );
+    }
+    {
+        auto game = std::make_unique<oa::Game>();
+        mp::Lobby lobby{};
+        mp::LoopbackNet loopback{};
+        mp::loopback_reset(loopback);
+        mp::lobby_reset(lobby, *game);
+        lobby.net = mp::loopback_lobby_net(loopback);
+        game->session_flags |= 1;
+        game->players[0].player_id = kGuest;
+        mp::lobby_seat_local(lobby, 0, false, "Guest");
+        join_remote(lobby, kHost);
+        const auto host_slot = mp::slot_for_player_id(lobby, kHost);
+        mp::slot_info(lobby, host_slot)->role = mp::kRoleHost;
+        auto& computer = mp::slot_player(lobby, 2);
+        computer.in_use = 1;
+        computer.player_id = kGuestComputer;
+        computer.index = 2;
+        mp::slot_set_status(lobby, computer, mp::kSlotComputer);
+        loopback.sent_count = 0;
+        mp::lobby_request_machine_groups(lobby);
+        expect(loopback.sent_count == 3, "one request per slot without a group");
+        oa::netgame::MachineGroupRequestRecord requests[3]{};
+        for (int32_t index = 0; index < 3 && index < loopback.sent_count; ++index) {
+            expect(loopback.sent_to[index] == kHost, "requests go to the host");
+            (void)oa::netgame::decode_record(
+                loopback.sent[index], loopback.sent_size[index], &requests[index]
+            );
+        }
+        expect(
+            requests[0].assign == 1 && requests[0].player_id == kGuest &&
+                requests[0].same_machine_id == kNone,
+            "the local player asks for a new group"
+        );
+        expect(
+            requests[1].assign == 0 && requests[1].player_id == kHost,
+            "the host's own group is only asked for"
+        );
+        expect(
+            requests[2].assign == 1 && requests[2].player_id == kGuestComputer &&
+                requests[2].same_machine_id == kGuest,
+            "the computer asks for the local player's group"
+        );
+        for (const auto& [player, group] :
+             {std::pair{kHost, 1}, std::pair{kGuest, 2}, std::pair{kGuestComputer, 2}}) {
+            oa::netgame::MachineGroupReplyRecord reply{};
+            reply.player_id = player;
+            reply.machine_group = static_cast<uint8_t>(group);
+            expect(mp::lobby_apply_event(lobby, record_event(kHost, reply)), "0x22 applies");
+        }
+        expect(
+            computer.machine_group == 2 && mp::local_player(lobby).machine_group == 2,
+            "groups stored"
+        );
+        mp::note_shared_machines(*game);
+        const auto sent_before = loopback.sent_count;
+        mp::lobby_say(lobby, mp::local_player(lobby), "hi");
+        expect(
+            loopback.sent_count == sent_before + 1 && loopback.sent_to[sent_before] == kHost,
+            "chat goes to the host's machine alone"
+        );
+        // A line longer than the record's text fills it with no terminator.
+        const std::string long_text(80, 'y');
+        mp::lobby_say(lobby, mp::local_player(lobby), long_text.c_str());
+        const auto said = loopback.sent_count - 1;
+        const uint8_t* said_text = loopback.sent[said] + 1;
+        expect(
+            loopback.sent_size[said] == 65 && std::memchr(said_text, 0, 64) == nullptr &&
+                said_text[63] == 'y',
+            "a long line fills the chat record's text"
+        );
+        oa::netgame::SlotTableRecord table{};
+        table.slot_ids[0] = kHost;
+        table.slot_ids[3] = kGuest;
+        table.slot_ids[6] = kNone;
+        expect(mp::lobby_apply_event(lobby, record_event(kHost, table)), "0x26 applies");
+        expect(
+            game->slot_table[3] == kGuest && game->slot_table[6] == kNone,
+            "client keeps the host's table"
+        );
+        mp::lobby_send_slot_table(lobby);
+        expect(loopback.sent_to[loopback.sent_count - 1] == kHost, "only the host sends its table");
+        mp::LobbyEvent left{};
+        left.kind = mp::LobbyEventKind::player_left;
+        left.player_id = kHost;
+        (void)mp::lobby_apply_event(lobby, left);
+        expect(
+            mp::slot_player(lobby, host_slot).machine_group == 0, "a departed slot drops its group"
+        );
+    }
+}
+
+void test_unit_sync_and_restrictions() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    game->session_flags |= 1;
+    game->players[0].player_id = 0x100;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    mp::LobbyUnit units[] = {
+        {"", "", 0, 0, 0, 0, "", 0, 0},
+        {"Commander", "ARM", 25000, 2500, mp::kUnitNoRestrict, 11, "ARMCOM", 0, 0},
+        {"Peewee", "ARM", 1000, 50, 0, 22, "ARMPW", 0, 0},
+        {"AK", "CORE", 900, 45, 0, 33, "CORAK", 0, 0},
+        {"Nuke", "ARM", 90000, 1500, mp::kUnitDisabledDefault, 44, "ARMSILO", 0, 0},
+    };
+    lobby.units = units;
+    lobby.unit_count = 5;
+    mp::LobbyEvent join{};
+    join.kind = mp::LobbyEventKind::player_joined;
+    join.player_id = 0x200;
+    (void)mp::lobby_apply_event(lobby, join);
+    mp::unit_sync_create(lobby, true);
+    expect(
+        lobby.sync.record_count == 4 && lobby.sync.peer_count == 0, "sync table seeded per unit"
+    );
+    const auto greeted_at = loopback.sent_count;
+    mp::unit_sync_tick(lobby);
+    expect(
+        lobby.sync.peer_count == 1 && loopback.sent[greeted_at][0] == 0x1a &&
+            loopback.sent[greeted_at][1] == 0 && loopback.sent_to[greeted_at] == 0x200,
+        "the host greets a playing peer"
+    );
+    expect(
+        lobby.sync.peers[0].sent == 5 && loopback.sent_count == greeted_at + 5 &&
+            loopback.sent[greeted_at + 1][1] == 3 && loopback.sent[greeted_at + 1][11] == 0,
+        "the changed roster has every record relayed; the peer has reported none"
+    );
+    mp::unit_sync_tick(lobby);
+    expect(
+        lobby.sync.peer_count == 1 && loopback.sent_count == greeted_at + 5,
+        "a peer is greeted once"
+    );
+    expect(!mp::unit_sync_complete(lobby), "peer handshake pending");
+    char diagnostic[mp::kChatLineBytes];
+    expect(
+        std::strcmp(
+            mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic),
+            "No units_expected sent from player"
+        ) == 0,
+        "+syncerr names a peer that sent no unit count"
+    );
+    expect(!mp::unit_sync_peer_complete(lobby, 0x200), "the peer itself is pending");
+    expect(mp::unit_sync_peer_complete(lobby, 0x999), "an unseated id is not waited on");
+    const auto handshake = [&](uint8_t subtype, uint32_t key, uint32_t value) {
+        uint8_t record[14] = {0x1a, subtype};
+        std::memcpy(record + 6, &key, 4);
+        std::memcpy(record + 10, &value, 4);
+        mp::unit_sync_receive(lobby, record, 1);
+    };
+    handshake(1, 0, 4);
+    handshake(2, 22, 0);
+    expect(
+        std::strcmp(
+            mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic),
+            "expected 4 units, got 1"
+        ) == 0,
+        "+syncerr reports the checksum shortfall"
+    );
+    handshake(2, 33, 0);
+    handshake(2, 33, 0);
+    expect(
+        lobby.sync.peers[0].sent == 7 && lobby.sync.peers[0].received == 2 &&
+            loopback.sent[loopback.sent_count - 1][11] == 1,
+        "host answers each new key with a verdict; a repeated key is ignored"
+    );
+    handshake(2, 11, 0);
+    handshake(2, 44, 0);
+    expect(
+        std::strcmp(
+            mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic), "packets sent=9  ackd=0"
+        ) == 0,
+        "+syncerr reports unacknowledged verdicts"
+    );
+    handshake(4, 0, 9);
+    expect(mp::unit_sync_complete(lobby), "handshake complete once acknowledged");
+    expect(mp::unit_sync_peer_complete(lobby, 0x200), "the peer is complete");
+    expect(
+        std::strcmp(mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic), "OK") == 0,
+        "+syncerr reports OK"
+    );
+    lobby.sync.host = false;
+    expect(
+        mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic) == nullptr,
+        "a client has no diagnostic"
+    );
+    expect(!mp::unit_sync_peer_complete(lobby, 0x200), "a client reports no peer complete");
+    lobby.sync.host = true;
+    handshake(120, 0, 0);
+    expect(lobby.sync.records_handled == 7, "subtypes >= 100 are dropped");
+
+    mp::RestrictPanel restrict {};
+    mp::Panel panel;
+    oa::ui::gui_layout::Layout layout;
+    const char* names[] = {
+        "restrict2.GUI",
+        "DESCLIST",
+        "SLIDER0",
+        "SLIDER1",
+        "SLIDER2",
+        "COUNT0",
+        "COUNT1",
+        "COUNT2",
+        "OK",
+        "Cancel",
+        "Reset"
+    };
+    for (const char* control : names) {
+        oa::ui::gui_layout::Gadget gadget;
+        gadget.common.name = control;
+        gadget.common.type = std::string_view(control).rfind("SLIDER", 0) == 0
+                                 ? oa::ui::gui_layout::GadgetType::scroll_bar
+                             : std::string_view(control).rfind("COUNT", 0) == 0
+                                 ? oa::ui::gui_layout::GadgetType::label
+                             : std::string_view(control) == "DESCLIST"
+                                 ? oa::ui::gui_layout::GadgetType::list_box
+                                 : oa::ui::gui_layout::GadgetType::button;
+        gadget.common.active = 1;
+        if (gadget.common.type == oa::ui::gui_layout::GadgetType::scroll_bar)
+            gadget.fields = oa::ui::gui_layout::ScrollBarFields{102, 16, 0, 8, "", ""};
+        layout.gadgets.push_back(gadget);
+    }
+    {
+        oa::ui::gui_layout::Gadget piclist;
+        piclist.common.name = "PICLIST";
+        piclist.common.type = oa::ui::gui_layout::GadgetType::list_box;
+        piclist.common.width = 96;
+        layout.gadgets.push_back(piclist);
+    }
+    mp::panel_load(panel, "guis/restrict2.gui", layout);
+    static std::vector<std::string> picture_paths;
+    static std::vector<oa::oa_ref32> freed_pictures;
+    picture_paths.clear();
+    lobby.services.load_picture =
+        [](void*, const char* path, int32_t* width, int32_t* height) -> oa::oa_ref32 {
+        picture_paths.emplace_back(path);
+        if (std::string_view(path).find("ARMPW") == std::string_view::npos)
+            return 0;
+        *width = 64;
+        *height = 48;
+        return 7;
+    };
+    lobby.services.free_picture = [](void*, oa::oa_ref32 picture) {
+        freed_pictures.push_back(picture);
+    };
+    mp::restrict_open(lobby, restrict, panel);
+    expect(restrict.count == 3, "norestrict units are left out");
+    expect(
+        mp::panel_control(panel, "SLIDER0")->notifies_panel &&
+            mp::panel_control(panel, "SLIDER2")->notifies_panel,
+        "the count sliders' moves reach the panel's handler"
+    );
+    // The panel loads one row's picture a call over the sorted rows while
+    // the unit table lasts: AK, Nuke, Peewee, then the zeroed rows' type 0.
+    for (int call = 0; call < 6; ++call)
+        mp::restrict_load_next_picture(lobby, restrict, panel);
+    expect(
+        picture_paths.size() == 5 && picture_paths[0] == "unitpics/CORAK.PCX" &&
+            picture_paths[2] == "unitpics/ARMPW.PCX" && picture_paths[3].empty(),
+        "one picture a call, by the rows' unit names"
+    );
+    expect(
+        restrict.picture_count == 5 && restrict.pictures[0].image ==
+            0 && restrict.pictures[0].width == 96 && restrict.pictures[0].height ==
+            mp::kRestrictMissingPictureHeight&& restrict.pictures[2].image ==
+            7 && restrict.pictures[2].width == 64 && restrict.pictures[2].load_state ==
+            mp::kRestrictPictureLoaded,
+        "missing pictures take the list width and 32 rows"
+    );
+    expect(
+        std::strncmp(restrict.entries[0].text, "AK\rCORE 45M  900E", 20) == 0, "rows sorted by text"
+    );
+    expect(restrict.entries[1].limit == 0, "disabled-by-default unit starts at 0");
+    expect(mp::panel_text(panel, "COUNT0") == "No Limit", "unlimited row reads No Limit");
+    expect(mp::panel_text(panel, "COUNT1") == "0", "disabled row reads 0");
+    auto* slider = mp::panel_control(panel, "SLIDER2");
+    oa::ui::gui_input::scroll_set_value(slider->scroll, 5);
+    mp::restrict_on_count_slider(lobby, restrict, panel, 2);
+    expect(
+        restrict.entries[2].limit == 5 && mp::panel_text(panel, "COUNT2") == "5",
+        "slider sets a limit"
+    );
+    mp::UnitSyncRecord record{};
+    expect(
+        mp::unit_sync_lookup(lobby, 44, &record) && record.limit == 0, "sync table keeps limits"
+    );
+    (void)mp::panel_press(panel, "Reset");
+    (void)mp::restrict_handle_event(lobby, restrict, panel);
+    expect(
+        restrict.entries[2].limit == 100 && restrict.entries[1].limit == 0,
+        "reset restores defaults"
+    );
+    (void)mp::panel_press(panel, "Cancel");
+    expect(
+        mp::restrict_handle_event(lobby, restrict, panel) == mp::RestrictAction::close,
+        "cancel closes"
+    );
+    expect(
+        mp::unit_sync_lookup(lobby, 22, &record) && record.limit == 0x65,
+        "cancel restores saved limits"
+    );
+    // Closing as host enables every row whose limit is not 0 and disables
+    // the rest; the relay queues the key for the panel.
+    mp::restrict_close(lobby, restrict);
+    expect(
+        freed_pictures.size() == 1 && freed_pictures[0] == 7 && restrict.picture_count == 0,
+        "closing frees the pictures"
+    );
+    expect(
+        mp::unit_sync_lookup(lobby, 22, &record) && record.local == 1,
+        "a limited unit stays enabled"
+    );
+    expect(
+        !mp::unit_sync_lookup(lobby, 44, &record) && record.local == 0,
+        "a zero-limit unit is disabled"
+    );
+    expect(mp::unit_sync_set_enabled(lobby, 44, true), "re-enabled unit both sides have");
+    expect(!mp::unit_sync_set_enabled(lobby, 99, true), "an unknown unit is not enabled");
+}
+
+// A client's table seeds its own types with the remote side clear and takes
+// the host's verdicts over them; marking the units then keeps a type only on a
+// record with both sides set and copies the record's limit.
+void test_unit_sync_marks_units() {
+    mp::Lobby lobby{};
+    mp::LobbyUnit units[] = {
+        {"", "", 0, 0, 0, 0, nullptr, 0, 0},
+        {"Commander", "ARM", 0, 0, mp::kUnitNoRestrict, 11, nullptr, 0, 0},
+        {"Nuke", "ARM", 0, 0, mp::kUnitDisabledDefault, 22, nullptr, 0, 0},
+        {"AK", "CORE", 0, 0, 0, 33, nullptr, 0, 0},
+        {"Peewee", "ARM", 0, 0, 0, 44, nullptr, 0, 0},
+    };
+    lobby.units = units;
+    lobby.unit_count = 5;
+    mp::unit_sync_create(lobby, false);
+    const auto verdict = [&](uint32_t key, uint8_t local, uint8_t remote, int16_t limit) {
+        uint8_t record[14] = {0x1a, 3};
+        std::memcpy(record + 6, &key, 4);
+        record[10] = local;
+        record[11] = remote;
+        std::memcpy(record + 12, &limit, 2);
+        mp::unit_sync_receive(lobby, record, 0);
+    };
+    verdict(11, 1, 1, -1);
+    verdict(33, 1, 0, 5);
+    verdict(44, 1, 1, 7);
+    verdict(55, 1, 1, -1);
+    const uint32_t keys[] = {0, 11, 22, 33, 44, 66};
+    std::vector<oa::UnitDef> records(std::size(keys));
+    const auto count = static_cast<uint32_t>(records.size());
+    for (std::size_t type = 0; type < records.size(); ++type) {
+        records[type].fbi_hash = keys[type];
+        records[type].flags = OA_UNIT_DEF_FLAG_AVAILABLE | OA_UNIT_DEF_FLAG_BUILDER;
+        records[type].player_limit = -1;
+    }
+    mp::unit_sync_mark_units(lobby.sync, records.data(), count);
+    const auto kept = [&](std::size_t type) {
+        return (records[type].flags & OA_UNIT_DEF_FLAG_AVAILABLE) != 0;
+    };
+    expect(kept(0) && records[0].player_limit == -1, "slot 0 is not synced");
+    expect(kept(1) && records[1].player_limit == -1, "a shared type stays unlimited");
+    expect(!kept(2) && records[2].player_limit == 0, "own record without a verdict drops");
+    expect(!kept(3) && records[3].player_limit == 5, "a verdict with the remote side clear drops");
+    expect(kept(4) && records[4].player_limit == 7, "a shared type takes the agreed limit");
+    expect(!kept(5) && records[5].player_limit == 0, "a type without a record drops with limit 0");
+    expect((records[5].flags & OA_UNIT_DEF_FLAG_BUILDER) != 0, "only the catalog bit changes");
+
+    auto* seeded = &lobby.sync.records[1];
+    expect(seeded->key == 22, "record order follows the seeding");
+    seeded->remote_high = 1;
+    mp::unit_sync_mark_units(lobby.sync, records.data(), count);
+    expect(kept(2), "the remote flag is read as a word");
+    lobby.sync.finished = true;
+    records[1].flags = 0;
+    mp::unit_sync_mark_units(lobby.sync, records.data(), count);
+    expect(!kept(1), "a finished sync leaves the table alone");
+}
+
+void test_game_list(const oa::AssetStore& assets) {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services = test_services();
+    lobby.local_version_major = 3;
+    mp::lobby_seat_local(lobby, 0, false, "");
+    mp::ConnectState state{};
+    const auto parsed = oa::ui::gui_layout::parse(read_gui(assets, "selgame.gui"));
+    expect(parsed.ok(), "SELGAME.GUI parses");
+    if (!parsed.ok())
+        return;
+    mp::Panel panel;
+    mp::panel_load(panel, "guis/selgame.gui", *parsed.layout);
+    panel.line_height = 14; // hattfont12's 'I' is 12 pixels high
+    mp::panel_bind_lists(panel);
+    mp::panel_bind_sliders(panel, slider_art);
+    last_message.clear();
+    expect(!mp::game_list_open(lobby, state, panel), "closed transport cannot list games");
+    expect(last_message == "Invalid TCP/IP Address", "invalid address reported");
+    loopback.opened = true;
+    mp::SessionEntry open{};
+    open.instance_guid[0] = 7;
+    std::snprintf(open.name, sizeof(open.name), "%-16.16s%-15.15s", "Friday", "Seven Islands");
+    open.max_players = 10;
+    mp::PlayerSetupInfo host{};
+    host.options = 3 | mp::option::watching_allowed | mp::option::commander_step;
+    host.metal_hundreds = 10;
+    host.energy_hundreds = 20;
+    host.version_major = 3;
+    std::memcpy(
+        open.user, reinterpret_cast<const uint8_t*>(&host) + mp::kSessionUserInfoOffset, 16
+    );
+    (void)mp::loopback_add_session(loopback, open);
+    auto closed = open;
+    closed.instance_guid[0] = 8;
+    host.options |= mp::option::game_closed;
+    std::memcpy(
+        closed.user, reinterpret_cast<const uint8_t*>(&host) + mp::kSessionUserInfoOffset, 16
+    );
+    (void)mp::loopback_add_session(loopback, closed);
+    expect(mp::game_list_open(lobby, state, panel), "game list opens");
+    const auto* names = mp::panel_control(panel, "GAMENAME");
+    expect(
+        names != nullptr && names->items.size() == 2 && names->items[0].rfind("Friday", 0) == 0,
+        "game names listed"
+    );
+    expect(
+        mp::panel_control(panel, "MAPNAME")->items[0] == "Seven Islands",
+        "map name split from session name"
+    );
+    expect(
+        mp::panel_control(panel, "PLAYERS")->items[0] == "3/10", "player count from option nibble"
+    );
+    expect(mp::panel_control(panel, "STATUS")->items[1] == "Lock", "closed game shows Lock");
+    expect(mp::panel_control(panel, "METAL")->items[0] == "1000", "metal column in units");
+    expect(mp::panel_control(panel, "COMMANDER")->items[0] == "Yes", "commander column");
+    expect(!mp::panel_control(panel, "JOINGAME")->grayed, "open game joinable");
+    expect(!mp::panel_control(panel, "WATCH")->grayed, "watching allowed");
+    // Ten games fit the columns' 160 pixels; the bar shows from the eleventh.
+    auto* bar = mp::panel_control(panel, "SLIDER");
+    expect(
+        names->height == 160 && mp::panel_control(panel, "STATUS")->height == 160 &&
+            bar != nullptr && bar->y == 123 && bar->height == 170 && bar->active == 0,
+        "two games leave SELGAME's bar hidden"
+    );
+    for (uint8_t extra = 0; extra < 9; ++extra) {
+        auto more = open;
+        more.instance_guid[0] = static_cast<uint8_t>(20 + extra);
+        (void)mp::loopback_add_session(loopback, more);
+    }
+    mp::panel_control(panel, "GAMENAME")->list_selection = 1;
+    (void)mp::panel_press(panel, "UPDATE");
+    expect(
+        mp::game_list_handle_event(lobby, state, panel) == mp::ConnectAction::none,
+        "UPDATE lists the games again"
+    );
+    expect(
+        names->items.size() == 11 && bar->active != 0 && bar->scroll.knob_size == 151 &&
+            bar->scroll.range == 16 && names->list_last_first == 1,
+        "eleven games show the bar with a knob of 10/11 of 167 pixels and 16 steps"
+    );
+    expect(names->list_selection == 0, "UPDATE selects the first game again");
+    bar->scroll.knob = 15;
+    mp::panel_sync_group(panel, mp::panel_find(panel, "SLIDER"));
+    expect(
+        names->list_first == 1 && mp::panel_control(panel, "PING")->list_first == 1,
+        "the bar scrolls every column"
+    );
+    mp::panel_control(panel, "GAMENAME")->list_selection = 1;
+    mp::game_list_refresh_join(lobby, state, panel);
+    expect(mp::panel_control(panel, "JOINGAME")->grayed, "closed game not joinable");
+    mp::panel_control(panel, "GAMENAME")->list_selection = 0;
+    mp::game_list_refresh_join(lobby, state, panel);
+    mp::panel_set_text(panel, "NICKNAME", "");
+    (void)mp::panel_press(panel, "JOINGAME");
+    last_message.clear();
+    expect(
+        mp::game_list_handle_event(lobby, state, panel) == mp::ConnectAction::none,
+        "join needs a name"
+    );
+    expect(last_message == "You must enter your name", "missing name reported");
+    mp::panel_set_text(panel, "NICKNAME", "Guest");
+    (void)mp::panel_press(panel, "JOINGAME");
+    expect(
+        mp::game_list_handle_event(lobby, state, panel) == mp::ConnectAction::join, "join accepted"
+    );
+    expect(mp::connect_join(lobby, state, false), "loopback join succeeds");
+    expect(
+        std::strcmp(mp::local_player(lobby).name, "Guest") == 0, "local player seated with nickname"
+    );
+    const auto last = loopback.sent_count - 1;
+    expect(
+        mp::local_info(lobby).color == mp::kNoColor && last >= 2 &&
+            loopback.sent[last - 2][0] ==
+                static_cast<uint8_t>(oa::netgame::RecordType::player_info) &&
+            loopback.sent[last][0] ==
+                static_cast<uint8_t>(oa::netgame::RecordType::player_value_request) &&
+            loopback.sent[last][1] == 0 && loopback.sent_to[last] == 0,
+        "a joiner sends its info, then asks for colour 0 before it knows the host"
+    );
+    expect(
+        mp::provider_kind(mp::kProviderGuidTcpip) == mp::ProviderKind::tcpip, "TCP/IP GUID kind"
+    );
+    expect(
+        mp::provider_kind(mp::kProviderGuidSerial) == mp::ProviderKind::serial, "serial GUID kind"
+    );
+}
+
+void test_open_service() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services = test_services();
+    mp::ConnectState state{};
+    state.provider = -1;
+    game->frontend_state = 0x15;
+    game->frontend_signal = 1;
+    game->frontend_pending_signal = 1;
+    // An open session sets Game.session_flags bit 0 and returns 1.
+    expect(mp::connect_open_service(lobby, state, "127.0.0.1"), "service opens");
+    expect(
+        (game->session_flags & mp::kNetFlagLive) != 0 && game->frontend_state == 0x15 &&
+            game->frontend_signal == 1 && state.error_text[0] == '\0',
+        "an open service marks the game live and keeps the frontend state"
+    );
+    game->session_flags = 0;
+    lobby.net.open = +[](void*, const mp::Provider*, const char*) { return false; };
+    expect(!mp::connect_open_service(lobby, state, "127.0.0.1"), "failed service returns 0");
+    expect(
+        std::strcmp(state.error_text, "An error occurred trying to use this service") == 0,
+        "the service error text is left in the error buffer"
+    );
+    expect(
+        game->frontend_state == 0x10 && game->frontend_signal == 0 &&
+            game->frontend_pending_signal == 0 && (game->session_flags & mp::kNetFlagLive) == 0,
+        "a failed service returns to state 0x10 with both signals 0"
+    );
+    // A non-empty error text is shown once and cleared.
+    last_message.clear();
+    mp::connect_show_error_text(lobby, state);
+    expect(
+        last_message == "An error occurred trying to use this service" &&
+            state.error_text[0] == '\0',
+        "the error text is shown and cleared"
+    );
+    last_message.clear();
+    mp::connect_show_error_text(lobby, state);
+    expect(last_message.empty(), "an empty error text shows nothing");
+}
+
+void test_map_memory() {
+    using oa::ui::frontend_multiplayer::map_memory_mb;
+    expect(map_memory_mb(0) == 16 && map_memory_mb(0x3e6665) == 16, "small maps need 16 MB");
+    expect(map_memory_mb(0x3e6666) == 24 && map_memory_mb(0x5fffff) == 24, "24 MB band");
+    expect(map_memory_mb(0x600000) == 32 && map_memory_mb(0x7fffff) == 32, "32 MB band");
+    expect(map_memory_mb(0x800000) == 48 && map_memory_mb(0x9fffff) == 48, "48 MB band");
+    expect(map_memory_mb(0xa00000) == 64 && map_memory_mb(0xbfffff) == 64, "64 MB band");
+    expect(map_memory_mb(0xc00000) == 128, "large maps need 128 MB");
+}
+
+// ---------------------------------------------------------------------------
+// Map previews
+
+/// Fills rows top..bottom-1 and columns left..right-1 of a target, short of
+/// its last row and column, with texels stepped in 16.16 from (u0, v0) by
+/// the span's length toward (u1, v1): the stretch a map preview is drawn with.
+///
+/// @param[in,out] target the target's palette indices
+/// @param target_width target width in pixels
+/// @param target_height target height in rows
+/// @param texels the texture's palette indices
+/// @param texel_width texture width in pixels
+/// @param left first column filled
+/// @param top first row filled
+/// @param right column after the last one filled
+/// @param bottom row after the last one filled
+/// @param u0 texture column at the left
+/// @param v0 texture row at the top
+/// @param u1 texture column the right edge steps toward
+/// @param v1 texture row the bottom edge steps toward
+void stretch_model(
+    std::vector<uint8_t>& target,
+    int32_t target_width,
+    int32_t target_height,
+    const std::vector<uint8_t>& texels,
+    int32_t texel_width,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom,
+    int32_t u0,
+    int32_t v0,
+    int32_t u1,
+    int32_t v1
+) {
+    const int32_t columns = right - left;
+    const int32_t rows = bottom - top;
+    if (columns <= 0 || rows <= 0)
+        return;
+    const int32_t du = ((u1 - u0) << 16) / columns;
+    const int32_t dv = ((v1 - v0) << 16) / rows;
+    for (int32_t row = 0; row < rows; ++row) {
+        const int32_t y = top + row;
+        if (y < 0 || y > target_height - 2)
+            continue;
+        const int32_t v = (v0 << 16) + row * dv;
+        for (int32_t column = 0; column < columns; ++column) {
+            const int32_t x = left + column;
+            if (x < 0 || x > target_width - 2)
+                continue;
+            const int32_t u = (u0 << 16) + column * du;
+            target[static_cast<std::size_t>(y * target_width + x)] =
+                texels[static_cast<std::size_t>((v >> 16) * texel_width + (u >> 16))];
+        }
+    }
+}
+
+/// Returns a minimap fitted to a square box as 3.1c fits it: the map's
+/// playable part (32 world pixels short on the right, 128 at the bottom)
+/// keeps its shape, its longer side fills the box and it is centred, on
+/// palette index 0.
+///
+/// @param minimap the minimap's palette indices
+/// @param width minimap width in pixels
+/// @param height minimap height in rows
+/// @param box the box's side in pixels
+/// @param world_width the map's width in world pixels
+/// @param world_height the map's height in world pixels
+/// @return box x box palette indices
+std::vector<uint8_t> fit_model(
+    const std::vector<uint8_t>& minimap,
+    int32_t width,
+    int32_t height,
+    int32_t box,
+    int32_t world_width,
+    int32_t world_height
+) {
+    const int32_t playable_width = world_width - 32;
+    const int32_t playable_height = world_height - 128;
+    int32_t shown_width = box, shown_height = box, used_width = width, used_height = height;
+    int32_t left = 0, top = 0;
+    if (playable_width >= playable_height) {
+        shown_height = playable_height * box / playable_width;
+        used_height = height * playable_height / playable_width;
+        top = (box - shown_height) / 2;
+    } else {
+        shown_width = playable_width * box / playable_height;
+        used_width = width * playable_width / playable_height;
+        left = (box - shown_width) / 2;
+    }
+    std::vector<uint8_t> fitted(static_cast<std::size_t>(box * box), 0);
+    stretch_model(
+        fitted,
+        box,
+        box,
+        minimap,
+        width,
+        left,
+        top,
+        left + shown_width,
+        top + shown_height,
+        0,
+        0,
+        used_width - 1,
+        used_height - 1
+    );
+    return fitted;
+}
+
+/// Returns a 252x252 minimap whose texels are never 0 and differ along both axes.
+std::vector<uint8_t> test_minimap() {
+    std::vector<uint8_t> minimap(252 * 252);
+    for (int32_t y = 0; y < 252; ++y)
+        for (int32_t x = 0; x < 252; ++x)
+            minimap[static_cast<std::size_t>(y * 252 + x)] =
+                static_cast<uint8_t>(1 + (x * 7 + y * 3) % 255);
+    return minimap;
+}
+
+/// Tells whether a box's pixels inside a rectangle are all non-zero and those outside it all 0.
+///
+/// @param box box x box palette indices
+/// @param side the box's side in pixels
+/// @param left first column inside
+/// @param top first row inside
+/// @param right column after the last one inside
+/// @param bottom row after the last one inside
+/// @return true when the box shows exactly the rectangle
+bool covers_only(
+    const std::vector<uint8_t>& box,
+    int32_t side,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom
+) {
+    if (box.size() != static_cast<std::size_t>(side * side))
+        return false;
+    for (int32_t y = 0; y < side; ++y)
+        for (int32_t x = 0; x < side; ++x) {
+            const bool inside = x >= left && x < right && y >= top && y < bottom;
+            if ((box[static_cast<std::size_t>(y * side + x)] != 0) != inside)
+                return false;
+        }
+    return true;
+}
+
+/// Checks the fit of a minimap into a map preview's box.
+void test_fit_map_picture() {
+    const auto minimap = test_minimap();
+    const auto fit = [&](int32_t world_width, int32_t world_height) {
+        return mp::fit_map_picture(minimap, 252, 252, 125, 125, world_width, world_height);
+    };
+    // A map whose playable part is square fills the box but its last column and row.
+    const auto square = fit(6176, 6272);
+    expect(
+        square == fit_model(minimap, 252, 252, 125, 6176, 6272),
+        "a square map is stretched over the box"
+    );
+    expect(covers_only(square, 125, 0, 0, 124, 124), "it covers all but the last column and row");
+    expect(square[0] == minimap[0], "the box's corner shows the minimap's");
+    // A wide map (16352x11616 playable) is 88 rows tall, 18 rows down, and
+    // shows the minimap's first 179 rows.
+    const auto wide = fit(16384, 11744);
+    expect(wide == fit_model(minimap, 252, 252, 125, 16384, 11744), "a wide map is letterboxed");
+    expect(covers_only(wide, 125, 0, 18, 124, 106), "rows 18 to 105 show the map");
+    expect(wide[18 * 125] == minimap[0], "the map's corner is on row 18");
+    // A tall map (7168x19456 playable) is 46 columns wide, 39 columns in, and
+    // shows the minimap's first 92 columns.
+    const auto tall = fit(7200, 19584);
+    expect(tall == fit_model(minimap, 252, 252, 125, 7200, 19584), "a tall map is pillarboxed");
+    expect(covers_only(tall, 125, 39, 0, 85, 124), "columns 39 to 84 show the map");
+    expect(tall[39] == minimap[0], "the map's corner is in column 39");
+    expect(
+        fit(32, 6272).empty() && fit(6176, 128).empty(),
+        "a map with no playable part has no picture"
+    );
+    expect(
+        mp::fit_map_picture(minimap, 252, 252, 0, 125, 6176, 6272).empty() &&
+            mp::fit_map_picture(minimap, 252, 252, mp::kMapPictureMaxSide + 1, 125, 6176, 6272)
+                .empty(),
+        "an empty or oversized box has no picture"
+    );
+    expect(
+        mp::fit_map_picture(std::span(minimap).first(252 * 251), 252, 252, 125, 125, 6176, 6272)
+            .empty(),
+        "a minimap shorter than its size says has no picture"
+    );
+}
+
+/// Map services of the map preview tests: two maps and their files.
+struct PreviewMaps {
+    std::string selected = "Test Map";
+    oa::data::campaign::CampaignFile test{};
+    oa::data::campaign::CampaignFile other{};
+    std::vector<uint8_t> test_file;
+    std::vector<uint8_t> other_file;
+    bool files_readable = true;
+};
+
+PreviewMaps* preview_maps = nullptr;
+
+/// Returns a map file of a size in terrain cells whose minimap is given.
+///
+/// @param width map width in 16-pixel cells
+/// @param height map height in 16-pixel cells
+/// @param minimap the minimap's palette indices, 252x252
+/// @return the file's bytes: the header, then the minimap
+std::vector<uint8_t>
+map_file(uint32_t width, uint32_t height, const std::vector<uint8_t>& minimap) {
+    std::vector<uint8_t> bytes(64 + 8 + minimap.size());
+    const auto put = [&](std::size_t at, uint32_t value) { std::memcpy(&bytes[at], &value, 4); };
+    put(0x00, 0x2000); // version
+    put(0x04, width);
+    put(0x08, height);
+    put(0x28, 64); // minimap offset
+    put(0x2c, 1);  // minimap present
+    put(64, 252);
+    put(68, 252);
+    std::memcpy(&bytes[72], minimap.data(), minimap.size());
+    return bytes;
+}
+
+/// Fills a map context with a map's name, OTA memory and player counts, and map file path.
+///
+/// @param[out] map the context
+/// @param name the map's name
+/// @param memory the OTA's memory text
+/// @param players the OTA's player counts
+/// @param path the map file's path
+void preview_context(
+    oa::data::campaign::CampaignFile& map,
+    const char* name,
+    const char* memory,
+    const char* players,
+    const char* path
+) {
+    oa::data::campaign::campaign_file_init(&map);
+    std::snprintf(map.localized_name, sizeof(map.localized_name), "%s", name);
+    std::snprintf(map.memory, sizeof(map.memory), "%s", memory);
+    std::snprintf(map.num_players, sizeof(map.num_players), "%s", players);
+    std::snprintf(
+        map.paths[static_cast<uint32_t>(oa::data::campaign::CampaignPath::mission)],
+        sizeof(map.paths[0]),
+        "%s",
+        path
+    );
+}
+
+/// Binds a lobby's map services to preview_maps.
+///
+/// @param[in,out] lobby the lobby
+void bind_preview_maps(mp::Lobby& lobby) {
+    lobby.maps.selected = [](void*) { return true; };
+    lobby.maps.name = [](void*) { return preview_maps->selected.c_str(); };
+    lobby.maps.select = [](void*, const char* value) {
+        if (std::strcmp(value, "Test Map") != 0 && std::strcmp(value, "Other Map") != 0)
+            return false;
+        preview_maps->selected = value;
+        return true;
+    };
+    lobby.maps.content_hash = [](void*) {
+        return preview_maps->selected == "Test Map" ? 0x1111U : 0x2222U;
+    };
+    lobby.maps.description = [](void*) {
+        return preview_maps->selected == "Test Map" ? "The test map" : "The other map";
+    };
+    lobby.maps.size_text = [](void*) { return "9 x 9"; };
+    lobby.maps.map_context = [](void*) -> const oa::data::campaign::CampaignFile* {
+        return preview_maps->selected == "Test Map" ? &preview_maps->test : &preview_maps->other;
+    };
+    lobby.maps.read_map = [](void*, const char* path, uint32_t offset, void* out, uint32_t size) {
+        const auto& file = std::strcmp(path, "maps/test.tnt") == 0 ? preview_maps->test_file
+                                                                   : preview_maps->other_file;
+        if (!preview_maps->files_readable || offset > file.size() || size > file.size() - offset)
+            return false;
+        std::memcpy(out, file.data() + offset, size);
+        return true;
+    };
+}
+
+/// Builds VIEWMAP.GUI's gadgets: the map's name, its picture, description and size.
+///
+/// @return the layout
+oa::ui::gui_layout::Layout view_map_layout() {
+    namespace gui = oa::ui::gui_layout;
+    const auto gadget = [](gui::GadgetType type,
+                           const char* name,
+                           int16_t x,
+                           int16_t y,
+                           int16_t width,
+                           int16_t height) {
+        gui::Gadget made;
+        made.common.type = type;
+        made.common.name = name;
+        made.common.x = x;
+        made.common.y = y;
+        made.common.width = width;
+        made.common.height = height;
+        made.common.active = 1;
+        if (type == gui::GadgetType::label)
+            made.fields = gui::LabelFields{};
+        else if (type == gui::GadgetType::hot_surface)
+            made.fields = gui::HotSurfaceFields{false};
+        return made;
+    };
+    gui::Layout layout;
+    layout.gadgets.push_back(gadget(gui::GadgetType::panel, "HEADER", 141, 24, 330, 390));
+    layout.gadgets.push_back(gadget(gui::GadgetType::hot_surface, "MAPPIC", 46, 114, 125, 125));
+    layout.gadgets.push_back(gadget(gui::GadgetType::label, "DESCRIPTION", 49, 269, 235, 20));
+    layout.gadgets.push_back(gadget(gui::GadgetType::label, "SIZE", 49, 288, 235, 20));
+    layout.gadgets.push_back(gadget(gui::GadgetType::label, "MAPNAME", 50, 71, 242, 19));
+    return layout;
+}
+
+/// Checks a map's summary: its name, memory and player counts, fitted minimap and description.
+void test_map_summary() {
+    PreviewMaps maps;
+    preview_maps = &maps;
+    const auto minimap = test_minimap();
+    maps.test_file = map_file(386, 392, minimap);
+    maps.other_file = map_file(1024, 734, minimap);
+    preview_context(maps.test, "Test Map", "32 mb", "2, 4", "maps/test.tnt");
+    preview_context(maps.other, "Other Map", "48 mb", "2, 3, 4, 5, 6", "maps/other.tnt");
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::lobby_reset(lobby, *game);
+    bind_preview_maps(lobby);
+    mp::Panel panel;
+    mp::panel_load(panel, "guis/viewmap.gui", view_map_layout());
+    mp::viewmap_open(lobby, panel);
+    const auto* picture = mp::panel_control(panel, "MAPPIC");
+    expect(mp::panel_text(panel, "MAPNAME") == "Test Map", "the map's name shows");
+    expect(
+        mp::panel_text(panel, "SIZE") == "32 mb  Players: 2, 4",
+        "SIZE shows the map's memory and player counts"
+    );
+    expect(mp::panel_text(panel, "DESCRIPTION") == "The test map", "the map's description shows");
+    expect(
+        picture != nullptr && picture->picture_width == 125 && picture->picture_height == 125 &&
+            picture->picture == fit_model(minimap, 252, 252, 125, 386 << 4, 392 << 4),
+        "MAPPIC holds the map's minimap fitted to its box"
+    );
+    // "Players" goes through the game's translation, as translate.tdf gives
+    // it for German; a text the translation does not give shows as it is.
+    lobby.services.translate = [](void*, const char* text) -> const char* {
+        return std::strcmp(text, "Players") == 0 ? "Spieler" : nullptr;
+    };
+    mp::map_summary_update(lobby, panel);
+    expect(
+        mp::panel_text(panel, "SIZE") == "32 mb  Spieler: 2, 4",
+        "SIZE names the players in the game's language"
+    );
+    lobby.services.translate = [](void*, const char*) -> const char* { return nullptr; };
+    mp::map_summary_update(lobby, panel);
+    expect(
+        mp::panel_text(panel, "SIZE") == "32 mb  Players: 2, 4",
+        "a text the translation does not give shows as it is"
+    );
+    lobby.services.translate = nullptr;
+    maps.selected = "Other Map";
+    mp::map_summary_update(lobby, panel);
+    expect(
+        picture != nullptr &&
+            picture->picture == fit_model(minimap, 252, 252, 125, 1024 << 4, 734 << 4) &&
+            picture->picture[17 * 125] == 0 && picture->picture[18 * 125] != 0,
+        "another map's minimap replaces it, letterboxed"
+    );
+    maps.files_readable = false;
+    mp::map_summary_update(lobby, panel);
+    expect(
+        picture != nullptr && picture->picture.empty() && picture->picture_width == 0,
+        "a map file that cannot be read leaves MAPPIC with no picture"
+    );
+    lobby.maps.map_context = nullptr;
+    mp::map_summary_update(lobby, panel);
+    expect(
+        mp::panel_text(panel, "MAPNAME") == "Other Map" && mp::panel_text(panel, "SIZE") == "9 x 9",
+        "without a map context the map's own name and size text show"
+    );
+    preview_maps = nullptr;
+}
+
+/// Checks that SELMAP hides MAPPIC while the highlighted map cannot be selected.
+void test_map_select_preview() {
+    namespace gui = oa::ui::gui_layout;
+    PreviewMaps maps;
+    preview_maps = &maps;
+    const auto minimap = test_minimap();
+    maps.test_file = map_file(386, 392, minimap);
+    maps.other_file = map_file(1024, 734, minimap);
+    preview_context(maps.test, "Test Map", "32 mb", "2, 4", "maps/test.tnt");
+    preview_context(maps.other, "Other Map", "48 mb", "2, 3, 4, 5, 6", "maps/other.tnt");
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::lobby_reset(lobby, *game);
+    bind_preview_maps(lobby);
+    auto layout = view_map_layout();
+    gui::Gadget names;
+    names.common.type = gui::GadgetType::list_box;
+    names.common.name = "MAPNAMES";
+    names.common.x = 60;
+    names.common.y = 86;
+    names.common.width = 230;
+    names.common.height = 193;
+    names.common.active = 1;
+    names.fields = gui::ListBoxFields{};
+    layout.gadgets.push_back(names);
+    mp::Panel panel;
+    mp::panel_load(panel, "guis/selmap.gui", layout);
+    mp::MapSelect select;
+    select.names = {"Lost Map", "Other Map", "Test Map"};
+    mp::panel_fill_list(panel, "MAPNAMES", select.names);
+    auto* list = mp::panel_control(panel, "MAPNAMES");
+    const auto* picture = mp::panel_control(panel, "MAPPIC");
+    if (list == nullptr || picture == nullptr) {
+        expect(false, "SELMAP has MAPNAMES and MAPPIC");
+        preview_maps = nullptr;
+        return;
+    }
+    list->list_selection = 2;
+    mp::mapselect_preview(lobby, select, panel);
+    expect(
+        picture->active != 0 && picture->value == 0 &&
+            picture->picture == fit_model(minimap, 252, 252, 125, 386 << 4, 392 << 4),
+        "a map that can be selected shows its minimap in MAPPIC"
+    );
+    list->list_selection = 0;
+    mp::mapselect_preview(lobby, select, panel);
+    expect(
+        picture->active == 0 && maps.selected == "Test Map" &&
+            mp::panel_text(panel, "MAPNAME") == "Test Map",
+        "a map that cannot be selected hides MAPPIC and keeps the summary"
+    );
+    list->list_selection = 1;
+    mp::mapselect_preview(lobby, select, panel);
+    expect(
+        picture->active != 0 && maps.selected == "Other Map" &&
+            picture->picture == fit_model(minimap, 252, 252, 125, 1024 << 4, 734 << 4),
+        "the next map that can be selected shows MAPPIC again with its minimap"
+    );
+    preview_maps = nullptr;
+}
+
+/// Checks that a client's open VIEWMAP follows the host's map, and nothing else does while it is open.
+void test_view_map_follows_host() {
+    PreviewMaps maps;
+    preview_maps = &maps;
+    const auto minimap = test_minimap();
+    maps.test_file = map_file(386, 392, minimap);
+    maps.other_file = map_file(450, 1224, minimap);
+    preview_context(maps.test, "Test Map", "32 mb", "2, 4", "maps/test.tnt");
+    preview_context(maps.other, "Other Map", "64 mb", "2", "maps/other.tnt");
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services.play_sound = sound;
+    lobby.services.message = message;
+    lobby.services.tick = tick;
+    lobby.services.disc_present = disc;
+    bind_preview_maps(lobby);
+    lobby.local_version_major = 3;
+    game->players[0].player_id = 0x200;
+    mp::lobby_seat_local(lobby, 0, false, "Guest");
+    mp::LobbyEvent host{};
+    host.kind = mp::LobbyEventKind::player_joined;
+    host.player_id = 0x100;
+    std::snprintf(host.name, sizeof(host.name), "%s", "Host");
+    (void)mp::lobby_apply_event(lobby, host);
+    auto* host_info = mp::slot_info(lobby, 1);
+    host_info->role = mp::kRoleHost;
+    host_info->version_major = 3;
+    host_info->version_minor = 1;
+    host_info->map_hash = 0x1111;
+    std::snprintf(host_info->map_name, sizeof(host_info->map_name), "%s", "Test Map");
+    mp::Panel lounge;
+    mp::panel_load(lounge, "guis/lounge2.gui", doors_layout());
+    mp::panel_bind_sliders(lounge, slider_art);
+    mp::lobby_enter_battleroom(lobby, lounge);
+    mp::Panel view;
+    mp::panel_load(view, "guis/viewmap.gui", view_map_layout());
+    mp::viewmap_open(lobby, view);
+    const auto* picture = mp::panel_control(view, "MAPPIC");
+    expect(mp::panel_text(view, "MAPNAME") == "Test Map", "VIEWMAP opens on the host's map");
+
+    // The host chooses another map: the open view follows it.
+    std::snprintf(host_info->map_name, sizeof(host_info->map_name), "%s", "Other Map");
+    host_info->map_hash = 0x2222;
+    game->gui_flags |= 1;
+    (void)mp::lobby_tick(lobby, lounge, mp::LobbyFront::view_map, &view);
+    expect(maps.selected == "Other Map", "the client selects the host's new map");
+    expect(
+        mp::panel_text(view, "MAPNAME") == "Other Map" &&
+            mp::panel_text(view, "SIZE") == "64 mb  Players: 2" &&
+            mp::panel_text(view, "DESCRIPTION") == "The other map",
+        "VIEWMAP shows the new map's summary"
+    );
+    expect(
+        picture != nullptr &&
+            picture->picture == fit_model(minimap, 252, 252, 125, 450 << 4, 1224 << 4) &&
+            picture->picture[38] == 0 && picture->picture[39] != 0,
+        "and its minimap, pillarboxed"
+    );
+
+    // Behind any other dialog the client keeps its map until the battle room is in front.
+    std::snprintf(host_info->map_name, sizeof(host_info->map_name), "%s", "Test Map");
+    host_info->map_hash = 0x1111;
+    game->gui_flags |= 1;
+    (void)mp::lobby_tick(lobby, lounge, mp::LobbyFront::dialog);
+    expect(maps.selected == "Other Map", "behind another dialog the host's map waits");
+    game->gui_flags |= 1;
+    (void)mp::lobby_tick(lobby, lounge);
+    expect(maps.selected == "Test Map", "with the battle room in front the client takes it");
+
+    // A map this machine does not have shows its name and no picture.
+    std::snprintf(host_info->map_name, sizeof(host_info->map_name), "%s", "Lost Map");
+    game->gui_flags |= 1;
+    (void)mp::lobby_tick(lobby, lounge, mp::LobbyFront::view_map, &view);
+    expect(
+        mp::panel_text(view, "MAPNAME") == "Lost Map" &&
+            mp::panel_text(view, "DESCRIPTION").empty() && picture != nullptr &&
+            picture->picture.empty(),
+        "a map the client lacks shows its name, no description and no picture"
+    );
+    preview_maps = nullptr;
+}
+
+void test_client_unit_sync() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    game->session_flags |= 1;
+    game->players[0].player_id = 0x200;
+    mp::lobby_seat_local(lobby, 0, false, "Client");
+    expect(mp::lobby_add_player(lobby, 0x100, "Host"), "the host is seated");
+    mp::slot_info(lobby, 1)->role = mp::kRoleHost;
+    std::vector<mp::LobbyUnit> units{{"", "", 0, 0, 0, 0, nullptr, 0, 0}};
+    for (uint32_t key = 1; key <= 6; ++key)
+        units.push_back({"U", "ARM", 0, 0, 0, key * 11, nullptr, 0, 0});
+    // The client works each unit's checksum out as it reports it; the first
+    // is already known.
+    units[1].content_checksum = 0x1234;
+    lobby.services.unit_checksum = [](void*, const mp::LobbyUnit& unit) {
+        return unit.fbi_hash + 0x70000u;
+    };
+    lobby.units = units.data();
+    lobby.unit_count = static_cast<int32_t>(units.size());
+    mp::unit_sync_create(lobby, false);
+    const auto start = loopback.sent_count;
+    mp::unit_sync_tick(lobby);
+    expect(loopback.sent_count == start, "a client waits for the host's greeting");
+    const uint8_t greeting[14] = {0x1a, 0};
+    mp::unit_sync_receive(lobby, greeting, 1);
+    const auto read_u32 = [&](int32_t index, std::size_t offset) {
+        uint32_t value = 0;
+        std::memcpy(&value, loopback.sent[index] + offset, sizeof value);
+        return value;
+    };
+    // The host lookup stops at the first host flag even when its slot is open.
+    const auto saved_status = game->players[0].status;
+    game->players[0].status = OA_PLAYER_STATUS_FREE;
+    mp::slot_info(lobby, 0)->role |= mp::kRoleHost;
+    mp::unit_sync_tick(lobby);
+    expect(
+        loopback.sent_count == start && lobby.sync.next_unit == 0,
+        "an open first host slot prevents falling through to a later host"
+    );
+    game->players[0].status = saved_status;
+    mp::slot_info(lobby, 0)->role &= static_cast<uint8_t>(~mp::kRoleHost);
+    mp::unit_sync_tick(lobby);
+    expect(
+        loopback.sent_count == start + 1 && loopback.sent[start][1] == 1 &&
+            read_u32(start, 10) == 6 && loopback.sent_to[start] == 0x100,
+        "the unit count goes to the host first"
+    );
+    mp::unit_sync_tick(lobby);
+    expect(
+        loopback.sent_count == start + 5 && loopback.sent[start + 1][1] == 2 &&
+            read_u32(start + 1, 6) == 11 && read_u32(start + 1, 10) == 0x1234 &&
+            read_u32(start + 4, 6) == 44 && read_u32(start + 4, 10) == 44 + 0x70000u &&
+            units[4].content_checksum == 44 + 0x70000u,
+        "four unit keys a frame, each with its content checksum"
+    );
+    mp::unit_sync_tick(lobby);
+    expect(loopback.sent_count == start + 7 && read_u32(start + 6, 6) == 66, "the remaining keys");
+    mp::unit_sync_tick(lobby);
+    expect(
+        loopback.sent_count == start + 8 && loopback.sent[start + 7][1] == 4 &&
+            read_u32(start + 7, 10) == 1,
+        "then how many records it has handled"
+    );
+}
+
+// ---- Who each battle-room record leaves from, and how records are batched ----
+
+constexpr uint32_t kRoomHost = 0x100, kRoomGuest = 0x200, kRoomComputer = 0x201, kRoomThird = 0x300;
+uint32_t milliseconds_now = 5000;
+
+uint32_t milliseconds(void*) {
+    return milliseconds_now;
+}
+
+/// Binds a lobby's clock, sounds, messages and disc to the test's.
+///
+/// @param[in,out] lobby Lobby whose services are set.
+void bind_services(mp::Lobby& lobby) {
+    lobby.services.play_sound = sound;
+    lobby.services.message = message;
+    lobby.services.tick = tick;
+    lobby.services.disc_present = disc;
+}
+
+/// Binds a lobby's map services to the test's one map.
+///
+/// @param[in,out] lobby Lobby whose map services are set.
+void bind_maps(mp::Lobby& lobby) {
+    lobby.maps.selected = selected;
+    lobby.maps.name = name;
+    lobby.maps.select = select_map;
+    lobby.maps.content_hash = hash;
+    lobby.maps.memory_mb = memory;
+}
+
+/// A battle room with no layout: the local player in slot 0, the other
+/// machine's player in slot 1 and a computer player of this machine in slot
+/// 2, with the sent records cleared.
+struct Room {
+    std::unique_ptr<oa::Game> game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::Panel panel;
+
+    /// @param hosting true seats the local player as the host and the other
+    ///        machine's player as a guest; false the other way round
+    explicit Room(bool hosting) {
+        mp::loopback_reset(loopback);
+        mp::lobby_reset(lobby, *game);
+        lobby.net = mp::loopback_lobby_net(loopback);
+        bind_services(lobby);
+        lobby.services.milliseconds = milliseconds;
+        bind_maps(lobby);
+        lobby.local_version_major = 3;
+        game->session_flags |= 1;
+        loopback.opened = true;
+        game->players[0].player_id = hosting ? kRoomHost : kRoomGuest;
+        mp::lobby_seat_local(lobby, 0, hosting, hosting ? "Host" : "Guest");
+        join_remote(lobby, hosting ? kRoomGuest : kRoomHost);
+        if (!hosting)
+            mp::slot_info(lobby, 1)->role = mp::kRoleHost;
+        auto& computer = mp::slot_player(lobby, 2);
+        computer.in_use = 1;
+        computer.player_id = kRoomComputer;
+        computer.index = 2;
+        mp::slot_set_status(lobby, computer, mp::kSlotComputer);
+        mp::slot_info(lobby, 2)->color = 3;
+        mp::local_info(lobby).color = 1;
+        loopback.sent_count = 0;
+    }
+
+    /// Returns the indexes of the sent records of a type, in order.
+    std::vector<int32_t> sent(oa::netgame::RecordType type) const {
+        std::vector<int32_t> found;
+        for (int32_t index = 0; index < loopback.sent_count; ++index)
+            if (loopback.sent[index][0] == static_cast<uint8_t>(type))
+                found.push_back(index);
+        return found;
+    }
+
+    /// Decodes the sent 0x1b records in order.
+    std::vector<oa::netgame::RejectRecord> rejects() const {
+        std::vector<oa::netgame::RejectRecord> found;
+        for (const auto index : sent(oa::netgame::RecordType::reject)) {
+            oa::netgame::RejectRecord record{};
+            (void)oa::netgame::decode_record(
+                loopback.sent[index], loopback.sent_size[index], &record
+            );
+            found.push_back(record);
+        }
+        return found;
+    }
+};
+
+// Each lobby block and team leaves from the player it describes, the two
+// going out together; the machine-group requests leave from the primary
+// player (the first seated one of this machine) for every slot still
+// without a group, together, and are flushed.
+void test_records_leave_from_their_players() {
+    using oa::netgame::RecordType;
+    Room room(false);
+    const auto& sent = room.loopback;
+    mp::lobby_send_player_info(room.lobby);
+    const auto infos = room.sent(RecordType::player_info);
+    const auto teams = room.sent(RecordType::player_team);
+    auto groups = room.sent(RecordType::machine_group_request);
+    expect(
+        infos.size() == 2 && teams.size() == 2,
+        "a lobby block and a team for each player of this machine"
+    );
+    if (infos.size() == 2 && teams.size() == 2) {
+        expect(
+            sent.sent_from[infos[0]] == kRoomGuest && sent.sent_from[infos[1]] == kRoomComputer,
+            "each lobby block leaves from the player it describes"
+        );
+        expect(
+            sent.sent_from[teams[0]] == kRoomGuest && sent.sent_from[teams[1]] == kRoomComputer,
+            "each team leaves from its player"
+        );
+        expect(
+            sent.sent_flush[infos[0]] == sent.sent_flush[teams[0]] &&
+                sent.sent_flush[infos[1]] == sent.sent_flush[teams[1]] &&
+                sent.sent_flush[infos[0]] < sent.sent_flush[infos[1]],
+            "a player's block and team go out together, one player after the other"
+        );
+    }
+    expect(groups.size() == 3, "a machine-group request for every slot without a group");
+    bool from_primary = !groups.empty() && !teams.empty();
+    for (const auto index : groups)
+        from_primary = from_primary && sent.sent_from[index] == kRoomGuest &&
+                       sent.sent_to[index] == kRoomHost &&
+                       sent.sent_flush[index] == sent.sent_flush[groups[0]] &&
+                       sent.sent_flush[index] > sent.sent_flush[teams.back()];
+    expect(from_primary, "the requests leave together from the primary player to the host");
+    expect(!groups.empty() && sent.flush_count > sent.sent_flush[groups.back()], "and are flushed");
+
+    // Once groups are settled only a slot without one asks.
+    mp::slot_player(room.lobby, 0).machine_group = 2;
+    mp::slot_player(room.lobby, 1).machine_group = 1;
+    room.loopback.sent_count = 0;
+    mp::lobby_send_player_info(room.lobby);
+    groups = room.sent(RecordType::machine_group_request);
+    oa::netgame::MachineGroupRequestRecord request{};
+    expect(
+        groups.size() == 1 &&
+            oa::netgame::decode_record(sent.sent[groups[0]], sent.sent_size[groups[0]], &request) ==
+                oa::netgame::WireError::ok &&
+            request.player_id == kRoomComputer && sent.sent_from[groups[0]] == kRoomGuest,
+        "only the computer player, still without a group, is asked for"
+    );
+
+    // A seated sender was heard from; this machine's own players are not heard.
+    clock_ticks += 10;
+    oa::netgame::PlayerTeamRecord team{};
+    team.player_id = kRoomHost;
+    team.value = 2;
+    expect(
+        mp::lobby_apply_event(room.lobby, record_event(kRoomHost, team)), "the host's team applies"
+    );
+    expect(
+        mp::slot_player(room.lobby, 1).last_update_time == clock_ticks,
+        "the host was heard from now"
+    );
+    oa::netgame::ChatRecord echo{};
+    std::snprintf(echo.text, sizeof(echo.text), "%s", "<Computer> echo");
+    const auto head = mp::lobby_chat_head(*room.game);
+    expect(
+        !mp::lobby_apply_event(room.lobby, record_event(kRoomComputer, echo)) &&
+            mp::lobby_chat_head(*room.game) == head,
+        "a record from this machine's own computer player is not heard"
+    );
+
+    // The host answers a group request and sends its slot table from its own player.
+    Room host(true);
+    expect(
+        mp::lobby_apply_event(
+            host.lobby, record_event(kRoomGuest, group_request(1, kRoomGuest, 0xffffffffU))
+        ),
+        "the host answers a request"
+    );
+    const auto replies = host.sent(RecordType::machine_group_reply);
+    expect(
+        replies.size() == 1 && host.loopback.sent_from[replies[0]] == kRoomHost,
+        "the group reply leaves from the host's player"
+    );
+    mp::lobby_send_slot_table(host.lobby);
+    const auto tables = host.sent(RecordType::slot_table);
+    expect(
+        tables.size() == 1 && host.loopback.sent_from[tables[0]] == kRoomHost,
+        "the slot table leaves from the host's player"
+    );
+}
+
+// About every two seconds each player of this machine pings (unguaranteed,
+// on its own) and probes; a player without a colour has the local player
+// ask the host again; then the lobby blocks go out. An echo fills the
+// echoing player's Ping column.
+void test_periodic_block() {
+    using oa::netgame::RecordType;
+    Room room(false);
+    const auto& sent = room.loopback;
+    mp::local_info(room.lobby).color = mp::kNoColor;
+    room.lobby.next_stats_tick = 0;
+    milliseconds_now = 5000;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    const auto pings = room.sent(RecordType::ping);
+    const auto probes = room.sent(RecordType::probe);
+    const auto colours = room.sent(RecordType::player_value_request);
+    const auto infos = room.sent(RecordType::player_info);
+    expect(
+        pings.size() == 2 && probes.size() == 2 && colours.size() == 1 && infos.size() == 2,
+        "two pings, two probes, one colour request and the lobby blocks"
+    );
+    if (pings.size() == 2 && probes.size() == 2 && colours.size() == 1 && infos.size() == 2) {
+        expect(
+            sent.sent_from[pings[0]] == kRoomGuest && sent.sent_from[probes[0]] == kRoomGuest &&
+                sent.sent_from[pings[1]] == kRoomComputer &&
+                sent.sent_from[probes[1]] == kRoomComputer,
+            "each player's ping and probe leave from it"
+        );
+        expect(
+            pings[0] < probes[0] && probes[0] < colours[0] && colours[0] < pings[1] &&
+                pings[1] < probes[1] && probes[1] < infos[0],
+            "player by player: ping, probe, colour request; then the lobby blocks"
+        );
+        expect(
+            sent.sent_unguaranteed[pings[0]] && sent.sent_unguaranteed[pings[1]] &&
+                !sent.sent_unguaranteed[probes[0]] && !sent.sent_unguaranteed[infos[0]],
+            "only the pings go without guaranteed delivery"
+        );
+        expect(
+            sent.sent_flush[pings[0]] != sent.sent_flush[probes[0]] &&
+                sent.sent_flush[pings[1]] != sent.sent_flush[probes[0]],
+            "each ping goes out on its own"
+        );
+        oa::netgame::PingRecord ping{};
+        expect(
+            oa::netgame::decode_record(sent.sent[pings[1]], sent.sent_size[pings[1]], &ping) ==
+                    oa::netgame::WireError::ok &&
+                ping.origin_player_id == kRoomComputer && ping.origin_tick_count == 5000 &&
+                ping.echo_tick_count == 0 && sent.sent_to[pings[1]] == 0,
+            "a ping is broadcast with the sender's id and this machine's millisecond clock"
+        );
+        const auto* colour = sent.sent[colours[0]];
+        expect(
+            colour[1] == 0 && sent.sent_from[colours[0]] == kRoomGuest &&
+                sent.sent_to[colours[0]] == kRoomHost,
+            "the local player asks the host for colour 0"
+        );
+        expect(
+            sent.flush_count > sent.sent_flush[sent.sent_count - 1],
+            "everything queued goes out in the frame"
+        );
+    }
+    expect(room.sent(RecordType::slot_table).empty(), "only the host sends the slot table");
+
+    room.loopback.sent_count = 0;
+    clock_ticks += 30;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(room.sent(RecordType::ping).empty(), "nothing again within two seconds");
+    clock_ticks += 31;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(
+        room.sent(RecordType::ping).size() == 2 &&
+            room.sent(RecordType::player_value_request).size() == 1,
+        "the block runs again after sixty ticks, still asking for a colour"
+    );
+    mp::local_info(room.lobby).color = 4;
+    room.loopback.sent_count = 0;
+    clock_ticks += 61;
+    (void)mp::lobby_tick(room.lobby, room.panel);
+    expect(
+        room.sent(RecordType::ping).size() == 2 &&
+            room.sent(RecordType::player_value_request).empty(),
+        "with a colour no request goes out"
+    );
+
+    // Echoes.
+    oa::netgame::PingRecord echo{};
+    echo.origin_tick_count = 4990;
+    echo.echo_tick_count = 1;
+    echo.origin_player_id = kRoomGuest;
+    milliseconds_now = 5030;
+    auto& host_slot = mp::slot_player(room.lobby, 1);
+    mp::lobby_player_ping(host_slot) = -1;
+    expect(mp::lobby_apply_event(room.lobby, record_event(kRoomHost, echo)), "an echo applies");
+    expect(mp::lobby_player_ping(host_slot) == 40, "the echoing player's ping is the round trip");
+    echo.origin_player_id = kRoomThird;
+    expect(
+        !mp::lobby_apply_event(room.lobby, record_event(kRoomHost, echo)) &&
+            mp::lobby_player_ping(host_slot) == 40,
+        "an echo of a ping this machine did not send changes nothing"
+    );
+    echo.origin_player_id = kRoomGuest;
+    echo.echo_tick_count = 0;
+    expect(
+        !mp::lobby_apply_event(room.lobby, record_event(kRoomHost, echo)),
+        "a request is answered by the connection"
+    );
+
+    // The host's own player also sends the slot table, and needs no colour request.
+    Room host(true);
+    host.lobby.next_stats_tick = 0;
+    (void)mp::lobby_tick(host.lobby, host.panel);
+    const auto tables = host.sent(RecordType::slot_table);
+    const auto host_probes = host.sent(RecordType::probe);
+    expect(
+        tables.size() == 1 && host.loopback.sent_from[tables[0]] == kRoomHost &&
+            !host_probes.empty() && tables[0] > host_probes[0],
+        "the host's player sends the slot table after its probe"
+    );
+    expect(host.sent(RecordType::player_value_request).empty(), "a host with a colour asks nobody");
+}
+
+// A client whose host's player is destroyed before the start rejects the
+// host (1) and itself (10) and leaves with "The creator has left the game";
+// any other departure is only passed on as a rejection.
+void test_host_leaving() {
+    using oa::netgame::RecordType;
+    mp::LobbyEvent left{};
+    left.kind = mp::LobbyEventKind::player_left;
+    {
+        Room room(false);
+        left.player_id = kRoomHost;
+        expect(mp::lobby_apply_event(room.lobby, left), "the host's departure applies");
+        const auto rejects = room.rejects();
+        expect(
+            rejects.size() == 3 && rejects[0].player_id == kRoomHost && rejects[0].reason == 1 &&
+                rejects[1].player_id == kRoomGuest && rejects[1].reason == 10 &&
+                rejects[2].player_id == kRoomComputer && rejects[2].reason == 10,
+            "the host is rejected with 1, then each player of this machine with 10"
+        );
+        const auto indexes = room.sent(RecordType::reject);
+        expect(
+            indexes.size() == 3 && room.loopback.sent_from[indexes[0]] == kRoomGuest &&
+                room.loopback.sent_from[indexes[1]] == kRoomGuest &&
+                room.loopback.sent_from[indexes[2]] == kRoomComputer &&
+                room.loopback.sent_to[indexes[1]] == 0 && room.loopback.sent_to[indexes[2]] == 0,
+            "each leaves to everyone from the first player of this machine still in the game"
+        );
+        expect(
+            mp::local_player(room.lobby).reject_reason == 10 &&
+                mp::slot_player(room.lobby, 2).reject_reason == 10,
+            "every player of this machine leaves"
+        );
+        expect(
+            std::strcmp(mp::reject_reason_text(10), "The creator has left the game") == 0,
+            "the game list says the creator left"
+        );
+        expect(
+            mp::slot_player(room.lobby, 1).status == mp::kSlotOpen && room.loopback.flush_count > 0,
+            "the host's slot opens and the records go out"
+        );
+    }
+    {
+        Room room(false);
+        join_remote(room.lobby, kRoomThird);
+        room.loopback.sent_count = 0;
+        left.player_id = kRoomThird;
+        const auto slot = mp::slot_for_player_id(room.lobby, kRoomThird);
+        // Each machine holds its own group, as the host's replies assign them.
+        mp::slot_player(room.lobby, 1).machine_group = 1;
+        if (slot > 0)
+            mp::slot_player(room.lobby, slot).machine_group = 3;
+        const uint16_t seated = mp::lobby_player_count(*room.game);
+        expect(mp::lobby_apply_event(room.lobby, left), "another departure applies");
+        expect(
+            mp::lobby_player_count(*room.game) == seated - 1,
+            "the departed player is counted out once"
+        );
+        const auto rejects = room.rejects();
+        expect(
+            rejects.size() == 1 && rejects[0].player_id == kRoomThird && rejects[0].reason == 1,
+            "another departure is passed on once with reason 1"
+        );
+        expect(
+            mp::local_player(room.lobby).reject_reason == 0 && slot > 0 &&
+                mp::slot_player(room.lobby, slot).status == mp::kSlotOpen,
+            "its slot opens and this machine stays"
+        );
+    }
+    {
+        Room room(false);
+        room.game->session_flags |= mp::kNetFlagGameStarted;
+        left.player_id = kRoomHost;
+        (void)mp::lobby_apply_event(room.lobby, left);
+        const auto rejects = room.rejects();
+        expect(
+            rejects.size() == 1 && rejects[0].player_id == kRoomHost &&
+                mp::local_player(room.lobby).reject_reason == 0,
+            "after the start the host's departure is only passed on"
+        );
+    }
+}
+
+// A received 0x1b naming a player not yet rejected is passed on once; one
+// naming this machine's player rejects every player here with one record.
+void test_reject_passed_on_once() {
+    oa::netgame::RejectRecord record{};
+    {
+        Room room(true);
+        record.player_id = kRoomGuest;
+        record.reason = 1;
+        const uint16_t seated = mp::lobby_player_count(*room.game);
+        expect(
+            mp::lobby_apply_event(room.lobby, record_event(kRoomGuest, record)),
+            "a rejection applies"
+        );
+        expect(
+            mp::lobby_player_count(*room.game) == seated - 1, "the rejected player is counted out"
+        );
+        mp::LobbyEvent left{};
+        left.kind = mp::LobbyEventKind::player_left;
+        left.player_id = kRoomGuest;
+        expect(
+            !mp::lobby_apply_event(room.lobby, left) &&
+                mp::lobby_player_count(*room.game) == seated - 1,
+            "its departure afterwards is not counted again"
+        );
+        auto rejects = room.rejects();
+        const auto indexes = room.sent(oa::netgame::RecordType::reject);
+        expect(
+            rejects.size() == 1 && rejects[0].player_id == kRoomGuest && rejects[0].reason == 1 &&
+                room.loopback.sent_from[indexes[0]] == kRoomHost &&
+                room.loopback.sent_to[indexes[0]] == 0,
+            "the first rejection is passed on from the primary player"
+        );
+        expect(
+            mp::slot_player(room.lobby, 1).status == mp::kSlotOpen &&
+                mp::slot_player(room.lobby, 1).in_use == 0,
+            "the rejected slot opens"
+        );
+        expect(
+            !mp::lobby_apply_event(room.lobby, record_event(kRoomThird, record)) &&
+                room.rejects().size() == 1,
+            "the same rejection again is not passed on"
+        );
+    }
+    {
+        Room room(false);
+        record.player_id = kRoomGuest;
+        record.reason = 1;
+        expect(
+            mp::lobby_apply_event(room.lobby, record_event(kRoomHost, record)),
+            "a rejection of this machine applies"
+        );
+        auto rejects = room.rejects();
+        const auto indexes = room.sent(oa::netgame::RecordType::reject);
+        expect(
+            rejects.size() == 2 && rejects[0].player_id == kRoomGuest && rejects[0].reason == 1 &&
+                rejects[1].player_id == kRoomComputer && rejects[1].reason == 1 &&
+                room.loopback.sent_from[indexes[0]] == kRoomGuest &&
+                room.loopback.sent_from[indexes[1]] == kRoomComputer,
+            "each player of this machine is named, the computer player by itself"
+        );
+        expect(
+            mp::local_player(room.lobby).reject_reason == 1 &&
+                mp::slot_player(room.lobby, 2).reject_reason == 1,
+            "every player of this machine is rejected"
+        );
+        (void)mp::lobby_apply_event(room.lobby, record_event(kRoomHost, record));
+        expect(room.rejects().size() == 2, "an already rejected player is not passed on again");
+    }
+}
+
+// Rejecting this machine's player follows the slot order: before the start
+// the local player leaves at the first record and the next seated player
+// sends the rest, so a computer player seated ahead of it is the only one
+// named; after the start only the first record goes out. A remote human
+// still playing takes its machine's other players with it; a remote
+// computer player leaves alone.
+void test_rejection_order() {
+    using oa::netgame::RecordType;
+    {
+        auto game = std::make_unique<oa::Game>();
+        mp::Lobby lobby{};
+        mp::LoopbackNet loopback{};
+        mp::loopback_reset(loopback);
+        mp::lobby_reset(lobby, *game);
+        lobby.net = mp::loopback_lobby_net(loopback);
+        bind_services(lobby);
+        bind_maps(lobby);
+        lobby.local_version_major = 3;
+        game->session_flags |= 1;
+        loopback.opened = true;
+        auto& computer = mp::slot_player(lobby, 0);
+        computer.in_use = 1;
+        computer.player_id = kRoomComputer;
+        computer.index = 0;
+        mp::slot_set_status(lobby, computer, mp::kSlotComputer);
+        game->players[1].player_id = kRoomGuest;
+        mp::lobby_seat_local(lobby, 1, false, "Guest");
+        loopback.sent_count = 0;
+        mp::lobby_reject(lobby, kRoomGuest, 2);
+        int32_t rejects = 0;
+        for (int32_t index = 0; index < loopback.sent_count; ++index) {
+            if (loopback.sent[index][0] != static_cast<uint8_t>(RecordType::reject))
+                continue;
+            oa::netgame::RejectRecord record{};
+            (void)oa::netgame::decode_record(
+                loopback.sent[index], loopback.sent_size[index], &record
+            );
+            expect(
+                record.player_id == kRoomComputer && loopback.sent_from[index] == kRoomComputer,
+                "the computer player seated ahead is named, by itself"
+            );
+            ++rejects;
+        }
+        expect(rejects == 1, "the local player is not named after it");
+        expect(
+            computer.reject_reason == 2 && mp::local_player(lobby).reject_reason == 2,
+            "both players of this machine are rejected"
+        );
+    }
+    {
+        Room room(false);
+        room.game->session_flags |= mp::kNetFlagGameStarted;
+        mp::lobby_reject(room.lobby, kRoomGuest, 2);
+        const auto rejects = room.rejects();
+        expect(
+            rejects.size() == 1 && rejects[0].player_id == kRoomGuest &&
+                mp::slot_player(room.lobby, 2).reject_reason == 2,
+            "after the start only the first record goes out"
+        );
+    }
+    {
+        Room room(true);
+        join_remote(room.lobby, kRoomThird);
+        const auto guest = mp::slot_for_player_id(room.lobby, kRoomGuest);
+        const auto third = mp::slot_for_player_id(room.lobby, kRoomThird);
+        mp::slot_player(room.lobby, guest).machine_group = 2;
+        mp::slot_player(room.lobby, third).machine_group = 2;
+        mp::slot_info(room.lobby, third)->state = 0;
+        const uint16_t seated = mp::lobby_player_count(*room.game);
+        mp::lobby_reject(room.lobby, kRoomThird, 1);
+        expect(
+            mp::slot_player(room.lobby, third).in_use == 0 &&
+                mp::slot_player(room.lobby, guest).in_use != 0 &&
+                mp::lobby_player_count(*room.game) == seated - 1,
+            "a remote player that is not a human still playing leaves alone"
+        );
+        join_remote(room.lobby, kRoomThird);
+        const auto again = mp::slot_for_player_id(room.lobby, kRoomThird);
+        mp::slot_player(room.lobby, again).machine_group = 2;
+        mp::slot_player(room.lobby, 2).machine_group = 2;
+        room.loopback.sent_count = 0;
+        mp::lobby_reject(room.lobby, kRoomGuest, 1);
+        const auto rejects = room.rejects();
+        expect(
+            rejects.size() == 1 && rejects[0].player_id == kRoomGuest &&
+                mp::slot_player(room.lobby, guest).in_use == 0 &&
+                mp::slot_player(room.lobby, again).in_use == 0 &&
+                mp::slot_player(room.lobby, again).reject_reason == 1 &&
+                mp::lobby_player_count(*room.game) == seated - 2,
+            "a remote human still playing takes its machine's other players with it"
+        );
+        expect(
+            mp::slot_player(room.lobby, 2).in_use != 0 &&
+                mp::slot_player(room.lobby, 2).reject_reason == 0,
+            "this machine's own players stay, whatever their machine group"
+        );
+    }
+}
+
+// A joiner the host refuses is told with the host's lobby blocks, then the
+// rejection; it is neither seated nor destroyed.
+void test_refused_joiner() {
+    using oa::netgame::RecordType;
+    Room room(true);
+    mp::LobbyEvent joined{};
+    joined.kind = mp::LobbyEventKind::player_joined;
+    joined.player_id = 0x400;
+    joined.refuse_reason = 4;
+    std::snprintf(joined.name, sizeof(joined.name), "%s", "Late");
+    expect(!mp::lobby_apply_event(room.lobby, joined), "a refused joiner changes nothing here");
+    expect(mp::slot_for_player_id(room.lobby, 0x400) < 0, "it is not seated");
+    const auto infos = room.sent(RecordType::player_info);
+    const auto rejects = room.rejects();
+    const auto indexes = room.sent(RecordType::reject);
+    expect(
+        infos.size() == 2 && rejects.size() == 1 && rejects[0].player_id == 0x400 &&
+            rejects[0].reason == 4 && indexes[0] > infos.back() &&
+            room.loopback.sent_to[indexes[0]] == 0,
+        "the lobby blocks go out, then 0x1b with the refusal"
+    );
+    expect(room.loopback.removed_player == 0, "its player is not destroyed");
+
+    // Once machines are shared, records to everyone go to one player of each
+    // machine; the joiner holds no slot and is told directly.
+    Room shared(true);
+    shared.game->shared_machines = 1;
+    shared.loopback.sent_count = 0;
+    expect(!mp::lobby_apply_event(shared.lobby, joined), "a refused joiner changes nothing here");
+    const auto shared_rejects = shared.sent(RecordType::reject);
+    bool told = false;
+    bool machines_told = false;
+    for (const auto index : shared_rejects) {
+        told = told || shared.loopback.sent_to[index] == 0x400;
+        machines_told = machines_told || shared.loopback.sent_to[index] == kRoomGuest;
+    }
+    bool blocks_told = false;
+    for (const auto index : shared.sent(RecordType::player_info))
+        blocks_told = blocks_told || shared.loopback.sent_to[index] == 0x400;
+    expect(
+        told && machines_told && blocks_told,
+        "with shared machines the joiner still hears its lobby blocks and its rejection"
+    );
+    expect(shared.lobby.refused_joiner == 0, "later records go per machine alone");
+}
+
+// The session is created with its full name and user bytes, and published
+// with flags 4 and a 0x20 that stays once set, never 0x400, and with the
+// player limit the battle room holds.
+void test_session_description() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::ConnectState connect{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    bind_services(lobby);
+    bind_maps(lobby);
+    lobby.local_version_major = 3;
+    loopback.opened = true;
+    std::snprintf(mp::lobby_game_name(*game), 17, "%s", "Big Battle");
+    std::snprintf(mp::lobby_nickname(*game), 17, "%s", "Host");
+    std::snprintf(mp::lobby_password(*game), 11, "%s", "secret");
+    expect(mp::connect_host(lobby, connect), "the host creates the session");
+    const auto& session = loopback.sessions[0];
+    char expected[mp::kSessionNameBytes];
+    std::snprintf(expected, sizeof expected, "%-16s%-15s", "Big Battle", name(nullptr));
+    expect(
+        std::memcmp(session.name, expected, sizeof expected) == 0,
+        "the session starts with its full name"
+    );
+    const auto& info = mp::local_info(lobby);
+    const auto* user =
+        reinterpret_cast<const uint8_t*>(&info) + offsetof(mp::PlayerSetupInfo, memory_mb);
+    expect(
+        std::memcmp(session.user, user, sizeof session.user) == 0 &&
+            (info.status & mp::status::password) != 0,
+        "and with the host's user bytes, password bit included"
+    );
+    expect(
+        mp::local_player(lobby).player_id == loopback.local_id && info.net_id == loopback.local_id,
+        "the local player takes the id the session gave"
+    );
+    mp::lobby_publish_session(lobby);
+    expect(
+        session.flags == 0x4 && session.max_players == 10,
+        "a password game publishes flags 4 and ten players"
+    );
+    mp::lobby_session_players(*game) = 9;
+    mp::lobby_publish_session(lobby);
+    expect(session.max_players == 9, "a closed slot lowers the published limit");
+    mp::local_info(lobby).options |= mp::option::started;
+    mp::lobby_publish_session(lobby);
+    expect(session.flags == 0x24, "a started game adds 0x20");
+    mp::local_info(lobby).options &= static_cast<uint16_t>(~mp::option::started);
+    mp::lobby_publish_session(lobby);
+    expect(session.flags == 0x24, "0x20 stays once published");
+}
+
+/// Checks the battle room's commands, matched without case: they send no chat.
+void test_chat_commands(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    for (const char* command :
+         {"+SYNCERR", "+SyncErr", "+PAGE", "+Page Guest hi", "+P", "+P Guest hi"}) {
+        f.panel.focus = mp::panel_find(f.panel, "MESSAGE");
+        mp::panel_set_text(f.panel, "MESSAGE", command);
+        (void)f.press("MESSAGE");
+    }
+    expect(
+        f.sent_of(oa::netgame::RecordType::chat) == 0,
+        "the commands send no chat whatever their case"
+    );
+    f.panel.focus = mp::panel_find(f.panel, "MESSAGE");
+    mp::panel_set_text(f.panel, "MESSAGE", "+Pages of text");
+    (void)f.press("MESSAGE");
+    expect(
+        f.sent_of(oa::netgame::RecordType::chat) == 1,
+        "a line that only starts like a command is chat"
+    );
+}
+
+/// Checks the Ping column and the host's published lowest latency from an echo.
+void test_ping_column(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    f.lobby.services.milliseconds = milliseconds;
+    f.join(0x200, "Guest");
+    f.remote_info(0x200, 0, 1);
+    oa::netgame::PingRecord echo{};
+    echo.origin_tick_count = 4990;
+    echo.echo_tick_count = 7;
+    echo.origin_player_id = 0x100;
+    milliseconds_now = 5030;
+    mp::local_info(f.lobby).lowest_latency = 0xffff;
+    expect(mp::lobby_apply_event(f.lobby, record_event(0x200u, echo)), "the guest's echo applies");
+    mp::lobby_update_status(f.lobby, f.panel);
+    const auto slot = mp::slot_for_player_id(f.lobby, 0x200);
+    char control[16];
+    std::snprintf(control, sizeof control, "PING%d", slot);
+    expect(mp::panel_text(f.panel, control) == "40", "the Ping column shows the round trip");
+    expect(mp::local_info(f.lobby).lowest_latency == 40, "the host keeps its lowest latency");
+}
+
+/// Checks that closing a slot publishes a lower player limit and reopening it a higher one.
+void test_closing_slots_republishes(const oa::ui::gui_layout::Layout& lounge) {
+    Fixture f(lounge);
+    mp::SessionEntry hosted{};
+    expect(mp::loopback_add_session(f.loopback, hosted), "the session is listed");
+    f.loopback.hosted = 0;
+    mp::lobby_session_players(*f.game) = 10;
+    expect(f.press("PLAYER3"), "PLAYER3 clickable");
+    expect(
+        mp::slot_player(f.lobby, 3).status == mp::kSlotBlocked &&
+            f.loopback.sessions[0].max_players == 9,
+        "closing a slot publishes nine players"
+    );
+    expect(f.press("PLAYER3"), "PLAYER3 clickable again");
+    expect(
+        mp::slot_player(f.lobby, 3).status != mp::kSlotBlocked &&
+            f.loopback.sessions[0].max_players == 10,
+        "reopening it publishes ten again"
+    );
+}
+
+void test_add_player_and_description() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services = test_services();
+    lobby.maps = test_maps();
+    lobby.local_version_major = 3;
+    game->session_flags |= 1;
+    game->players[0].player_id = 0x100;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    // Slot 1 is closed: the joiner takes the first slot neither in use nor closed.
+    game->players[1].status = mp::kSlotBlocked;
+    expect(mp::lobby_add_player(lobby, 0x300, "Joiner"), "a new id is seated");
+    const auto& seated = game->players[2];
+    expect(
+        seated.in_use == 1 && seated.status == mp::kSlotRemote && seated.player_id == 0x300 &&
+            seated.index == 2 && std::strcmp(seated.name, "Joiner") == 0 &&
+            seated.last_update_time == clock_ticks && seated.reject_reason == 0,
+        "the joiner is remote in the first open slot"
+    );
+    expect(mp::lobby_player_count(*game) == 2, "the joiner is counted");
+    expect(
+        loopback.sent_count > 0 && loopback.sent[loopback.sent_count - 1][0] ==
+                                       static_cast<uint8_t>(oa::netgame::RecordType::player_team),
+        "the local player's info goes out again"
+    );
+    expect(
+        !mp::lobby_add_player(lobby, 0x300, "Joiner"), "an id already in use is not seated twice"
+    );
+    expect(!mp::lobby_add_player(lobby, 0x100, "Host"), "the local player's slot is in use");
+
+    // Colours: the host takes a free one itself and hands the next free
+    // one to a client whose request is taken.
+    const auto sent_before = loopback.sent_count;
+    mp::lobby_request_color(lobby, 4);
+    expect(
+        mp::local_info(lobby).color == 4 && loopback.sent_count == sent_before,
+        "host takes a free colour"
+    );
+    expect(
+        !mp::lobby_color_available(lobby, 0x300, 4) && mp::lobby_color_available(lobby, 0x100, 4) &&
+            !mp::lobby_color_available(lobby, 0x300, 10) &&
+            !mp::lobby_color_available(lobby, 0x300, 0xff),
+        "a colour is taken by any other seated player only"
+    );
+    mp::LobbyEvent request{};
+    request.kind = mp::LobbyEventKind::record;
+    request.player_id = 0x300;
+    request.size = 2;
+    request.data[0] = static_cast<uint8_t>(oa::netgame::RecordType::player_value_request);
+    request.data[1] = 4;
+    expect(mp::lobby_apply_event(lobby, request), "the host answers a colour request");
+    const auto* reply = loopback.sent[loopback.sent_count - 1];
+    expect(
+        reply[0] == static_cast<uint8_t>(oa::netgame::RecordType::player_value_reply) &&
+            reply[1] == 5 && loopback.sent_to[loopback.sent_count - 1] == 0x300 &&
+            mp::slot_info(lobby, 2)->color == 5,
+        "a taken colour is replaced by the next free one"
+    );
+    request.data[1] = 7;
+    expect(mp::lobby_apply_event(lobby, request), "a free colour request is granted");
+    reply = loopback.sent[loopback.sent_count - 1];
+    expect(reply[1] == 7 && mp::slot_info(lobby, 2)->color == 5, "a granted colour is echoed");
+    mp::LobbyEvent answer{};
+    answer.kind = mp::LobbyEventKind::record;
+    answer.player_id = 0x300;
+    answer.size = 2;
+    answer.data[0] = static_cast<uint8_t>(oa::netgame::RecordType::player_value_reply);
+    answer.data[1] = 6;
+    expect(
+        mp::lobby_apply_event(lobby, answer) && mp::local_info(lobby).color == 6,
+        "a reply sets the local colour"
+    );
+
+    std::snprintf(mp::lobby_game_name(*game), 17, "%s", "Big Battle");
+    char session_name[mp::kSessionNameBytes];
+    uint8_t user[mp::kSessionUserBytes];
+    mp::lobby_session_description(lobby, session_name, user);
+    char expected[mp::kSessionNameBytes];
+    std::snprintf(expected, sizeof expected, "%-16s%-15s", "Big Battle", name(nullptr));
+    expect(
+        std::memcmp(session_name, expected, sizeof expected) == 0, "game and map names space padded"
+    );
+    const auto& info = mp::local_info(lobby);
+    expect(
+        (info.options & 0xf) == 2 && info.version_major == 3, "player count and version stamped"
+    );
+    const auto* user_bytes =
+        reinterpret_cast<const uint8_t*>(&info) + offsetof(mp::PlayerSetupInfo, memory_mb);
+    expect(
+        std::memcmp(user, user_bytes, sizeof user) == 0,
+        "user words are the info bytes from memory_mb on"
+    );
+}
+
+// The host decides per unit whether every peer has it, from the keys and,
+// from version 1.2 on, the checksums they report, and again whenever the
+// roster changes. A reported checksum must also match the host's own for
+// the unit, which it works out through its files the first time one is
+// compared and keeps.
+int host_checksums_worked = 0;
+
+void test_unit_sync_reevaluation() {
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    game->session_flags |= 1;
+    game->players[0].player_id = 0x100;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    mp::LobbyUnit units[] = {
+        {"", "", 0, 0, 0, 0, nullptr, 0, 0},
+        {"Peewee", "ARM", 1000, 50, 0, 22, nullptr, 0, 0},
+        {"AK", "CORE", 900, 45, 0, 33, nullptr, 0, 0},
+        {"Flash", "ARM", 1100, 60, 0, 44, nullptr, 0, 0},
+        {"Hammer", "ARM", 1300, 120, 0, 55, nullptr, 0, 0},
+        {"Samson", "ARM", 1400, 130, 0, 66, nullptr, 0, 0},
+    };
+    lobby.units = units;
+    lobby.unit_count = 6;
+    for (const uint32_t id : {0x200U, 0x300U}) {
+        mp::LobbyEvent join{};
+        join.kind = mp::LobbyEventKind::player_joined;
+        join.player_id = id;
+        (void)mp::lobby_apply_event(lobby, join);
+    }
+    const auto first = mp::slot_for_player_id(lobby, 0x200);
+    const auto second = mp::slot_for_player_id(lobby, 0x300);
+    mp::slot_info(lobby, first)->version_major = 3;
+    mp::slot_info(lobby, second)->version_major = 3;
+    // Two machines, each its own group, as the host's replies assign them.
+    mp::slot_player(lobby, first).machine_group = 2;
+    mp::slot_player(lobby, second).machine_group = 3;
+    lobby.services.unit_checksum = [](void*, const mp::LobbyUnit& unit) {
+        ++host_checksums_worked;
+        return unit.fbi_hash * 0x101u;
+    };
+    const auto own = [](uint32_t key) { return key * 0x101u; };
+    mp::unit_sync_create(lobby, true);
+    mp::unit_sync_tick(lobby);
+    expect(lobby.sync.peer_count == 2, "both peers are greeted");
+    const auto report = [&](int32_t slot, uint32_t key, uint32_t checksum) {
+        uint8_t record[14] = {0x1a, 2};
+        std::memcpy(record + 6, &key, 4);
+        std::memcpy(record + 10, &checksum, 4);
+        mp::unit_sync_receive(lobby, record, static_cast<uint8_t>(slot));
+    };
+    const auto sent_key = [&](int32_t index) {
+        uint32_t key = 0;
+        std::memcpy(&key, loopback.sent[index] + 6, sizeof key);
+        return key;
+    };
+    mp::UnitSyncRecord record{};
+    report(first, 22, 0);
+    const auto last = loopback.sent_count - 1;
+    expect(
+        !mp::unit_sync_lookup(lobby, 22, &record) && sent_key(last - 1) == 22 &&
+            sent_key(last) == 22 && loopback.sent[last][11] == 0 &&
+            loopback.sent_to[last - 1] == 0x200 && loopback.sent_to[last] == 0x300,
+        "a unit one peer has not reported is missing, and every peer is told"
+    );
+    report(second, 22, 0);
+    expect(mp::unit_sync_lookup(lobby, 22, &record), "a unit every peer reported is available");
+    expect(
+        host_checksums_worked == 0, "a report without a checksum leaves the host's own unworked"
+    );
+    report(first, 33, own(33) + 1);
+    report(second, 33, own(33));
+    expect(
+        !mp::unit_sync_lookup(lobby, 33, &record),
+        "peers reporting different checksums lose the unit"
+    );
+    expect(
+        host_checksums_worked == 1 && units[2].content_checksum == own(33) &&
+            lobby.sync.records[1].checksum == own(33),
+        "the host works its own checksum out once and keeps it"
+    );
+    mp::slot_info(lobby, first)->version_major = 1;
+    mp::slot_info(lobby, first)->version_minor = 1;
+    report(first, 44, 5);
+    report(second, 44, own(44));
+    expect(
+        mp::unit_sync_lookup(lobby, 44, &record),
+        "a peer before version 1.2 is compared by key only"
+    );
+    report(first, 55, own(55) + 2);
+    report(second, 55, own(55) + 2);
+    expect(
+        !mp::unit_sync_lookup(lobby, 55, &record),
+        "a unit whose files differ from the host's is missing"
+    );
+    expect(host_checksums_worked == 3, "each unit's checksum is worked out once");
+    report(first, 66, 0);
+    expect(!mp::unit_sync_lookup(lobby, 66, &record), "a unit the second peer lacks is missing");
+
+    mp::LobbyEvent left{};
+    left.kind = mp::LobbyEventKind::player_left;
+    left.player_id = 0x300;
+    (void)mp::lobby_apply_event(lobby, left);
+    mp::unit_sync_tick(lobby);
+    const auto relayed = loopback.sent_count - 1;
+    expect(
+        lobby.sync.peer_count == 1 && mp::unit_sync_lookup(lobby, 66, &record) &&
+            mp::unit_sync_lookup(lobby, 33, &record) && sent_key(relayed) == 66 &&
+            loopback.sent[relayed][11] == 1 && loopback.sent_to[relayed] == 0x200,
+        "once the peer that lacked a unit leaves, the unit is available again"
+    );
+}
+
+// The connection selection takes the launch's transport; the host's session
+// takes its player limit; the session description marks an active launch.
+void test_launch_connection() {
+    reset_launch();
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    bind_services(lobby);
+    bind_maps(lobby);
+    lobby.local_version_major = 3;
+    lobby.launch_link = launch_link();
+    mp::ConnectState state{};
+    state.provider = -1;
+    state.provider_count = 2;
+    std::memcpy(state.providers[0].guid, mp::kProviderGuidIpx, 16);
+    std::memcpy(state.providers[1].guid, mp::kProviderGuidTcpip, 16);
+    launch_block.connection_type = 1;
+    std::snprintf(launch_block.password, sizeof launch_block.password, "%s", "YFCPDVPKETZYKXA1");
+    expect(
+        mp::providers_take_launch(lobby, state) && state.provider == 1 &&
+            std::memcmp(mp::lobby_provider_guid(*game), mp::kProviderGuidTcpip, 16) == 0,
+        "connection type 1 takes the TCP/IP provider"
+    );
+    expect(launch_block.connection_type == 0, "the connection type is taken once");
+    expect(mp::lobby_password(*game)[0] == '\0', "without an active launch the password stays");
+    launch_block.connection_type = 2;
+    active_launch = true;
+    expect(
+        mp::providers_take_launch(lobby, state) && state.provider == 0,
+        "connection type 2 takes the IPX provider"
+    );
+    expect(
+        std::strcmp(mp::lobby_password(*game), "YFCPDVPKET") == 0,
+        "an active launch's password becomes the game's, 10 characters"
+    );
+    launch_block.connection_type = 3;
+    expect(
+        !mp::providers_take_launch(lobby, state) && launch_block.connection_type == 0,
+        "a transport not listed takes nothing and is still cleared"
+    );
+    expect(!mp::providers_take_launch(lobby, state), "no connection type takes nothing");
+
+    loopback.opened = true;
+    std::snprintf(mp::lobby_game_name(*game), 17, "%s", "Acid Pools");
+    std::snprintf(mp::lobby_nickname(*game), 17, "%s", "Ghost");
+    launch_block.player_limit = 4;
+    expect(
+        mp::connect_host(lobby, state) && mp::lobby_session_players(*game) == 4,
+        "an active launch's player limit caps the session"
+    );
+    const auto& info = mp::local_info(lobby);
+    expect(
+        (info.status & mp::status::launch_only) != 0 && info.version_major == 103,
+        "an active launch marks the session and biases its version"
+    );
+    expect(mp::info_version_compatible(info, 3), "the biased version still joins");
+    launch_block.player_limit = 12;
+    expect(
+        mp::connect_host(lobby, state) && mp::lobby_session_players(*game) == 10,
+        "a limit above 10 gives 10"
+    );
+    launch_block.player_limit = 1;
+    expect(
+        mp::connect_host(lobby, state) && mp::lobby_session_players(*game) == 10,
+        "a limit of 1 leaves 10"
+    );
+    active_launch = false;
+    launch_block.player_limit = 4;
+    expect(
+        mp::connect_host(lobby, state) && mp::lobby_session_players(*game) == 10,
+        "without an active launch the session takes 10"
+    );
+    expect(
+        (mp::local_info(lobby).status & mp::status::launch_only) == 0 &&
+            mp::local_info(lobby).version_major == 3,
+        "and its description is unmarked"
+    );
+    reset_launch();
+}
+
+/// Loads an installed GUI into a panel.
+///
+/// @param assets the installed game's store
+/// @param file file name under guis/
+/// @param[out] panel panel to load
+/// @return false when the file does not parse
+bool load_gui(const oa::AssetStore& assets, const char* file, mp::Panel& panel) {
+    const auto parsed = oa::ui::gui_layout::parse(read_gui(assets, file));
+    expect(parsed.ok(), file);
+    if (!parsed.ok())
+        return false;
+    mp::panel_load(panel, (std::string("guis/") + file).c_str(), *parsed.layout);
+    panel.line_height = 14;
+    mp::panel_bind_lists(panel);
+    mp::panel_bind_sliders(panel, slider_art);
+    return true;
+}
+
+/// Adds a listed session, launch-only when asked.
+///
+/// @param[in,out] loopback loopback net
+/// @param launch_only whether the host marks the game launch-only
+void add_listed_session(mp::LoopbackNet& loopback, bool launch_only) {
+    mp::SessionEntry entry{};
+    entry.instance_guid[0] = 9;
+    std::snprintf(entry.name, sizeof(entry.name), "%-16.16s%-15.15s", "Acid Pools", "Acid Pools");
+    entry.max_players = 10;
+    mp::PlayerSetupInfo host{};
+    host.options = 1 | mp::option::watching_allowed;
+    host.version_major = launch_only ? 103 : 3;
+    host.status = launch_only ? mp::status::launch_only : 0;
+    std::memcpy(
+        entry.user, reinterpret_cast<const uint8_t*>(&host) + mp::kSessionUserInfoOffset, 16
+    );
+    (void)mp::loopback_add_session(loopback, entry);
+}
+
+// The connection screens after a launch: TCP.GUI takes the launch's
+// address, the game list hosts at once or waits for the host, NEWMULTI goes
+// on by itself, and a launch-only game is joinable only while a launch is
+// active.
+void test_launch_screens(const oa::AssetStore& assets) {
+    reset_launch();
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    bind_services(lobby);
+    bind_maps(lobby);
+    lobby.local_version_major = 3;
+    lobby.launch_link = launch_link();
+    mp::lobby_seat_local(lobby, 0, false, "");
+    mp::ConnectState state{};
+    state.provider = -1;
+    state.settings = {nullptr, read_saved_address, write_saved_address, nullptr};
+
+    // TCP.GUI: the stored address without a launch address.
+    mp::Panel tcp;
+    if (!load_gui(assets, "tcp.gui", tcp))
+        return;
+    mp::tcp_open(lobby, state, tcp);
+    expect(
+        mp::panel_text(tcp, "ADDRESS") == "192.168.0.9" && !state.launch_address_used,
+        "TCP.GUI shows the stored address"
+    );
+    // An active launch's address is taken and accepted at once, quietly.
+    std::snprintf(launch_block.address, sizeof launch_block.address, "%s", "10.66.5.217");
+    launch_block.hosting = 1;
+    active_launch = true;
+    mp::tcp_open(lobby, state, tcp);
+    expect(
+        mp::panel_text(tcp, "ADDRESS") == "10.66.5.217" && state.launch_address_used,
+        "TCP.GUI takes the launch address"
+    );
+    sounds.clear();
+    loopback.opened = false;
+    expect(
+        mp::tcp_accept_launch_address(lobby, state, tcp) == mp::ConnectAction::game_list,
+        "the launch address opens the service"
+    );
+    expect(sounds.empty() && address_saves == 0, "no SmlButton and no saved address");
+    expect(
+        (game->connection_flags & (mp::kConnectAddressSet | mp::kConnectFromOk)) ==
+            (mp::kConnectAddressSet | mp::kConnectFromOk),
+        "the address is set and the OK bit hosts"
+    );
+    // Without an active launch the accept sounds and saves as OK does.
+    active_launch = false;
+    launch_block.hosting = 0;
+    mp::tcp_open(lobby, state, tcp);
+    game->connection_flags = 0;
+    expect(
+        mp::tcp_accept_launch_address(lobby, state, tcp) == mp::ConnectAction::game_list,
+        "the '-n1' address opens the service"
+    );
+    expect(
+        !sounds.empty() && sounds.back() == "SmlButton" && saved_address == "10.66.5.217",
+        "SmlButton and the saved address"
+    );
+    expect(
+        (game->connection_flags & (mp::kConnectAddressSet | mp::kConnectFromOk)) ==
+            mp::kConnectAddressSet,
+        "a joiner leaves the OK bit clear"
+    );
+
+    // SELGAME: a hosting launch goes on to NEWMULTI at once.
+    mp::Panel list;
+    if (!load_gui(assets, "selgame.gui", list))
+        return;
+    loopback.opened = true;
+    active_launch = true;
+    launch_block.hosting = 1;
+    std::snprintf(mp::lobby_nickname(*game), 17, "%s", "Ghost");
+    expect(mp::game_list_open(lobby, state, list), "the game list opens");
+    expect(
+        state.update_requested && !state.join_pending && launch_block.address[0] == '\0',
+        "a hosting launch asks to host and the address is taken"
+    );
+    sounds.clear();
+    expect(
+        mp::game_list_tick(lobby, state, list) == mp::ConnectAction::new_game,
+        "the game list goes on to NEWMULTI"
+    );
+    expect(sounds.empty(), "no BigButton while a launch is active");
+
+    // A launched joiner waits for the host's game and joins it.
+    std::snprintf(launch_block.address, sizeof launch_block.address, "%s", "10.66.5.217");
+    launch_block.hosting = 0;
+    expect(mp::game_list_open(lobby, state, list) && state.join_pending, "a joiner waits");
+    last_message.clear();
+    const auto start = clock_ticks;
+    expect(
+        mp::game_list_tick(lobby, state, list) == mp::ConnectAction::none && state.host_waiting,
+        "no game listed yet"
+    );
+    expect(last_message == "Waiting for host... (0)", "the wait's first frame shows 0");
+    clock_ticks += 1;
+    (void)mp::game_list_tick(lobby, state, list);
+    expect(last_message == "Waiting for host... (20)", "the next frame counts from the first");
+    clock_ticks += 14; // 500 ms past the start: a poll, still nothing listed
+    (void)mp::game_list_tick(lobby, state, list);
+    clock_ticks += 1;
+    (void)mp::game_list_tick(lobby, state, list);
+    expect(last_message == "Waiting for host... (18)", "19.5 s left show as 18");
+    add_listed_session(loopback, true);
+    clock_ticks = start + 31; // past the next poll
+    sounds.clear();
+    expect(
+        mp::game_list_tick(lobby, state, list) == mp::ConnectAction::join && !state.host_waiting,
+        "the host's launch-only game is joined once listed"
+    );
+    expect(sounds.empty() && game->frontend_pending_signal == 0x12, "a quiet join");
+
+    // Nobody hosts in time: the launch's join fails with host-not-found.
+    loopback.session_count = 0;
+    std::snprintf(launch_block.address, sizeof launch_block.address, "%s", "10.66.5.217");
+    expect(mp::game_list_open(lobby, state, list) && state.join_pending, "a joiner waits again");
+    auto action = mp::ConnectAction::none;
+    for (int32_t frame = 0; frame < 700 && action == mp::ConnectAction::none; ++frame) {
+        action = mp::game_list_tick(lobby, state, list);
+        clock_ticks += 1;
+    }
+    expect(
+        action == mp::ConnectAction::main_menu && game->frontend_state == 2,
+        "after 20 s the game returns to the main menu"
+    );
+    expect(
+        failed_joins.size() == 1 && failed_joins[0] == mp::kHostNotFoundText,
+        "the launch's join fails once, with host-not-found"
+    );
+    expect(!state.host_waiting, "the wait ends");
+
+    // A joiner whose launch is no longer active when its wait starts is
+    // told "Host not found.  Exiting..." once the wait ends, and
+    // 4 s later the game leaves; no launch's join fails.
+    std::snprintf(launch_block.address, sizeof launch_block.address, "%s", "10.66.5.217");
+    expect(
+        mp::game_list_open(lobby, state, list) && state.join_pending, "a joiner waits once more"
+    );
+    active_launch = false;
+    action = mp::ConnectAction::none;
+    int32_t exiting_frame = -1;
+    int32_t frame = 0;
+    for (; frame < 900 && action == mp::ConnectAction::none; ++frame) {
+        action = mp::game_list_tick(lobby, state, list);
+        if (exiting_frame < 0 && state.host_not_found_exiting) {
+            exiting_frame = frame;
+            expect(
+                last_message == mp::kHostNotFoundExitingText && !state.host_waiting,
+                "the wait ends showing Host not found.  Exiting..."
+            );
+        }
+        clock_ticks += 1;
+    }
+    expect(
+        action == mp::ConnectAction::leave_game && exiting_frame >= 0 &&
+            frame - 1 - exiting_frame == 120,
+        "the game leaves 4 s after the text shows"
+    );
+    expect(
+        failed_joins.size() == 1 && !state.host_not_found_exiting, "no launch's join fails with it"
+    );
+
+    // A launch-only game refuses a joiner without an active launch.
+    active_launch = false;
+    state.join_pending = false;
+    add_listed_session(loopback, true);
+    expect(mp::game_list_update(lobby, state, list), "the launch-only game is listed");
+    mp::panel_control(list, "GAMENAME")->list_selection = 0;
+    mp::panel_set_text(list, "NICKNAME", "Guest");
+    (void)mp::panel_press(list, "JOINGAME");
+    last_message.clear();
+    expect(
+        mp::game_list_handle_event(lobby, state, list) == mp::ConnectAction::none &&
+            last_message == "You must join this game via the Boneyards.",
+        "a launch-only game needs an active launch"
+    );
+    active_launch = true;
+    (void)mp::panel_press(list, "JOINGAME");
+    expect(
+        mp::game_list_handle_event(lobby, state, list) == mp::ConnectAction::join,
+        "with a launch active it is joinable"
+    );
+    // PREVMENU while a launch is active goes to the main menu.
+    (void)mp::panel_press(list, "PREVMENU");
+    game->frontend_state = 0x11;
+    expect(
+        mp::game_list_handle_event(lobby, state, list) == mp::ConnectAction::main_menu &&
+            game->frontend_state == 2,
+        "PREVMENU returns to the main menu"
+    );
+
+    // NEWMULTI: the launch's user name, and an active launch hosts at once.
+    mp::Panel newmulti;
+    if (!load_gui(assets, "newmulti.gui", newmulti))
+        return;
+    std::snprintf(launch_block.user_name, sizeof launch_block.user_name, "%s", "Ghost_Commander");
+    game->frontend_pending_signal = 0;
+    mp::new_game_open(lobby, state, newmulti);
+    expect(
+        std::strcmp(mp::lobby_nickname(*game), "Ghost_Commander") == 0 &&
+            mp::panel_text(newmulti, "NICKNAME") == "Ghost_Commander",
+        "the launch's user name is the nickname"
+    );
+    expect(
+        state.host_at_once && game->frontend_pending_signal == 0x11,
+        "an active launch hosts without OK"
+    );
+    active_launch = false;
+    mp::new_game_open(lobby, state, newmulti);
+    expect(!state.host_at_once, "without a launch NEWMULTI waits for OK");
+    reset_launch();
+}
+
+// The battle room applies an active launch's options and locks.
+void test_launch_battleroom(const oa::ui::gui_layout::Layout& lounge) {
+    reset_launch();
+    active_launch = true;
+    launch_block.max_units = 200;
+    launch_block.lock_options = 1;
+    launch_block.death_option = 3;
+    launch_block.energy = 3000;
+    launch_block.metal = 2500;
+    launch_block.faction = oa::ui::frontend_multiplayer::launch::faction::core;
+    launch_block.team = 2;
+    launch_block.los = 2;
+    launch_block.cheats = 2;
+    launch_block.location = 1;
+    launch_block.mapping = 1;
+    launch_block.watching = 2;
+    launch_block.tournament = 1;
+    std::snprintf(launch_block.mission, sizeof launch_block.mission, "%s", "Acid Pools");
+    std::snprintf(launch_block.provider_label, sizeof launch_block.provider_label, "%s", "Ladder");
+    const auto link = launch_link();
+    {
+        Fixture f(lounge, &link);
+        const auto& info = mp::local_info(f.lobby);
+        expect(info.max_units == 200 && mp::lobby_max_units(*f.game) == 200, "the unit limit");
+        expect(
+            mp::lobby_options_locked(f.lobby) && mp::lobby_launch_locked(f.lobby),
+            "the lock and the tournament lock the options"
+        );
+        expect(
+            (info.options & mp::option::commander_mask) == mp::option::commander_deathmatch &&
+                f.game->session_rules == 2 && f.game->start_options[0] == 2,
+            "commander rule 3 is deathmatch"
+        );
+        expect(
+            info.side == 1 && mp::lobby_player_team(mp::local_player(f.lobby)) == 1,
+            "Core side and team 2"
+        );
+        expect(
+            (info.options & (mp::option::los_limited | mp::option::los_true)) ==
+                mp::option::los_limited,
+            "line of sight 2 is circular"
+        );
+        expect(
+            (info.options & mp::option::cheats_allowed) != 0 &&
+                (info.options & mp::option::fixed_locations) != 0 &&
+                (info.options & mp::option::unmapped) != 0 &&
+                (info.options & mp::option::watching_allowed) != 0,
+            "cheats, fixed positions, unmapped and watching"
+        );
+        expect(
+            info.metal_hundreds >= 24 && info.metal_hundreds <= 26 && info.energy_hundreds >= 29 &&
+                info.energy_hundreds <= 31,
+            "the sliders start at the launch's resources"
+        );
+        for (const char* control :
+             {"MAXUNITS", "ENERGY", "METAL", "CHEATING", "LOSTYPE", "GAMEOPEN"})
+            expect(mp::panel_control(f.panel, control)->grayed, control);
+        expect(
+            mp::panel_control(f.panel, "RESTRICTIONS")->grayed &&
+                mp::panel_control(f.panel, "COMMANDER")->grayed,
+            "RESTRICTIONS and COMMANDER locked"
+        );
+        expect(
+            mp::panel_text(f.panel, "PREVMENU") == "Ladder", "PREVMENU shows the provider label"
+        );
+        expect(map_name == "Acid Pools", "the host plays the launch's map");
+    }
+    map_name = "Coast To Coast";
+    std::snprintf(
+        launch_block.provider_label, sizeof launch_block.provider_label, "%s", "TwelveLetter"
+    );
+    {
+        Fixture f(lounge, &link, false);
+        expect(map_name == "Coast To Coast", "a joiner leaves the map to the host");
+        expect(
+            mp::panel_text(f.panel, "PREVMENU") == "Previous Menu",
+            "a long label leaves the caption"
+        );
+    }
+    // Without an active launch nothing applies.
+    active_launch = false;
+    {
+        Fixture f(lounge, &link);
+        expect(
+            !mp::lobby_options_locked(f.lobby) && mp::local_info(f.lobby).max_units != 200,
+            "an inactive launch applies nothing"
+        );
+        expect(!mp::panel_control(f.panel, "COMMANDER")->grayed, "COMMANDER stays open");
+    }
+    map_name = "Coast To Coast";
+    reset_launch();
+}
+
+} // namespace
+
+// Without arguments the self-contained cases; with --data the lounge and game
+// list over the installed game's GUI files.
+/// Queues a one-byte probe (0x06) from a player for the battle room's next pump.
+///
+/// @param[in,out] loopback the room's loopback net
+/// @param from the probing player
+void inject_probe(mp::LoopbackNet& loopback, uint32_t from) {
+    mp::LobbyEvent event{};
+    event.kind = mp::LobbyEventKind::record;
+    event.player_id = from;
+    event.size = 1;
+    event.data[0] = static_cast<uint8_t>(oa::netgame::RecordType::probe);
+    expect(mp::loopback_inject(loopback, event), "the probe is queued");
+}
+
+// The battle room's stall scan, which runs as each pump ends. A remote
+// player silent for more than the player timeout (30 s unless the game
+// names another) is named for TIMEOUT.GUI, and any record from it, a probe
+// as well, clears the name. This machine's own players, its computer player
+// among them, are never named, and a player is silent only from its
+// arrival. Silent players of two machines name no one, and of one machine
+// the first in slot order. "Drop 0" and a pause leave the name as it was,
+// and after a pause silence counts from the pause. TIMEOUT.GUI's countdown
+// rejects the player once, with reason 6, at the timeout plus 120 s.
+void test_player_timeout() {
+    constexpr uint16_t kPaused = 0x01; // Game.sim_run_flags: the game is paused
+    Room room(true);
+    auto& lobby = room.lobby;
+    auto& game = *room.game;
+    lobby.next_stats_tick = 0xffffffffU; // no periodic block
+    expect(
+        game.player_timeout_seconds == mp::kDefaultPlayerTimeoutSeconds &&
+            mp::kDefaultPlayerTimeoutSeconds == 30,
+        "the battle room's player timeout is 30 s by default"
+    );
+    const uint32_t limit = 30U * 30U;
+    auto& guest = mp::slot_player(lobby, mp::slot_for_player_id(lobby, kRoomGuest));
+    auto& computer = mp::slot_player(lobby, 2);
+    expect(computer.last_update_time == 0, "this machine's computer player was never heard from");
+
+    uint32_t heard = guest.last_update_time;
+    clock_ticks = heard + limit;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "silence for the timeout itself is not yet a stall");
+    clock_ticks = heard + limit + 1;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == kRoomGuest, "a remote player silent past the timeout is named");
+    inject_probe(room.loopback, kRoomGuest);
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        guest.last_update_time == clock_ticks && lobby.stalled_player == 0,
+        "a probe from it is heard, and no one is named any more"
+    );
+
+    clock_ticks += 100 * limit;
+    guest.last_update_time = clock_ticks;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        lobby.stalled_player == 0 && computer.in_use != 0 && computer.status == mp::kSlotComputer,
+        "this machine's computer player, never heard from, is never named"
+    );
+    join_remote(lobby, kRoomThird);
+    const auto third_slot = mp::slot_for_player_id(lobby, kRoomThird);
+    expect(third_slot == 3, "a third player arrives");
+    auto& third = mp::slot_player(lobby, third_slot);
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        third.last_update_time == clock_ticks && lobby.stalled_player == 0,
+        "an arriving player is silent only from its arrival"
+    );
+
+    // Two machines, then one.
+    guest.machine_group = 2;
+    third.machine_group = 3;
+    heard = clock_ticks;
+    clock_ticks = heard + limit + 1;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "silent players of two machines name no one");
+    third.machine_group = 2;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        lobby.stalled_player == kRoomGuest,
+        "silent players of one machine name the first in slot order"
+    );
+
+    // "Drop 0" leaves the name as it was.
+    game.console_flags |= OA_CONSOLE_FLAG_NO_DROP;
+    guest.last_update_time = clock_ticks;
+    third.last_update_time = clock_ticks;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == kRoomGuest, "with Drop 0 the scan does not run");
+    game.console_flags &= static_cast<uint16_t>(~OA_CONSOLE_FLAG_NO_DROP);
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "without it the players are heard again");
+
+    // A pause leaves the name as it was, and silence counts from its end.
+    heard = clock_ticks;
+    clock_ticks = heard + limit + 1;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == kRoomGuest, "the guest's machine is silent again");
+    game.sim_run_flags |= kPaused;
+    clock_ticks += 5 * limit;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(
+        lobby.stalled_player == kRoomGuest && lobby.timeout_baseline == clock_ticks,
+        "while paused the scan only follows the clock"
+    );
+    game.sim_run_flags &= static_cast<uint16_t>(~kPaused);
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "once the pause ends, the silence before it is forgotten");
+    const uint32_t resumed = clock_ticks;
+    clock_ticks = resumed + limit;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == 0, "silence counts from the pause");
+    clock_ticks = resumed + limit + 1;
+    (void)mp::lobby_tick(lobby, room.panel);
+    expect(lobby.stalled_player == kRoomGuest, "and names the player once past the timeout");
+
+    // TIMEOUT.GUI's countdown, without its layout.
+    mp::Panel dialog;
+    expect(!mp::timeout_open(lobby, dialog, 0x999), "TIMEOUT opens for no id without a slot");
+    expect(mp::timeout_open(lobby, dialog, kRoomGuest), "TIMEOUT opens for the silent player");
+    const uint32_t last = clock_ticks;
+    guest.last_update_time = last;
+    const uint32_t drop = (30U + 120U) * 30U;
+    room.loopback.sent_count = 0;
+    clock_ticks = last + drop - 1;
+    expect(
+        !mp::timeout_tick(lobby, dialog) && room.rejects().empty(),
+        "short of the timeout plus 120 s, no one is rejected"
+    );
+    clock_ticks = last + drop;
+    expect(mp::timeout_tick(lobby, dialog), "at the timeout plus 120 s the dialog closes");
+    const auto rejects = room.rejects();
+    const auto sent = room.sent(oa::netgame::RecordType::reject);
+    expect(
+        rejects.size() == 1 && sent.size() == 1 && rejects[0].player_id == kRoomGuest &&
+            rejects[0].reason == 6 && room.loopback.sent_from[sent[0]] == kRoomHost,
+        "one 0x1b {id, 6} goes out from the host's player"
+    );
+    expect(
+        mp::slot_for_player_id(lobby, kRoomGuest) < 0 && guest.status == mp::kSlotOpen &&
+            guest.reject_reason == 6 && mp::slot_for_player_id(lobby, kRoomThird) < 0,
+        "the silent player's slot opens, with its machine's other player"
+    );
+    expect(
+        mp::timeout_tick(lobby, dialog) && room.rejects().size() == 1,
+        "a closed countdown sends nothing more"
+    );
+    (void)mp::lobby_tick(lobby, room.panel);
+    const auto computer_slot = mp::slot_for_player_id(lobby, kRoomComputer);
+    expect(
+        lobby.stalled_player == 0 && room.rejects().size() == 1 && computer_slot >= 0 &&
+            mp::slot_player(lobby, computer_slot).status == mp::kSlotComputer,
+        "no one is left to name, and the computer player stays"
+    );
+
+    // A game that names its own timeout keeps it.
+    auto named = std::make_unique<oa::Game>();
+    named->player_timeout_seconds = 120;
+    mp::Lobby fresh{};
+    mp::lobby_reset(fresh, *named);
+    expect(named->player_timeout_seconds == 120, "a timeout already set is kept");
+    Room slow(true);
+    slow.lobby.next_stats_tick = 0xffffffffU;
+    slow.game->player_timeout_seconds = 120;
+    heard = mp::slot_player(slow.lobby, 1).last_update_time;
+    clock_ticks = heard + 120U * 30U;
+    (void)mp::lobby_tick(slow.lobby, slow.panel);
+    expect(slow.lobby.stalled_player == 0, "120 s of silence is within a 120 s timeout");
+    clock_ticks = heard + 120U * 30U + 1;
+    (void)mp::lobby_tick(slow.lobby, slow.panel);
+    expect(slow.lobby.stalled_player == kRoomGuest, "past it the player is named");
+}
+
+int main(int argc, char** argv) {
+    if (!oa::test::game_data_requested(argc, argv)) {
+        test_unit_sync_and_restrictions();
+        test_unit_sync_marks_units();
+        test_map_memory();
+        test_fit_map_picture();
+        test_map_summary();
+        test_map_select_preview();
+        test_view_map_follows_host();
+        test_open_service();
+        test_launch_connection();
+        test_add_player_and_description();
+        test_client_unit_sync();
+        test_unit_sync_reevaluation();
+        test_machine_groups();
+        test_alliance_relation();
+        test_records_leave_from_their_players();
+        test_periodic_block();
+        test_host_leaving();
+        test_reject_passed_on_once();
+        test_rejection_order();
+        test_refused_joiner();
+        test_player_timeout();
+        test_session_description();
+        test_hot_surfaces();
+        test_slider_binding();
+        test_slider_input();
+        test_list_scrolling();
+        test_start_doors(doors_layout());
+    } else {
+        const auto assets = oa::test::require_game_assets("the lobby over the installed GUI files");
+        const auto lounge = oa::ui::gui_layout::parse(read_gui(assets, "lounge2.gui"));
+        expect(lounge.ok(), "the install's LOUNGE2.GUI parses");
+        const auto common =
+            oa::formats::gaf::parse(oa::test::read_game_file(assets, "anims/commongui.gaf"));
+        expect(common.ok(), "the install's COMMONGUI.GAF parses");
+        if (common.ok())
+            for (const auto& sequence : common.archive->sequences)
+                if (sequence.name == "SLIDERS")
+                    for (const auto& frame : sequence.frames)
+                        slider_art.shared.push_back(
+                            {static_cast<int16_t>(frame.width), static_cast<int16_t>(frame.height)}
+                        );
+        expect(!slider_art.shared.empty(), "COMMONGUI.GAF has the SLIDERS art");
+        if (lounge.ok()) {
+            test_rows_and_colors(*lounge.layout);
+            test_side_and_watch(*lounge.layout);
+            test_teams_and_alliances(*lounge.layout);
+            test_options_and_sliders(*lounge.layout);
+            test_lounge_sliders(*lounge.layout);
+            test_ready_and_start(*lounge.layout);
+            test_start_doors(*lounge.layout);
+            test_row_indicators(*lounge.layout);
+            test_slot_cycle(*lounge.layout);
+            test_chat_and_leave(*lounge.layout);
+            test_client_rules(*lounge.layout);
+            test_browsing_behind_a_dialog(*lounge.layout);
+            test_chat_commands(*lounge.layout);
+            test_ping_column(*lounge.layout);
+            test_closing_slots_republishes(*lounge.layout);
+            test_launch_battleroom(*lounge.layout);
+        }
+        test_game_list(assets);
+        test_launch_screens(assets);
+    }
+    if (failures != 0) {
+        std::fprintf(stderr, "%d failure(s)\n", failures);
+        return 1;
+    }
+    std::puts("multiplayer lobby tests passed");
+    return 0;
+}

@@ -22,13 +22,12 @@ The layer order, and the check that holds the tree to it afterwards, are in
 ## Running it
 
 From a clean checkout (every tree committed), with the projects that build
-on the engine checked out below it or named with `--tree`, and the
-directory of the rename record those projects keep:
+on the engine checked out below it or named with `--tree`:
 
 ```sh
 python3 tools/layout/layout.py --self-test
-python3 tools/layout/layout.py --check --rename-record RECORD_DIR
-python3 tools/layout/layout.py --apply --rename-record RECORD_DIR --relocate-with RELOCATE_SCRIPT
+python3 tools/layout/layout.py --check
+python3 tools/layout/layout.py --apply
 ```
 
 `--check` computes the whole pass in memory and prints what it would do, or
@@ -38,11 +37,8 @@ still include a file left outside it, and every script, build file or data
 file that would still name a file or directory the pass removes. `--apply`
 moves the files with `git mv`, rewrites the engine and the projects that
 build on it, and stages everything; it changes nothing when a problem is
-found. A project's directory that holds a `renames.tsv` is a rename record
-and is never rewritten; `--apply` refuses to run until `--rename-record`
-names it. The moved files and renamed names are then added to its
-`renames.tsv`, and the relocation script is run on the staged tree as
-`RELOCATE_SCRIPT relocate --repo ENGINE --head TREE --out RECORD_DIR`. A
+found. A project's directory that `--leave DIR` names is never
+rewritten. A
 second `--apply` on a laid-out tree reports that the tree is laid out
 already and changes nothing.
 
@@ -69,7 +65,7 @@ When the tree has changed since the table was written:
 ## Proving a pass
 
 After `--apply` and a commit of every tree, each of these must pass as it
-does before the pass (the rename record's checks read `HEAD`):
+does before the pass:
 
 - The engine: configure with the game (`OA_GAME_DIR`), build, and run the
   whole ctest, which then includes
@@ -83,8 +79,7 @@ does before the pass (the rename record's checks read `HEAD`):
   --show-only=json-v1` of both builds): the same tests, the same arguments,
   apart from renamed targets and moved paths.
 - Each project that builds on the engine, configured with
-  `-DOA_ENGINE_DIR` at the laid-out tree, built and tested; and the rename
-  record's own checks.
+  `-DOA_ENGINE_DIR` at the laid-out tree, built and tested.
 - The Windows harness (`tools/test_windows.sh`).
 
 ## Known limits

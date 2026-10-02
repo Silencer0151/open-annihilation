@@ -160,7 +160,7 @@ void Runtime::load_preference_file() {
         return;
     }
     // Explicit profiles start with defaults, never import installation or
-    // personal settings. This keeps isolated regression runs reproducible.
+    // personal settings. This keeps isolated test runs reproducible.
     if (options_.preferences_file)
         return;
     // Read-only migration of the early prototype's installation-local

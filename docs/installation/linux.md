@@ -109,6 +109,10 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
 [Settings](../../README.md#settings).
 
+For multiplayer, a firewall on the computer must let through UDP port
+47624, which other computers use to find a hosted game, TCP ports 2300 to
+2400 and UDP ports 2350 to 2400.
+
 ## Raspberry Pi
 
 Open Annihilation runs on a Raspberry Pi 4, Pi 400 or Pi 5 with the 64-bit

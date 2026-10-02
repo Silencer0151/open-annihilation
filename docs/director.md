@@ -9,13 +9,14 @@ into MP4 files. A script can also be written or edited by hand.
 
 Both need two things besides the game:
 
-- **An extension of the build that replays the recording.** The engine
-  itself reads no recording format: it hands the recording's bytes to the
-  extensions of the build (`Extension::open_recording`,
+- **Network play, which replays the recording.** The game hands the
+  recording's bytes to the extensions of the build (`Extension::open_recording`,
   [src/app/README.md](../src/app/README.md#extensions)), and the one that
-  recognises them starts the recorded game and steps it one tick at a time
-  for the engine. A build without such an extension stops with `no extension
-  of this build replays NAME`.
+  recognises them starts the recorded game and steps it one tick at a time.
+  Network play ([src/app/README.md](../src/app/README.md#network-play)),
+  always built, replays 3.1c's recorded games (`.tad`). A recording no
+  extension of the build replays stops the run with
+  `no extension of this build replays NAME`.
 - **The `ffmpeg` program on `PATH`**, built with `libx264`, for the videos
   (as for [capture.md](capture.md)). `OA_DIRECTOR_ENCODER=none` renders
   without it: every frame is drawn and hashed and the sound and manifests
@@ -29,9 +30,9 @@ render replay the recording alike.
 ## Generating a script
 
 ```sh
-open-annihilation --generate-script games/game.rec
-open-annihilation --generate-script games/game.rec --output videos/game.oascript --resolution 3840x2160
-open-annihilation --generate-script games/game.rec --output videos/game.oamovie
+open-annihilation --generate-script games/game.tad
+open-annihilation --generate-script games/game.tad --output videos/game.oascript --resolution 3840x2160
+open-annihilation --generate-script games/game.tad --output videos/game.oamovie
 ```
 
 The recording is replayed to its end without drawing, in the exact order a
@@ -155,7 +156,7 @@ names its key, such as `director.shots[2].cameraEnd.position.y`.
 ```yaml
 oascript: 1
 input:
-  demo: game.rec
+  demo: game.tad
   tickrate: 30
 output:
   resolution: { width: 1920, height: 1080 }
@@ -272,8 +273,8 @@ bundles.
 
 ## Limits
 
-- **An extension must replay the recording.** Without one, neither option
-  does anything but say so.
+- **Network play must be built.** Without it, or another extension that
+  replays the recording, neither option does anything but say so.
 - **`showUx`** draws the interface the game draws around a battlefield of
   the frame's size, from the camera's whole map pixel; the interface keeps
   timers of its own, so frames with it may differ from run to run.

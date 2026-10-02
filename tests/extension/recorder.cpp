@@ -2,19 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // A test extension that fills every hook of oa-game's extension table with
-// a recorder. Each call is counted, under the hook's name and, for a hook
-// that takes one, the enumerator it was given; every answer is the one a
-// null hook stands for, so the game behaves as it does without an
-// extension. When oa-game exits, the counts go to the file --record-hooks
-// names, one "<hook>[ <enumerator>] <count>" line each in name order,
-// together with the follower's (follower.cpp), whose hooks start with
-// "follower.".
+// a recorder, but frontend_game and frontend_states: one extension at most
+// may fill those, and network play, which the engine registers in every
+// build, fills both. The game lists the recorder after network play. Each
+// call is counted, under the hook's name and, for a hook that takes one,
+// the enumerator it was given; every answer is the one a null hook stands
+// for, so the game behaves as it does with network play alone. When
+// oa-game exits, the counts go to the file --record-hooks names, one
+// "<hook>[ <enumerator>] <count>" line each in name order, together with
+// the follower's (follower.cpp), whose hooks start with "follower.".
 //
-// The frontend's Game block, which frontend_game must return, is the
-// recorder's own zeroed block, as the engine's own would be, and
-// --check-multiplayer-menu, which check_multiplayer_menu takes over, only
-// says that it ran. The recorder also adds one member to Runtime
-// (recorder_runtime_members.hpp) and calls it through RuntimeExtension, the
+// --check-multiplayer-menu runs network play's check of the multiplayer
+// screens first; the recorder's check_multiplayer_menu then says that it
+// ran. The recorder also adds one member to Runtime
+// (recorder_runtime_members.hpp) and calls it through RecorderExtension, the
 // friend, as the extension table's startup hook runs.
 //
 // --record-quit STATUS reaches the screen services an extension keeps: an
@@ -24,11 +25,12 @@
 // the run through quit with STATUS. Without the option none of this runs.
 //
 // The check host (check_host.hpp) is driven as a check an extension runs
-// drives it, through its entries and runtime_options alone: after the
-// engine's own --check-multiplayer-menu check, a round of the main menu
-// clicks MULTI, closes the box it opens with Return and clicks it again;
-// and with --record-check-host the recorder takes the headless run
-// (run_mode headless) for the entries that work without a window.
+// drives it, through its entries and runtime_options alone: after network
+// play's --check-multiplayer-menu check, a round of the main menu clicks
+// MULTI twice, which the recorder takes over (select_multiplayer answers
+// taken during the round) so that the main menu stays up; and with
+// --record-check-host the recorder takes the headless run (run_mode
+// headless) for the entries that work without a window.
 #include "recorder.hpp"
 
 #include "oa/app/check_host.hpp"
@@ -36,6 +38,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -85,13 +88,13 @@ constexpr uint64_t kQuitFrame = 10;
 struct Recorder {
     std::string path{};                       // --record-hooks FILE; empty writes nothing
     std::map<std::string, uint64_t> counts{}; // by "<hook>[ <enumerator>]"
-    oa::Game frontend_game{};
-    bool quit{};                      // --record-quit was given
-    int quit_status{};                // its STATUS
-    uint64_t after_pump_frames{};     // frames seen at FrameStage::after_pump
-    void* host{};                     // ScreenContext::host, kept from the overlay
-    const ScreenServices* services{}; // ScreenContext::services, kept likewise
-    bool check_host{};                // --record-check-host was given
+    bool taking_multi{};                      // a check host round takes MULTI over
+    bool quit{};                              // --record-quit was given
+    int quit_status{};                        // its STATUS
+    uint64_t after_pump_frames{};             // frames seen at FrameStage::after_pump
+    void* host{};                             // ScreenContext::host, kept from the overlay
+    const ScreenServices* services{};         // ScreenContext::services, kept likewise
+    bool check_host{};                        // --record-check-host was given
 };
 
 /// Returns the recorder of this process.
@@ -308,31 +311,16 @@ void frontend_entry(void* /*context*/, FrontendEntry& /*entry*/) {
     record("frontend_entry");
 }
 
-/// Leaves every frontend state to the engine (Extension::frontend_states).
-///
-/// @param context Extension::context (unused)
-/// @param[out] handler the runtime's handler; left empty
-void frontend_states(void* /*context*/, oa::ui::frontend_state::StateHandler& /*handler*/) {
-    record("frontend_states");
-}
-
-/// Leaves MULTI to the engine's message box (Extension::select_multiplayer).
+/// Leaves MULTI to network play, but takes it over during a check host round
+/// (Extension::select_multiplayer).
 ///
 /// @param context Extension::context (unused)
 /// @param[in,out] runtime the running app; left as it is
-/// @return unavailable
+/// @return taken during a check host round of the main menu; unavailable otherwise
 MultiplayerSelection select_multiplayer(void* /*context*/, Runtime& /*runtime*/) {
     record("select_multiplayer");
-    return MultiplayerSelection::unavailable;
-}
-
-/// Returns the recorder's frontend Game block (Extension::frontend_game).
-///
-/// @param context Extension::context (unused)
-/// @return the block, zeroed as the engine's own starts
-oa::Game* frontend_game(void* /*context*/) {
-    record("frontend_game");
-    return &recorder().frontend_game;
+    return recorder().taking_multi ? MultiplayerSelection::taken
+                                   : MultiplayerSelection::unavailable;
 }
 
 /// Leaves the preferences write to write the password (Extension::keep_stored_password).
@@ -497,31 +485,11 @@ void click(const CheckHost& host, Point at) {
         host.frame(host.context);
 }
 
-/// Presses and releases Return through the check host, then runs the frames
-/// the menus settle in.
-///
-/// @param host the check host
-void press_return(const CheckHost& host) {
-    SDL_Event event{};
-    event.type = SDL_EVENT_KEY_DOWN;
-    event.key.windowID = host.window_id(host.context);
-    event.key.scancode = SDL_SCANCODE_RETURN;
-    event.key.key = SDLK_RETURN;
-    event.key.down = true;
-    require(host.dispatch(host.context, &event), "Return ended the run");
-    event.type = SDL_EVENT_KEY_UP;
-    event.key.down = false;
-    require(host.dispatch(host.context, &event), "Return ended the run");
-    for (int frame = 0; frame < kSettleFrames; ++frame)
-        host.frame(host.context);
-}
-
 /// Drives a round of the main menu through the check host, with the window
-/// up: MULTI clicked asks the extensions (select_multiplayer), whose answer
-/// opens the engine's message box; Return closes it, so that a second click
-/// reaches MULTI again, and Return closes that box too. The cursor follows
-/// the pointer, the clock holds, and the files, sounds and preferences
-/// entries answer.
+/// up: MULTI clicked twice asks the extensions (select_multiplayer) each
+/// time, and the recorder takes it over, so the main menu stays up. The
+/// cursor follows the pointer, the clock holds, and the files, sounds and
+/// preferences entries answer.
 ///
 /// @param runtime the running game, on the main menu with its window up
 void check_host_menu_round(Runtime& runtime) {
@@ -534,6 +502,7 @@ void check_host_menu_round(Runtime& runtime) {
     require_main_menu(host, "the start");
     const Point multi = gadget_centre(host, "multi");
     const uint64_t asked = hook_recorder::calls("select_multiplayer");
+    recorder().taking_multi = true;
     click(host, multi);
     int32_t cursor_x = 0;
     int32_t cursor_y = 0;
@@ -545,18 +514,18 @@ void check_host_menu_round(Runtime& runtime) {
     );
     require(hook_recorder::calls("select_multiplayer") == asked + 1, "MULTI was not asked");
     require_main_menu(host, "MULTI");
-    press_return(host);
     click(host, multi);
+    recorder().taking_multi = false;
     require(
-        hook_recorder::calls("select_multiplayer") == asked + 2,
-        "Return did not close MULTI's message box"
+        hook_recorder::calls("select_multiplayer") == asked + 2, "a second MULTI was not asked"
     );
-    press_return(host);
-    require_main_menu(host, "the end");
+    require_main_menu(host, "the second MULTI");
     check_clock(host);
     check_composed_frame(host);
     check_files(host, runtime_options(runtime));
-    std::printf("recorder: check host, windowed: MULTI clicked twice, Return closed its box\n");
+    std::printf(
+        "recorder: check host, windowed: MULTI clicked twice, taken over by the recorder\n"
+    );
 }
 
 /// Drives the entries that work without a window through the check host,
@@ -611,7 +580,7 @@ uint64_t hook_recorder::calls(const char* hook, const char* detail) {
 }
 
 // The recorder's hooks that take the runtime.
-struct RuntimeExtension {
+struct RecorderExtension {
     /// Counts the start and calls the recorder's Runtime member (Extension::startup).
     ///
     /// @param context Extension::context (unused)
@@ -663,16 +632,16 @@ struct RuntimeExtension {
     /// @param[in,out] runtime the running app; left as it is
     static void shutdown(void* /*context*/, Runtime& /*runtime*/) { record("shutdown"); }
 
-    /// Says that --check-multiplayer-menu ran, then runs the engine's own check,
-    /// whose click on MULTI reaches select_multiplayer, and a round of the main
-    /// menu through the check host (Extension::check_multiplayer_menu).
+    /// Says that --check-multiplayer-menu ran, after network play's check of
+    /// the multiplayer screens, then runs a round of the main menu through the
+    /// check host, whose clicks on MULTI reach select_multiplayer
+    /// (Extension::check_multiplayer_menu).
     ///
     /// @param context Extension::context (unused)
     /// @param[in,out] runtime the running app, whose main menu the check drives
     static void check_multiplayer_menu(void* /*context*/, Runtime& runtime) {
         record("check_multiplayer_menu");
         std::printf("recorder: --check-multiplayer-menu\n");
-        runtime.check_multiplayer_unavailable();
         check_host_menu_round(runtime);
     }
 
@@ -921,46 +890,51 @@ void oa_extension_init_recorder(oa::app::Extension* table) {
     table->check_options = check_options;
     table->switch_handler = switch_handler;
     table->text = text;
-    table->startup = RuntimeExtension::startup;
+    table->startup = RecorderExtension::startup;
     table->register_screens = register_screens;
-    table->ready = RuntimeExtension::ready;
+    table->ready = RecorderExtension::ready;
     table->frontend_entry = frontend_entry;
-    table->frontend_states = frontend_states;
-    table->run_mode = RuntimeExtension::run_mode;
-    table->start_scene = RuntimeExtension::start_scene;
-    table->shutdown = RuntimeExtension::shutdown;
+    table->run_mode = RecorderExtension::run_mode;
+    table->start_scene = RecorderExtension::start_scene;
+    table->shutdown = RecorderExtension::shutdown;
     table->select_multiplayer = select_multiplayer;
-    table->frontend_game = frontend_game;
     table->keep_stored_password = keep_stored_password;
-    table->check_multiplayer_menu = RuntimeExtension::check_multiplayer_menu;
-    table->state = RuntimeExtension::state;
-    table->frame = RuntimeExtension::frame;
-    table->simulation_step = RuntimeExtension::simulation_step;
-    table->outcome_ready = RuntimeExtension::outcome_ready;
+    table->check_multiplayer_menu = RecorderExtension::check_multiplayer_menu;
+    table->state = RecorderExtension::state;
+    table->frame = RecorderExtension::frame;
+    table->simulation_step = RecorderExtension::simulation_step;
+    table->outcome_ready = RecorderExtension::outcome_ready;
     table->match_game = match_game;
-    table->match_event = RuntimeExtension::match_event;
+    table->match_event = RecorderExtension::match_event;
     table->disconnect_text = disconnect_text;
-    table->give_resources = RuntimeExtension::give_resources;
-    table->message_hooks = RuntimeExtension::message_hooks;
-    table->player_gone = RuntimeExtension::player_gone;
-    table->console_host = RuntimeExtension::console_host;
-    table->check_console = RuntimeExtension::check_console;
-    table->draw_loading = RuntimeExtension::draw_loading;
-    table->draw_match_hud = RuntimeExtension::draw_match_hud;
-    table->draw_match_overlay = RuntimeExtension::draw_match_overlay;
-    table->pause_changed = RuntimeExtension::pause_changed;
-    table->load_progress = RuntimeExtension::load_progress;
-    table->team_panel_host = RuntimeExtension::team_panel_host;
-    table->close_requested = RuntimeExtension::close_requested;
+    table->give_resources = RecorderExtension::give_resources;
+    table->message_hooks = RecorderExtension::message_hooks;
+    table->player_gone = RecorderExtension::player_gone;
+    table->console_host = RecorderExtension::console_host;
+    table->check_console = RecorderExtension::check_console;
+    table->draw_loading = RecorderExtension::draw_loading;
+    table->draw_match_hud = RecorderExtension::draw_match_hud;
+    table->draw_match_overlay = RecorderExtension::draw_match_overlay;
+    table->pause_changed = RecorderExtension::pause_changed;
+    table->load_progress = RecorderExtension::load_progress;
+    table->team_panel_host = RecorderExtension::team_panel_host;
+    table->close_requested = RecorderExtension::close_requested;
     table->return_label = return_label;
-    table->speed_changed = RuntimeExtension::speed_changed;
-    table->app_mode_set = RuntimeExtension::app_mode_set;
-    table->open_recording = RuntimeExtension::open_recording;
+    table->speed_changed = RecorderExtension::speed_changed;
+    table->app_mode_set = RecorderExtension::app_mode_set;
+    table->open_recording = RecorderExtension::open_recording;
     // A hook left unset here would fall back to the engine's behaviour
-    // unrecorded: stop before anything runs.
+    // unrecorded: stop before anything runs. Network play's own two are
+    // left unset.
     uintptr_t words[1 + kHookCount]{};
     std::memcpy(words, table, sizeof words);
+    const std::array<std::size_t, 2> network_play_only{
+        offsetof(Extension, frontend_states) / sizeof(void*),
+        offsetof(Extension, frontend_game) / sizeof(void*)
+    };
     for (std::size_t hook = 1; hook <= kHookCount; ++hook) {
+        if (hook == network_play_only[0] || hook == network_play_only[1])
+            continue;
         if (words[hook] == 0) {
             std::fprintf(stderr, "recorder: hook %zu of the extension table is not set\n", hook);
             std::exit(1);

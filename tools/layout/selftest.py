@@ -8,8 +8,8 @@ module the pass creates, a foreach loop that names the target it leaves, an
 include directory that reaches into another module inside an if/else, app
 headers included by bare name that move under include/, a Python path
 joined from pieces, Markdown that names paths, include paths, targets and
-namespaces, and a project that builds on the engine with a rename record of
-its own. The test runs the pass on it and compares what it writes with the
+namespaces, and a project that builds on the engine with a directory the
+pass leaves as it is. The test runs the pass on it and compares what it writes with the
 expected text. It then adds a module and an app header the table does not
 know and expects --check to name them, and the boundary header's include
 of it that would leave include/; gives the header the include row that
@@ -114,8 +114,7 @@ PROJECT = {
     "x.cpp": '#include "oa/alpha.hpp"\nint f() { return oa::alpha::count(); }\n',
     "src/own/a.cpp": "",
     "AGENTS.md": "The engine's src/game/alpha and our src/own.\n",
-    "record/renames.tsv": "old\tnew\tkind\tscope\n",
-    "record/notes.md": "oa::alpha::Thing and src/game/alpha as recorded.\n",
+    "kept/notes.md": "oa::alpha::Thing and src/game/alpha as written.\n",
 }
 
 EXPECTED = {
@@ -162,7 +161,7 @@ int count() { return oa::formats::pack::size(); }
     ("ext", "CMakeLists.txt"):
         "project(ext)\nadd_library(ext-lib x.cpp)\ntarget_link_libraries(ext-lib PRIVATE oa-sim-alpha ${OA_ENGINE_DIR})\n",
     ("ext", "AGENTS.md"): "The engine's src/sim/alpha and our src/own.\n",
-    ("ext", "record/notes.md"): PROJECT["record/notes.md"],
+    ("ext", "kept/notes.md"): PROJECT["kept/notes.md"],
 }
 
 # The one problem the tree gives: a joined path no hunk rewrites.
@@ -214,6 +213,7 @@ def lay_out(layout, root, files, rows=TABLE):
     write_tree(new_files, NEW_FILES)
     areas = {layout.ENGINE: layout.Area(layout.ENGINE, root, sorted(files), None, ""),
              "ext": layout.Area("ext", root / "ext", sorted(PROJECT), None, "")}
+    areas["ext"].left_dirs.append("kept")
     plan = layout.Plan(layout.read_table(table), layout.read_patches(patches), areas)
     plan.compute_moves()
     plan.compute_namespaces()

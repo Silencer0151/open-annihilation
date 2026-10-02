@@ -266,8 +266,8 @@ Bad (described here rather than quoted):
   in. Say what the game does instead, and where the engine guards against
   bad input, state the bound it keeps.
 
-Engine code also never refers to a particular extension or to a project that
-builds on the engine, by name or by path.
+Engine code also never refers to an extension that is not part of the
+engine, or to a project that builds on the engine, by name or by path.
 
 ## Naming
 
@@ -392,7 +392,7 @@ uses depends on its layer (default; maintainer to confirm):
 | core | `src/core` | C11 records: plain C structs, no standard library containers, exceptions or virtual functions; layouts pinned |
 | base, sim | `src/base/game-math` and the geometry, timers and sine table in `src/ui/services`; `src/sim/*`, `src/sim/*`, `src/sim/*`, `src/sim/ai`, `src/sim/*`, `src/sim/ballistics`, `src/sim/scenario`, `src/sim/session`, and `src/sim/*` except the renderer and sprite animation | In code a simulation tick runs, and in the state it keeps: no exceptions, no virtual dispatch and no heap-allocating containers. `std::array`, `std::span`, `std::optional`, `<bit>` and `<algorithm>` are allowed. |
 | formats, data | `src/formats/*`, `src/data/defs`, `src/data/persist`, and the SQSH writer in `src/ui/services` | C++20; decoders take a byte span; errors are returned as values and no exception crosses the public interface; format libraries do not open files themselves |
-| platform, present, audio, media, ui, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/app`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer and never cross the extension table |
+| platform, present, audio, media, ui, netgame, session, app | `src/platform`, `src/platform/preferences/*`, `src/present`, `src/present/world-renderer`, `src/sim/sprite-animation`, `src/audio`, `src/media`, `src/ui/*`, `src/ui/*`, `src/netgame`, `src/netgame/*`, `src/session/demo`, `src/app`, `src/app/netgame`, and the rest of `src/ui/services` (cursor, input, labels, preferences, console commands) | C++20, the standard library and virtual interfaces allowed; exceptions stay inside a layer and never cross the extension table |
 | tests and tools | every `tests/` directory, `tests`, `tools`, `tools/oa-tool/main.cpp` | C++20 and the standard library; see [Tests](#tests) |
 
 `src/ui/services` holds code of three layers until the layout pass
@@ -450,8 +450,10 @@ void fire(Salvo& salvo) {
 
 Dependencies point one way: core, then base, then platform and formats (not
 each other), data, sim (not platform), present, audio and media (which read
-simulation state and never write it), ui, and app, the only layer that wires
-the others together. Tools and tests may depend on anything. A module links
+simulation state and never write it), ui with netgame and session (network
+play's session and match, and the playback of recorded games, which the
+multiplayer screens drive and which drive them), and app, the only layer
+that wires the others together. Tools and tests may depend on anything. A module links
 every library whose headers it includes, and never reaches into another
 module's directory with `../`.
 
@@ -608,9 +610,8 @@ const uint8_t viewer = world.game.local_player_index; // local player index (+0x
 ## Tests
 
 Tests state their expected values plainly: constants, the game data of the
-player's installation, or behaviour. Suites built on recorded data live
-outside this repository. [testing.md](testing.md) holds the details; in
-short:
+player's installation, or behaviour. [testing.md](testing.md) holds the
+details; in short:
 
 - A test that reads game data takes the installation from the `OA_GAME_DIR`
   environment variable at run time, never from a compile definition, and
@@ -645,29 +646,35 @@ it rather than starting an older executable. Keep it that way as the application
 it start another executable or a mock game. State current limitations
 plainly instead.
 
-Multiplayer is not part of the engine. Extension libraries add optional
-features through the table of hooks in `src/app/include/oa/app/extension.hpp`:
-a project that builds the game registers each with `oa_add_extension`
-(`cmake/OaExtensions.cmake`) and the function that fills its table at
-startup, and the engine combines their tables by the rules that header
-states. With none registered those features are unavailable. Engine code
-never refers to any particular extension. An extension reaches the engine only
-through that table and declared headers: meet a new need with a hook or a
-declared header, never with a new `Runtime` member or friend or another use
-of a private `Runtime` name. The `Runtime` members an extension still adds
-are frozen and may only shrink. Raise `OA_EXTENSION_API_VERSION` with any
-change to the table's contract. [src/app/README.md](../../src/app/README.md)
-describes the table and the frozen members.
+Extension libraries add optional features through the table of hooks in
+`src/app/include/oa/app/extension.hpp`: each is registered with
+`oa_add_extension` (`cmake/OaExtensions.cmake`) and the function that fills
+its table at startup, and the engine combines their tables by the rules that
+header states. A hook no extension fills keeps the engine's behaviour.
+Network play is the engine's own: the engine always registers
+`oa-app-netgame` (`src/app/netgame`), which takes the 3.1c network switches
+and runs the multiplayer screens, the networked match and the replay of
+recorded games. A project that builds the game may register further
+extensions, and engine code never refers to one. An extension reaches the
+engine only through that table and declared headers: meet a new need with a
+hook or a declared header, never with a new `Runtime` member or friend or
+another use of a private `Runtime` name. Network play's `Runtime` members
+and those an extension still adds are frozen and may only shrink. Raise
+`OA_EXTENSION_API_VERSION` with any change to the table's contract.
+[src/app/README.md](../../src/app/README.md) describes the table and the
+frozen members.
 
-- **Why:** the engine must build, test and ship on its own, and an extension
-  must be able to tell, at compile time, whether the engine it builds against
-  offers the contract it expects.
-- **Applies to:** `src/app`, `cmake/OaExtensions.cmake`, `run.sh`.
+- **Why:** an extension that is not part of the engine must be able to
+  build on it without the engine naming it, and to tell, at compile time,
+  whether the engine it builds against offers the contract it expects.
+- **Applies to:** `src/app`, `src/app/netgame`, `cmake/OaExtensions.cmake`,
+  `run.sh`.
 - **Checked by:** `runtime-surface-names` and `runtime-surface-selftest`
   (`tools/check_runtime_surface.py`, within
   `tools/runtime-surface-baseline.json`); `app-extension-list` and the
-  extension tests in `tests/extension`; CI builds and starts
-  `open-annihilation`.
+  extension tests in `tests/extension`; `netgame-runtime-surface`; CI builds
+  and starts `open-annihilation`, and builds and tests it with the recorder
+  test extensions beside network play in the extension-recorder job.
 
 Game data never enters the repository: no archives, maps, sounds, movies,
 or captures of them.

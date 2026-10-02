@@ -28,8 +28,8 @@
 # links (directly or through other libraries), the rest in the order they
 # were registered. It compiles that source into oa-game, links every
 # extension library, copies their game files after each build, and
-# registers the tests whose expectations depend on the extensions. With no
-# extension registered, the game has none and runs without multiplayer.
+# registers the tests whose expectations depend on the extensions. The
+# engine registers network play's extension itself (oa-app-netgame), first.
 include_guard(GLOBAL)
 
 # Registers an extension library of oa-game (see above).
@@ -105,16 +105,12 @@ endfunction()
 # directory, and schedules that step. The engine calls it once, where it
 # defines oa-game.
 function(oa_schedule_extension_list)
-  set_property(GLOBAL PROPERTY OA_EXTENSION_ENGINE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
   set_property(GLOBAL PROPERTY OA_EXTENSION_ENGINE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
-  set_property(GLOBAL PROPERTY OA_EXTENSION_NATIVE_CHECK_TIMEOUT "${OA_NATIVE_CHECK_TIMEOUT}")
-  set_property(GLOBAL PROPERTY OA_EXTENSION_SKIP_CODE "${OA_GAME_DATA_SKIP_CODE}")
   cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _oa_finish_extension_list)
 endfunction()
 
 # The step at the end of the top-level directory's configure (see above).
 function(_oa_finish_extension_list)
-  get_property(engine_source_dir GLOBAL PROPERTY OA_EXTENSION_ENGINE_SOURCE_DIR)
   get_property(engine_binary_dir GLOBAL PROPERTY OA_EXTENSION_ENGINE_BINARY_DIR)
   get_property(registered GLOBAL PROPERTY OA_EXTENSIONS)
 
@@ -222,8 +218,6 @@ namespace {
   if(NOT BUILD_TESTING OR NOT TARGET oa-game)
     return()
   endif()
-  get_property(timeout GLOBAL PROPERTY OA_EXTENSION_NATIVE_CHECK_TIMEOUT)
-  get_property(skip_code GLOBAL PROPERTY OA_EXTENSION_SKIP_CODE)
   if(IS_DIRECTORY "${OA_GAME_DIR}")
     # The game's -y switch (like -c and -n) skips both opening movies;
     # unless an extension takes it, it is refused before anything plays.
@@ -237,22 +231,5 @@ namespace {
       --preferences-file "${engine_binary_dir}/native-checks/intro-switch.conf")
     set_tests_properties(native-intro-switch PROPERTIES
       PASS_REGULAR_EXPRESSION "${intro_switch_result}" FAIL_REGULAR_EXPRESSION "zrb")
-  endif()
-  # MULTI's notice over the demo, started on the folder that holds the
-  # demo's installer as the other native-demo tests are: an extension checks
-  # its own screens instead (--check-multiplayer-menu), so it is checked
-  # only without one; skipped without an installer.
-  find_package(Python3 COMPONENTS Interpreter QUIET)
-  if(NOT ordered AND Python3_Interpreter_FOUND)
-    add_test(NAME native-demo-multiplayer-menu COMMAND ${Python3_EXECUTABLE}
-      "${engine_source_dir}/tools/check_native_demo_installer.py"
-      --native $<TARGET_FILE:oa-game> --check multiplayer-menu
-      --scratch-root "${engine_binary_dir}/native-checks")
-    set_tests_properties(native-demo-multiplayer-menu PROPERTIES TIMEOUT ${timeout}
-      SKIP_RETURN_CODE ${skip_code})
-    if(OA_DEMO_INSTALLER)
-      set_property(TEST native-demo-multiplayer-menu APPEND PROPERTY ENVIRONMENT
-        "OA_DEMO_INSTALLER=${OA_DEMO_INSTALLER}")
-    endif()
   endif()
 endfunction()

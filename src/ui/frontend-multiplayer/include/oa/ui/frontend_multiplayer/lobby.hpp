@@ -1,0 +1,1145 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Multiplayer lobby state: the lobby player-info block, the per-slot rules of
+// the battleroom (LOUNGE2.GUI) and the unit-content sync table.
+//
+// Slots are the ten canonical Player records of oa::Game. Player.info holds a
+// 1-based handle into Lobby::infos. Game and Player fields the lobby reads
+// and writes are reached through the unaligned accessors below.
+#pragma once
+
+#include "oa/data/campaign/campaign_file.hpp"
+#include "oa/core/game_state.h"
+#include "oa/core/types.h"
+#include "oa/core/unit_def.h"
+#include "oa/ui/frontend_multiplayer/launch_block.hpp"
+#include "oa/ui/frontend_multiplayer/lobby_net.hpp"
+#include "oa/ui/frontend_multiplayer/panel.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+namespace oa::ui::frontend_multiplayer {
+
+inline constexpr int32_t kSlotCount = OA_PLAYER_COUNT;
+inline constexpr uint8_t kNoSlot = 10;
+inline constexpr uint8_t kNoTeam = 5; // Player.team of a player on no team
+inline constexpr int32_t kTeamCount = 5;
+inline constexpr uint8_t kNoColor = 0xff; // PlayerSetupInfo.color before a colour is chosen
+inline constexpr int32_t kColorCount = 10;
+inline constexpr int16_t kRowPitch = 0x14; // cloned row spacing in pixels
+/// The player timeout of a game that names none, in seconds; the -t switch
+/// sets 30 to 300.
+inline constexpr int32_t kDefaultPlayerTimeoutSeconds = 30;
+
+// Player.status values used by the lobby.
+inline constexpr uint8_t kSlotOpen = OA_PLAYER_STATUS_FREE;
+inline constexpr uint8_t kSlotLocal = OA_PLAYER_STATUS_LOCAL;
+inline constexpr uint8_t kSlotComputer = OA_PLAYER_STATUS_COMPUTER;
+inline constexpr uint8_t kSlotRemote = OA_PLAYER_STATUS_MIRRORED;
+inline constexpr uint8_t kSlotBlocked = OA_PLAYER_STATUS_CLOSED;
+
+// PlayerSetupInfo.state of a remote slot: 1 playing, 2 defeated.
+inline constexpr uint8_t kInfoStatePlaying = 1;
+inline constexpr uint8_t kInfoStateDefeated = 2;
+
+// PlayerSetupInfo.role: the player hosts the session.
+inline constexpr uint8_t kRoleHost = 0x01;
+
+/// Game.session_flags bit set while a multiplayer session is open.
+inline constexpr uint8_t kNetFlagLive = 0x01;
+/// Game.session_flags bit set when the host's 0x08 start record arrives, and
+/// when a watcher joins a game already started.
+inline constexpr uint8_t kNetFlagGameStarted = 0x04;
+/// Game.outcome_flags bit set when the player leaves the game.
+inline constexpr uint16_t kOutcomeLeaving = 0x04;
+
+// PlayerSetupInfo.options: the host's copy is the game setting.
+namespace option {
+inline constexpr uint16_t started = 0x0010; // START pressed; also session flag 0x20
+inline constexpr uint16_t ready = 0x0020;   // READYx
+inline constexpr uint16_t watcher = 0x0040; // slot is spectating
+inline constexpr uint16_t watching_allowed = 0x0080;
+inline constexpr uint16_t unmapped = 0x0100;       // MAPPING stage 0
+inline constexpr uint16_t los_limited = 0x0200;    // LOSTYPE not "Permanent"
+inline constexpr uint16_t los_true = 0x0400;       // with los_limited: "True", else "Circular"
+inline constexpr uint16_t commander_mask = 0x1800; // COMMANDER stage << 11
+inline constexpr uint16_t commander_step = 0x0800;
+inline constexpr uint16_t commander_deathmatch = 0x1000;
+inline constexpr uint16_t cheats_allowed = 0x2000;
+inline constexpr uint16_t fixed_locations = 0x4000;
+inline constexpr uint16_t game_closed = 0x8000;
+inline constexpr uint16_t player_count_mask = 0x000f; // Game.player_count as a player is seated
+} // namespace option
+
+// PlayerSetupInfo.status.
+namespace status {
+inline constexpr uint16_t password = 0x0001; // host requires a password
+inline constexpr uint16_t allied_victory = 0x0002;
+inline constexpr uint16_t has_disc = 0x0004;
+// Only a launched game may join; the version byte is biased by 100.
+inline constexpr uint16_t launch_only = 0x0008;
+} // namespace status
+
+#pragma pack(push, 1)
+
+// The 0xB9-byte lobby block sent as record 0x20 and copied by DirectPlay
+// system message 0x102.
+struct PlayerSetupInfo {
+    char map_name[0x80]{};
+    char password[0x0b]{};
+    uint16_t screen_width{};
+    uint16_t screen_height{};
+    uint8_t reserved_after_screen_height{}; // copied with the block; never read
+    uint32_t net_id{};                      // sender id overlay in record 0x20
+    uint8_t state{};                        // mirrors Player.status except remote
+    uint8_t side{};
+    uint8_t color{};
+    uint8_t role{};
+    uint8_t reserved_after_role{}; // copied with the block; never read
+    uint16_t memory_mb{};
+    uint16_t options{};
+    uint16_t status{};
+    uint16_t lowest_latency{};
+    uint16_t energy_hundreds{};
+    uint16_t metal_hundreds{};
+    uint16_t max_units{};
+    uint8_t version_major{};
+    uint8_t version_minor{};
+    uint32_t map_hash{};
+    uint8_t reserved_after_map_hash[0x0c]{}; // copied with the block; never read
+};
+
+#pragma pack(pop)
+static_assert(sizeof(PlayerSetupInfo) == kPlayerInfoBytes);
+OA_ASSERT_OFFSET(PlayerSetupInfo, map_name, 0x00);
+OA_ASSERT_OFFSET(PlayerSetupInfo, password, 0x80);
+OA_ASSERT_OFFSET(PlayerSetupInfo, screen_width, 0x8b);
+OA_ASSERT_OFFSET(PlayerSetupInfo, screen_height, 0x8d);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_screen_height, 0x8f);
+OA_ASSERT_OFFSET(PlayerSetupInfo, net_id, 0x90);
+OA_ASSERT_OFFSET(PlayerSetupInfo, state, 0x94);
+OA_ASSERT_OFFSET(PlayerSetupInfo, side, 0x95);
+OA_ASSERT_OFFSET(PlayerSetupInfo, color, 0x96);
+OA_ASSERT_OFFSET(PlayerSetupInfo, role, 0x97);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_role, 0x98);
+OA_ASSERT_OFFSET(PlayerSetupInfo, memory_mb, 0x99);
+OA_ASSERT_OFFSET(PlayerSetupInfo, options, 0x9b);
+OA_ASSERT_OFFSET(PlayerSetupInfo, status, 0x9d);
+OA_ASSERT_OFFSET(PlayerSetupInfo, lowest_latency, 0x9f);
+OA_ASSERT_OFFSET(PlayerSetupInfo, energy_hundreds, 0xa1);
+OA_ASSERT_OFFSET(PlayerSetupInfo, metal_hundreds, 0xa3);
+OA_ASSERT_OFFSET(PlayerSetupInfo, max_units, 0xa5);
+OA_ASSERT_OFFSET(PlayerSetupInfo, version_major, 0xa7);
+OA_ASSERT_OFFSET(PlayerSetupInfo, version_minor, 0xa8);
+OA_ASSERT_OFFSET(PlayerSetupInfo, map_hash, 0xa9);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_map_hash, 0xad);
+
+// One unit-content record keyed by FBI hash.
+struct UnitSyncRecord {
+    uint32_t key{};
+    uint32_t checksum{}; // host: the unit's content checksum, 0 until a peer's is compared
+    uint8_t local{};     // the unit exists here
+    uint8_t local_high{};
+    uint8_t remote{}; // the host reported it
+    uint8_t remote_high{};
+    int32_t limit{}; // build limit, -1 unlimited
+};
+
+inline constexpr std::size_t kMaxSyncUnits = 1024;
+
+// Handshake progress of one peer as seen by the host.
+struct UnitSyncPeer {
+    uint32_t player_id{};
+    uint32_t expected{};                 // subtype 1: def count
+    uint32_t received{};                 // subtype 2 entries accepted
+    uint32_t sent{};                     // greeting and verdicts sent to this peer
+    uint32_t acknowledged{};             // subtype 4: highest received count reported
+    uint32_t keys[kMaxSyncUnits]{};      // subtype 2 keys in arrival order, received of them
+    uint32_t checksums[kMaxSyncUnits]{}; // subtype 2 values, parallel to keys
+};
+
+// The battle room's unit-content handshake.
+struct UnitSync {
+    bool host{};
+    bool finished{};
+    uint32_t records_handled{};
+    int32_t next_unit{}; // client: unit types reported so far
+    UnitSyncRecord records[kMaxSyncUnits]{};
+    int32_t record_count{};
+    uint32_t pending[kMaxSyncUnits]{}; // keys updated since the restrict panel looked
+    int32_t pending_count{};
+    UnitSyncPeer peers[kSlotCount]{};
+    int32_t peer_count{};
+};
+
+// A unit type as the lobby sees it (a projection of UnitDef).
+struct LobbyUnit {
+    const char* name{};          // UnitDef.name
+    const char* side{};          // UnitDef.side
+    float cost_energy{};         // UnitDef.build_cost_energy
+    float cost_metal{};          // UnitDef.build_cost_metal
+    uint32_t abilities{};        // UnitDef.abilities; bit 15 norestrict, bit 16 disabled by default
+    uint32_t fbi_hash{};         // UnitDef.fbi_hash
+    const char* unit_name{};     // UnitDef.unit_name; names its script, GUI and download files
+    uint32_t content_checksum{}; // UnitDef.content_checksum, 0 until worked out
+    uint32_t weapon_checksum{};  // UnitDef.weapon_checksum
+};
+
+inline constexpr uint32_t kUnitNoRestrict = 1U << 15;
+inline constexpr uint32_t kUnitDisabledDefault = 1U << 16;
+
+struct DisplayMode {
+    int32_t width{};
+    int32_t height{};
+    int32_t depth{};
+};
+
+// Services other than the network used by the lobby rules.
+struct LobbyServices {
+    void* context{};
+    void (*play_sound)(void* context, const char* name){}; // interface sound by name
+    void (*message)(void* context, const char* text){};    // modal message box
+    uint32_t (*tick)(void* context){};                     // 30 Hz game clock
+    bool (*disc_present)(void* context){};
+    int32_t (*display_modes)(void* context, DisplayMode* out, int32_t capacity){};
+    // Lobby notifications the game reacts to (sound cues): 2 player added,
+    // 4 side or alliance changed, 5 map changed, 10 game starting.
+    void (*notify)(void* context, int32_t event){};
+    // A unit's content checksum from its installed files and its weapon
+    // checksum; one already worked out is returned as it is.
+    uint32_t (*unit_checksum)(void* context, const LobbyUnit& unit){};
+    // A PCX as a picture; 0 when it cannot be read.
+    oa_ref32 (*load_picture)(void* context, const char* path, int32_t* width, int32_t* height){};
+    void (*free_picture)(void* context, oa_ref32 picture){};
+    // Language variant lookups of picture paths.
+    const data::campaign::CampaignFiles* files{};
+    /// A millisecond clock, which stamps the battle room's pings; null
+    /// reads the 30 Hz clock in milliseconds.
+    uint32_t (*milliseconds)(void* context){};
+    /// Translates interface text into the game's language, as the game's
+    /// translate.tdf table gives it; the result stays valid until the next
+    /// call. Null, or a null result, leaves the text as it is.
+    const char* (*translate)(void* context, const char* text){};
+};
+
+// The multiplayer map context (Game.game_options).
+struct LobbyMaps {
+    void* context{};
+    bool (*selected)(void* context){};
+    const char* (*name)(void* context){};
+    bool (*select)(void* context, const char* name){};
+    uint32_t (*content_hash)(void* context){};
+    // Memory the selected map needs, in MB.
+    int32_t (*memory_mb)(void* context){};
+    const char* (*description)(void* context){};
+    const char* (*size_text)(void* context){};
+    int32_t (*count)(void* context){};
+    const char* (*at)(void* context, int32_t index){};
+    // The map context itself, bound to the selected map; null without one.
+    const data::campaign::CampaignFile* (*map_context)(void* context){};
+    // Bytes of a map file at an offset; false when fewer are there.
+    bool (*read_map)(void* context, const char* path, uint32_t offset, void* out, uint32_t size){};
+};
+
+/// Returns the memory, in MB, a map needs by the size of its terrain file.
+///
+/// @param terrain_bytes Size of the map's TNT file in bytes.
+/// @return 16, 24, 32, 48, 64 or 128.
+[[nodiscard]] int32_t map_memory_mb(int32_t terrain_bytes) noexcept;
+
+// The launch the connection screens, the battle room and the
+// session read, and what they ask of the launch that made it.
+struct LaunchLink {
+    /// The game's launch block; null reads as an empty block.
+    oa::ui::frontend_multiplayer::launch::LaunchBlock* block{};
+    void* context{};
+    /// Tells whether a launch is active: a launch written into the block
+    /// started the running game; null answers false.
+    bool (*launch_active)(void* context){};
+    /// A join the active launch asked for failed (its host was not found):
+    /// shows `text` and leaves the launched battle; null does neither.
+    void (*join_failed)(void* context, const char* text){};
+    /// Asks the next frontend pass to set application mode `mode`, as the
+    /// returns from a launched game set mode 1; null asks nothing.
+    void (*request_app_mode)(void* context, int32_t mode){};
+    /// Leaves the game and ends the program with exit status 0: the session
+    /// closes, and with `with_reason` the local player's disconnect reason,
+    /// when there is one, shows first; without it an open session hears
+    /// outcome event 8 as it closes. Null leaves nothing.
+    void (*leave_game)(void* context, bool with_reason){};
+};
+
+inline constexpr std::size_t kChatLines = 30;
+inline constexpr std::size_t kChatLineBytes = 0x48;
+
+struct Lobby {
+    Game* game{};
+    PlayerSetupInfo infos[kSlotCount];
+    LobbyNet net;
+    LobbyServices services;
+    LobbyMaps maps;
+    UnitSync sync;
+    LobbyUnit* units{}; // index 0 is the reserved empty type
+    int32_t unit_count{};
+    bool rows_built{}; // rows cloned for all slots
+    bool option_4{};   // a tournament game: the launch's tournament field is set
+    uint32_t last_player_count{};
+    int16_t start_frame{}; // battlestart animation frame
+    uint32_t start_frame_tick{};
+    uint32_t next_stats_tick{};
+    uint8_t confirm_slot{};    // YesOrNo target
+    uint32_t timeout_player{}; // TIMEOUT.GUI target player id
+    int32_t timeout_refresh_tick{};
+    /// The player the stall scan at the end of the last pump found
+    /// (lobby_check_timeouts), which TIMEOUT.GUI follows; 0 for none.
+    uint32_t stalled_player{};
+    /// The 30 Hz time the stall scan last found the game paused; a player
+    /// heard from before it counts as silent from it instead.
+    uint32_t timeout_baseline{};
+    uint32_t local_version_major{}; // the build version, as Game.version_block holds it
+    uint32_t local_version_minor{};
+    int32_t row_base{}; // panel count before the rows were cloned
+    /// A joiner being refused, which is not seated: while it is set, a
+    /// record to everyone that goes out per machine goes to it too. 0 for
+    /// none.
+    uint32_t refused_joiner{};
+    /// The launch and its service.
+    LaunchLink launch_link;
+};
+
+// ---------------------------------------------------------------------------
+// Game-state accessors: unaligned views of fields in the packed Game and
+// Player records.
+
+// Unaligned little-endian view of one field inside a packed record.
+template <class T>
+struct FieldRef {
+    uint8_t* at{};
+
+    /// Reads the field.
+    ///
+    /// @return The field's value.
+    operator T() const noexcept {
+        T value{};
+        std::memcpy(&value, at, sizeof(T));
+        return value;
+    }
+
+    /// Writes the field.
+    ///
+    /// @param value Value to store.
+    /// @return This view.
+    FieldRef& operator=(T value) noexcept {
+        std::memcpy(at, &value, sizeof(T));
+        return *this;
+    }
+};
+
+/// Returns the count of seated players (Game.player_count).
+[[nodiscard]] FieldRef<uint16_t> lobby_player_count(Game& game) noexcept;
+/// Returns the chat ring's head index (Game.chat_head).
+[[nodiscard]] FieldRef<uint16_t> lobby_chat_head(Game& game) noexcept;
+/// Returns the chat ring's tail index (Game.chat_tail).
+[[nodiscard]] FieldRef<uint16_t> lobby_chat_tail(Game& game) noexcept;
+/// Returns one line of the 30-line chat ring (Game.chat_lines); the index wraps.
+[[nodiscard]] char* lobby_chat_line(Game& game, std::size_t index) noexcept;
+/// Returns the game name (Game.game_name, 17 bytes).
+[[nodiscard]] char* lobby_game_name(Game& game) noexcept;
+/// Returns the local nickname (Game.nickname, 17 bytes).
+[[nodiscard]] char* lobby_nickname(Game& game) noexcept;
+/// Returns the game password (Game.password, 11 bytes).
+[[nodiscard]] char* lobby_password(Game& game) noexcept;
+/// Returns the lobby option word (Game.setup_options; bit 0 locks the host's options).
+[[nodiscard]] FieldRef<uint16_t> lobby_option_word(Game& game) noexcept;
+/// Returns the unit limit of the game (Game.max_units).
+[[nodiscard]] FieldRef<uint16_t> lobby_max_units(Game& game) noexcept;
+/// Returns the configured unit limit (Game.max_units_setting).
+[[nodiscard]] FieldRef<uint16_t> lobby_max_units_default(Game& game) noexcept;
+/// Returns the local screen width (Game.screen_width).
+[[nodiscard]] FieldRef<int32_t> lobby_screen_width(Game& game) noexcept;
+/// Returns the local screen height (Game.screen_height).
+[[nodiscard]] FieldRef<int32_t> lobby_screen_height(Game& game) noexcept;
+/// Returns the stored provider GUID (Game.provider_guid, 16 bytes).
+[[nodiscard]] uint8_t* lobby_provider_guid(Game& game) noexcept;
+/// Returns the session's player limit (Game.session_player_limit).
+[[nodiscard]] FieldRef<int32_t> lobby_session_players(Game& game) noexcept;
+/// Returns a player's ping (Player.latency).
+[[nodiscard]] FieldRef<int32_t> lobby_player_ping(Player& player) noexcept;
+/// Returns the tick a player was seated at (Player.join_tick).
+[[nodiscard]] FieldRef<uint32_t> lobby_player_join_tick(Player& player) noexcept;
+/// Returns a player's team, 0..4 or kNoTeam (Player.team).
+[[nodiscard]] uint8_t& lobby_player_team(Player& player) noexcept;
+/// Returns a player's allied-back table, one byte per slot (Player.allied_by).
+[[nodiscard]] uint8_t* lobby_player_allied_back(Player& player) noexcept;
+/// Returns the number of playable sides (Game.side_count), capped at 255.
+[[nodiscard]] uint8_t lobby_side_count(const Game& game) noexcept;
+
+// Game options copied from the host's option word when a game starts.
+struct StartedOptions {
+    uint32_t commander{};   // Game.start_options[0]
+    uint32_t unmapped{};    // Game.start_options[1]
+    uint32_t los_limited{}; // Game.start_options[2]
+    uint32_t los_true{};    // Game.start_options[3]
+    uint32_t fixed_locations{};
+};
+
+/// Returns the game options stored when the last game started; fixed_locations is always 0.
+[[nodiscard]] StartedOptions lobby_started_options(Game& game) noexcept;
+
+/// Resolves a slot's Player.info handle.
+///
+/// @param lobby Lobby state.
+/// @param slot Player slot, 0..9.
+/// @return The slot's lobby block, or null for a slot out of range or an unset handle.
+[[nodiscard]] PlayerSetupInfo* slot_info(Lobby& lobby, int32_t slot) noexcept;
+
+/// Resolves a player's Player.info handle.
+///
+/// @param lobby Lobby state.
+/// @param player Player record.
+/// @return The player's lobby block, or null when the handle is unset or out of range.
+[[nodiscard]] PlayerSetupInfo* player_info(Lobby& lobby, const Player& player) noexcept;
+
+/// Returns the player record of a slot, clamped to 0..9.
+[[nodiscard]] Player& slot_player(Lobby& lobby, int32_t slot) noexcept;
+/// Returns the local player's record.
+[[nodiscard]] Player& local_player(Lobby& lobby) noexcept;
+/// Returns the local player's lobby block (block 0 when its handle is unset).
+[[nodiscard]] PlayerSetupInfo& local_info(Lobby& lobby) noexcept;
+
+/// Prepares an empty lobby: every slot open and cleared, infos bound, no colours or teams, local slot 0.
+///
+/// No player is stalled, and a game with no player timeout gets
+/// kDefaultPlayerTimeoutSeconds.
+///
+/// @param[out] lobby Lobby to reset; it is bound to game.
+/// @param[in,out] game Game block whose player records and chat ring are cleared.
+void lobby_reset(Lobby& lobby, Game& game) noexcept;
+
+/// Puts the local player in a slot as host or client with its nickname.
+///
+/// The host takes the first free colour; a client waits for the host's.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param slot Player slot, 0..9.
+/// @param host True to take the host role.
+/// @param nickname Player name, or null for none.
+void lobby_seat_local(Lobby& lobby, int32_t slot, bool host, const char* nickname) noexcept;
+
+// ---------------------------------------------------------------------------
+// Slot predicates
+
+/// Tells whether a slot is live: status local, computer or remote, and it has a player index.
+///
+/// @param player Player record.
+/// @return True for a live slot.
+[[nodiscard]] bool slot_active(const Player& player) noexcept;
+
+/// Tells whether a remote slot's info reports it still playing.
+///
+/// @param lobby Lobby state.
+/// @param player Player record.
+/// @return True for an occupied remote slot in info state 1.
+[[nodiscard]] bool slot_remote_playing(Lobby& lobby, const Player& player) noexcept;
+
+/// Tells whether a remote slot's info reports it defeated.
+///
+/// @param lobby Lobby state.
+/// @param player Player record.
+/// @return True for an occupied remote slot in info state 2.
+[[nodiscard]] bool slot_remote_defeated(Lobby& lobby, const Player& player) noexcept;
+
+/// Tells whether an active slot still has units or never built any.
+///
+/// @param player Player record.
+/// @return True for a participating slot.
+[[nodiscard]] bool slot_participating(const Player& player) noexcept;
+
+/// Finds the first non-open slot flagged host in its info.
+///
+/// @param lobby Lobby state.
+/// @return The slot, or kNoSlot.
+[[nodiscard]] uint8_t lobby_host_slot(Lobby& lobby) noexcept;
+
+/// Sets Player.status, mirroring it into PlayerSetupInfo.state unless remote.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] player Player record to change.
+/// @param status New status.
+void slot_set_status(Lobby& lobby, Player& player, uint8_t status) noexcept;
+
+/// Tells whether a launch arranged the game: option word bit 0 and the second gate both set.
+///
+/// The second gate is the launch's tournament field (Lobby::option_4).
+///
+/// @param lobby Lobby state.
+/// @return True for a game a launch arranged.
+[[nodiscard]] bool lobby_launch_locked(Lobby& lobby) noexcept;
+
+/// Tells whether the game's options are locked: option word bit 0, which a launch's lock sets.
+///
+/// @param lobby Lobby state.
+/// @return True while the host's option controls stay locked.
+[[nodiscard]] bool lobby_options_locked(Lobby& lobby) noexcept;
+
+/// Tells whether a launch is active (LaunchLink::launch_active).
+///
+/// @param lobby Lobby state and its launch link.
+/// @return The link's answer; false without one.
+[[nodiscard]] bool lobby_launch_active(const Lobby& lobby) noexcept;
+
+/// Tells whether a launch is active over a launch block: the lobby has the block and lobby_launch_active.
+///
+/// @param lobby Lobby state and its launch link.
+/// @return False without a launch block.
+[[nodiscard]] bool lobby_launch_block_active(const Lobby& lobby) noexcept;
+
+/// Tells whether a host's version byte is at least the local version.
+///
+/// @param info The host's lobby block; the launch-only status bit biases its version by 100.
+/// @param local_major Local major version, compared as a signed byte.
+/// @return True when the local game may join.
+[[nodiscard]] bool
+info_version_compatible(const PlayerSetupInfo& info, uint32_t local_major) noexcept;
+
+/// Returns the password field of the local lobby block.
+///
+/// @param lobby Lobby state.
+/// @return The 11-byte field.
+[[nodiscard]] char* local_password_field(Lobby& lobby) noexcept;
+
+/// Tells whether this machine has the host's map.
+///
+/// @param lobby Lobby state.
+/// @return False when no map is selected; true when the host predates map hashes (before 1.2) or the
+///         local map hash matches the host's.
+[[nodiscard]] bool lobby_has_host_map(Lobby& lobby) noexcept;
+
+// ---------------------------------------------------------------------------
+// Colours, teams and alliances
+
+/// Returns the first colour no active slot uses.
+///
+/// @param lobby Lobby state.
+/// @return The colour, 0..9; colours above 9 count as 9, and 0 when all are used.
+[[nodiscard]] int32_t lobby_next_free_color(Lobby& lobby) noexcept;
+
+/// Counts the active slots on a team; once a watched game started only participating slots count.
+///
+/// @param lobby Lobby state.
+/// @param team Team 0..4; team 5 (none) counts zero.
+/// @return The member count.
+[[nodiscard]] int32_t team_member_count(Lobby& lobby, uint32_t team) noexcept;
+
+/// Tells whether some team holds every playing slot (players, computers and defeated remotes).
+///
+/// @param lobby Lobby state.
+/// @return True when one team has them all.
+[[nodiscard]] bool lobby_all_on_one_team(Lobby& lobby) noexcept;
+
+/// Finds the next slot from a start that shares a slot's team, reaching the slot itself last.
+///
+/// @param lobby Lobby state.
+/// @param slot Slot whose team is searched.
+/// @param start First slot to look at.
+/// @return The mate's slot, slot itself when it is reached first, or -1.
+[[nodiscard]] int32_t next_team_mate(Lobby& lobby, int32_t slot, int32_t start) noexcept;
+
+/// Sets the stage of every TEAMICONSn control: team * 2 (+1 when alone), 10 without a team.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+void lobby_update_team_icons(Lobby& lobby, Panel& panel) noexcept;
+
+/// Marks mutual alliance and allied victory between team mates; clears allied victory for a player alone.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_update_ally_matrix(Lobby& lobby) noexcept;
+
+/// Breaks the alliances a slot held through its current team, on both sides.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param slot Slot leaving its team.
+void lobby_leave_team(Lobby& lobby, int32_t slot) noexcept;
+
+/// Advances a slot's team (0..4, then none), republishes it and refreshes the alliances and icons.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @param slot Slot whose team changes.
+void lobby_cycle_team(Lobby& lobby, Panel& panel, int32_t slot) noexcept;
+
+// ---------------------------------------------------------------------------
+// Slot table maintenance
+
+/// Swaps two player records, opens the first, and renumbers every slot's index.
+///
+/// The game renumbers eleven records; the eleventh lies past the table and
+/// is not touched here.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param first Slot that ends up open, holding the second's old record.
+/// @param second Slot that receives the first's record.
+void lobby_swap_slots(Lobby& lobby, int32_t first, int32_t second) noexcept;
+
+/// Moves active slots in front of open ones, leaving closed slots in place.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_compact_slots(Lobby& lobby) noexcept;
+
+// ---------------------------------------------------------------------------
+// Battleroom panel
+
+/// Clones the PLAYERx..TEAMICONSx template row for all ten slots, shaping each row for its slot.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+void lobby_build_rows(Lobby& lobby, Panel& panel) noexcept;
+
+/// Converts a button into a label showing its caption, two pixels to the right.
+///
+/// @param[in,out] control Control to convert; other types are left alone.
+void control_make_label(Control& control) noexcept;
+
+/// Sets the COMMANDER..GAMEOPEN stages from the host's option word (the local one without a host).
+///
+/// @param lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+void lobby_update_option_buttons(Lobby& lobby, Panel& panel) noexcept;
+
+/// Sets a slot's SIDEn stage: the slot's side, or 2 for a watcher.
+///
+/// @param lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @param slot Player slot.
+void lobby_update_side_button(Lobby& lobby, Panel& panel, int32_t slot) noexcept;
+
+/// Handles the MAXUNITS slider: shows the host's value, or the local knob + 20 for the host, and stores it.
+///
+/// The host republishes its lobby block.
+///
+/// @param[in,out] panel The battle room panel.
+/// @param lobby The Lobby, as the slider's user pointer.
+void lobby_on_max_units(Panel& panel, void* lobby) noexcept;
+
+/// Handles the METAL slider: rounds down to hundreds, shows and stores it; the host republishes.
+///
+/// @param[in,out] panel The battle room panel.
+/// @param lobby The Lobby, as the slider's user pointer.
+void lobby_on_metal(Panel& panel, void* lobby) noexcept;
+
+/// Handles the ENERGY slider: rounds down to hundreds, shows and stores it; the host republishes.
+///
+/// @param[in,out] panel The battle room panel.
+/// @param lobby The Lobby, as the slider's user pointer.
+void lobby_on_energy(Panel& panel, void* lobby) noexcept;
+
+/// Binds a slider's maximum, knob value and handler, then runs the handler.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @param name Slider control name.
+/// @param maximum Largest value.
+/// @param value Initial value.
+/// @param handler Change handler, called with the Lobby as its user pointer; may be null.
+void lobby_bind_slider(
+    Lobby& lobby,
+    Panel& panel,
+    const char* name,
+    int32_t maximum,
+    int32_t value,
+    SliderHandler handler
+) noexcept;
+
+/// Cycles the local screen resolution through the display modes and announces it.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param backwards Step to the previous mode (right click) instead of the next.
+void lobby_cycle_resolution(Lobby& lobby, bool backwards) noexcept;
+
+/// Refreshes every row, the chat output, the option buttons and the map name.
+///
+/// Also enforces the host's rules: deathmatch rejects computer and defeated
+/// players, and watchers are dropped when watching is off. A missing host map
+/// blinks the name and clears the local ready mark.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+void lobby_update_status(Lobby& lobby, Panel& panel) noexcept;
+
+/// Tells whether every seated slot is READY and not everyone is watching.
+///
+/// @param lobby Lobby state.
+/// @return False without a remote player or with only one seated player.
+[[nodiscard]] bool lobby_ready_to_start(Lobby& lobby) noexcept;
+
+/// Sets up LOUNGE2.GUI for the local slot: options, sliders, unit sync, rows and the player info broadcast.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+void lobby_enter_battleroom(Lobby& lobby, Panel& panel) noexcept;
+
+enum class LobbyAction : uint8_t {
+    none,
+    leave,          // PREVMENU: back to the game list
+    start,          // host pressed START with every check passed
+    select_map,     // host opens SELMAP.GUI
+    view_map,       // client opens VIEWMAP.GUI
+    restrictions,   // open RESTRICT2.GUI
+    confirm_reject, // open YesOrNo.gui for Lobby::confirm_slot
+};
+
+/// Handles a click on the battle room panel (panel.selected is the control).
+///
+/// Covers the per-slot logo, player, side, ally, team, resolution and ready
+/// controls, chat entry, the host's option buttons, START (CD, team and map
+/// checks), GAMEOPEN, RESTRICTIONS and the map buttons. The chat line's
+/// commands (+syncerr, +page and +p) are matched without case and send no
+/// chat. What the click queued is flushed before it returns.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @return What the screen should do next.
+LobbyAction lobby_handle_event(Lobby& lobby, Panel& panel) noexcept;
+
+/// The panel in front of the battle room while it ticks.
+enum class LobbyFront : uint8_t {
+    battleroom, ///< the battle room itself
+    view_map,   ///< VIEWMAP.GUI, over the battle room
+    dialog,     ///< any other dialog over the battle room
+};
+
+/// Runs the per-frame battle room work: incoming records, the stall scan, refresh, START animation, unit
+/// sync and the periodic block, then flushes what the frame queued.
+///
+/// Once the incoming records are applied, the stall scan
+/// (lobby_check_timeouts) sets Lobby::stalled_player, whatever is in front.
+///
+/// About every two seconds, for each seated local or computer player in slot
+/// order and from that player: what is queued is flushed, a ping (0x02) goes
+/// out at once without guaranteed delivery, then a probe (0x06); while the
+/// player shows no colour the local player asks the host for colour 0; the
+/// host's own player sends the slot table (0x26). Then every such player's
+/// lobby block and team go out (lobby_send_player_info). Each echo of a ping
+/// becomes the echoing player's Ping column entry.
+///
+/// The rows and the session's player count are kept up to date whatever is
+/// in front. While a dialog is in front, the battle room's status, its START
+/// doors and a client's copy of the host's map and resources wait until the
+/// battle room is in front again, as in 3.1c, so a host browsing SELMAP's
+/// maps tells the others nothing. A client's open VIEWMAP follows the host's
+/// map instead (viewmap_follow_host).
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @param front the panel in front of the battle room
+/// @param[in,out] view_map VIEWMAP's panel while front is view_map; null otherwise
+/// @return leave once the local player was rejected, else none.
+LobbyAction lobby_tick(
+    Lobby& lobby, Panel& panel, LobbyFront front = LobbyFront::battleroom, Panel* view_map = nullptr
+) noexcept;
+
+/// Scans the remote players for a stall, as each battle-room pump ends.
+///
+/// A remote player is stalled once more than Game.player_timeout_seconds
+/// have passed since it was last heard from, or since the scan last found
+/// the game paused when that is later. This machine's own players, its
+/// computer players among them, are never stalled. While the game is
+/// paused the scan only moves Lobby::timeout_baseline to now, and with the
+/// console's "Drop 0" it does not run; either way the player TIMEOUT.GUI
+/// names stays as it was.
+///
+/// @param[in,out] lobby Lobby state.
+/// @return The player TIMEOUT.GUI names: the first stalled player in slot order when every stalled
+///         player shares one machine group, 0 when none is stalled or they are of several groups;
+///         Lobby::stalled_player when the scan does not run.
+[[nodiscard]] uint32_t lobby_check_timeouts(Lobby& lobby) noexcept;
+
+/// Settles alliances and drops the unit sync table when the panel closes.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_leave_battleroom(Lobby& lobby) noexcept;
+
+// ---------------------------------------------------------------------------
+// Records the lobby sends and receives
+
+/// Sends every local and computer slot's lobby block (0x20) and team (0x24) to all players, then the
+/// machine-group requests.
+///
+/// Each slot's records leave from that slot's own player; each team is
+/// flushed as it goes, and the requests are flushed at the end. Does
+/// nothing outside a live session.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_send_player_info(Lobby& lobby) noexcept;
+
+/// Broadcasts a local or computer player's team as 0x24 from that player and flushes it.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param player Player whose team is sent; others are ignored.
+void lobby_send_team(Lobby& lobby, const Player& player) noexcept;
+
+/// Tells whether no other seated player shows a colour.
+///
+/// @param lobby Lobby state.
+/// @param player_id Player asking; its own colour does not count.
+/// @param color Colour 0..9; 0xff and colours outside 0..9 are never available.
+/// @return True when the colour is free.
+[[nodiscard]] bool lobby_color_available(Lobby& lobby, uint32_t player_id, int32_t color) noexcept;
+
+/// Gives a player the first colour from a start on that no other local, computer or remote slot shows.
+///
+/// Past 9 the search wraps to 0. The local player takes the colour; anyone
+/// else is told with 0x18.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param player_id Player to colour.
+/// @param color First colour to try.
+/// @return False when the reply cannot be encoded.
+/// @quirk After ten taken colours the last candidate, possibly 10, is given anyway.
+bool lobby_assign_free_color(Lobby& lobby, uint32_t player_id, uint32_t color) noexcept;
+
+/// Makes the local player's colour choice.
+///
+/// The host takes it, or the next free one; a client asks the host with
+/// 0x17 from the local player, flushed at once, and waits for its 0x18. A
+/// click on a computer slot's logo also lands here, and so does the
+/// periodic block while a local or computer slot shows no colour.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param color Colour wanted.
+void lobby_request_color(Lobby& lobby, uint32_t color) noexcept;
+
+/// Broadcasts the host's slot table (Game.slot_table) as 0x26: each slot's player id, 0 for an open slot
+/// and -1 for a closed one.
+///
+/// Only the host in a live session sends it, from its own player; clients
+/// keep the copy they receive.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_send_slot_table(Lobby& lobby) noexcept;
+
+/// Sends an alliance change as 0x23 from the changing player to the other player and flushes it.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param from Player whose alliance changed.
+/// @param to Player the alliance is with; the record goes to it.
+/// @param value New alliance value.
+/// @param both_sides Nonzero asks the receiver to set its own alliance with from too.
+void lobby_send_alliance(
+    Lobby& lobby, const Player& from, const Player& to, uint8_t value, uint32_t both_sides
+) noexcept;
+
+/// Sets the alliance of one player with another.
+///
+/// A local or computer side updates its own tables; a remote target is told
+/// through record 0x23. A computer or defeated remote target, or both_sides,
+/// has the mirror entries set too.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] from Player whose alliance changes.
+/// @param[in,out] to Player the alliance is with.
+/// @param value New alliance value.
+/// @param both_sides Set the mirror entries as well.
+void lobby_set_alliance(
+    Lobby& lobby, Player& from, Player& to, uint8_t value, bool both_sides
+) noexcept;
+
+/// Rejects a seated player once: broadcasts 0x1b and retires the slot.
+///
+/// Records leave from the first seated local or computer player, and none
+/// from one already rejected. Nothing is sent for a player no slot answers
+/// to or one already rejected, whose reason is only replaced. A computer
+/// slot, or a remote one, is named, no longer counted (Game.player_count)
+/// and opened; before the start a computer player of this machine also
+/// leaves the session, and after it this machine's own slots stay seated. A
+/// remote human still playing takes every remote player of its machine
+/// group with it. Rejecting the local player names each local and computer
+/// player of this machine in slot order and leaves the battle room: before
+/// the start the local player leaves at the first record, so the next
+/// seated player sends the rest and a computer player seated ahead of it is
+/// named instead of it; after the start only the first record goes out.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param player_id Rejected player.
+/// @param reason RejectReason value, stored as the slot's reject reason.
+void lobby_reject(Lobby& lobby, uint32_t player_id, uint8_t reason) noexcept;
+
+/// Broadcasts a chat line "<name> text" as 0x05 from the speaker, flushes it and posts it locally.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param speaker Player speaking.
+/// @param text Line text.
+void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept;
+
+/// Appends a line to the chat ring, dropping the oldest when full.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param line Line to post, cut to 71 characters.
+void lobby_post_chat(Lobby& lobby, const char* line) noexcept;
+
+/// Builds the session description after stamping the version and player count into the local info.
+///
+/// A game started while a launch is active sets the launch-only status bit
+/// and biases the version by 100; any other clears the bit and leaves the
+/// version unbiased.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[out] name Session name: game name, then the map name at 16, space padded to 31 characters.
+/// @param[out] user The 16 user bytes: the local PlayerSetupInfo from memory_mb through version_minor.
+void lobby_session_description(Lobby& lobby, char* name, uint8_t* user) noexcept;
+
+/// Publishes the session description with flags 4 and 0x20 once started, and the player limit.
+///
+/// Only the host's session takes it. A password is never flagged on the
+/// session: joiners present it in their join block. The limit is the
+/// session's player limit (lobby_session_players), which closing a slot
+/// lowers and reopening it raises.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_publish_session(Lobby& lobby) noexcept;
+
+/// Seats a session player.
+///
+/// A slot played here that already answers to the id and is not in use is
+/// taken over, otherwise the first slot neither in use nor closed becomes
+/// remote. The seated player's reject reason clears, its arrival time is
+/// stamped, it is counted, and the local players' info goes out again. The
+/// slot's own reset (Player and info defaults) follows the lobby
+/// rules. Players already in a joined session arrive the same way.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param player_id Session player id.
+/// @param name Player name, or null for none.
+/// @return False when no slot can take the player.
+bool lobby_add_player(Lobby& lobby, uint32_t player_id, const char* name) noexcept;
+
+/// Seats a computer player in an open slot as a session player of this machine.
+///
+/// Its session name is "AI:" and the local player's name, sixteen characters
+/// at most. Its lobby block is prepared as for any seated player: no colour,
+/// the host role only in the host's slot, the player count in the option
+/// word's low bits and the game-closed bit off, a unit limit of 100, the
+/// password bit, the launch-only status bit while a launch is active (the
+/// version stays unbiased), this machine's screen mode and version; the
+/// block keeps the rest of the slot's last occupant's options, a watcher bit
+/// included. When the session refuses the player the slot is open again and
+/// a message advises joining or creating the game again.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param slot Open slot to seat the computer in.
+void lobby_add_computer(Lobby& lobby, int32_t slot) noexcept;
+
+/// Applies one received event: arrivals, departures, a lost session or a lobby record.
+///
+/// A joiner the host refuses is not seated: this machine's lobby blocks go
+/// out, then 0x1b with the refusal. A departed player is rejected with
+/// reason 1; when it is the host's player before the start, the local
+/// player is rejected with reason 10 too and leaves ("The creator has left
+/// the game"). A record from one of this machine's own players is ignored;
+/// any other record, of whatever type, stamps its seated sender's
+/// Player.last_update_time, which the stall scan reads. A received
+/// 0x1b naming a seated player rejects it as lobby_reject does, passing it
+/// on once.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param event Event from LobbyNet::receive.
+/// @return True when it changed the lobby.
+bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept;
+
+/// Finds the in-use slot answering to a player id.
+///
+/// @param lobby Lobby state.
+/// @param player_id Session player id.
+/// @return The slot, or -1.
+[[nodiscard]] int32_t slot_for_player_id(Lobby& lobby, uint32_t player_id) noexcept;
+
+// ---------------------------------------------------------------------------
+// Machine groups: the players one machine seats share Player.machine_group
+// (1..10), which the host hands out; its own machine is group 1. The lobby
+// settles them and the match keeps them.
+
+/// Sets Game.shared_machines when an active player shares its group with another; broadcasts then go once
+/// per machine.
+///
+/// @param[in,out] game Game whose players are examined.
+void note_shared_machines(Game& game) noexcept;
+
+/// Returns the first group 1..10 no active player holds.
+///
+/// @param game Game whose players are examined.
+/// @return The group, or 0 when all are taken.
+[[nodiscard]] uint32_t free_machine_group(const Game& game) noexcept;
+
+/// Lists who one broadcast goes to while machines are shared: in slot order the first remote player of
+/// each group.
+///
+/// @param game Game whose players are examined.
+/// @param[out] ids Player ids to send to.
+/// @return The number of ids.
+/// @quirk Only groups 0..9 are marked as reached, so every group-10 player gets its own copy.
+[[nodiscard]] int32_t
+machine_broadcast_targets(const Game& game, uint32_t (&ids)[kSlotCount]) noexcept;
+
+/// Asks the host (0x21) for the group of every active slot without one.
+///
+/// The local player asks for a new group, a computer player for its human's
+/// group, a remote player for the group the host gave it. Every request
+/// leaves from the primary player. The host puts its own slots in group 1
+/// and asks nothing.
+///
+/// @param[in,out] lobby Lobby state.
+void lobby_request_machine_groups(Lobby& lobby) noexcept;
+
+// ---------------------------------------------------------------------------
+// Unit-content sync table
+
+/// Clears the table and seeds one record per unit type.
+///
+/// Every record exists here; on the host it is also marked reported, and
+/// units disabled by default start with limit 0, others unlimited.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param host Whether this machine hosts the game.
+void unit_sync_create(Lobby& lobby, bool host) noexcept;
+
+/// Drops the table.
+///
+/// @param[in,out] lobby Lobby state.
+void unit_sync_destroy(Lobby& lobby) noexcept;
+
+/// Sends a 0x1a record to one player, or to the host when not hosting, with bytes 2..5 cleared.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param player_id Destination when hosting.
+/// @param record The 14-byte record.
+void unit_sync_send(Lobby& lobby, uint32_t player_id, const uint8_t* record) noexcept;
+
+/// Handles a received 0x1a record.
+///
+/// A client stores the host's verdicts (subtype 3). The host records a
+/// peer's unit count (1), checksums (2) and received count (4).
+///
+/// @param[in,out] lobby Lobby state.
+/// @param record The 14-byte record; subtypes of 100 and above are dropped.
+/// @param from_slot Sender's slot.
+void unit_sync_receive(Lobby& lobby, const uint8_t* record, uint8_t from_slot) noexcept;
+
+/// Sends one record's verdict (subtype 3: local, remote and limit) to a peer.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] peer Peer to send to; its sent count grows.
+/// @param record Record whose verdict is sent.
+void unit_sync_send_verdict(
+    Lobby& lobby, UnitSyncPeer& peer, const UnitSyncRecord& record
+) noexcept;
+
+/// Queues a changed key for the restrict panel and, when hosting, sends its verdict to every peer.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param key FBI hash of the unit.
+void unit_sync_relay(Lobby& lobby, uint32_t key) noexcept;
+
+/// Pops the oldest changed record.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[out] out The record, or an empty one for a key no longer in the table.
+/// @return False when none is queued.
+bool unit_sync_pop_changed(Lobby& lobby, UnitSyncRecord* out) noexcept;
+
+/// Looks up a record.
+///
+/// @param lobby Lobby state.
+/// @param key FBI hash of the unit.
+/// @param[out] out The record, or an empty one for an unknown key.
+/// @return True when both sides have the unit.
+bool unit_sync_lookup(Lobby& lobby, uint32_t key, UnitSyncRecord* out) noexcept;
+
+/// Marks a unit enabled or disabled by the host's restrictions and relays the record.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param key FBI hash of the unit.
+/// @param enabled Whether the unit may be built.
+/// @return True when it is enabled and every peer has it; false for an unknown key.
+bool unit_sync_set_enabled(Lobby& lobby, uint32_t key, bool enabled) noexcept;
+
+/// Works out on the host whether every peer has a unit, and relays the record either way.
+///
+/// A non-zero checksum that differs from the host's own content checksum of
+/// the unit (worked out the first time one is compared) clears it; so does a
+/// peer that has not reported the key or, for a non-zero checksum, a peer
+/// from version 1.2 on that reported another one. A key the host lacks is
+/// ignored.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param key FBI hash of the unit.
+/// @param checksum Checksum a peer reported, or 0 to recheck without one.
+void unit_sync_update_record(Lobby& lobby, uint32_t key, uint32_t checksum) noexcept;
+
+/// Runs the unit sync for one battle room frame.
+///
+/// A client, once the host has greeted it, reports its unit count, then
+/// four units a frame with their content checksums, then how many records it
+/// has handled. The host drops peers no longer playing and greets new ones
+/// (subtype 0); when either changed the roster, every record is updated
+/// without a checksum (in table order, not key order).
+///
+/// @param[in,out] lobby Lobby state.
+void unit_sync_tick(Lobby& lobby) noexcept;
+
+/// Returns a unit's content checksum, worked out through the host's files the first time and kept in the
+/// unit (UnitDef.content_checksum).
+///
+/// @param lobby Lobby state.
+/// @param[in,out] unit Unit whose checksum is wanted.
+/// @return The checksum; 0 when it cannot be worked out.
+[[nodiscard]] uint32_t unit_sync_content_checksum(Lobby& lobby, LobbyUnit& unit) noexcept;
+
+/// Sets a unit's build limit and relays the record (the host sends it to every peer; the restrict panel
+/// sees it change).
+///
+/// @param[in,out] lobby Lobby state.
+/// @param key FBI hash of the unit; unknown keys are ignored.
+/// @param limit Build limit, -1 for unlimited.
+void unit_sync_set_limit(Lobby& lobby, uint32_t key, int32_t limit) noexcept;
+
+/// Marks the unit catalog from the sync table.
+///
+/// Leaves each type of records[1..count) available only when the record for
+/// its FBI hash has both sides set, and gives it that record's limit; a type
+/// with no record gets limit 0. No-op once the sync finished.
+///
+/// @param sync The settled sync table.
+/// @param[in,out] records Unit definitions, index 0 being the empty type.
+/// @param count Number of definitions.
+void unit_sync_mark_units(const UnitSync& sync, UnitDef* records, uint32_t count) noexcept;
+
+/// Tells whether the host's sync is complete: every peer still playing has reported its unit count, sent a
+/// checksum per unit and acknowledged every verdict.
+///
+/// @param lobby Lobby state.
+/// @return The result; true for a client or once finished.
+[[nodiscard]] bool unit_sync_complete(Lobby& lobby) noexcept;
+
+/// Tells whether the host's sync with one player is complete.
+///
+/// @param lobby Lobby state.
+/// @param player_id Peer to test.
+/// @return False for a client; true for a peer not waited on (defeated or computer) or once finished.
+[[nodiscard]] bool unit_sync_peer_complete(Lobby& lobby, uint32_t player_id) noexcept;
+
+/// Answers "+syncerr": the first peer's shortfall.
+///
+/// Unlike the checks above it does not skip defeated or computer peers.
+///
+/// @param lobby Lobby state.
+/// @param[out] out Buffer for a formatted shortfall.
+/// @param capacity Bytes available at out.
+/// @return The shortfall (out or a static message), "OK", or null for a client.
+[[nodiscard]] const char*
+unit_sync_diagnostic(Lobby& lobby, char* out, std::size_t capacity) noexcept;
+
+} // namespace oa::ui::frontend_multiplayer

@@ -9,9 +9,10 @@
 // fills a zeroed table of its own. main() calls every registered init once,
 // before the command line is parsed, and combines the tables into the one
 // the engine calls (ExtensionList, extension_list.hpp). A library that
-// includes runtime.hpp builds against oa::extension-sdk. Every hook no
-// extension fills keeps the engine's own behaviour, which is the game
-// without multiplayer; with no extension registered that is the whole game.
+// includes runtime.hpp builds against oa::extension-sdk. Network play is
+// one of them: the engine registers it in every build (oa-app-netgame,
+// src/app/netgame), and other extensions build on it or beside it. Every
+// hook no extension fills keeps the engine's own behaviour.
 //
 // The extensions are listed in dependency order: one whose library links
 // another registered extension comes after it, and the rest keep the order
@@ -205,7 +206,7 @@ enum class RunPhase : uint8_t {
 
 // What MULTI on the main menu does (Extension::select_multiplayer).
 enum class MultiplayerSelection : uint8_t {
-    unavailable, // the engine's message box says multiplayer is not available
+    unavailable, // no answer: the next extension is asked; with none, MULTI does nothing
     frontend,    // the main menu's own MULTI step into the frontend's multiplayer states
     taken,       // the extension has taken the game over; the engine does nothing more
 };
@@ -500,15 +501,18 @@ struct Extension {
     /// Chooses what MULTI on the main menu does, and may take the game over.
     ///
     /// Called each time MULTI is activated on the main menu, by pointer or
-    /// keyboard, before the engine does anything for it. The extension may
-    /// take the game over here (open its own screens, start a session) and
-    /// answer taken. With a null hook, or an answer the enum does not hold,
-    /// the engine shows its message box as for unavailable.
+    /// keyboard, before the engine does anything for it; not over game data
+    /// with no multiplayer map, where MULTI shows the engine's
+    /// missing-content notice. The extension may take the game over here
+    /// (open its own screens, start a session) and answer taken. A null
+    /// hook, or an answer the enum does not hold, counts as unavailable;
+    /// when no extension answers otherwise, MULTI does nothing and the main
+    /// menu stays up. Network play answers frontend.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app, on the main menu
-    /// @return unavailable to show the engine's "not available" message box
-    ///         over the main menu; frontend to run the main menu's own MULTI
+    /// @return unavailable when the extension leads MULTI nowhere, leaving it
+    ///         to the other extensions; frontend to run the main menu's own MULTI
     ///         step, which plays the button's sound and moves the frontend to
     ///         its multiplayer states (the extension's frontend_states handler
     ///         and screens drive them); taken when the extension has taken
@@ -543,9 +547,10 @@ struct Extension {
     /// Runs --check-multiplayer-menu in place of the engine's check.
     ///
     /// Called once, with the SDL renderer up, when --check-multiplayer-menu
-    /// was given. Throws to fail the check. When no extension fills it the
-    /// engine's check runs, which clicks MULTI and requires the "not
-    /// available" message box.
+    /// was given over game data with a multiplayer map. Throws to fail the
+    /// check. Over data with no multiplayer map the engine's check runs
+    /// instead, which clicks MULTI and requires the missing-content notice;
+    /// over other data, when no extension fills it, the check fails.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app

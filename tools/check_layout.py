@@ -23,7 +23,8 @@ defined (--targets, written by cmake/OaLayout.cmake), and fails on:
   layer        a link from a module library to a library of a later layer
                (the order is core; base; platform and formats, which may
                not use each other; data; sim, which may not use platform;
-               present, audio and media; ui; app), unless
+               present, audio and media; ui, netgame and session; app),
+               unless
                tools/layout-baseline.json lists it
   stale        a baseline entry for a link that no longer exists, which
                must be removed: the baseline may only shrink
@@ -54,13 +55,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools" / "layout-baseline.json"
 LAYERS = {"core": 1, "base": 2, "platform": 3, "formats": 3, "data": 4, "sim": 5, "present": 6, "audio": 6,
-          "media": 6, "ui": 7, "app": 8}
+          "media": 6, "ui": 7, "netgame": 7, "session": 7, "app": 8}
 # Pairs of groups in one layer that may not use each other.
 APART = {("platform", "formats"), ("formats", "platform")}
 # Groups a group may not use although they come earlier.
 FORBIDDEN = {("sim", "platform")}
 # Groups whose directory is itself a module (src/core, not src/core/<module>).
-GROUP_LEVEL = {"core", "platform", "present", "audio", "media", "app"}
+GROUP_LEVEL = {"core", "platform", "present", "audio", "media", "netgame", "app"}
 LIBRARY_TYPES = {"STATIC_LIBRARY", "SHARED_LIBRARY", "MODULE_LIBRARY", "OBJECT_LIBRARY", "INTERFACE_LIBRARY"}
 # Targets that are build infrastructure rather than modules.
 INFRASTRUCTURE = {"oa-options", "oa-extension-sdk", "oa-test-game-data"}

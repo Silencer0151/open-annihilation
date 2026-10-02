@@ -5,11 +5,12 @@
 """Hold an extension's reach into Runtime's private part to a shrinking budget.
 
 An extension reaches oa-game through the hooks of src/app/include/oa/app/extension.hpp.
-Until that is its only way in, it may also name a header of Runtime members
-in OA_RUNTIME_EXTENSION_MEMBERS, which runtime.hpp includes inside class
-Runtime, and use Runtime's private names from those members and from
-Runtime's friends. This check measures both and compares them with a
-baseline that may only shrink:
+Until that is its only way in, it may also have a header of Runtime members
+that runtime.hpp includes inside class Runtime (network play's,
+oa/app/netgame_runtime_members.hpp, in every build; another extension's
+through OA_RUNTIME_EXTENSION_MEMBERS), and use Runtime's private names from
+those members and from Runtime's friends. This check measures both for one
+such header and compares them with a baseline that may only shrink:
 
   declarations  the member declarations of the members header: each member
                 function, data member, nested type and friend it declares;
@@ -726,7 +727,7 @@ def main(argv=None):
     """Runs the check, the self-test or a baseline update; returns the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("sources", nargs="*", type=Path, help="the extension's sources that reach Runtime")
-    parser.add_argument("--members", type=Path, help="the header OA_RUNTIME_EXTENSION_MEMBERS names")
+    parser.add_argument("--members", type=Path, help="the extension's header of Runtime members")
     parser.add_argument("--runtime", type=Path, default=DEFAULT_RUNTIME, help="runtime.hpp (default: the engine's)")
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE,
                         help="allowed declarations and names (default: tools/runtime-surface-baseline.json)")

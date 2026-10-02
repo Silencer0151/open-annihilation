@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The main menu's Multiplayer path, clicked through the SDL presenter as a
-// player does: the box MULTI opens without an extension that offers
-// multiplayer, or the notice over game data with no multiplayer map; that
-// extension checks its own screens.
+// The main menu's Multiplayer path over game data with no multiplayer map,
+// clicked through the SDL presenter as a player does: MULTI shows the
+// missing-content notice. Over other data the extensions check the
+// multiplayer screens MULTI opens (network play's check_multiplayer_menu).
 #include "oa/app/runtime.hpp"
 
 #include "oa/ui/frontend_dialogs.hpp"
@@ -19,15 +19,11 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <variant>
-#include <vector>
 
 namespace oa::app {
 
 namespace {
 
-// MSGBOX.GUI holds its root and OK; the message lines follow as labels.
-constexpr std::size_t kFirstMessageLabel = 2;
 constexpr int kSettleFrames = 4;
 
 [[noreturn]] void fail(std::string_view what) {
@@ -112,7 +108,8 @@ void Runtime::multiplayer_check_settle() {
 }
 
 void Runtime::check_multiplayer_menu() {
-    if (extension_.check_multiplayer_menu != nullptr) {
+    // Over data with no multiplayer map MULTI asks no extension.
+    if (!eligible_map_names_.empty() && extension_.check_multiplayer_menu != nullptr) {
         extension_.check_multiplayer_menu(extension_.context, *this);
         return;
     }
@@ -123,6 +120,10 @@ void Runtime::check_multiplayer_unavailable() {
     namespace dialogs = oa::ui::frontend_dialogs;
     if (sdl_.renderer == nullptr || sdl_.window == nullptr)
         fail("needs the SDL renderer");
+    require(
+        eligible_map_names_.empty(),
+        "the data has multiplayer maps, and no extension checks the screens MULTI opens"
+    );
     bool running = true;
     const auto press_enter = [&] {
         SDL_Event event{};
@@ -145,35 +146,22 @@ void Runtime::check_multiplayer_unavailable() {
         if (!options_.snapshot.empty())
             write_ppm(step_snapshot(options_.snapshot, step), surface_);
     };
-    // OK's records are relative to the box's root, which holds its place on
+    // OK's records are relative to the notice's root, which holds its place on
     // the canvas.
     const auto click_ok = [&] {
         const auto* box = dialogs::dialog_resources();
-        require(box != nullptr, "no message box to close");
+        require(box != nullptr, "no notice to close");
         const auto& gadgets = box->layout.gadgets;
         const auto& root = gadgets.front().common;
         for (std::size_t index = 1; index < gadgets.size(); ++index) {
             const auto& ok = gadgets[index].common;
             if (ok.name != "OK")
                 continue;
-            require(ok.active != 0, "the message box's OK is hidden");
+            require(ok.active != 0, "the notice's OK is hidden");
             multiplayer_check_click(root.x + ok.x + ok.width / 2, root.y + ok.y + ok.height / 2);
             return;
         }
-        fail("the message box has no OK");
-    };
-    const auto message_lines = [] {
-        std::vector<std::string> lines;
-        const auto* box = dialogs::dialog_resources();
-        if (box == nullptr)
-            return lines;
-        const auto& gadgets = box->layout.gadgets;
-        for (std::size_t index = kFirstMessageLabel; index < gadgets.size(); ++index) {
-            const auto& fields = gadgets[index].fields;
-            if (const auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&fields))
-                lines.push_back(label->text);
-        }
-        return lines;
+        fail("the notice has no OK");
     };
     const auto require_main_menu = [&](std::string_view when) {
         require(
@@ -182,31 +170,16 @@ void Runtime::check_multiplayer_unavailable() {
             std::string(when) + " left the main menu"
         );
     };
-    // Game data with no multiplayer map shows its notice instead.
-    const bool no_maps = eligible_map_names_.empty();
     for (const bool by_enter : {false, true}) {
         multiplayer_check_settle();
         require_main_menu("settling");
         require(dialogs::dialog_kind() == dialogs::DialogKind::none, "a dialog is already open");
         click_multi();
-        if (no_maps) {
-            require(
-                dialogs::dialog_kind() == dialogs::DialogKind::notice ||
-                    dialogs::dialog_kind() == dialogs::DialogKind::message_box,
-                "MULTI opened no notice"
-            );
-        } else {
-            require(
+        require(
+            dialogs::dialog_kind() == dialogs::DialogKind::notice ||
                 dialogs::dialog_kind() == dialogs::DialogKind::message_box,
-                "MULTI opened no message box"
-            );
-            const auto lines = message_lines();
-            require(
-                lines.size() == 1 && lines.front() == kMultiplayerUnavailable,
-                "the message box does not say \"" + std::string(kMultiplayerUnavailable) +
-                    "\" on one line"
-            );
-        }
+            "MULTI opened no notice"
+        );
         require_main_menu("MULTI");
         if (by_enter) {
             press_enter();
@@ -217,19 +190,15 @@ void Runtime::check_multiplayer_unavailable() {
         const std::string_view closer = by_enter ? "Enter" : "OK";
         require(
             dialogs::dialog_kind() == dialogs::DialogKind::none,
-            std::string(closer) + " did not close the message box"
+            std::string(closer) + " did not close the notice"
         );
         require_main_menu(closer);
         require(status_.find("unimplemented service") == std::string::npos, status_);
         if (!by_enter)
             snapshot("closed");
     }
-    if (no_maps)
-        std::cout << "multiplayer menu check: MULTI shows the notice for data with no "
-                     "multiplayer map over the main menu; OK and Enter close it, twice\n";
-    else
-        std::cout << "multiplayer menu check: MULTI says \"" << kMultiplayerUnavailable
-                  << "\" over the main menu; OK and Enter close it, twice\n";
+    std::cout << "multiplayer menu check: MULTI shows the notice for data with no "
+                 "multiplayer map over the main menu; OK and Enter close it, twice\n";
 }
 
 } // namespace oa::app

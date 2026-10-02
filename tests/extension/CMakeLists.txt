@@ -5,14 +5,16 @@
 # members than oa-game's fails to link, and, in a build configured with
 # -DOA_RECORD_EXTENSION_HOOKS=ON, two test extensions record the calls of
 # every hook of the extension table and show that oa-game calls them,
-# combined as extension.hpp says: the recorder, which fills every hook, and
-# the follower, whose library links the recorder's and which fills every
-# hook but those one extension at most may fill. The follower is registered
-# first; the game lists it after the recorder all the same. The recorder
-# also adds one Runtime member through OA_RUNTIME_EXTENSION_MEMBERS, so that
-# the mechanism is built while it exists. Added by the top-level project
-# before it applies the members header, which this directory names for the
-# recorder.
+# combined with network play's extension as extension.hpp says: the
+# recorder, which fills every hook but those one extension at most may fill
+# (network play fills them), and the follower, whose library links the
+# recorder's and which fills the same hooks. The game lists network play
+# first, then the recorder; the follower is registered before the recorder
+# and listed after it all the same. The recorder also adds one Runtime
+# member through OA_RUNTIME_EXTENSION_MEMBERS, so that the mechanism is
+# built while it exists. Added by the top-level project after network play
+# and before it applies the members header, which this directory names for
+# the recorder.
 if(NOT TARGET oa-game)
   return()
 endif()
