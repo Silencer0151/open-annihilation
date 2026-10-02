@@ -474,6 +474,27 @@ module's directory with `../`.
   order everywhere yet; the layout pass fixes the existing edges.
 - **Checked by:** review; the layout check once the layout pass lands.
 
+### Link no graphics API
+
+No target of the tree, tests and tools included, links a graphics API: a
+graphics library or framework such as `d3d9`, `dxgi`, `opengl32`,
+`vulkan-1`, `GL`, `EGL`, `Metal` or `QuartzCore`, or one of CMake's
+`OpenGL::` and `Vulkan::` targets. Platform code that needs one reaches it
+at run time, through the objects SDL has made or through the system's
+loader. What SDL's own target brings with it is SDL's.
+
+- **Why:** one package runs on every machine of its system. A link to a
+  graphics library makes every start load that driver, and stops the
+  program from starting where the library is missing: an older Windows, or
+  a Linux system without it.
+- **Applies to:** every build file and source of the tree.
+- **Checked by:** `engine-layout` (`tools/check_layout.py`), which reads
+  the links the configuration made and every link the build files make in
+  any branch, so that a link made for one system fails on every system. It
+  reads a variable a link names with every value any build file gives it,
+  in any function or scope, so a variable a link names needs a name no
+  other build file uses for something else.
+
 ## Seams between modules
 
 Between simulation modules, prefer a direct call where the layer order

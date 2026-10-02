@@ -95,6 +95,51 @@ jobs:
       - name: Synthetic conformance and platform smoke tests
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure --no-tests=error
 
+  # The engine against SDL 3.2.0, the oldest release the build accepts
+  # (find_package(SDL3 3.2)), which tools/bootstrap_sdl.py pins beside the
+  # engine's own and installs in a folder of its own. An SDL function, or a
+  # behaviour a test relies on, that is newer than 3.2.0 and that engine
+  # code uses without a version check fails here, on each system, where
+  # that system's own platform code is compiled. The tests that need no
+  # game data run as in the build job.
+  sdl-3-2:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    name: SDL 3.2.0 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux development dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - name: Windows zlib
+        if: runner.os == 'Windows'
+        run: vcpkg install zlib:x64-windows
+      - name: Build SDL 3.2.0
+        run: python tools/bootstrap_sdl.py --version 3.2.0
+      - name: Configure Unix
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install-3.2.0"
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B build -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install-3.2.0" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      # The configuration found the SDL this job built, not another one the
+      # runner holds. The folder is matched with either slash, as Windows
+      # may write it with backslashes.
+      - name: The build uses SDL 3.2.0
+        shell: bash
+        run: grep -E '^SDL3_DIR:PATH=.*[/\\]local[/\\]deps[/\\]sdl-install-3\.2\.0([/\\]|$)' build/CMakeCache.txt
+      - name: Build
+        run: cmake --build build --config Debug --parallel 4
+      - name: Tests that need no game data
+        run: ctest --test-dir build -C Debug --output-on-failure --no-tests=error
+
   # The demo's tests (ctest label demo) over the free Total Annihilation demo
   # (1997), the only game data CI may download: the 3.1c installation the
   # other game-data tests and native checks read is not redistributable, so

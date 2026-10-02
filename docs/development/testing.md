@@ -254,6 +254,13 @@ and `--match-ticks N` it replays without a window.
   results must equal a 64-bit build's: run the pinned-digest tests
   (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`,
   `game-math-extended`) on it.
+- **The oldest SDL:** the build accepts SDL 3.2 or newer.
+  `python3 tools/bootstrap_sdl.py --version 3.2.0` builds 3.2.0, the
+  oldest release, into `local/deps/sdl-install-3.2.0`, beside the pinned
+  SDL, which it leaves in place; configure with that folder as
+  `CMAKE_PREFIX_PATH`, as the `sdl-3-2` CI job does. Engine code that
+  needs a newer SDL checks the version with `SDL_VERSION_ATLEAST`, so that
+  the tree still builds and runs on 3.2.0.
 
 ### What CI runs
 
@@ -262,6 +269,7 @@ Continuous integration (`.github/workflows/build.yml`) runs these jobs:
 | Job | What it does |
 |---|---|
 | `build` | Builds the tree on macOS (arm64), Windows and Linux, in Debug and in Check, starts `open-annihilation` on each, and runs every test that needs no game data, network play's among them. Running both build types runs the pinned-digest tests (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`, `game-math-extended`) on an optimised build as well, so a build type that computes different results fails. Linux also runs the format and licence checks, and macOS the documentation check |
+| `sdl-3-2` | On macOS, Windows and Linux, builds SDL 3.2.0, the oldest release the build accepts, into its own folder (`tools/bootstrap_sdl.py --version 3.2.0`), checks that the configuration found it, builds the tree in Debug against it and runs every test that needs no game data, so that engine code needing a newer SDL without checking its version fails on the system whose code it is |
 | `demo` | On macOS and Linux, downloads the installer of the Total Annihilation demo (1997), checks it against its pinned SHA-256 and caches it, then builds in Check and runs the demo's tests (`ctest -L demo`) with `-DOA_REQUIRE_DEMO_INSTALLER=ON`, so a demo test that skips fails |
 | `extension-recorder` | Builds and tests on Linux with the recorder test extensions registered beside network play (`-DOA_RECORD_EXTENSION_HOOKS=ON`) |
 | `sanitizers` | Builds Debug with Clang on Linux under AddressSanitizer and UndefinedBehaviorSanitizer and runs the suite |

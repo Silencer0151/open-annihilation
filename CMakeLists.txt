@@ -1000,8 +1000,13 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/format_sources.py --self-test)
     add_test(NAME licensing-check-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/spdx_headers.py --self-test)
+    # tools/bootstrap_sdl.py reads its command line as its help says: the
+    # pinned releases, a release given with its SHA-256, the refusals, and
+    # the folders each release builds in. It downloads nothing.
+    add_test(NAME sdl-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_sdl.py --self-test)
     set_tests_properties(fixed-width-rewrite-selftest format-check-selftest licensing-check-selftest
-      PROPERTIES TIMEOUT 60)
+      sdl-bootstrap-selftest PROPERTIES TIMEOUT 60)
   endif()
 endif()
 
