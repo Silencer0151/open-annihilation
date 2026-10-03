@@ -1,24 +1,158 @@
 # Card-drawn world
 
 Groundwork for the tier in which the graphics card draws the battlefield
-itself: the card-ready forms of the game's assets, built from the same
-decoded data the processor draws from today. Each part is a library of its
-own with its own test, so that the parts land and build separately. Nothing
-in this module touches SDL or a graphics API, and nothing draws from these
-records yet: the standard tier is unchanged, and no part of this module runs
-unless a later change wires it in.
+itself: the card-ready forms of the game's assets, built on the processor
+from the same decoded data the processor draws from today, in pure C++20
+with no window, renderer or platform interface. The module is one library,
+`oa-present-gpu-world` (`oa::present::gpu_world`), whose main header
+`include/oa/present/gpu_world.hpp` includes every part; each part has its
+own header under `include/oa/present/gpu_world/`, its own source and its
+own test, so that the parts land separately, and `texel.hpp` holds what
+they share: `texel_bytes`, the four bytes of an RGBA8 texel. Nothing in
+this module touches SDL or a graphics API, and nothing draws from these
+records yet: the standard tier is unchanged, and no part of this module
+runs unless a later change wires it in.
+
+## The terrain atlas
+
+`include/oa/present/gpu_world/terrain_atlas.hpp` turns a map's 32x32 tile
+mosaic into pages of RGBA8 texels (red, green, blue and alpha in memory
+order, alpha always 255) with a mip chain each, and the grid of atlas slots
+the map's cells show. The whole map is resident: every distinct tile the
+grid names has its slot before the first frame, so nothing is placed or
+evicted while a match runs.
+
+- **Slots.** `build_terrain_atlas` walks the grid row by row and gives each
+  distinct tile, compared by its pixels, the next slot in order of first
+  use, so cells that share a tile share a slot and tiles no cell names take
+  none. `TerrainAtlas::grid` holds the slot of every cell and
+  `slot_tiles` the map's tile each slot was filled from. A slot spans
+  `slot_pitch` (40) texels a side at level 0: the tile and a gutter ring
+  of `level_0_gutter` (4) texels copied from the tile's edge, so that
+  linear filtering never reads a neighbour.
+- **Colour.** A texel of a tile is the tile's pixel through the palette and
+  then the display gamma table, the bytes today's terrain fill and
+  conversion give it at zoom 1. Every other texel of a page is opaque
+  black.
+- **Pages.** The build takes the largest edge a page may have:
+  `fit_page_edge` of the card's texture limit, a power of two from
+  `page_edge_minimum` (64) to `page_edge_limit` (4096), 2048 on a card
+  whose textures stop there. Slots fill pages of `full_page_slots` of that
+  edge (10,404 at 4096, 2,601 at 2048) in slot order, and `plan_page` sizes
+  each page for the slots it holds: each edge a power of two up to the page
+  edge, the smallest area whose rows of whole slots hold the count, then
+  the squarer page, then the wider of two the same shape. A cell names its
+  slot in 16 bits, so an atlas holds at most `slot_limit` (65,536) slots on
+  `page_limit` of the edge pages (7 at 4096, 26 at 2048). The atlas records
+  its `page_edge` and `slots_per_page`, and the same map gives the same
+  tiles and views within every edge, on more pages as the edge falls.
+- **Levels.** Level L of a page is the exact box reduction of level 0:
+  each texel the average of the 2^L by 2^L level-0 texels under it,
+  rounded once, halves up, in palette colour before the gamma table, the
+  order today's zoomed-out terrain filter and conversion keep. The chain
+  runs down to one texel (`level_count`, `level_size`). At the tile levels,
+  `tile_level_count` (3) of them, every tile is a whole number of texels
+  (32, 16 and 8 a side) with a whole gutter ring (4, 2 and 1 texels), and
+  the gutters are rebuilt from the level's own reduced tile edges, so each
+  level filters without bleeding on its own. Deeper levels reduce the whole
+  page, tiles and gutters together, and complete the chain; a renderer
+  stops at the last tile level. `tile_rect` gives a slot's tile at a tile
+  level.
+- **Memory.** `terrain_atlas_footprint` costs an atlas before it is built,
+  within a page edge: its pages and their every level, the tables, and the
+  builder's working storage, which is the sums of the largest page's last
+  tile level and the level after it. The largest atlas among the installed
+  game's maps is Crystal Maze's, 11,444 slots: a 4096x4096 page and a
+  2048x1024 page within 4096, or four 2048x2048 pages and a 2048x1024 page
+  within 2048, 96.0 MiB of texels with their chains either way against
+  11.2 MiB of 8-bit tiles, built with 15.0 MiB of working storage within
+  4096 and 3.8 MiB within 2048. A map of 3,466 distinct tiles takes one
+  4096x2048 page, 42.7 MiB, or two pages within 2048, 32.0 MiB; the
+  format's bound of 65,536 slots takes seven pages, 554.7 MiB, or 26 pages,
+  538.7 MiB. The game's zoom never goes below one half, so the levels the
+  card draws from are 0 and 1, and the chain beyond the tile levels is
+  under two per cent of the whole.
+- **Reading back.** `read_terrain_view` reads what the card shows at a tile
+  level when the camera lies on a whole texel of that level, black past
+  the map's edge, for checks against the processor's terrain; it refuses a
+  deeper level and a camera between texels.
+- **Malformed maps** are refused with the atlas left empty: an empty grid,
+  a grid that is not `tile_width` by `tile_height` cells or that exceeds
+  `grid_cell_limit`, a tile set that is not `tile_count` tiles, and a cell
+  naming a tile the set lacks.
+
+### What the atlas holds exactly, and what the renderer decides
+
+What the card does with the atlas, and how a zoom between levels is
+filtered, is the renderer's to decide. At zoom 1, level 0 holds today's
+bytes exactly at every camera. At zoom one half, level 1 drawn 1:1 holds
+today's bytes exactly when the camera lies on an even map pixel. Today's
+zoomed-out filter clamps the camera to any integer map pixel, so at an odd
+camera, half of the positions, level 1 drawn 1:1 shows today's picture
+shifted by one map pixel, half a level-1 texel; at zoom one quarter the
+same holds for a camera off a multiple of 4, three positions in four. The
+renderer either snaps the camera to the level's grid at those zooms, which
+the camera's clamp allows, or accepts the shift; `read_terrain_view`
+refuses a camera between the level's texels rather than choose. Between
+zoom one half and 1 the card's own filter, or a blend of the two levels,
+applies, and those bytes are the card's, not today's.
+
+### Limitations and follow-ups
+
+- **No greyed variant.** The fog's mapped-but-unseen cells show the
+  terrain through the gray table. That is the same build with a palette
+  whose entries are the gray table's, another atlas beside this one, made
+  when the fog pass needs it, not here.
+- **No eviction and no budget.** The atlas is the whole map, and
+  `terrain_atlas_footprint` is what a tier's memory figure costs it with.
+  There is no smaller form: dropping the chain beyond the tile levels saves
+  under two per cent, so a machine that cannot afford a map's atlas within
+  the card's page edge is a tier choice, not this module's.
+- **Nothing is uploaded.** The pages are processor memory; the renderer
+  that uploads them and chooses the level per draw is a later change.
+
+### Tests
+
+`gpu-world-terrain-atlas` (`tests/terrain_atlas_test.cpp`) plans pages by
+table within every page edge, with the edge fitted from a texture limit;
+packs a seeded map with duplicated and unused tiles within 4096 and within
+2048 and checks the slots, the grid, every tile's texels against the
+palette and gamma, the gutters at every tile level, that no slot overlaps
+another and that the rest of the page is black; builds the same map within
+64, 128 and 2048, and a map of one slot more than a 2048 page holds within
+2048, 4096 and a limit of 3000, and checks the pages, the same tiles and
+views at every tile level, and the footprint against each build; reads
+views at level 0 against today's terrain fill (`fill_scaled_viewport` at
+zoom 1, through the gamma table as the conversion applies it), at the
+camera positions and sizes that cross the map's edges, with no gamma and
+with gamma 0.75 and 1.25; reads views at level 1 against the present
+layer's area pass at a scale of exactly one half (`plan_area_filter` and
+`area_filter_rgb24`, which `world-scene-filter` pins to today's box filter
+byte for byte) and against that filter written out, and at level 2 against
+the filter written out at one quarter, with the camera on whole texels,
+with and without gamma; checks every texel of every level against the
+exact average of the level-0 texels under it; holds the seeded map's page
+and grid to pinned FNV-1a digests, with and without a gamma table and
+within either edge; refuses each malformed map and each bad read; and
+prints the memory figures within 4096 and within 2048.
+
+`gpu-world-terrain-atlas-data` does the same over every map of the installed
+game: level 0 against the fill over the whole map, level 1 against the area
+pass and level 2 against the filter written out on every fourth band of 256
+rows, and every eighth map again through a gamma table; then builds the
+largest atlas within 2048 as well, checks that it shows the same views from
+pages within the edge, and prints both figures.
 
 ## Sprite pages
 
 `oa::present::gpu_world::SpritePages`
-(`include/oa/present/gpu_world/sprite_pages.hpp`, library
-`oa-present-gpu-world-sprite-pages`) holds GAF sprite frames as texels the
-card can draw: trees, wrecks and other features, explosions, smoke, flames,
-plasma and the sprite shadows. A frame comes in as the GAF reader renders it
-for the match today (`oa::formats::gaf::RenderedFrame`: one palette index and
-one coverage byte a pixel, with the hotspot), is decoded once into RGBA8
-texels and placed on a page; the next request for the same frame is answered
-from the page.
+(`include/oa/present/gpu_world/sprite_pages.hpp`) holds GAF sprite frames
+as texels the card can draw: trees, wrecks and other features, explosions,
+smoke, flames, plasma and the sprite shadows. A frame comes in as the GAF
+reader renders it for the match today (`oa::formats::gaf::RenderedFrame`:
+one palette index and one coverage byte a pixel, with the hotspot), is
+decoded once into RGBA8 texels and placed on a page; the next request for
+the same frame is answered from the page.
 
 **What a request gives back.** `frame(frame_id, mode, source)` returns a
 `FrameRecord`: the page, the frame's rectangle of texels on it, the hotspot

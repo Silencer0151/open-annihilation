@@ -20,6 +20,7 @@
 // keep level 0 only for now; the cells are aligned for level 1 to follow.
 
 #include "oa/formats/gaf.hpp"
+#include "oa/present/gpu_world/texel.hpp"
 #include "oa/present/surface.h"
 
 #include <array>
@@ -31,8 +32,6 @@
 
 namespace oa::present::gpu_world {
 
-/// Bytes of one page texel: red, green, blue and alpha, in that order.
-inline constexpr uint32_t texel_bytes = 4;
 /// Transparent texels left around every frame on a page, on each side: two,
 /// so that a half-size level of the page keeps one.
 inline constexpr uint32_t frame_gutter = 2;
