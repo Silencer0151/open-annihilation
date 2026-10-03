@@ -8,8 +8,10 @@
 // the first after the tier is switched on or the window resized among them;
 // the standard tier's picture for the readers that keep one; the view drawn
 // between map pixels as a slow scroll moves it, and the pointer picking what
-// is drawn (runtime_smooth_pan_check.cpp); and the card's textures made once
-// and its prescale targets drawn once a painted frame.
+// is drawn (runtime_smooth_pan_check.cpp); the card's textures made once
+// and its prescale targets drawn once a painted frame; and the Full tier's
+// model stage over the zoom-1 frame, its frame of models against the
+// processor's raster of the same list (check_full_models).
 // The tier comes from the game's own decision: --hardware-acceleration
 // switches it on after the start-up function test passed, and the check
 // switches it off and on again as --no-hardware-acceleration and
@@ -38,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -999,6 +1002,9 @@ int Runtime::check_render_tiers() {
             fail("zoom 1 differs from compose_match_frame");
         }
     }
+    // The Full tier's model stage over the same frame: the card's frame of
+    // the list's models against the processor's raster of them.
+    check_full_models(report_directory);
     // Zoomed out: the area pass's picture, uploaded as the processor composed it.
     for (const float zoom : area_zooms) {
         at_zoom(zoom);
@@ -2323,6 +2329,319 @@ void Runtime::check_full_render_tier(
               << full_->frames << " frames, with the box filter never run; pictures in "
               << report_directory.string() << '\n';
     level(HardwareAcceleration::off);
+}
+
+namespace {
+
+namespace model_render = oa::present::model;
+
+/// A colour no entry of a palette has, for the processor's undrawn pixels,
+/// whose nearest entry a shadow darkens to another entry, so that a shadow
+/// over it shows: over a colour that darkens to itself the bridge writes
+/// nothing back.
+std::array<uint8_t, 3>
+colour_outside(const oa::Palette& palette, const model_render::ModelDisplay& display) {
+    for (uint32_t candidate = 0xc1c2c3U;; candidate += 0x30507U) {
+        const std::array<uint8_t, 3> colour{
+            static_cast<uint8_t>(candidate >> 16),
+            static_cast<uint8_t>(candidate >> 8),
+            static_cast<uint8_t>(candidate)
+        };
+        bool used = false;
+        uint8_t nearest = 0;
+        int64_t least = INT64_MAX;
+        for (std::size_t i = 0; i < OA_PALETTE_COLORS; ++i) {
+            const auto& entry = palette.entries[i];
+            if (entry.r == colour[0] && entry.g == colour[1] && entry.b == colour[2])
+                used = true;
+            const int64_t dr = int64_t{entry.r} - colour[0];
+            const int64_t dg = int64_t{entry.g} - colour[1];
+            const int64_t db = int64_t{entry.b} - colour[2];
+            const int64_t distance = dr * dr + dg * dg + db * db;
+            if (distance < least) {
+                least = distance;
+                nearest = static_cast<uint8_t>(i);
+            }
+        }
+        if (!used && display.alpha.size() > nearest && display.alpha[nearest] != nearest)
+            return colour;
+    }
+}
+
+/// The draw kinds the model stage draws, which the processor's raster of
+/// the models alone keeps, with the commits that write the bridge back.
+bool model_kind(WorldDrawKind kind) noexcept {
+    switch (kind) {
+    case WorldDrawKind::model:
+    case WorldDrawKind::projectile:
+    case WorldDrawKind::debris:
+    case WorldDrawKind::fragment:
+    case WorldDrawKind::commit:
+    case WorldDrawKind::commit_always:
+        return true;
+    case WorldDrawKind::pixel_square:
+    case WorldDrawKind::sprite:
+    case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::line:
+    case WorldDrawKind::selection_line:
+        return false;
+    }
+    return false;
+}
+
+/// The bounds a frame of the fight is held to against the band raster,
+/// which samples each pixel at its corner where the card samples its
+/// centre: the coverage within the model raster bounds, and the colours
+/// within the share the installed game's unit models measured against the
+/// band raster at zoom 1, with room (app-full-models-data prints it).
+constexpr double most_corner_sampled_far_share = 0.6;
+
+} // namespace
+
+void Runtime::check_full_models(const fs::path& report_directory) {
+    const auto fail = [](const std::string& what) {
+        throw std::runtime_error("render tiers check: " + what);
+    };
+    MatchModels& models = match_models();
+    const uint32_t bf_w = match_world_cpu_.width;
+    const uint32_t bf_h = match_world_cpu_.height;
+    if (bf_w == 0 || bf_h == 0 || accelerated_.frame.method != SceneMethod::none ||
+        models.bridge.scale != 1.0F)
+        fail("the model stage case needs the battlefield drawn at zoom 1");
+    // The card's frame of the list's models, into a transparent target the
+    // battlefield's size on the game's renderer.
+    card::Executor executor;
+    if (!executor.open(sdl_.renderer, render_texture_limit()))
+        fail("the card executor cannot open on the renderer: " + executor.error());
+    full::ModelStage stage;
+    stage.set_palette(models.display.palette, 1.0F);
+    oa::formats::gaf::RenderedFrame shadow_sprite;
+    const oa::Sprite& shadow = models.projectile_shadow;
+    if (shadow.data != nullptr && shadow.width != 0 && shadow.height != 0) {
+        shadow_sprite.width = shadow.width;
+        shadow_sprite.height = shadow.height;
+        shadow_sprite.origin_x = shadow.origin_x;
+        shadow_sprite.origin_y = shadow.origin_y;
+        shadow_sprite.transparency_index = shadow.key;
+        const auto size = static_cast<std::size_t>(shadow.width) * shadow.height;
+        const auto* pixels = static_cast<const uint8_t*>(shadow.data);
+        shadow_sprite.pixels.assign(pixels, pixels + size);
+        shadow_sprite.coverage.resize(size);
+        for (std::size_t i = 0; i < size; ++i)
+            shadow_sprite.coverage[i] = pixels[i] != shadow.key ? 1 : 0;
+    }
+    const oa::World& world = match_->world().record;
+    full::ModelFrameInputs inputs;
+    inputs.draws = &models.draws;
+    inputs.world = &world;
+    inputs.library = &models.library;
+    inputs.display = &models.display;
+    inputs.graphics_flags = models.renderer.graphics_flags;
+    inputs.tick = models.renderer.tick;
+    std::copy_n(models.renderer.team_colors, full::team_colour_players, inputs.team_colors.begin());
+    inputs.light = {models.renderer.light[0], models.renderer.light[1], models.renderer.light[2]};
+    inputs.light_scale = models.renderer.light_scale;
+    inputs.projectile_shadow = shadow_sprite.width != 0 ? &shadow_sprite : nullptr;
+    full::SceneView view;
+    view.zoom = 1.0F;
+    view.camera_x = models.renderer.camera_x;
+    view.camera_y = models.renderer.camera_y;
+    view.width = static_cast<int32_t>(bf_w);
+    view.height = static_cast<int32_t>(bf_h);
+    SDL_Texture* target = SDL_CreateTexture(
+        sdl_.renderer,
+        SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_TARGET,
+        static_cast<int>(bf_w),
+        static_cast<int>(bf_h)
+    );
+    if (target == nullptr)
+        fail(std::string("SDL_CreateTexture for the model stage's target: ") + SDL_GetError());
+
+    struct TargetGuard {
+        SDL_Texture* texture{};
+
+        ~TargetGuard() { SDL_DestroyTexture(texture); }
+    } guard{target};
+
+    if (!SDL_SetRenderTarget(sdl_.renderer, target) ||
+        !SDL_SetRenderDrawBlendMode(sdl_.renderer, SDL_BLENDMODE_NONE) ||
+        !SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 0) || !SDL_RenderClear(sdl_.renderer) ||
+        !SDL_SetRenderTarget(sdl_.renderer, nullptr))
+        fail(std::string("clearing the model stage's target: ") + SDL_GetError());
+    card::CardFrame frame;
+    stage.emit_frame(inputs, view, executor, frame);
+    if (!stage.error().empty())
+        fail("the model stage: " + stage.error());
+    if (!stage.upload(executor))
+        fail("the model stage's upload: " + stage.error());
+    if (!executor.execute(frame, target))
+        fail("the card refused the frame of models: " + executor.error());
+    std::vector<uint8_t> rgba(std::size_t{bf_w} * bf_h * 4U);
+    {
+        if (!SDL_SetRenderTarget(sdl_.renderer, target))
+            fail(
+                std::string("SDL_SetRenderTarget to read the model stage's target: ") +
+                SDL_GetError()
+            );
+        SDL_Surface* read = SDL_RenderReadPixels(sdl_.renderer, nullptr);
+        std::ignore = SDL_SetRenderTarget(sdl_.renderer, nullptr);
+        if (read == nullptr)
+            fail(
+                std::string("SDL_RenderReadPixels of the model stage's target: ") + SDL_GetError()
+            );
+        SDL_Surface* converted = SDL_ConvertSurface(read, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(read);
+        if (converted == nullptr)
+            fail(std::string("SDL_ConvertSurface of the model stage's target: ") + SDL_GetError());
+        for (uint32_t y = 0; y < bf_h; ++y)
+            std::memcpy(
+                rgba.data() + std::size_t{y} * bf_w * 4U,
+                static_cast<const uint8_t*>(converted->pixels) +
+                    std::size_t{y} * static_cast<std::size_t>(converted->pitch),
+                std::size_t{bf_w} * 4U
+            );
+        SDL_DestroySurface(converted);
+    }
+    const auto counts = stage.counts();
+    stage.close(executor);
+    // The processor's raster of the same list's models alone, through a
+    // model bridge of its own as a band of the frame draws them.
+    WorldDrawList models_only = models.draws;
+    std::erase_if(models_only.draws, [](const WorldDraw& draw) { return !model_kind(draw.kind); });
+    add_world_draw(models_only, WorldDrawKind::commit_always, 0);
+    const std::array<uint8_t, 3> key = colour_outside(models.display.palette, models.display);
+    renderer::Surface raster{bf_w, bf_h, std::vector<uint8_t>(std::size_t{bf_w} * bf_h * 3U)};
+    for (std::size_t i = 0; i < raster.rgb.size(); i += 3) {
+        raster.rgb[i] = key[0];
+        raster.rgb[i + 1] = key[1];
+        raster.rgb[i + 2] = key[2];
+    }
+    model_render::RgbBridge bridge;
+    model_render::bridge_begin(
+        bridge,
+        {raster.rgb.data(),
+         static_cast<int32_t>(bf_w),
+         static_cast<int32_t>(bf_h),
+         static_cast<int32_t>(bf_w) * 3},
+        models.bridge.area,
+        1.0F,
+        models.display.palette
+    );
+    std::vector<model_render::BridgeBand> bands;
+    model_render::bridge_split(bridge, 1, bands);
+    WorldFrameDraw frame_draw{};
+    frame_draw.target = {
+        raster.rgb.data(),
+        static_cast<int32_t>(bf_w),
+        static_cast<int32_t>(bf_h),
+        0,
+        0,
+        static_cast<int32_t>(bf_w),
+        static_cast<int32_t>(bf_h),
+        0,
+        static_cast<int32_t>(bf_h)
+    };
+    frame_draw.palette = &match_palette_;
+    frame_draw.scale = 1.0F;
+    frame_draw.bridge = &bridge;
+    frame_draw.display = &models.display;
+    frame_draw.projectile_shadow = &models.projectile_shadow;
+    frame_draw.debris_view = {0, 0, static_cast<int32_t>(bf_w) - 1, static_cast<int32_t>(bf_h) - 1};
+    draw_world_band(
+        models_only,
+        frame_draw,
+        bands.front(),
+        models.renderer,
+        models.supersample,
+        models.debris_points
+    );
+    model_render::bridge_join_band(bridge, bands.front());
+    const auto comparison =
+        full::compare_model_rasters(rgba.data(), raster.rgb.data(), bf_w, bf_h, key);
+    full::ModelRasterBounds bounds;
+    bounds.far_share = most_corner_sampled_far_share;
+    std::cout << "render tiers check: the model stage drew " << counts.units << " units, "
+              << counts.projectiles << " projectiles, " << counts.debris << " debris pieces, "
+              << counts.fragments << " fragments and " << counts.shadows << " shadows as "
+              << counts.polygons << " polygons in " << frame.batches.size() << " batches; against "
+              << "the processor's raster: " << comparison.drawn << " pixels drawn, "
+              << comparison.same << " the same, " << comparison.phase << " a texel of phase, "
+              << comparison.edge_colour << " another colour at an edge, " << comparison.far
+              << " far, " << comparison.edge_coverage << " covered by one within a pixel of the "
+              << "other, " << comparison.far_coverage << " covered by one alone, "
+              << comparison.shadowed << " shadowed\n";
+    if (counts.units == 0 || comparison.drawn == 0)
+        fail("the model stage drew no unit of the frame");
+    if (!full::within_bounds(comparison, bounds)) {
+        // The card's picture over the key colour, so that the two compare.
+        renderer::Surface card_picture{bf_w, bf_h, std::vector<uint8_t>(raster.rgb.size())};
+        for (std::size_t i = 0; i < std::size_t{bf_w} * bf_h; ++i) {
+            const uint8_t* pixel = rgba.data() + i * 4U;
+            const unsigned left = 255U - pixel[3];
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                card_picture.rgb[i * 3U + channel] =
+                    static_cast<uint8_t>(pixel[channel] + (key[channel] * left) / 255U);
+        }
+        write_png(report_directory / "native-render-tiers-models-card.png", card_picture);
+        write_png(report_directory / "native-render-tiers-models-processor.png", raster);
+        // The first pixels one picture alone draws with nothing of the other
+        // within a pixel, each with its surroundings, for the report.
+        const auto by_card = [&](int x, int y) {
+            return x >= 0 && y >= 0 && x < static_cast<int>(bf_w) && y < static_cast<int>(bf_h) &&
+                   rgba
+                           [(std::size_t{static_cast<uint32_t>(y)} * bf_w +
+                             static_cast<uint32_t>(x)) *
+                                4U +
+                            3U] != 0;
+        };
+        const auto by_processor = [&](int x, int y) {
+            if (x < 0 || y < 0 || x >= static_cast<int>(bf_w) || y >= static_cast<int>(bf_h))
+                return false;
+            const uint8_t* pixel =
+                raster.rgb.data() +
+                (std::size_t{static_cast<uint32_t>(y)} * bf_w + static_cast<uint32_t>(x)) * 3U;
+            return pixel[0] != key[0] || pixel[1] != key[1] || pixel[2] != key[2];
+        };
+        const auto alone = [&](int x, int y) {
+            const bool card = by_card(x, y);
+            const bool processor = by_processor(x, y);
+            if (card == processor)
+                return false;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if (card ? by_processor(x + dx, y + dy) : by_card(x + dx, y + dy))
+                        return false;
+            return true;
+        };
+        constexpr int most_listed = 6;
+        constexpr int reach = 10;
+        int listed = 0;
+        int skip_until_y = -1;
+        for (int y = 0; y < static_cast<int>(bf_h) && listed < most_listed; ++y) {
+            if (y < skip_until_y)
+                continue;
+            for (int x = 0; x < static_cast<int>(bf_w) && listed < most_listed; ++x) {
+                if (!alone(x, y))
+                    continue;
+                std::cout << "render tiers check: (" << x << ", " << y << ") drawn by the "
+                          << (by_card(x, y) ? "card" : "processor") << " alone; around it:\n";
+                for (int row = y - reach; row <= y + reach; ++row) {
+                    std::cout << "  card:";
+                    for (int column = x - reach; column <= x + reach; ++column)
+                        std::cout << (by_card(column, row) ? '#' : '.');
+                    std::cout << "  processor:";
+                    for (int column = x - reach; column <= x + reach; ++column)
+                        std::cout << (by_processor(column, row) ? '#' : '.');
+                    std::cout << '\n';
+                }
+                ++listed;
+                skip_until_y = y + 2 * reach;
+                break;
+            }
+        }
+        fail("the model stage's frame strays from the processor's raster of the models");
+    }
 }
 
 } // namespace oa::app

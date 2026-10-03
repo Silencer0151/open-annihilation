@@ -337,11 +337,15 @@ logs it.
   battlefield's edges; and that a zoom to the zoom it is at, by the wheel
   or about the centre, keeps the point drawn under its anchor
   (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that a zoom
-  ease makes no texture; and that prescale targets are drawn once a
-  painted frame; it writes pictures of one moment at zoom 0.5, 1 and 2.5
-  in both tiers. Its flag names Full, so its Basic cases set the level to
-  `basic` and its Full cases (`check_full_render_tier`) run after them at
-  `full`: at zoom 1, 2 and 4 the frame equals `compose_match_frame`; a
+  ease makes no texture; that prescale targets are drawn once a painted
+  frame; and that the Full tier's model stage (`runtime_full.hpp`), given
+  the zoom-1 frame's list, draws the fight's units, projectiles, debris and
+  fragments and their shadows on the game's renderer within the model
+  raster bounds of the processor's raster of the same list
+  (`check_full_models`); it writes pictures of one moment at zoom 0.5, 1
+  and 2.5 in both tiers. Its flag names Full, so its Basic cases set the
+  level to `basic` and its Full cases (`check_full_render_tier`) run after
+  them at `full`: at zoom 1, 2 and 4 the frame equals `compose_match_frame`; a
   Full frame leaves what the match reads back (`match_draw_read_back`) as
   the standard tier's frame of the same moment does; at zoom 0.5 with the
   camera on an even map pixel the terrain under a transparent overlay,
@@ -427,7 +431,9 @@ logs it.
   drop, the zoom-in target and the overlay made at the loading screen
   rather than at the first frame that needs them, smooth panning, and the
   models, fog and overlays as card draws; the sprites are the scene
-  builder's first stage, below, which `--full-stages` switches on.
+  builder's first stage, below, which `--full-stages` switches on, and
+  the models its second, built and checked but not yet run by a presented
+  frame.
   `app-full-terrain` checks the level rule and the quads over a small map
   on three pages, one batch per page whatever the grid's order.
 - `runtime_full.hpp`, `runtime_full_sprites.cpp`, `full_stages.hpp`: the
@@ -440,7 +446,7 @@ logs it.
   `none`; `terrain` names what every Full frame draws anyway) beside
   `--hardware-acceleration=full`, while the processor still draws the
   rest; a stage this version does not draw is logged once and left to the
-  processor. So far the sprite stage exists
+  processor. The sprite stage is the one a presented frame runs so far
   (`full::emit_sprites`): the sprites, blended sprites, particle squares,
   lines and selection lines of the list, in its order, each sprite a quad
   from its cell on the sprite pages
@@ -487,6 +493,38 @@ logs it.
   gray's edges and such painted pixels; at zoom 0.5 the terrain under the
   sprites is the card's own level 1, which the terrain cases hold, and the
   stage's picture is `app-full-sprites`' to hold.
+- `runtime_full_models.cpp` (library `oa-app-full-models`): the builder's
+  model stage (`full::ModelStage`), which follows the sprites in the
+  frame's order (`full_stages.hpp`): the list's units, 3D features,
+  projectiles, debris pieces and shatter fragments as triangles from the
+  models' meshes (`src/present/gpu-world`), each corner placed from the
+  piece transforms the planner rebuilt with the arithmetic of the path the
+  processor draws the piece by (a cached piece as its image, a moving piece
+  flat, a carried unit as its carrier composes it), the polygons of a unit
+  with a depth plane sorted lowest first by their depth in its place, and
+  the palette's tables approximated as the design says: the shade rows as
+  a per-vertex multiplier with a bright page of doubled texels for the
+  rows above unlit, the alpha table as alpha 0.5 for cloaked units and
+  shadows, the blue table as a halved colour with an additive lift, the
+  nanoframe's bands per polygon and its outline as line quads, diggers'
+  and other players' underwater polygons left out. Texture frames go on
+  sprite pages on first sight in two variants, the image key transparent
+  as in a cached image or a colour as in a flat draw; shadows go into a
+  transparent shadow target the battlefield's size, every silhouette
+  replacing what is there so overlaps darken once, composed over the
+  battlefield at half darkness by one resolve, or straight into the
+  battlefield where the target cannot be made (`emit_shadows`, the
+  extension point a later better-shadows option replaces). The stage draws
+  through the builder's `SceneView`, as the sprite stage does, so that the
+  presentation can run it in the sprites' frame; it does not yet, and
+  `--full-stages=models` is logged as left to the processor
+  (`full::stages_built`): nothing of the match reaches the stage but
+  `--check-render-tiers`, whose model case builds a frame of the fight's
+  models and holds it to the processor's raster of them.
+  `app-full-models` compares the stage with the processor's raster on
+  SDL's software renderer over synthetic scenes, and `app-full-models-data`
+  over every unit model of the installed game at zoom 1, against the
+  processor's raster sampled at the pixel centres, where the card samples.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,

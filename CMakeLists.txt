@@ -320,7 +320,43 @@ if(OA_BUILD_PLATFORM)
     oa-app-acceleration-status
     oa-platform-job-pool oa-present-world-renderer PRIVATE oa-platform-shims
     oa-base-float-precision SDL3::SDL3 oa-options)
+  # The Full tier's model stage (runtime_full.hpp): the planner's units, 3D
+  # features, projectiles, debris pieces and shatter fragments as triangles
+  # the card draws from the models' meshes and the texture pages, with the
+  # palette's tables approximated as the design says, and their shadows
+  # into a shadow target composed once at half darkness; and the comparison
+  # of such a frame with the processor's raster, for the checks. Nothing of
+  # the match reaches it yet but the render tiers check.
+  add_library(oa-app-full-models src/app/runtime_full_models.cpp)
+  add_library(oa::app::full_models ALIAS oa-app-full-models)
+  target_link_libraries(oa-app-full-models PUBLIC oa-app-card-executor
+    oa-present-gpu-world oa-present-model
+    oa-present oa-present-world-renderer oa-formats-gaf oa-sim-effect-particles
+    oa-sim-model-runtime oa-core-types PRIVATE oa-base-game-math oa-options)
   if(BUILD_TESTING)
+    # The model stage on SDL's software renderer over a transparent target,
+    # read back against the processor's raster of the same list drawn
+    # through the bridge: synthetic scenes of flat and textured models at
+    # rest and turned, a depth-sorted unit, a lit building and its bright
+    # page, a cloaked unit, a unit under construction, units under water
+    # of both sides, carried units, shadows into the target and straight
+    # into the frame, a projectile, a debris piece and a fragment, a
+    # back-facing polygon left out, the pages placed once and uploaded, and
+    # a frame at zoom 2; with --data, every unit model of the installed
+    # game at zoom 1, drawn from a cached image with and without a depth
+    # plane, held to the bounds the figures print.
+    add_executable(oa-app-full-models-test src/app/runtime_full_models_test.cpp
+      src/app/world_draws.cpp)
+    target_link_libraries(oa-app-full-models-test PRIVATE oa-app-full-models oa-formats-hpi
+      oa-formats-tdf oa-platform-job-pool SDL3::SDL3 oa-test-game-data oa-test-support
+      oa-options)
+    add_test(NAME app-full-models COMMAND oa-app-full-models-test)
+    set_tests_properties(app-full-models PROPERTIES TIMEOUT 180
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
+    add_test(NAME app-full-models-data COMMAND oa-app-full-models-test --data)
+    set_tests_properties(app-full-models-data PROPERTIES TIMEOUT 900
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
+    oa_game_data_tests(app-full-models-data)
     add_executable(oa-app-video-capture-test src/app/video_capture_test.cpp)
     target_link_libraries(oa-app-video-capture-test PRIVATE oa-app-video-capture oa-options)
     add_test(NAME app-video-capture COMMAND oa-app-video-capture-test)
@@ -639,7 +675,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
   oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
-  oa-formats-png oa-app-full-terrain oa-app-card-executor oa-present-gpu-world)
+  oa-formats-png oa-app-full-terrain oa-app-card-executor oa-present-gpu-world
+  oa-app-full-models)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).

@@ -156,6 +156,9 @@ quads filled as triangles, which it never checks.
   terrain atlas's pages through the executor, then the stages' batches,
   and the processor draws the rest over and under them; the models, fog
   and overlays as card draws follow.
+- The model stage of the scene builder (`src/app/runtime_full.hpp`) builds
+  frames of the battlefield's models for the render tiers check and its
+  tests; no presented frame runs one yet.
 - The composed darken mode and the pixel-art sampling mode are exercised
   only on renderers that take them; the software renderer takes neither,
   so the fallbacks are what the test covers.

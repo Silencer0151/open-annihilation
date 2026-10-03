@@ -9,21 +9,32 @@
 // itself (full_stages.hpp) while the processor still draws the rest of the
 // battlefield, so that a stage lands and is checked on its own. This
 // header holds what every stage shares and the stages built so far;
-// runtime_full_sprites.cpp holds the sprite stage, full_terrain.hpp the
-// terrain, which every Full frame draws before the stages, and
-// runtime_full.cpp the branch of the presentation that runs them all on the
-// executor. Nothing here reads the Runtime, so a stage is tested on its own.
+// runtime_full_sprites.cpp holds the sprite stage, runtime_full_models.cpp
+// the model stage, which follows it in the frame's order and which no
+// presented frame runs yet, full_terrain.hpp the terrain, which every Full
+// frame draws before the stages, and runtime_full.cpp the branch of the
+// presentation that runs them all on the executor. Nothing here reads the
+// Runtime, so a stage is tested on its own.
 #pragma once
 
 #include "full_stages.hpp"
 #include "oa/app/card.hpp"
+#include "oa/app/card/executor.hpp"
+#include "oa/core/world.h"
+#include "oa/formats/gaf.hpp"
 #include "oa/formats/hpi.hpp"
+#include "oa/present/gpu_world/model_meshes.hpp"
 #include "oa/present/gpu_world/sprite_pages.hpp"
+#include "oa/present/model/model_draw.hpp"
+#include "oa/present/model/model_library.hpp"
+#include "oa/present/surface.h"
 #include "oa/present/world_renderer.hpp"
 #include "world_draws.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -196,6 +207,13 @@ SpriteStageResult emit_sprites(
 /// @return the width in target pixels
 [[nodiscard]] float line_width(const SceneView& view) noexcept;
 
+/// Returns the target pixels one map pixel covers in a view: the zoom
+/// times the view's scale.
+///
+/// @param view the view
+/// @return target pixels per map pixel
+[[nodiscard]] float pixels_per_map_pixel(const SceneView& view) noexcept;
+
 /// Returns a flat colour through the display gamma, as the card takes it:
 /// each channel from 0 to 1.
 ///
@@ -227,5 +245,290 @@ void append_line_quad(
     float width,
     const card::Colour& colour
 );
+
+// ---------------------------------------------------------------------------
+// The model stage (runtime_full_models.cpp): units, 3D features,
+// projectiles, debris and shatter fragments as meshes from the planner's
+// list, and their shadows, drawn into a transparent shadow target and
+// composed once at half darkness. It draws through the SceneView above, as
+// the sprite stage does; the presentation does not run it yet.
+
+/// Players a team colour is kept for, as ModelRenderer::team_colors has them.
+inline constexpr std::size_t team_colour_players = 10;
+
+/// What the model stage reads of a frame: the planner's list and the state
+/// it points into, read and never written. The list, the World, the library
+/// and the display must outlive the frame's emission.
+struct ModelFrameInputs {
+    const WorldDrawList* draws{};
+    /// The match's World: the units a plan names, and Game's sea level,
+    /// viewpoint player and debug overlay.
+    const oa::World* world{};
+    /// The prepared models and the texture library the frame draws from.
+    const oa::present::model::ModelLibrary* library{};
+    /// The models' display tables: the shade table gives the flat polygons
+    /// of a lit building their colours. Null draws them unlit.
+    const oa::present::model::ModelDisplay* display{};
+    uint16_t graphics_flags{}; ///< Game.graphics_flags: shadows, vehicle shadows and shading
+    uint32_t tick{};           ///< the match's tick, which the nanoframe's colours cycle by
+    /// Each player's colour, by player index (ModelRenderer::team_colors).
+    std::array<uint8_t, team_colour_players> team_colors{};
+    /// The shaded builder's light direction and the scale of its dot product.
+    std::array<float, 3> light{
+        oa::present::model::default_light_x,
+        oa::present::model::default_light_y,
+        oa::present::model::default_light_z
+    };
+    float light_scale{oa::present::model::default_light_scale};
+    /// FX.GAF "shadow" frame 0, rendered, for the projectiles' shadows; null
+    /// casts none.
+    const oa::formats::gaf::RenderedFrame* projectile_shadow{};
+};
+
+/// What the model stage did since it was made, for checks and the frame
+/// statistics.
+struct ModelStageCounts {
+    uint64_t units{};            ///< unit and 3D feature draws emitted
+    uint64_t carried{};          ///< carried units drawn with their carriers
+    uint64_t projectiles{};      ///< 3DO projectile draws, a missile's child counted with it
+    uint64_t debris{};           ///< debris pieces drawn, those culled on their origin left out
+    uint64_t fragments{};        ///< shatter fragments drawn
+    uint64_t polygons{};         ///< polygons emitted as triangles
+    uint64_t culled{};           ///< polygons left out as back-facing or flat
+    uint64_t shadows{};          ///< silhouettes and shadow sprites emitted
+    uint64_t meshes_built{};     ///< meshes built from models
+    uint64_t frames_placed{};    ///< texture frames placed on the pages
+    uint64_t page_uploads{};     ///< page rectangles uploaded
+    uint64_t target_creations{}; ///< shadow targets made
+};
+
+/// The model stage: the meshes, the texture pages and the shadow target
+/// the card draws models from, and the batches it emits for a frame.
+///
+/// Per frame, emit_shadows first and then emit_draw for each draw of the
+/// list in its order (emit_frame does both for a frame of models alone);
+/// upload sends the page texels written since the last upload, and the
+/// caller then executes the frame. The stage keeps the executor's handles
+/// of what it made; close destroys them.
+class ModelStage {
+  public:
+
+    /// The stage's state, defined with the stage.
+    struct Impl;
+
+    /// Makes a stage with empty pages, no meshes and no palette.
+    ModelStage();
+    ModelStage(const ModelStage&) = delete;
+    ModelStage& operator=(const ModelStage&) = delete;
+    /// Frees the stage's own memory; the executor's pages and targets are
+    /// freed by close.
+    ~ModelStage();
+
+    /// Sets the palette and the display gamma the pages, the meshes and
+    /// every flat colour are built from; a value that differs empties the
+    /// pages and the meshes, which are built again on their next use.
+    ///
+    /// @param palette the match's palette
+    /// @param gamma channel multiplier; 1 applies the palette unchanged
+    void set_palette(const Palette& palette, float gamma);
+
+    /// Destroys every page and target the stage made on an executor and
+    /// forgets the meshes, as at a match's end or a device reset.
+    ///
+    /// @param[in,out] executor the executor the pages and targets were made on
+    void close(card::Executor& executor) noexcept;
+
+    /// Emits the frame's shadows: every drawn unit's and 3D feature's
+    /// silhouette and every projectile's shadow sprite into the shadow
+    /// target, cleared first, then one resolve that composes the target over
+    /// the battlefield at half darkness. Where the target cannot be made,
+    /// each shadow is drawn straight into the battlefield at half darkness
+    /// in list order. This function is the extension point a later
+    /// "better shadows" option replaces.
+    ///
+    /// @param inputs the frame's list and state
+    /// @param view the frame's view
+    /// @param[in,out] executor the executor the target and pages are made on
+    /// @param[in,out] frame the command list the batches are appended to
+    void emit_shadows(
+        const ModelFrameInputs& inputs,
+        const SceneView& view,
+        card::Executor& executor,
+        card::CardFrame& frame
+    );
+
+    /// Emits one draw of the list: a unit or 3D feature, a projectile, a
+    /// debris piece or a shatter fragment, as the polygons the processor
+    /// draws for it; every other kind is left to the other stages.
+    ///
+    /// @param inputs the frame's list and state
+    /// @param view the frame's view
+    /// @param entry the draw, one of inputs.draws->draws
+    /// @param[in,out] executor the executor the pages are made on
+    /// @param[in,out] frame the command list the batches are appended to
+    void emit_draw(
+        const ModelFrameInputs& inputs,
+        const SceneView& view,
+        const WorldDraw& entry,
+        card::Executor& executor,
+        card::CardFrame& frame
+    );
+
+    /// Emits a frame of models alone: the shadows, then every draw of the
+    /// list in its order.
+    ///
+    /// @param inputs the frame's list and state
+    /// @param view the frame's view
+    /// @param[in,out] executor the executor the pages and target are made on
+    /// @param[in,out] frame the command list the batches are appended to
+    void emit_frame(
+        const ModelFrameInputs& inputs,
+        const SceneView& view,
+        card::Executor& executor,
+        card::CardFrame& frame
+    );
+
+    /// Uploads the page texels written since the last upload, and frees
+    /// the executor's pages of pages the sprite pages released.
+    ///
+    /// @param[in,out] executor the executor the pages were made on
+    /// @return false, with error() set, when an upload failed
+    [[nodiscard]] bool upload(card::Executor& executor);
+
+    /// Returns what the stage has done.
+    ///
+    /// @return the counts since the stage was made
+    [[nodiscard]] const ModelStageCounts& counts() const noexcept { return counts_; }
+
+    /// Returns why the last executor call that failed did; the stage goes on
+    /// without what it could not make.
+    ///
+    /// @return the executor's error, with what the stage was making; empty for none
+    [[nodiscard]] const std::string& error() const noexcept { return error_; }
+
+    /// Returns the pages the texture frames are placed on.
+    ///
+    /// @return the pages, in the palette's colours
+    [[nodiscard]] const oa::present::gpu_world::SpritePages& pages() const noexcept {
+        return pages_;
+    }
+
+    /// Returns the pages whose texels are doubled and clamped, which lit
+    /// buildings draw their brightened polygons from.
+    ///
+    /// @return the bright pages
+    [[nodiscard]] const oa::present::gpu_world::SpritePages& bright_pages() const noexcept {
+        return bright_pages_;
+    }
+
+    /// Returns the bytes the meshes hold.
+    ///
+    /// @return the sum of mesh_bytes over the meshes built
+    [[nodiscard]] std::size_t mesh_bytes() const noexcept;
+
+    /// Returns the number of models whose mesh is built.
+    ///
+    /// @return the meshes held, refused models left out
+    [[nodiscard]] std::size_t mesh_count() const noexcept;
+
+    /// Reports whether the frame's shadows went to the shadow target, or
+    /// straight into the battlefield because the target could not be made.
+    ///
+    /// @return true after an emit_shadows that composed the target
+    [[nodiscard]] bool shadows_through_target() const noexcept { return shadows_through_target_; }
+
+  private:
+
+    std::unique_ptr<Impl> impl_;
+    oa::present::gpu_world::SpritePages pages_;
+    oa::present::gpu_world::SpritePages bright_pages_;
+    ModelStageCounts counts_{};
+    std::string error_{};
+    bool shadows_through_target_{};
+};
+
+// ---------------------------------------------------------------------------
+// Checks: the card's frame against the processor's raster
+
+/// Most a channel of a pixel the card drew may differ from the processor's
+/// for the two to count as the same colour: the card blends the gamma
+/// colours in float and rounds its own way.
+inline constexpr int model_raster_tolerance = 4;
+
+/// How a frame of models the card drew compares with the processor's raster
+/// of the same list over the same pixels. Pixels within one pixel of each
+/// other may differ, since the card samples each pixel at its centre where
+/// the processor's walk samples its corner: a sloped edge's pixels, a texel
+/// of phase inside a polygon, and the colour of a pixel within one pixel of
+/// either picture's edge, where the card reads a texel the processor's span
+/// ends before.
+struct ModelRasterComparison {
+    std::size_t drawn{};       ///< pixels either picture draws
+    std::size_t same{};        ///< pixels both draw within model_raster_tolerance a channel
+    std::size_t phase{};       ///< pixels both draw, each colour found within a pixel in the other
+    std::size_t edge_colour{}; ///< pixels both draw within a pixel of an edge, in other colours
+    std::size_t far{};         ///< pixels both draw in colours the other has nowhere within a pixel
+    std::size_t
+        edge_coverage{}; ///< pixels one picture alone draws, the other drawing within a pixel
+    std::size_t far_coverage{}; ///< pixels one picture alone draws, the other drawing nothing near
+    std::size_t shadowed{};     ///< pixels the card darkened alone, compared by coverage only
+
+    /// Returns the share of the drawn pixels one picture alone draws with
+    /// the other drawing nothing near.
+    ///
+    /// @return far_coverage over drawn; 0 when nothing is drawn
+    [[nodiscard]] double far_coverage_share() const noexcept;
+
+    /// Returns the share of the pixels both draw whose colours are far apart.
+    ///
+    /// @return far over same + phase + edge_colour + far; 0 when nothing is
+    ///     drawn by both
+    [[nodiscard]] double far_share() const noexcept;
+};
+
+/// The bounds a frame of models is held to against the processor's raster:
+/// the figures the installed game's unit models measured at zoom 1 on SDL's
+/// software renderer, with room.
+struct ModelRasterBounds {
+    /// Most of the drawn pixels one picture alone may draw with the other
+    /// drawing nothing within a pixel, and the pixels allowed on a small
+    /// model whatever the share.
+    double far_coverage_share{0.01};
+    std::size_t far_coverage_pixels{4};
+    /// Most of the pixels both draw that may take a colour the other has
+    /// nowhere within a pixel.
+    double far_share{0.25};
+};
+
+/// Compares a frame the card drew with the processor's raster of the same
+/// list, pixel by pixel.
+///
+/// The card's picture is RGBA with alpha 0 where it drew nothing, 255 where
+/// a model's body is and between where a shadow alone darkened the target;
+/// the processor's is RGB24 with the display gamma applied, every pixel it
+/// did not draw holding the key colour.
+///
+/// @param card_rgba the card's picture, 4 bytes a pixel, rows of `width`
+/// @param processor_rgb the processor's picture, 3 bytes a pixel, rows of `width`
+/// @param width columns of both
+/// @param height rows of both
+/// @param key the colour of the processor's undrawn pixels
+/// @return the comparison
+[[nodiscard]] ModelRasterComparison compare_model_rasters(
+    const uint8_t* card_rgba,
+    const uint8_t* processor_rgb,
+    uint32_t width,
+    uint32_t height,
+    const std::array<uint8_t, 3>& key
+);
+
+/// Tells whether a comparison keeps within the bounds.
+///
+/// @param comparison the comparison
+/// @param bounds the bounds
+/// @return true when something was drawn, the far coverage is within its
+///     share or its pixels, and the far colours within their share
+[[nodiscard]] bool
+within_bounds(const ModelRasterComparison& comparison, const ModelRasterBounds& bounds) noexcept;
 
 } // namespace oa::app::full

@@ -6368,6 +6368,19 @@ class Runtime final : public menu::Host,
         uint16_t unit
     );
 
+    /// Checks the Full tier's model stage (runtime_full.hpp) over the match
+    /// frame last presented at zoom 1: the frame of models the stage builds
+    /// from the planner's list, run by the card executor on the game's
+    /// renderer into a transparent target the battlefield's size and read
+    /// back, must keep within the model raster bounds against the
+    /// processor's raster of the same list's units, 3D features,
+    /// projectiles, debris and fragments alone, drawn through a model bridge
+    /// as a band of the frame draws them; the pictures go to the report
+    /// folder when it does not. Part of check_render_tiers.
+    ///
+    /// @param report_directory where the pictures of a failed case go
+    void check_full_models(const fs::path& report_directory);
+
     /// Checks the match presented through SDL layers: every presented frame must equal
     /// compose_match_frame outside the software cursor.
     ///
