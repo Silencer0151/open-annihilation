@@ -126,6 +126,9 @@ Platform and application:
 - [src/app](../src/app/README.md): the game application, `open-annihilation`,
   adding a screen or overlay, the extension table, and network play's
   place in the game.
+- [card command lists](../src/app/card/README.md): what a frame asks the
+  graphics card to draw, and the executor that runs it on SDL's renderer,
+  for the Full tier.
 
 Modules without a README are described by the comments at the top of their
 public headers.
