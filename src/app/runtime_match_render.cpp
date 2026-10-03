@@ -889,11 +889,24 @@ void Runtime::render_match_surface() {
         match_terrain_cache_.rgb.resize(terrain_pixels);
         terrain_cache_cam_x_ = ~0u;
     }
+    // In the Full tier the graphics card draws the whole battlefield: the
+    // terrain is not filled, the bands do not draw and the fog is not
+    // rasterised; the world layer is the overlay canvas, cleared to the key
+    // colour, which the painters after the fog paint. The camera and the
+    // zoom the frame draws at are kept for the card's frame.
+    const bool card_world = full_presentation() && !directed;
+    note_full_canvas(card_world, camera_x, camera_y, draw_scale);
     // A director's camera redraws the terrain at any change of zoom, however
     // small, so that what a frame shows never hangs on the frames before it.
-    if (terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
+    if (card_world) {
+        // The cache is not filled for this frame: the next frame drawn
+        // whole fills it.
+        terrain_cache_cam_x_ = ~0u;
+    } else if (
+        terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
         std::abs(terrain_cache_zoom_ - draw_scale) > 1.0e-4F ||
-        (directed && terrain_cache_zoom_ != draw_scale)) {
+        (directed && terrain_cache_zoom_ != draw_scale)
+    ) {
         if (auto error = oa::present::world_renderer::fill_scaled_viewport(
                 *selected_tnt_,
                 match_palette_,
@@ -919,7 +932,14 @@ void Runtime::render_match_surface() {
     scene_layer.width = static_cast<uint32_t>(scene_w);
     scene_layer.height = static_cast<uint32_t>(scene_h);
     scene_layer.rgb.resize(terrain_pixels);
-    std::memcpy(scene_layer.rgb.data(), match_terrain_cache_.rgb.data(), terrain_pixels);
+    if (card_world) {
+        const std::array<uint8_t, 3> key = full_overlay_key();
+        uint8_t* pixel = scene_layer.rgb.data();
+        for (std::size_t left = terrain_pixels / 3U; left != 0; --left, pixel += 3)
+            std::memcpy(pixel, key.data(), 3);
+    } else {
+        std::memcpy(scene_layer.rgb.data(), match_terrain_cache_.rgb.data(), terrain_pixels);
+    }
     viewport.destination_x = 0;
     viewport.destination_y = 0;
     viewport.surface_width = static_cast<uint32_t>(bf_w);
@@ -1686,9 +1706,6 @@ void Runtime::render_match_surface() {
     frame_draw.display = &models.display;
     frame_draw.projectile_shadow = &models.projectile_shadow;
     frame_draw.debris_view = {0, 0, vis_w - 1, vis_h - 1};
-    // In the Full tier the graphics card draws the kinds its stages take,
-    // over the world layer the bands leave them out of.
-    frame_draw.card_kinds = take_full_card_kinds();
     // A scene the area pass reduces draws its thin lines about one screen
     // pixel thick; every other frame draws them as the game always has.
     if (scaling.method == SceneMethod::area) {
@@ -1697,7 +1714,10 @@ void Runtime::render_match_surface() {
         frame_draw.bridge_line_thickness =
             oa::present::world_renderer::scene_line_thickness(1.0F, match_zoom());
     }
-    draw_world_bands(models, frame_draw, draw_pool_.get());
+    // The card draws every kind of the list in the Full tier; the bands
+    // draw nothing there.
+    if (!card_world)
+        draw_world_bands(models, frame_draw, draw_pool_.get());
     oa::present::bind_display(bound_display);
     mark_profile(OA_PROFILE_RENDER_STUFF);
     const auto fog_pass = [&](FogPasses passes) {
@@ -1713,19 +1733,7 @@ void Runtime::render_match_surface() {
             passes
         );
     };
-    if (frame_draw.card_kinds == 0) {
-        fog_pass(FogPasses::both);
-    } else {
-        // The Full tier keeps the world under the painters, without the
-        // card's kinds, with the ground out of sight grayed: the base the
-        // card draws its kinds over, greyed by their cells, and the picture
-        // what is painted after is found against. The black over
-        // never-mapped ground goes over the card's kinds as it goes over
-        // the processor's, so it is painted after the base is kept.
-        fog_pass(FogPasses::unseen);
-        capture_full_base(world_surface);
-        fog_pass(FogPasses::unmapped);
-    }
+    fog_pass(FogPasses::both);
     // A scene drawn apart becomes the world layer's picture at the zoom, on
     // which everything after the fog is drawn in screen pixels.
     if (scaling.apart) {

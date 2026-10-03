@@ -4,7 +4,8 @@
 // The Full tier's sprite stage (runtime_full.hpp): the frame's sprites,
 // particle squares, lines and selection lines as quads of the card's
 // command list, in the planner's order, each sprite from its cell on the
-// sprite pages.
+// sprite pages; a draw at a time, so that the branch keeps the list's order
+// between the sprites and the models.
 #include "runtime_full.hpp"
 
 #include "oa/present/world_renderer/world_fog.hpp"
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -125,7 +127,7 @@ class Emitter {
     ) {
         open(key);
         card::append_quad(frame_, x, y, width, height, u0, v0, u1, v1, colour);
-        frame_.batches.back().index_count += indices_per_quad;
+        frame_.batches[last_].index_count += indices_per_quad;
     }
 
     /// Appends a line's quad (append_line_quad) to the untextured batch.
@@ -139,7 +141,7 @@ class Emitter {
     void line(float x0, float y0, float x1, float y1, float width, const card::Colour& colour) {
         open(BatchKey{});
         append_line_quad(frame_, x0, y0, x1, y1, width, colour);
-        frame_.batches.back().index_count += indices_per_quad;
+        frame_.batches[last_].index_count += indices_per_quad;
     }
 
     /// Returns the batches opened.
@@ -147,17 +149,29 @@ class Emitter {
     /// @return the count
     [[nodiscard]] uint32_t batches() const noexcept { return batches_; }
 
+    /// Returns the batches the emitter opened, in the order it opened them.
+    ///
+    /// @return their positions among the frame's batches
+    [[nodiscard]] const std::vector<std::size_t>& opened() const noexcept { return opened_; }
+
   private:
 
     /// Indices a quad adds: two triangles.
     static constexpr uint32_t indices_per_quad = 6;
 
-    /// Opens a batch of a key unless the last batch opened has it.
+    /// Opens a batch of a key unless the last batch opened has it, is still
+    /// the frame's last and holds the indices up to the frame's end. Another
+    /// stage drawing to the same frame between two of this stage's draws
+    /// appends batches of its own, which a quad of this stage must not
+    /// join: it would draw from that stage's page with its blend.
     ///
     /// @param key the batch's page, blend and sampling
     void open(const BatchKey& key) {
-        if (open_ && key_ == key)
-            return;
+        if (open_ && key_ == key && last_ + 1 == frame_.batches.size()) {
+            const card::Batch& last = frame_.batches[last_];
+            if (std::size_t{last.first_index} + last.index_count == frame_.indices.size())
+                return;
+        }
         card::Batch batch;
         batch.operation = card::Operation::draw;
         batch.target = view_.target;
@@ -172,6 +186,8 @@ class Emitter {
         frame_.batches.push_back(batch);
         open_ = true;
         key_ = key;
+        last_ = frame_.batches.size() - 1;
+        opened_.push_back(last_);
         ++batches_;
     }
 
@@ -180,6 +196,8 @@ class Emitter {
     card::Rect scissor_{};
     bool open_{};
     BatchKey key_{};
+    std::size_t last_{};                ///< the position of the batch last opened
+    std::vector<std::size_t> opened_{}; ///< the positions of every batch opened
     uint32_t batches_{};
 };
 
@@ -210,16 +228,42 @@ CellFog cell_fog(const SightView& sight, int32_t map_x, int32_t map_z) noexcept 
     return mapped ? CellFog::seen : CellFog::unmapped;
 }
 
-uint16_t card_kinds(uint8_t stages) noexcept {
-    uint16_t kinds = 0;
-    if ((stages & stage_sprites) != 0)
-        kinds = static_cast<uint16_t>(
-            kinds | card_kind_bit(WorldDrawKind::sprite) |
-            card_kind_bit(WorldDrawKind::blended_sprite) |
-            card_kind_bit(WorldDrawKind::pixel_square) | card_kind_bit(WorldDrawKind::line) |
-            card_kind_bit(WorldDrawKind::selection_line)
-        );
-    return kinds;
+bool sprite_kind(WorldDrawKind kind) noexcept {
+    switch (kind) {
+    case WorldDrawKind::sprite:
+    case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::pixel_square:
+    case WorldDrawKind::line:
+    case WorldDrawKind::selection_line:
+        return true;
+    case WorldDrawKind::commit:
+    case WorldDrawKind::commit_always:
+    case WorldDrawKind::model:
+    case WorldDrawKind::projectile:
+    case WorldDrawKind::debris:
+    case WorldDrawKind::fragment:
+        break;
+    }
+    return false;
+}
+
+bool model_kind(WorldDrawKind kind) noexcept {
+    switch (kind) {
+    case WorldDrawKind::model:
+    case WorldDrawKind::projectile:
+    case WorldDrawKind::debris:
+    case WorldDrawKind::fragment:
+        return true;
+    case WorldDrawKind::commit:
+    case WorldDrawKind::commit_always:
+    case WorldDrawKind::sprite:
+    case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::pixel_square:
+    case WorldDrawKind::line:
+    case WorldDrawKind::selection_line:
+        break;
+    }
+    return false;
 }
 
 card::Sampling sprite_sampling(float zoom) noexcept {
@@ -280,42 +324,69 @@ void append_line_quad(
     frame.indices.push_back(first + 3);
 }
 
-SpriteStageResult emit_sprites(
-    const SpriteStageInputs& inputs,
-    gpu::SpritePages& pages,
-    const SpritePageHooks& hooks,
-    card::CardFrame& frame
-) {
-    SpriteStageResult result;
-    if (inputs.list == nullptr || inputs.view.width <= 0 || inputs.view.height <= 0)
-        return result;
-    const WorldDrawList& list = *inputs.list;
-    const SceneView& view = inputs.view;
+/// One frame's emission: what emit_sprites kept on its stack, so that the
+/// branch can hand the list's draws over one at a time.
+struct SpriteFrame::Impl {
+    const SpriteStageInputs& inputs;
+    gpu::SpritePages& pages;
+    const SpritePageHooks& hooks;
+    card::CardFrame& frame;
+    SpriteStageResult result{};
+    bool drawing{}; ///< the inputs name a list and a view that draws
     // Where the frame stood before the stage, to take the stage back.
-    const std::size_t vertices_before = frame.vertices.size();
-    const std::size_t indices_before = frame.indices.size();
-    const std::size_t batches_before = frame.batches.size();
-    const uint64_t evictions_before = pages.statistics().evictions;
-    DecodedFrom decoded_from;
-    for (const auto& [source, decoded] : list.decoded_of)
-        if (decoded != nullptr)
-            decoded_from.emplace(decoded, source);
-    std::vector<Placed> placed;
-    placed.reserve(list.sprites.size());
-    Emitter emitter(frame, view);
-    const card::Sampling sampling = sprite_sampling(view.zoom);
-    const float zoom = view.zoom;
-    const float width = line_width(view);
-    const bool greys = pages.has_gray_table();
-    const card::Colour opaque{1.0F, 1.0F, 1.0F, 1.0F};
-    const card::Colour translucent{
-        translucent_level, translucent_level, translucent_level, translucent_level
-    };
-    const auto emit_sprite = [&](const SpriteDraw& sprite, bool blended) {
+    std::size_t vertices_before{};
+    std::size_t indices_before{};
+    std::size_t batches_before{};
+    uint64_t evictions_before{};
+    DecodedFrom decoded_from{};
+    std::vector<Placed> placed{};
+    Emitter emitter;
+    card::Sampling sampling{card::Sampling::nearest};
+    float zoom{1.0F};
+    float width{1.0F}; ///< a line's width in target pixels
+    bool greys{};      ///< the pages hold a gray table
+
+    /// Readies the frame's emission.
+    ///
+    /// @param stage_inputs the list, the view, the sight, the palette and the gamma
+    /// @param sprite_pages the sprite pages
+    /// @param page_hooks the host's pages
+    /// @param card_frame the card's frame
+    Impl(
+        const SpriteStageInputs& stage_inputs,
+        gpu::SpritePages& sprite_pages,
+        const SpritePageHooks& page_hooks,
+        card::CardFrame& card_frame
+    )
+        : inputs(stage_inputs), pages(sprite_pages), hooks(page_hooks), frame(card_frame),
+          emitter(card_frame, stage_inputs.view) {
+        drawing = inputs.list != nullptr && inputs.view.width > 0 && inputs.view.height > 0;
+        if (!drawing)
+            return;
+        vertices_before = frame.vertices.size();
+        indices_before = frame.indices.size();
+        batches_before = frame.batches.size();
+        evictions_before = pages.statistics().evictions;
+        for (const auto& [source, decoded] : inputs.list->decoded_of)
+            if (decoded != nullptr)
+                decoded_from.emplace(decoded, source);
+        placed.reserve(inputs.list->sprites.size());
+        sampling = sprite_sampling(inputs.view.zoom);
+        zoom = inputs.view.zoom;
+        width = line_width(inputs.view);
+        greys = pages.has_gray_table();
+    }
+
+    /// Emits a sprite's quad from its cell on the pages.
+    ///
+    /// @param sprite the sprite
+    /// @param blended the planner blends it through the alpha table
+    void emit_sprite(const SpriteDraw& sprite, bool blended) {
         if (sprite.frame == nullptr || hooks.card_page == nullptr) {
             ++result.refused;
             return;
         }
+        const SceneView& view = inputs.view;
         // The fog's state where the sprite is drawn: the map pixel under
         // its screen point, as the fog lays its tiles by map column and row
         // alone, whatever height the point was lifted by.
@@ -326,7 +397,7 @@ SpriteStageResult emit_sprites(
             view.camera_y +
                 static_cast<int32_t>(std::floor(static_cast<float>(sprite.screen.y) / zoom))
         );
-        const bool greyed = fog == CellFog::unseen && greys;
+        const bool greyed = fog == CellFog::unseen && greys && !inputs.sight.dithered;
         const auto mode = greyed ? gpu::DrawMode::greyed : gpu::DrawMode::opaque;
         const uint64_t key = frame_key(sprite.frame, decoded_from);
         const gpu::FrameResult found = pages.frame(key, mode, *sprite.frame);
@@ -346,6 +417,10 @@ SpriteStageResult emit_sprites(
             static_cast<float>(sprite.screen.x) - static_cast<float>(sprite.frame->origin_x) * zoom;
         const float top =
             static_cast<float>(sprite.screen.y) - static_cast<float>(sprite.frame->origin_y) * zoom;
+        const card::Colour opaque{1.0F, 1.0F, 1.0F, 1.0F};
+        const card::Colour translucent{
+            translucent_level, translucent_level, translucent_level, translucent_level
+        };
         emitter.quad(
             {page, card::Blend::alpha_premultiplied, sampling},
             emitter.place_x(left),
@@ -361,8 +436,16 @@ SpriteStageResult emit_sprites(
         ++result.sprites;
         if (greyed)
             ++result.greyed;
-    };
-    for (const WorldDraw& draw : list.draws) {
+    }
+
+    /// Emits one draw of the list.
+    ///
+    /// @param draw the draw
+    void emit(const WorldDraw& draw) {
+        if (!drawing)
+            return;
+        const WorldDrawList& list = *inputs.list;
+        const SceneView& view = inputs.view;
         switch (draw.kind) {
         case WorldDrawKind::sprite:
         case WorldDrawKind::blended_sprite:
@@ -435,26 +518,83 @@ SpriteStageResult emit_sprites(
             break;
         }
     }
-    result.batches = emitter.batches();
-    // The pages evict least recently used first, so a frame placed this
-    // frame goes only once every older one has: when the frame's distinct
-    // sprites exceed the pages' memory. A cell drawn from after its frame
-    // left it would show another sprite, so the stage then draws nothing.
-    if (pages.statistics().evictions != evictions_before)
-        for (const Placed& sprite : placed) {
-            const gpu::FrameResult held = pages.find(sprite.key, sprite.mode);
-            if (held.status == gpu::FrameStatus::ok && held.record.page == sprite.record.page &&
-                held.record.rect.x == sprite.record.rect.x &&
-                held.record.rect.y == sprite.record.rect.y)
-                continue;
+
+    /// Ends the emission (SpriteFrame::finish).
+    ///
+    /// @return what was emitted
+    SpriteStageResult finish() {
+        if (!drawing)
+            return result;
+        result.batches = emitter.batches();
+        // The pages evict least recently used first, so a frame placed this
+        // frame goes only once every older one has: when the frame's
+        // distinct sprites exceed the pages' memory. A cell drawn from after
+        // its frame left it would show another sprite, so the stage then
+        // draws nothing.
+        if (pages.statistics().evictions != evictions_before)
+            for (const Placed& sprite : placed) {
+                const gpu::FrameResult held = pages.find(sprite.key, sprite.mode);
+                if (held.status == gpu::FrameStatus::ok && held.record.page == sprite.record.page &&
+                    held.record.rect.x == sprite.record.rect.x &&
+                    held.record.rect.y == sprite.record.rect.y)
+                    continue;
+                take_back();
+                result = {};
+                result.pages_overflowed = true;
+                break;
+            }
+        return result;
+    }
+
+    /// Takes the stage's draws out of the frame: where its batches are the
+    /// frame's last ones, by cutting the frame back to where it stood when
+    /// the stage began; where another stage's batches lie among them, by
+    /// emptying each of the stage's batches, whose vertices then stay in
+    /// the frame but draw nothing.
+    void take_back() {
+        const std::vector<std::size_t>& opened = emitter.opened();
+        const bool last = opened.size() == frame.batches.size() - batches_before;
+        if (last) {
             frame.vertices.resize(vertices_before);
             frame.indices.resize(indices_before);
             frame.batches.resize(batches_before);
-            result = {};
-            result.pages_overflowed = true;
-            break;
+            return;
         }
-    return result;
+        for (const std::size_t position : opened)
+            frame.batches[position].index_count = 0;
+    }
+};
+
+SpriteFrame::SpriteFrame(
+    const SpriteStageInputs& inputs,
+    gpu::SpritePages& pages,
+    const SpritePageHooks& hooks,
+    card::CardFrame& frame
+)
+    : impl_(std::make_unique<Impl>(inputs, pages, hooks, frame)) {
+}
+
+SpriteFrame::~SpriteFrame() = default;
+
+void SpriteFrame::emit(const WorldDraw& draw) {
+    impl_->emit(draw);
+}
+
+SpriteStageResult SpriteFrame::finish() {
+    return impl_->finish();
+}
+
+SpriteStageResult emit_sprites(
+    const SpriteStageInputs& inputs,
+    gpu::SpritePages& pages,
+    const SpritePageHooks& hooks,
+    card::CardFrame& frame
+) {
+    SpriteFrame emission(inputs, pages, hooks, frame);
+    if (inputs.list != nullptr)
+        for (const WorldDraw& draw : inputs.list->draws)
+            emission.emit(draw);
+    return emission.finish();
 }
 
 } // namespace oa::app::full

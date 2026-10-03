@@ -51,6 +51,10 @@ inline constexpr int kDotPitch = 2;
 /// Source pixels a tinted cell reaches past the time it sits behind, on
 /// every side.
 inline constexpr int kCellMargin = 1;
+/// How much of the battlefield's light the panel's fill takes away, in 256ths.
+inline constexpr uint32_t kPanelOpacity = 232;
+/// How much more of it the graph's fill takes away, in 256ths.
+inline constexpr uint32_t kGraphOpacity = 128;
 
 /// GUI palette slot of a time within the frame's allowance: a mid green,
 /// darker than the health bar's, so that it stands apart from the yellow.

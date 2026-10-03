@@ -1,26 +1,31 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The Full tier's presentation: the terrain drawn by the graphics card from
-// the map's terrain atlas, built and uploaded as the match loads as texture
-// pages with their levels, by the level rule of full_terrain.hpp, and then
-// the stages of the scene builder (runtime_full.hpp) that are switched on,
-// the sprites so far; everything else the processor still draws, at the
-// zoom over a terrain base filled by the nearest fill, and the card
-// composes it over its own terrain through overlays of what differs from
-// that base: with a stage on, what the bands drew and the fog's gray under
-// the stages' batches, and what the fog's black and the painters changed
-// over them. With Enhanced anti-aliasing on, the card draws its terrain and
-// its stages into a world target at the row's supersample factor
+// The Full tier's presentation: the graphics card draws the battlefield
+// from the card's command list, built once per presented frame from the
+// last list the planner made. The terrain comes from the map's terrain
+// atlas, built and uploaded as the match loads as texture pages with their
+// levels, by the level rule of full_terrain.hpp; the fog's greyed pass goes
+// over it from the greyed atlas, built with a palette of the gray table's
+// entries, or its dithered form; the model stage's shadows, then the list's
+// sprites, particles, lines, units, projectiles and debris in the planner's
+// order from the sprite pages and the models' meshes (runtime_full.hpp);
+// the fog's black pass over never-mapped ground; and the quads the painters
+// asked for in place of shading the world themselves. With Enhanced
+// anti-aliasing on, the card draws the terrain, the fog's greyed pass and
+// the stages into a world target at the row's supersample factor
 // (full_supersampling.hpp), within the step-down's rung, the budget S and
 // the texture limit, and reduces it to the window: by exact halvings from
 // zoom 1 up, by the two-level blend of the view drawn at zoom 1 below; the
-// processor's anti-aliasing never runs, and the processor's overlays go
-// over the reduced picture. The planner, the HUD, the painters and the
-// readers that keep a picture run as in the Basic tier. It is reached only
-// when the tier decided for the frame is Full.
+// processor's anti-aliasing never runs. The processor paints the interface
+// and, onto an overlay canvas cleared to a key colour outside the palette,
+// everything the painters after the fog paint; the overlay is laid over the
+// card's picture 1:1. The planner, the HUD, the painters and the readers
+// that keep a picture run as in the Basic tier. It is reached only when the
+// tier decided for the frame is Full.
 #include "oa/app/runtime.hpp"
 
+#include "full_fog.hpp"
 #include "full_presentation.hpp"
 #include "graphics_report.hpp"
 #include "match_models.hpp"
@@ -33,6 +38,7 @@
 
 #include "oa/base/float_precision.hpp"
 #include "oa/platform/machine.hpp"
+#include "oa/present/surface.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 
 #include <SDL3/SDL.h>
@@ -60,10 +66,11 @@ namespace {
 namespace gw = oa::present::gpu_world;
 namespace ft = full_terrain;
 namespace policy = render_policy;
+namespace wr = oa::present::world_renderer;
 
 /// What --render-fault card makes the card's frame fail with.
 constexpr std::string_view forced_card_failure =
-    "the card refused the terrain frame: forced by --render-fault card";
+    "the card refused the frame: forced by --render-fault card";
 /// What the log says when Full's pages must wait for a shared game or a
 /// replay to end.
 constexpr std::string_view full_waits_message =
@@ -106,6 +113,12 @@ constexpr int test_centroid_most_difference = 4;
 constexpr uint8_t test_page_levels = 2;
 /// Channels of a texel the read-back compares: red, green and blue.
 constexpr std::size_t compared_channels = 3;
+/// Entries of the display gamma's table, of the gray table and of a palette.
+constexpr std::size_t table_entries = 256;
+/// Bytes one entry of the game's palette bytes takes.
+constexpr std::size_t palette_entry_stride = palette_entry_bytes;
+/// Indices a quad adds to a frame.
+constexpr uint32_t quad_indices = 6;
 
 /// Returns the nanoseconds since a moment of the steady clock.
 ///
@@ -117,9 +130,6 @@ constexpr std::size_t compared_channels = 3;
     )
                                      .count());
 }
-
-/// Entries of the display gamma's table and of the gray table.
-constexpr std::size_t table_entries = 256;
 
 /// Rounds a count up to a multiple of the target's grain.
 ///
@@ -412,13 +422,14 @@ run_full_function_test(card::Executor& executor, SDL_Renderer* renderer, bool so
     return finish(failure);
 }
 
-/// Finds what a picture holds over a base, as ARGB8888 words, and uploads
-/// the bands that hold it now or held it at the last upload, so that the
-/// texture holds this picture's overlay whatever came before.
+/// Converts the overlay canvas by its key colour into ARGB8888 words, and
+/// uploads the bands that hold paint now or held it at the last upload, so
+/// that the texture holds this frame's overlay whatever came before.
 ///
-/// @param renderer the game's renderer
-/// @param picture the picture, RGB24 at the battlefield's size
-/// @param base the base it is found against, the same size
+/// @param canvas the painted canvas, RGB24 at the battlefield's size
+/// @param key the colour the canvas was cleared to
+/// @param bf_w the battlefield's width in pixels
+/// @param bf_h its height
 /// @param gamma the display gamma's table; null for none
 /// @param pool the drawing threads
 /// @param[in,out] overlay the words, the battlefield's size
@@ -426,9 +437,9 @@ run_full_function_test(card::Executor& executor, SDL_Renderer* renderer, bool so
 /// @param[in,out] uploaded_bands the bands uploaded last
 /// @param[in,out] uploaded the texture holds an uploaded overlay
 /// @param[in,out] texture the overlay's texture, made for the size
-void upload_overlay(
-    const uint8_t* picture,
-    const uint8_t* base,
+void upload_keyed_overlay(
+    const uint8_t* canvas,
+    std::array<uint8_t, 3> key,
     uint32_t bf_w,
     uint32_t bf_h,
     const std::array<uint8_t, 256>* gamma,
@@ -440,8 +451,8 @@ void upload_overlay(
     TiledTexture& texture
 ) {
     const std::size_t pitch = std::size_t{bf_w} * card::texel_bytes;
-    convert_rgb24_overlay_argb(
-        picture, base, bf_w, bf_h, overlay.data(), pitch, gamma, opaque_bands, pool
+    convert_rgb24_keyed_overlay_argb(
+        canvas, key, bf_w, bf_h, overlay.data(), pitch, gamma, opaque_bands, pool
     );
     const auto bands = static_cast<uint32_t>(opaque_bands.size());
     const auto stale = [&](uint32_t band) {
@@ -466,6 +477,93 @@ void upload_overlay(
     }
     uploaded_bands = opaque_bands;
     uploaded = true;
+}
+
+/// Returns the palette of the gray table's entries: each entry replaced by
+/// the entry the fog grays it to, the palette's nearest to the grey of its
+/// mean channel (build_gray_levels), so that an atlas built with it holds
+/// the fog's picture of the terrain.
+///
+/// @param palette the match's palette, 4 bytes a colour
+/// @return the greyed palette, the same layout
+oa::PaletteBytes greyed_palette(const oa::PaletteBytes& palette) {
+    const oa::Palette entries = oa::present::palette_from_bytes(palette);
+    std::array<uint8_t, table_entries> levels{};
+    wr::build_gray_levels(entries, levels);
+    oa::PaletteBytes greyed = palette;
+    for (std::size_t index = 0; index < OA_PALETTE_COLORS; ++index) {
+        const auto& entry = entries.entries[index];
+        const auto level =
+            static_cast<std::size_t>((static_cast<unsigned>(entry.r) + entry.g + entry.b) / 3U);
+        const std::size_t source = static_cast<std::size_t>(levels[level]) * palette_entry_stride;
+        std::memcpy(&greyed[index * palette_entry_stride], &palette[source], palette_entry_stride);
+    }
+    return greyed;
+}
+
+/// Returns the texel bytes the pages of an atlas take at the levels the
+/// Full tier uploads, which the memory guard counts before they are made.
+///
+/// @param atlas the atlas
+/// @return the bytes
+[[nodiscard]] uint64_t atlas_page_bytes(const gw::TerrainAtlas& atlas) noexcept {
+    uint64_t bytes = 0;
+    for (const auto& atlas_page : atlas.pages)
+        for (std::size_t level = 0;
+             level < std::min<std::size_t>(full_terrain_levels, atlas_page.levels.size());
+             ++level)
+            bytes += uint64_t{atlas_page.levels[level].width} * atlas_page.levels[level].height *
+                     bytes_per_texel;
+    return bytes;
+}
+
+/// Uploads levels 0 to full_terrain_levels - 1 of an atlas's pages as the
+/// executor's pages, and lets each page's texels go once the card holds
+/// them: the atlas keeps its grid and its pages' sizes and levels, which
+/// the builder reads.
+///
+/// Throws FullCardError when a page cannot be made or filled.
+///
+/// @param[in,out] executor the executor
+/// @param[in,out] atlas the atlas, whose texels are freed
+/// @param[out] pages the executor's page for each page of the atlas, in order
+/// @param[in,out] bytes the texel bytes uploaded, added to
+/// @param what the atlas, for the error
+void upload_atlas_pages(
+    card::Executor& executor,
+    gw::TerrainAtlas& atlas,
+    std::vector<card::PageHandle>& pages,
+    uint64_t& bytes,
+    const char* what
+) {
+    for (auto& atlas_page : atlas.pages) {
+        card::PageDescription description;
+        description.width = atlas_page.width;
+        description.height = atlas_page.height;
+        description.level_count = static_cast<uint8_t>(
+            std::min<std::size_t>(full_terrain_levels, atlas_page.levels.size())
+        );
+        const card::PageHandle page = executor.create_page(description);
+        if (page == card::PageHandle{})
+            throw FullCardError(
+                std::string("a ") + what + " page could not be made: " + executor.error()
+            );
+        pages.push_back(page);
+        for (uint8_t level = 0; level < description.level_count; ++level) {
+            const auto& atlas_level = atlas_page.levels[level];
+            const uint32_t pitch = atlas_level.width * card::texel_bytes;
+            if (!executor.update_page(
+                    page, level, nullptr, atlas_page.texels.data() + atlas_level.offset, pitch
+                ))
+                throw FullCardError(
+                    std::string("a ") + what + " page could not be filled: " + executor.error()
+                );
+            bytes += uint64_t{pitch} * atlas_level.height;
+        }
+        // The card holds the page now; the processor keeps the page's
+        // sizes and levels, which the builder reads, and lets its texels go.
+        std::vector<uint8_t>().swap(atlas_page.texels);
+    }
 }
 
 namespace supersampling = full_supersampling;
@@ -527,6 +625,73 @@ anti_aliasing_level_of(oa::present::model::UnitSupersampling level) noexcept {
     return bytes / (uint64_t{1024} * 1024);
 }
 
+/// Readies the projectiles' shadow sprite for the model stage, from the
+/// match's FX.GAF "shadow" frame, once per sprite.
+///
+/// @param[out] frame the rendered frame the stage reads
+/// @param[in,out] source the sprite's pixels the frame was made from
+/// @param shadow the match's sprite; no data for none
+void ensure_projectile_shadow(
+    oa::formats::gaf::RenderedFrame& frame, const void*& source, const oa::Sprite& shadow
+) {
+    if (source == shadow.data)
+        return;
+    frame = {};
+    source = shadow.data;
+    if (shadow.data == nullptr || shadow.width == 0 || shadow.height == 0)
+        return;
+    frame.width = shadow.width;
+    frame.height = shadow.height;
+    frame.origin_x = shadow.origin_x;
+    frame.origin_y = shadow.origin_y;
+    frame.transparency_index = shadow.key;
+    const auto size = static_cast<std::size_t>(shadow.width) * shadow.height;
+    const auto* pixels = static_cast<const uint8_t*>(shadow.data);
+    frame.pixels.assign(pixels, pixels + size);
+    frame.coverage.resize(size);
+    for (std::size_t i = 0; i < size; ++i)
+        frame.coverage[i] = pixels[i] != shadow.key ? 1 : 0;
+}
+
+/// Appends the quads the painters asked for over the world, in paint order,
+/// consecutive quads of one blend in one batch.
+///
+/// @param[in,out] frame the frame
+/// @param quads the quads, in pixels of the battlefield layer
+/// @param battlefield the battlefield's rectangle in the window
+/// @return quads appended
+uint32_t append_world_quads(
+    card::CardFrame& frame, std::span<const FullWorldQuad> quads, const card::Rect& battlefield
+) {
+    card::Batch* batch = nullptr;
+    for (const FullWorldQuad& quad : quads) {
+        if (batch == nullptr || batch->blend != quad.blend) {
+            frame.batches.emplace_back();
+            batch = &frame.batches.back();
+            batch->operation = card::Operation::draw;
+            batch->blend = quad.blend;
+            batch->scissored = true;
+            batch->scissor = battlefield;
+            batch->first_index = static_cast<card::Index>(frame.indices.size());
+            batch->index_count = 0;
+        }
+        card::append_quad(
+            frame,
+            static_cast<float>(battlefield.x + quad.x),
+            static_cast<float>(battlefield.y + quad.y),
+            static_cast<float>(quad.width),
+            static_cast<float>(quad.height),
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            quad.colour
+        );
+        batch->index_count += quad_indices;
+    }
+    return static_cast<uint32_t>(quads.size());
+}
+
 } // namespace
 
 void Runtime::destroy_full_presentation(FullPresentation* full) noexcept {
@@ -545,7 +710,7 @@ void Runtime::FullPresentation::ensure_sprite_palette(
     // of its colour's mean channel, so a frame's greyed cell takes that
     // entry for each of its indices.
     std::array<uint8_t, table_entries> levels{};
-    oa::present::world_renderer::build_gray_levels(palette, levels);
+    wr::build_gray_levels(palette, levels);
     std::array<uint8_t, gw::gray_table_entries> gray{};
     for (std::size_t index = 0; index < gray.size(); ++index) {
         const auto& entry = palette.entries[index];
@@ -643,59 +808,20 @@ void Runtime::FullPresentation::destroy_world_target() noexcept {
     world_target_bytes = 0;
 }
 
-void Runtime::set_full_stages(uint8_t stages) {
-    if (!full_)
-        full_.reset(new FullPresentation);
-    // The terrain is the Full tier's whatever the stages asked for.
-    const auto left = static_cast<uint8_t>(stages & ~full::stages_built & ~full::stage_terrain);
-    if (left != 0 && (full_->stages | stages) != full_->stages)
-        std::cout << graphics_log_prefix << "the graphics card does not draw the "
-                  << full::stage_text(left)
-                  << " of the battlefield in this version; the processor draws them\n"
-                  << std::flush;
-    full_->stages = static_cast<uint8_t>(stages & full::stages_built);
-}
-
-uint8_t Runtime::full_stages() const noexcept {
-    return full_ ? full_->stages : uint8_t{0};
-}
-
-uint16_t Runtime::take_full_card_kinds() {
-    const uint16_t kinds = full_presentation() ? full::card_kinds(full_->stages) : uint16_t{0};
-    if (full_)
-        full_->frame_drawn = kinds != 0;
-    return kinds;
-}
-
-bool Runtime::full_frame_drawn() const noexcept {
-    return full_ && full_->frame_drawn;
-}
-
-void Runtime::capture_full_base(const oa::present::world_renderer::Surface& world) {
-    if (!full_)
-        return;
-    full_->base.width = world.width;
-    full_->base.height = world.height;
-    full_->base.rgb.assign(world.rgb.begin(), world.rgb.end());
-}
-
-full::SpriteStageResult Runtime::full_sprite_result() const noexcept {
-    return full_ ? full_->sprites : full::SpriteStageResult{};
-}
-
-renderer::Surface Runtime::full_base() const {
-    return full_ ? full_->base : renderer::Surface{};
-}
-
 void Runtime::free_full_match_state() noexcept {
     if (!full_)
         return;
     free_full_match_textures();
-    full_->sprite_pages.clear();
-    full_->gray_generation = 0;
-    full_->base = {};
-    full_->frame_drawn = false;
-    full_->sprites = {};
+    auto& full = *full_;
+    full.sprite_pages.clear();
+    full.gray_generation = 0;
+    full.sprites = {};
+    full.models_palette = {};
+    full.models_gamma = 0.0F;
+    full.projectile_shadow = {};
+    full.projectile_shadow_source = nullptr;
+    full.fog = {};
+    full.canvas_drawn = false;
 }
 
 bool Runtime::full_presentation() const noexcept {
@@ -722,6 +848,9 @@ void Runtime::free_full_match_textures() noexcept {
     for (const card::PageHandle page : full.pages)
         full.executor.destroy_page(page);
     full.pages.clear();
+    for (const card::PageHandle page : full.greyed_pages)
+        full.executor.destroy_page(page);
+    full.greyed_pages.clear();
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.executor.destroy_target(full.target);
@@ -743,14 +872,10 @@ void Runtime::free_full_match_textures() noexcept {
     full.opaque_bands = {};
     full.uploaded_bands = {};
     full.overlay_uploaded = false;
-    // The stages' pages and the second overlay go with the match too.
+    // The stages' pages and targets go with the match too.
     full.destroy_sprite_card_pages();
-    full.stage_frame = {};
-    full.painted_texture.reset();
-    full.painted = {};
-    full.painted_opaque_bands = {};
-    full.painted_uploaded_bands = {};
-    full.painted_uploaded = false;
+    full.models.close(full.executor);
+    full.world_quads.clear();
     full.drawn = false;
 }
 
@@ -851,7 +976,8 @@ void Runtime::preallocate_full_match_textures() {
             ensure_full_match_textures();
             full.pages_from_load = true;
             const auto bf_w = static_cast<uint32_t>(std::max(0, match_layout_.battlefield_width()));
-            const auto bf_h = static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()));
+            const auto bf_h =
+                static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()));
             ensure_full_target(bf_w, bf_h);
             if (bf_w != 0 && bf_h != 0)
                 ensure_full_world_target(
@@ -997,13 +1123,11 @@ void Runtime::ensure_full_world_target(
     }
     if (fitted == 1 && full.world_target != card::TargetHandle{})
         full.destroy_world_target();
-    if (!waits && fitted < asked &&
-        (fitted != full.supersample || asked != full.supersample_asked))
+    if (!waits && fitted < asked && (fitted != full.supersample || asked != full.supersample_asked))
         std::cout << graphics_log_prefix << "full tier: anti-aliasing "
                   << (fitted > 1 ? std::to_string(fitted) + "x" : std::string("off"))
                   << ": the Enhanced anti-aliasing row asks for " << asked
-                  << "x, but the budget of "
-                  << mebibytes(full.supersample_budget * bytes_per_texel)
+                  << "x, but the budget of " << mebibytes(full.supersample_budget * bytes_per_texel)
                   << " MiB and the renderer allow no larger world target at " << size_width << "x"
                   << size_height << '\n'
                   << std::flush;
@@ -1019,12 +1143,15 @@ void Runtime::ensure_full_executor() {
         if (!full.executor.open(sdl_.renderer, render_texture_limit()))
             throw FullCardError("the card could not be opened: " + full.executor.error());
         full.function_tested = false;
+        // The executor's pages and targets went with its last hold on the
+        // renderer.
         full.pages.clear();
+        full.greyed_pages.clear();
+        full.card_pages.clear();
         full.pages_from_load = false;
         full.atlas_source = {};
         full.target = {};
         full.target_refused = false;
-        // The executor's targets went with its last hold on the renderer.
         full.world_target = {};
         full.world_target_width = 0;
         full.world_target_height = 0;
@@ -1064,6 +1191,7 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     const FullPresentation::AtlasSource source = FullPresentation::AtlasSource::of(map);
     const bool same_source = full.atlas_source == source && !full.pages.empty() &&
                              full.pages.size() == full.atlas.pages.size() &&
+                             full.greyed_pages.size() == full.pages.size() &&
                              full.atlas_page_edge == page_edge && full.atlas_palette == palette &&
                              full.atlas_gamma == gamma &&
                              (!gamma || full.atlas_gamma_table == gamma_table_);
@@ -1074,6 +1202,9 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     for (const card::PageHandle page : full.pages)
         full.executor.destroy_page(page);
     full.pages.clear();
+    for (const card::PageHandle page : full.greyed_pages)
+        full.executor.destroy_page(page);
+    full.greyed_pages.clear();
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.atlas_source = {};
@@ -1081,47 +1212,36 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     const gw::TerrainAtlasError error = gw::build_terrain_atlas(
         map, palette, gamma ? &gamma_table_ : nullptr, page_edge, full.atlas
     );
-    full.atlas_build_ns = nanoseconds_since(build_start);
     if (error != gw::TerrainAtlasError::none)
         throw FullCardError(
             std::string("the terrain atlas could not be built: ") +
             gw::terrain_atlas_error_text(error)
         );
-    // The pages' memory, counted by the memory guard before they are made.
-    uint64_t page_bytes = 0;
-    for (const auto& atlas_page : full.atlas.pages)
-        for (std::size_t level = 0;
-             level < std::min<std::size_t>(full_terrain_levels, atlas_page.levels.size());
-             ++level)
-            page_bytes += uint64_t{atlas_page.levels[level].width} *
-                          atlas_page.levels[level].height * bytes_per_texel;
-    if (!accelerated_buffer_allowed(policy::AcceleratedBuffer::card_pages, page_bytes))
+    // The greyed terrain: the same build with the gray table's entries,
+    // whose slots and grid are the colour atlas's, since the tiles are told
+    // apart by their indices; its texels go once uploaded.
+    gw::TerrainAtlas greyed;
+    const gw::TerrainAtlasError greyed_error = gw::build_terrain_atlas(
+        map, greyed_palette(palette), gamma ? &gamma_table_ : nullptr, page_edge, greyed
+    );
+    full.atlas_build_ns = nanoseconds_since(build_start);
+    if (greyed_error != gw::TerrainAtlasError::none)
+        throw FullCardError(
+            std::string("the greyed terrain atlas could not be built: ") +
+            gw::terrain_atlas_error_text(greyed_error)
+        );
+    if (greyed.pages.size() != full.atlas.pages.size() || greyed.grid != full.atlas.grid)
+        throw FullCardError("the greyed terrain atlas does not share the terrain's slots");
+    // The pages' memory, both atlases', counted by the memory guard before
+    // they are made.
+    if (!accelerated_buffer_allowed(
+            policy::AcceleratedBuffer::card_pages,
+            atlas_page_bytes(full.atlas) + atlas_page_bytes(greyed)
+        ))
         throw FullCardError("the terrain pages: too little memory");
     const auto upload_start = std::chrono::steady_clock::now();
-    for (auto& atlas_page : full.atlas.pages) {
-        card::PageDescription description;
-        description.width = atlas_page.width;
-        description.height = atlas_page.height;
-        description.level_count = static_cast<uint8_t>(
-            std::min<std::size_t>(full_terrain_levels, atlas_page.levels.size())
-        );
-        const card::PageHandle page = full.executor.create_page(description);
-        if (page == card::PageHandle{})
-            throw FullCardError("a terrain page could not be made: " + full.executor.error());
-        full.pages.push_back(page);
-        for (uint8_t level = 0; level < description.level_count; ++level) {
-            const auto& atlas_level = atlas_page.levels[level];
-            const uint32_t pitch = atlas_level.width * card::texel_bytes;
-            if (!full.executor.update_page(
-                    page, level, nullptr, atlas_page.texels.data() + atlas_level.offset, pitch
-                ))
-                throw FullCardError("a terrain page could not be filled: " + full.executor.error());
-            full.page_bytes += uint64_t{pitch} * atlas_level.height;
-        }
-        // The card holds the page now; the processor keeps the page's
-        // sizes and levels, which the builder reads, and lets its texels go.
-        std::vector<uint8_t>().swap(atlas_page.texels);
-    }
+    upload_atlas_pages(full.executor, full.atlas, full.pages, full.page_bytes, "terrain");
+    upload_atlas_pages(full.executor, greyed, full.greyed_pages, full.page_bytes, "greyed terrain");
     full.page_upload_ns = nanoseconds_since(upload_start);
     full.atlas_source = source;
     full.atlas_page_edge = page_edge;
@@ -1161,6 +1281,19 @@ void Runtime::ensure_full_match_textures() {
     auto& full = *full_;
     ensure_full_executor();
     ensure_full_terrain_pages(match_palette_);
+    // The sprite pages and the model stage, at the match's palette.
+    full.ensure_sprite_palette(match_palette_, display_gamma_);
+    if (match_models_) {
+        auto& models = match_models();
+        if (full.models_gamma != display_gamma_ || full.models_palette != match_palette_) {
+            full.models.set_palette(models.display.palette, display_gamma_);
+            full.models_palette = match_palette_;
+            full.models_gamma = display_gamma_;
+        }
+        ensure_projectile_shadow(
+            full.projectile_shadow, full.projectile_shadow_source, models.projectile_shadow
+        );
+    }
     // The overlay, at the battlefield's size: the world layer's, or before
     // the first frame the match layout's.
     const uint32_t bf_w =
@@ -1185,15 +1318,6 @@ void Runtime::ensure_full_match_textures() {
         full.opaque_bands.assign(bands, 0);
         full.uploaded_bands.assign(bands, 0);
         full.overlay.assign(std::size_t{bf_w} * bf_h * 4U, 0);
-        // The second overlay, of what is painted over the stages' batches.
-        full.painted_texture.reset();
-        full.painted_texture.create(
-            sdl_.renderer, bf_w, bf_h, limit, SDL_BLENDMODE_BLEND, full.counts
-        );
-        full.painted_uploaded = false;
-        full.painted_opaque_bands.assign(bands, 0);
-        full.painted_uploaded_bands.assign(bands, 0);
-        full.painted.assign(std::size_t{bf_w} * bf_h * 4U, 0);
         // A new battlefield size needs new targets.
         full.executor.destroy_target(full.target);
         full.target = {};
@@ -1235,40 +1359,30 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         const uint32_t bf_w = match_world_cpu_.width;
         const uint32_t bf_h = match_world_cpu_.height;
         const float zoom = match_zoom();
-        const auto& base = match_terrain_cache_;
         const uint32_t limit = render_texture_limit();
-        // The terrain base is the frame's own nearest fill at the zoom and
-        // camera, the battlefield's size; a frame drawn otherwise, as the
+        // The frame's world layer is the overlay canvas, drawn at the zoom
+        // and camera the card draws from; a frame drawn otherwise, as the
         // standard tier's scaling draws it, is Basic's to present.
-        const bool base_ready =
-            base.width == bf_w && base.height == bf_h &&
-            base.rgb.size() == match_world_cpu_.rgb.size() &&
-            std::abs(terrain_cache_zoom_ - zoom) <= 1.0e-4F && !accelerated_.frame.apart &&
-            full.pages.size() == full.atlas.pages.size() && !full.pages.empty() &&
-            full.overlay_texture.made_for(bf_w, bf_h, limit);
-        if (!base_ready) {
+        const bool ready = full.canvas_drawn && match_ && match_models_ &&
+                           std::abs(full.frame_zoom - zoom) <= 1.0e-4F &&
+                           !accelerated_.frame.apart &&
+                           full.pages.size() == full.atlas.pages.size() && !full.pages.empty() &&
+                           full.greyed_pages.size() == full.pages.size() &&
+                           full.overlay_texture.made_for(bf_w, bf_h, limit);
+        if (!ready) {
             full.drawn = false;
             return false;
         }
         const auto* gamma = gamma_identity_ ? nullptr : &gamma_table_;
         const auto upload_start = std::chrono::steady_clock::now();
         upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
-        // With a stage on, the frame kept the world layer without the
-        // card's kinds, after the fog's gray and before its black and the
-        // painters: the stages draw over it, and the black and the painters
-        // over them.
-        const bool staged = full.stages != 0 && full.frame_drawn && full.base.width == bf_w &&
-                            full.base.height == bf_h &&
-                            full.base.rgb.size() == match_world_cpu_.rgb.size();
-        // What the processor drew over the terrain base, by difference from
-        // it, uploaded in the bands that hold it now or held it at the last
-        // upload, so the texture holds this frame's overlay whatever came
-        // before; with a stage on, what it drew under the stages, and then
-        // what the fog's black and the painters changed over them.
+        // What the painters painted on the canvas, by its key, uploaded in
+        // the bands that hold it now or held it at the last upload, so the
+        // texture holds this frame's overlay whatever came before.
         const auto overlay_start = std::chrono::steady_clock::now();
-        upload_overlay(
-            staged ? full.base.rgb.data() : match_world_cpu_.rgb.data(),
-            base.rgb.data(),
+        upload_keyed_overlay(
+            match_world_cpu_.rgb.data(),
+            full_overlay_key(),
             bf_w,
             bf_h,
             gamma,
@@ -1279,20 +1393,6 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             full.overlay_uploaded,
             full.overlay_texture
         );
-        if (staged)
-            upload_overlay(
-                match_world_cpu_.rgb.data(),
-                full.base.rgb.data(),
-                bf_w,
-                bf_h,
-                gamma,
-                draw_pool_.get(),
-                full.painted,
-                full.painted_opaque_bands,
-                full.painted_uploaded_bands,
-                full.painted_uploaded,
-                full.painted_texture
-            );
         full.overlay_ns = nanoseconds_since(overlay_start);
         const auto present_start = std::chrono::steady_clock::now();
         phase_times_.upload += static_cast<int64_t>(nanoseconds_since(upload_start));
@@ -1300,7 +1400,8 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             throw_present_error("SDL_RenderClear");
         draw_accelerated_hud_strips();
 
-        // The terrain, from the pages, by the level rule at the zoom.
+        // The card's frame: the terrain from the pages, by the level rule at
+        // the zoom, and everything over it.
         const auto build_start = std::chrono::steady_clock::now();
         auto& frame = full.frame;
         frame.reset();
@@ -1318,88 +1419,167 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                                full.executor.capabilities().pixel_art_sampling;
         full.plan = ft::plan_terrain_draw(zoom, pixel_art);
         ft::TerrainView view;
-        view.camera_x = terrain_cache_cam_x_;
-        view.camera_y = terrain_cache_cam_y_;
+        view.camera_x = full.frame_camera_x;
+        view.camera_y = full.frame_camera_y;
         view.origin_x = static_cast<float>(match_layout_.left);
         view.origin_y = static_cast<float>(match_layout_.top);
         view.scale = zoom;
         view.width = bf_w;
         view.height = bf_h;
         uint32_t quads = 0;
+        uint32_t fog_quads = 0;
+        uint32_t world_quads = 0;
         bool through_target = false;
-        // The stages' batches go on the last list the planner built; a page
-        // a stage would make now waits in a shared game or a replay after
-        // the loading screen (FullPresentation::card_page).
-        auto& stage_frame = full.stage_frame;
-        stage_frame.reset();
+        // The fog's greyed pass over the terrain, from the greyed pages at
+        // the terrain's levels and sampling, into whatever the terrain was
+        // drawn into. Under the dithered option the pass is the dither over
+        // everything, drawn after the stages.
+        const auto& fog = full.fog;
+        const bool fogged = !fog.grid.tiles.empty();
+        const auto append_unseen = [&](const ft::TerrainView& where,
+                                       std::span<const full_fog::GreyedLevel> levels,
+                                       card::TargetHandle target,
+                                       const card::Rect* scissor) {
+            if (!fogged || fog.dithered)
+                return;
+            full_fog::FogPlacement placement;
+            placement.camera_x = fog.camera_x;
+            placement.camera_z = fog.camera_z;
+            placement.origin_x = where.origin_x;
+            placement.origin_y = where.origin_y;
+            placement.scale = where.scale;
+            fog_quads += full_fog::append_unseen_terrain(
+                frame, fog.grid, full.atlas, full.greyed_pages, levels, placement, target, scissor
+            );
+        };
+
+        // The stages, over the last list the planner built: what they read,
+        // and the sight the sprite stage tells the fog's state from; none
+        // when the match cannot say, which draws every sprite in colour. A
+        // page a stage would make now waits in a shared game or a replay
+        // after the loading screen (FullPresentation::card_page).
+        auto& models = match_models();
+        full::ModelFrameInputs model_inputs;
+        model_inputs.draws = &models.draws;
+        model_inputs.world = &match_->world().record;
+        model_inputs.library = &models.library;
+        model_inputs.display = &models.display;
+        model_inputs.graphics_flags = models.renderer.graphics_flags;
+        model_inputs.tick = models.renderer.tick;
+        std::copy_n(
+            models.renderer.team_colors, full::team_colour_players, model_inputs.team_colors.begin()
+        );
+        model_inputs.light = {
+            models.renderer.light[0], models.renderer.light[1], models.renderer.light[2]
+        };
+        model_inputs.light_scale = models.renderer.light_scale;
+        model_inputs.projectile_shadow =
+            full.projectile_shadow.width != 0 ? &full.projectile_shadow : nullptr;
+        full::SpriteStageInputs sprite_inputs;
+        sprite_inputs.list = &models.draws;
+        std::span<const uint8_t> coverage;
+        try {
+            coverage = match_->player_coverage(match_view_player());
+        } catch (const std::exception&) {
+            coverage = {};
+        }
+        const auto& sight = match_->sight();
+        if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
+            sprite_inputs.sight.coverage = coverage;
+            sprite_inputs.sight.player_bits = sight.player_bits;
+            sprite_inputs.sight.width = sight.width;
+            sprite_inputs.sight.height = sight.height;
+            sprite_inputs.sight.viewer_bit =
+                static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
+            sprite_inputs.sight.line_of_sight = match_line_of_sight_on();
+            sprite_inputs.sight.mapping = match_mapping_on();
+            sprite_inputs.sight.dithered = fog.dithered;
+        }
+        sprite_inputs.palette = &match_palette_;
+        sprite_inputs.gamma = gamma;
+        const full::SpritePageHooks hooks{&full, &FullPresentation::card_page_hook};
         full.sprites = {};
         full.stage_ns = 0;
         full.creation_allowed =
             !render_run_ || render_run_->host == nullptr ||
             policy::first_use_allowed(render_run_->host->tier_inputs().match, full.loading_screen);
-        const bool sprites_on = staged && (full.stages & full::stage_sprites) != 0 && match_;
-        // The sprite stage: the frame's sprites, particle squares and lines
-        // from the sprite pages, in the list's order, appended to a frame
-        // through a view: straight to the window at the battlefield's
-        // corner, or into the world target at its draw scale. The pages'
-        // texels the stage changed go up before the frame runs.
-        const auto emit_sprite_stage = [&](card::CardFrame& into,
-                                           float origin_x,
-                                           float origin_y,
-                                           float view_scale,
-                                           card::TargetHandle target) {
-            full.ensure_sprite_palette(match_palette_, display_gamma_);
-            full::SpriteStageInputs inputs;
-            inputs.list = &match_models().draws;
-            inputs.view.origin_x = origin_x;
-            inputs.view.origin_y = origin_y;
-            inputs.view.scale = view_scale;
-            inputs.view.zoom = zoom;
-            inputs.view.offset = accelerated_.frame_offset;
-            inputs.view.width = static_cast<int32_t>(bf_w);
-            inputs.view.height = static_cast<int32_t>(bf_h);
-            inputs.view.target = target;
-            // The camera the sight is read at: the planner's, map pixels.
-            inputs.view.camera_x = match_camera_x_;
-            inputs.view.camera_y = match_camera_z_;
-            // The viewer's sight, as the fog reads it; none when the match
-            // cannot say, which draws every sprite in colour.
-            std::span<const uint8_t> coverage;
-            try {
-                coverage = match_->player_coverage(match_view_player());
-            } catch (const std::exception&) {
-                coverage = {};
+        // Emits the stages into the frame through a view: straight to the
+        // window at the battlefield's corner, or into the world target at
+        // its draw scale. The model stage's shadows first, then each draw of
+        // the list to the stage of its kind, the sprite stage's batches never
+        // joining the model stage's; the pages' texels the stages changed go
+        // up before the frame runs.
+        const auto emit_stages =
+            [&](float origin_x, float origin_y, float view_scale, card::TargetHandle target) {
+                const auto stage_start = std::chrono::steady_clock::now();
+                full::SceneView scene;
+                scene.origin_x = origin_x;
+                scene.origin_y = origin_y;
+                scene.scale = view_scale;
+                scene.zoom = zoom;
+                scene.offset = accelerated_.frame_offset;
+                scene.width = static_cast<int32_t>(bf_w);
+                scene.height = static_cast<int32_t>(bf_h);
+                scene.camera_x = static_cast<int32_t>(full.frame_camera_x);
+                scene.camera_y = static_cast<int32_t>(full.frame_camera_y);
+                scene.target = target;
+                sprite_inputs.view = scene;
+                {
+                    full::SpriteFrame sprites(sprite_inputs, full.sprite_pages, hooks, frame);
+                    full.models.emit_shadows(model_inputs, scene, full.executor, frame);
+                    for (const WorldDraw& draw : models.draws.draws) {
+                        if (full::sprite_kind(draw.kind))
+                            sprites.emit(draw);
+                        else if (full::model_kind(draw.kind))
+                            full.models.emit_draw(model_inputs, scene, draw, full.executor, frame);
+                    }
+                    full.sprites = sprites.finish();
+                }
+                if (full.sprites.pages_overflowed && !full.overflow_logged) {
+                    full.overflow_logged = true;
+                    std::cout << graphics_log_prefix
+                              << "the frame's sprites do not fit the sprite pages; the card draws "
+                                 "none of them this frame\n"
+                              << std::flush;
+                }
+                if (!full.models.error().empty() && !full.stage_error_logged) {
+                    full.stage_error_logged = true;
+                    std::cout << graphics_log_prefix
+                              << "the full tier's model stage: " << full.models.error()
+                              << "; it draws on without what it could not make\n"
+                              << std::flush;
+                }
+                full.upload_sprite_pages();
+                if (!full.models.upload(full.executor))
+                    throw FullCardError(
+                        "the model stage's pages could not be uploaded: " + full.models.error()
+                    );
+                full.stage_ns += nanoseconds_since(stage_start);
+            };
+        // Appends what goes over everything the card drew, straight to the
+        // window after a target's reduction: the fog's dither, where the
+        // option is on, since the processor dithers the objects as it does
+        // the ground and the pages hold no dithered sprite; the fog's black
+        // pass over never-mapped ground; and the painters' quads.
+        const auto append_over_everything = [&]() {
+            if (fogged) {
+                full_fog::FogPlacement placement;
+                placement.camera_x = fog.camera_x;
+                placement.camera_z = fog.camera_z;
+                placement.origin_x = view.origin_x;
+                placement.origin_y = view.origin_y;
+                placement.scale = zoom;
+                if (fog.dithered)
+                    fog_quads += full_fog::append_unseen_dither(
+                        frame, fog.grid, fog.dither, placement, card::TargetHandle{}, &battlefield
+                    );
+                fog_quads += full_fog::append_unmapped(
+                    frame, fog.grid, fog.unmapped, placement, card::TargetHandle{}, &battlefield
+                );
             }
-            const auto& sight = match_->sight();
-            if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
-                inputs.sight.coverage = coverage;
-                inputs.sight.player_bits = sight.player_bits;
-                inputs.sight.width = sight.width;
-                inputs.sight.height = sight.height;
-                inputs.sight.viewer_bit =
-                    static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
-                inputs.sight.line_of_sight = match_line_of_sight_on();
-                inputs.sight.mapping = match_mapping_on();
-            }
-            inputs.palette = &match_palette_;
-            inputs.gamma = gamma;
-            const full::SpritePageHooks hooks{&full, &FullPresentation::card_page_hook};
-            full.sprites = full::emit_sprites(inputs, full.sprite_pages, hooks, into);
-            if (full.sprites.pages_overflowed && !full.overflow_logged) {
-                full.overflow_logged = true;
-                std::cout << graphics_log_prefix
-                          << "the frame's sprites do not fit the sprite pages; the card draws "
-                             "none of them this frame\n"
-                          << std::flush;
-            }
-            full.upload_sprite_pages();
-            if (!full.stages_logged) {
-                full.stages_logged = true;
-                std::cout << graphics_log_prefix << "full tier: the graphics card also draws the "
-                          << full::stage_text(full.stages) << " of the battlefield\n"
-                          << std::flush;
-            }
+            world_quads = append_world_quads(frame, full.world_quads, battlefield);
         };
+
         // Anti-aliasing: the factor the Enhanced anti-aliasing row asks for,
         // within the step-down's rung, fitted to this battlefield, and the
         // world target at it.
@@ -1416,16 +1596,13 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         const supersampling::WorldTargetPlan supersampled =
             supersampling::plan_world_target(zoom, full.supersample, bf_w, bf_h);
         full.drawn_plan = supersampled;
-        // The stage's batches inside the terrain's frame, which the terrain's
-        // count leaves out.
-        uint32_t sprite_batches = 0;
         if (supersampled.factor > 1) {
             // The terrain into the world target, level 0 NEAREST at the
             // plan's draw scale: from zoom 1 up the texture holds the
             // factor's texels a window pixel, and below it one a map pixel;
-            // the sprite stage into it at the same scale; then the target
-            // reduced into the battlefield, by the factor's halvings or by
-            // the two-level blend of the part drawn.
+            // the fog's greyed pass and the stages into it at the same
+            // scale; then the target reduced into the battlefield, by the
+            // factor's halvings or by the two-level blend of the part drawn.
             through_target = true;
             ft::TerrainPass pass;
             pass.level = 0;
@@ -1452,18 +1629,12 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             quads += ft::append_terrain_tiles(
                 frame, full.atlas, full.pages, target_view, pass, full.world_target, nullptr
             );
-            if (sprites_on) {
-                // Size pixels per layout pixel, so that the texture holds the
-                // sprites at the factor's pixels a window pixel, or at zoom 1
-                // below zoom 1.
-                const auto stage_start = std::chrono::steady_clock::now();
-                const auto before = static_cast<uint32_t>(frame.batches.size());
-                emit_sprite_stage(
-                    frame, 0.0F, 0.0F, supersampled.draw_scale / zoom, full.world_target
-                );
-                sprite_batches = static_cast<uint32_t>(frame.batches.size()) - before;
-                full.stage_ns = nanoseconds_since(stage_start);
-            }
+            const std::array<full_fog::GreyedLevel, 1> levels{{{pass.level, pass.sampling, 1.0F}}};
+            append_unseen(target_view, levels, full.world_target, nullptr);
+            // Size pixels per layout pixel, so that the texture holds the
+            // stages at the factor's pixels a window pixel, or at zoom 1
+            // below zoom 1.
+            emit_stages(0.0F, 0.0F, supersampled.draw_scale / zoom, full.world_target);
             card::Batch reduce;
             reduce.operation =
                 supersampled.two_level ? card::Operation::blend_reduce : card::Operation::resolve;
@@ -1496,15 +1667,14 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 target_view.scale = static_cast<float>(factor);
                 target_view.width = full.target_width;
                 target_view.height = full.target_height;
+                const ft::TerrainPass& pass = full.plan.passes[0];
                 quads += ft::append_terrain_tiles(
-                    frame,
-                    full.atlas,
-                    full.pages,
-                    target_view,
-                    full.plan.passes[0],
-                    full.target,
-                    nullptr
+                    frame, full.atlas, full.pages, target_view, pass, full.target, nullptr
                 );
+                const std::array<full_fog::GreyedLevel, 1> levels{
+                    {{pass.level, pass.sampling, 1.0F}}
+                };
+                append_unseen(target_view, levels, full.target, nullptr);
                 card::Batch resolve;
                 resolve.operation = card::Operation::resolve;
                 resolve.source = full.target;
@@ -1527,40 +1697,54 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 quads += ft::append_terrain_tiles(
                     frame, full.atlas, full.pages, view, pass, card::TargetHandle{}, &battlefield
                 );
+                const std::array<full_fog::GreyedLevel, 1> levels{
+                    {{pass.level, pass.sampling, 1.0F}}
+                };
+                append_unseen(view, levels, card::TargetHandle{}, &battlefield);
             }
-        } else {
-            for (uint32_t index = 0; index < full.plan.pass_count; ++index)
-                quads += ft::append_terrain_tiles(
-                    frame,
-                    full.atlas,
-                    full.pages,
-                    view,
-                    full.plan.passes[index],
-                    card::TargetHandle{},
-                    &battlefield
-                );
-        }
-        full.build_ns = nanoseconds_since(build_start) - full.stage_ns;
-        // Drawn straight, the stage's batches go into a frame of their own,
-        // run over the first overlay.
-        if (sprites_on && supersampled.factor == 1) {
-            const auto stage_start = std::chrono::steady_clock::now();
-            emit_sprite_stage(
-                stage_frame,
+            emit_stages(
                 static_cast<float>(match_layout_.left),
                 static_cast<float>(match_layout_.top),
                 1.0F,
                 card::TargetHandle{}
             );
-            full.stage_ns = nanoseconds_since(stage_start);
+        } else {
+            std::array<full_fog::GreyedLevel, ft::most_terrain_passes> levels{};
+            for (uint32_t index = 0; index < full.plan.pass_count; ++index) {
+                const ft::TerrainPass& pass = full.plan.passes[index];
+                quads += ft::append_terrain_tiles(
+                    frame, full.atlas, full.pages, view, pass, card::TargetHandle{}, &battlefield
+                );
+                levels[index] = {pass.level, pass.sampling, 1.0F};
+            }
+            // The second pass is blended over the first at its alpha, so it
+            // carries that share of the picture and the first the rest.
+            if (full.plan.pass_count == 2) {
+                levels[1].share = std::clamp(full.plan.passes[1].alpha, 0.0F, 1.0F);
+                levels[0].share = 1.0F - levels[1].share;
+            }
+            append_unseen(
+                view,
+                std::span<const full_fog::GreyedLevel>(levels.data(), full.plan.pass_count),
+                card::TargetHandle{},
+                &battlefield
+            );
+            emit_stages(
+                static_cast<float>(match_layout_.left),
+                static_cast<float>(match_layout_.top),
+                1.0F,
+                card::TargetHandle{}
+            );
         }
+        append_over_everything();
+        full.build_ns = nanoseconds_since(build_start) - full.stage_ns;
         const auto execute_start = std::chrono::steady_clock::now();
         // The failure --check-renderer-ladder forces stands in for the
         // card's own.
         if (render_fault_due(RenderFaultPoint::card))
             throw FullCardError(std::string(forced_card_failure));
         if (!full.executor.execute(frame, nullptr))
-            throw FullCardError("the card refused the terrain frame: " + full.executor.error());
+            throw FullCardError("the card refused the frame: " + full.executor.error());
         oa::base::float_precision::restore_program_float_control();
         full.execute_ns = nanoseconds_since(execute_start);
         // The frame counts towards the stage of Full's first frames.
@@ -1571,17 +1755,13 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         full.drawn = true;
         full.drawn_zoom = zoom;
         full.drawn_quads = quads;
-        // The terrain's batches, with the clear and the reduction of a
-        // target it drew through; the stage counts its own.
-        full.drawn_batches = static_cast<uint32_t>(frame.batches.size()) - sprite_batches;
+        full.drawn_fog_quads = fog_quads;
+        full.drawn_world_quads = world_quads;
+        full.drawn_batches = static_cast<uint32_t>(frame.batches.size());
         full.drawn_through_target = through_target;
         ++full.frames;
 
-        // What the processor drew, over the card's terrain, 1:1: under the
-        // stages' kinds where the frame was drawn straight, over the whole
-        // reduced picture where it was drawn through the world target; then
-        // the stages' batches where the target did not hold them, and what
-        // was painted over them.
+        // What the painters painted, over the card's picture, 1:1.
         const SDL_FRect world{
             static_cast<float>(battlefield.x),
             static_cast<float>(battlefield.y),
@@ -1591,20 +1771,6 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         draw_one_to_one(
             sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
         );
-        if (staged) {
-            if (supersampled.factor == 1) {
-                const auto stage_run_start = std::chrono::steady_clock::now();
-                if (!full.executor.execute(stage_frame, nullptr))
-                    throw FullCardError(
-                        "the card refused the stages' frame: " + full.executor.error()
-                    );
-                oa::base::float_precision::restore_program_float_control();
-                full.stage_ns += nanoseconds_since(stage_run_start);
-            }
-            draw_one_to_one(
-                sdl_.renderer, full.painted_texture, nullptr, &world, one_to_one_scale_mode()
-            );
-        }
         // The tier's own passes, timed for the step-down as Basic's are.
         accelerated_.passes_ns += full.overlay_ns + full.build_ns + full.execute_ns + full.stage_ns;
         finish_match_layers(frame_format, dialogs, upload_start, present_start);

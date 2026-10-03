@@ -614,12 +614,10 @@ void Runtime::draw_accelerated_screen(
 void Runtime::ensure_screen_world() {
     if (!match_ || screen_ != Screen::match)
         return;
-    // A Full frame's world layer holds the processor's draws over a nearest
-    // terrain base, which below zoom 1 is not the standard tier's picture,
-    // and leaves the card's kinds out where a stage draws them.
+    // A Full frame's world layer is the overlay canvas, the key colour but
+    // where the painters painted, not a picture.
     const auto method = accelerated_.frame.method;
-    if (method != SceneMethod::area && method != SceneMethod::magnify && !full_presentation() &&
-        !full_frame_drawn())
+    if (method != SceneMethod::area && method != SceneMethod::magnify && !full_frame_drawn())
         return;
 
     // The world drawn again as the standard tier draws it, at the moment

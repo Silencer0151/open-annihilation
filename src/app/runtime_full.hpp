@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The Full tier's scene builder: the stages that turn the planner's draw
-// list (world_draws.hpp) into the card's command list (oa/app/card.hpp).
-// Each stage is one function that emits its batches into the frame's
-// shared CardFrame in the list's order, so that the stages compose in the
-// painter's order the planner laid down, and each can be switched on by
-// itself (full_stages.hpp) while the processor still draws the rest of the
-// battlefield, so that a stage lands and is checked on its own. This
-// header holds what every stage shares and the stages built so far;
-// runtime_full_sprites.cpp holds the sprite stage, runtime_full_models.cpp
-// the model stage, which follows it in the frame's order and which no
-// presented frame runs yet, full_terrain.hpp the terrain, which every Full
-// frame draws before the stages, and runtime_full.cpp the branch of the
-// presentation that runs them all on the executor. Nothing here reads the
-// Runtime, so a stage is tested on its own.
+// The Full tier's scene builder: the stages that turn the planner's
+// battlefield draws (world_draws.hpp) into a card command list (card.hpp),
+// which the Full branch of the presentation (runtime_full.cpp) runs on the
+// card once per presented frame. This header holds what every stage
+// shares, the view a frame is built for, and two of the stages: the sprite
+// stage (runtime_full_sprites.cpp), the list's sprites, particle squares,
+// lines and selection lines from the sprite pages, and the model stage
+// (runtime_full_models.cpp), the list's units, 3D features, projectiles,
+// debris and shatter fragments as meshes, with their shadows drawn into a
+// transparent shadow target and composed once at half darkness. The
+// terrain stage is full_terrain.hpp and the fog passes are full_fog.hpp,
+// both pure. The branch walks the list once and hands each draw to the
+// stage of its kind, so that sprites and models keep the painter's order
+// the planner laid down. Nothing here reads the Runtime, so a stage is
+// tested on its own; the standard and Basic tiers never reach it.
 #pragma once
 
-#include "full_stages.hpp"
 #include "oa/app/card.hpp"
 #include "oa/app/card/executor.hpp"
 #include "oa/core/world.h"
@@ -38,12 +38,17 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace oa::app::full {
 
+// ---------------------------------------------------------------------------
+// What every stage shares
+
 /// A call only the Full tier makes failed: a page or target the executor
 /// could not make or fill, or a frame it refused. The presentation drops
-/// the tier's stages for the run and presents the frame as Basic does.
+/// the tier for the run and presents the frame as Basic does.
 class CardError : public std::runtime_error {
   public:
 
@@ -79,6 +84,12 @@ struct SceneView {
     card::TargetHandle target{};
 };
 
+/// Returns the target pixels one map pixel covers in a view.
+///
+/// @param view the view
+/// @return the zoom times the view's scale
+[[nodiscard]] float pixels_per_map_pixel(const SceneView& view) noexcept;
+
 /// The viewer's sight, from which a stage tells the fog's state at a cell:
 /// the sight grid's cells of fog_cell_pixels map pixels a side.
 struct SightView {
@@ -89,6 +100,9 @@ struct SightView {
     uint16_t viewer_bit{};                   ///< the viewer's bit in player_bits
     bool line_of_sight{};                    ///< the line-of-sight rule is on
     bool mapping{true};                      ///< the mapping rule is on
+    /// The dithered option: the fog dithers the cells out of sight instead
+    /// of greying them, so a sprite under one is drawn in colour.
+    bool dithered{};
 };
 
 /// What the fog shows of a cell.
@@ -111,6 +125,30 @@ enum class CellFog : uint8_t {
 /// @param map_z map pixel row
 /// @return the state
 [[nodiscard]] CellFog cell_fog(const SightView& sight, int32_t map_x, int32_t map_z) noexcept;
+
+/// Returns a flat colour through the display gamma, as the card takes it:
+/// each channel from 0 to 1.
+///
+/// @param rgb the colour before the gamma
+/// @param gamma the gamma's table; null for a gamma of 1
+/// @return the colour, opaque
+[[nodiscard]] card::Colour
+flat_colour(const std::array<uint8_t, 3>& rgb, const std::array<uint8_t, 256>* gamma) noexcept;
+
+/// Tells whether a kind of draw is the sprite stage's.
+///
+/// @param kind the kind
+/// @return true for sprites, blended sprites, particle squares, lines and selection lines
+[[nodiscard]] bool sprite_kind(WorldDrawKind kind) noexcept;
+
+/// Tells whether a kind of draw is the model stage's.
+///
+/// @param kind the kind
+/// @return true for models, projectiles, debris pieces and shatter fragments
+[[nodiscard]] bool model_kind(WorldDrawKind kind) noexcept;
+
+// ---------------------------------------------------------------------------
+// The sprite stage
 
 /// What the sprite stage asks of its host: the card's page that holds a
 /// sprite page's texels.
@@ -150,10 +188,8 @@ struct SpriteStageResult {
     bool pages_overflowed{};
 };
 
-/// Emits the frame's sprites, particle squares, lines and selection lines
-/// into the card's frame, in the list's order: one quad a draw, consecutive
-/// draws that share their page and blend in one batch, every batch into
-/// the view's target under the battlefield's scissor.
+/// One frame's emission of the sprite stage, a draw at a time, so that the
+/// branch can hand the list's draws to the stages in the list's order.
 ///
 /// A sprite is its frame's cell on the pages (SpritePages::frame, keyed by
 /// the frame the planner drew from), a quad `w * zoom` by `h * zoom` with
@@ -163,12 +199,60 @@ struct SpriteStageResult {
 /// sight it is drawn from its greyed cell when the pages hold a gray table;
 /// under never-mapped ground it is drawn as under any other, since the
 /// black pass over that ground goes over it. A page's texels are sampled
-/// nearest at a whole-number zoom,
-/// linear below 1 and pixel-art above. A particle's square is the
-/// planner's rectangle, solid; a line is a quad `max(1, zoom)` layout
-/// pixels wide through the centres of its end pixels, a selection line the
-/// same from map pixels at the zoom, each in its colour through the gamma.
-/// Every other kind of draw is left to the other stages.
+/// nearest at a whole-number zoom, linear below 1 and pixel-art above. A
+/// particle's square is the planner's rectangle, solid; a line is a quad
+/// `max(1, zoom)` layout pixels wide through the centres of its end
+/// pixels, a selection line the same from map pixels at the zoom, each in
+/// its colour through the gamma. Every other kind of draw is left to the
+/// other stages. Consecutive draws that share their page and blend go in
+/// one batch, every batch into the view's target under the battlefield's
+/// scissor.
+class SpriteFrame {
+  public:
+
+    /// Readies one frame's emission.
+    ///
+    /// @param inputs the list, the view, the sight, the palette and the gamma;
+    ///        they outlive the frame's emission
+    /// @param[in,out] pages the sprite pages, which place the frames drawn this frame
+    /// @param hooks the host's pages for the sprite pages
+    /// @param[in,out] frame the card's frame the batches are appended to
+    SpriteFrame(
+        const SpriteStageInputs& inputs,
+        oa::present::gpu_world::SpritePages& pages,
+        const SpritePageHooks& hooks,
+        card::CardFrame& frame
+    );
+    SpriteFrame(const SpriteFrame&) = delete;
+    SpriteFrame& operator=(const SpriteFrame&) = delete;
+    /// Frees the frame's state; what was emitted stays in the card's frame
+    /// as finish left it.
+    ~SpriteFrame();
+
+    /// Emits one draw of the list, where it is a kind the stage draws.
+    ///
+    /// @param draw the draw, one of the list's
+    void emit(const WorldDraw& draw);
+
+    /// Ends the frame's emission: where the pages evicted a frame placed
+    /// this frame, which only a frame whose distinct sprites exceed the
+    /// pages' memory does, the stage's batches are taken back, since a cell
+    /// drawn from after its frame left it would show another sprite.
+    ///
+    /// @return what was emitted
+    [[nodiscard]] SpriteStageResult finish();
+
+  private:
+
+    /// The frame's state, defined with the stage.
+    struct Impl;
+
+    std::unique_ptr<Impl> impl_;
+};
+
+/// Emits the frame's sprites, particle squares, lines and selection lines
+/// into the card's frame, in the list's order: a SpriteFrame over every
+/// draw of the list.
 ///
 /// @param inputs the list, the view, the sight, the palette and the gamma
 /// @param[in,out] pages the sprite pages, which place the frames drawn this frame
@@ -181,14 +265,6 @@ SpriteStageResult emit_sprites(
     const SpritePageHooks& hooks,
     card::CardFrame& frame
 );
-
-/// Returns the bits (card_kind_bit) of the draw kinds the card draws when
-/// stages are on, which the bands leave undrawn: for the sprite stage the
-/// sprites, blended sprites, particle squares, lines and selection lines.
-///
-/// @param stages the stages on (full_stages.hpp)
-/// @return the kinds' bits; 0 for no stage
-[[nodiscard]] uint16_t card_kinds(uint8_t stages) noexcept;
 
 /// Returns how a sprite's page is sampled at a zoom: nearest at a
 /// whole-number zoom, where the card gives the game's pixels exactly;
@@ -206,22 +282,6 @@ SpriteStageResult emit_sprites(
 /// @param view the view
 /// @return the width in target pixels
 [[nodiscard]] float line_width(const SceneView& view) noexcept;
-
-/// Returns the target pixels one map pixel covers in a view: the zoom
-/// times the view's scale.
-///
-/// @param view the view
-/// @return target pixels per map pixel
-[[nodiscard]] float pixels_per_map_pixel(const SceneView& view) noexcept;
-
-/// Returns a flat colour through the display gamma, as the card takes it:
-/// each channel from 0 to 1.
-///
-/// @param rgb the colour before the gamma
-/// @param gamma the gamma's table; null for a gamma of 1
-/// @return the colour, opaque
-[[nodiscard]] card::Colour
-flat_colour(const std::array<uint8_t, 3>& rgb, const std::array<uint8_t, 256>* gamma) noexcept;
 
 /// Appends a line as a quad of one colour: the segment between the centres
 /// of its first and last pixels, `width` pixels wide and drawn out half a
@@ -247,11 +307,7 @@ void append_line_quad(
 );
 
 // ---------------------------------------------------------------------------
-// The model stage (runtime_full_models.cpp): units, 3D features,
-// projectiles, debris and shatter fragments as meshes from the planner's
-// list, and their shadows, drawn into a transparent shadow target and
-// composed once at half darkness. It draws through the SceneView above, as
-// the sprite stage does; the presentation does not run it yet.
+// The model stage
 
 /// Players a team colour is kept for, as ModelRenderer::team_colors has them.
 inline constexpr std::size_t team_colour_players = 10;

@@ -373,11 +373,6 @@ struct Options {
     // memory or with a flag that names Off, and the check runs its density
     // case.
     bool native_density = false;
-    // --full-stages=STAGE[,STAGE], or none: the stages of the Full tier's
-    // scene builder the graphics card draws while the tier is built stage by
-    // stage (full_stages.hpp), when --hardware-acceleration asks for Full;
-    // the processor draws the rest. No stage without the flag.
-    uint8_t full_stages = 0;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
     // advances a frame at a time, each frame between two ticks as the

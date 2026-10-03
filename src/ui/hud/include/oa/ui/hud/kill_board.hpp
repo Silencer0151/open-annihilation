@@ -19,6 +19,12 @@ inline constexpr uint8_t kBoardFlashTicks = 0x1e;
 inline constexpr uint16_t kGraphicsBoardPinned = 0x0080u;
 /// Game.session_rules value (deathmatch) whose board counts commanders.
 inline constexpr int32_t kSessionRulesCommanderCounts = 2;
+/// The shade level the board darkens the battlefield under it with
+/// (KillBoardSink::shade): shade table row 8.
+inline constexpr int32_t kBoardShadeLevel = -0x18;
+/// The light levels the local player's row is lit with, one after the other.
+inline constexpr int32_t kLocalRowLightLevel = 0x1f;
+inline constexpr int32_t kLocalRowInnerLightLevel = 0x14;
 
 /// Board animation state kept between frames.
 struct KillBoard {

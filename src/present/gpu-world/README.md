@@ -10,10 +10,9 @@ own header under `include/oa/present/gpu_world/`, its own source and its
 own test, so that the parts land separately, and `texel.hpp` holds what
 they share: `texel_bytes`, the four bytes of an RGBA8 texel. Nothing in
 this module touches SDL or a graphics API. The Full tier
-(`src/app/runtime_full.cpp`) draws the terrain from the terrain atlas's
-pages, and its sprite stage (`src/app/runtime_full.hpp`) from the sprite
-pages; the standard tier is unchanged, and no part of this module runs
-unless that tier draws.
+(`src/app/runtime_full.cpp`) draws from the terrain atlas, the sprite pages
+and the model meshes; the standard tier is unchanged, and no part of this
+module runs unless that tier does.
 
 ## The terrain atlas
 
@@ -101,10 +100,12 @@ applies, and those bytes are the card's, not today's.
 
 ### Limitations and follow-ups
 
-- **No greyed variant.** The fog's mapped-but-unseen cells show the
-  terrain through the gray table. That is the same build with a palette
-  whose entries are the gray table's, another atlas beside this one, made
-  when the fog pass needs it, not here.
+- **The greyed variant is the Full tier's.** The fog's mapped-but-unseen
+  cells show the terrain through the gray table: the same build with a
+  palette whose entries are the gray table's, a second atlas the Full
+  tier builds beside this one (`greyed_palette`,
+  `src/app/runtime_full.cpp`), sharing its slots and grid, and uploads as
+  its greyed pages.
 - **No eviction and no budget.** The atlas is the whole map, and
   `terrain_atlas_footprint` is what a tier's memory figure costs it with.
   There is no smaller form: dropping the chain beyond the tile levels saves
@@ -112,10 +113,11 @@ applies, and those bytes are the card's, not today's.
   the card's page edge is a tier choice, not this module's.
 - **Uploaded by the Full tier.** The pages are processor memory until the
   Full tier (`src/app/runtime_full.cpp`) uploads levels 0 and 1 of each
-  page as the match loads; it then lets each page's texels go and keeps
-  the grid, the slots and the pages' sizes and levels, which its builder
-  reads through `tile_rect`, choosing the level per draw by its zoom. The
-  greyed variant follows.
+  page as the match loads, with a greyed variant built with a palette of
+  the gray table's entries for the fog's greyed pass; it then lets each
+  page's texels go and keeps the grid, the slots and the pages' sizes and
+  levels, which its builder reads through `tile_rect`, choosing the level
+  per draw by its zoom.
 
 ### Tests
 
@@ -255,10 +257,11 @@ the page bytes under the limit throughout.
 
 ### Limitations
 
-Not wired into any drawing. The pages hold level 0 only: level 1, the exact
-half-size box the design draws sprites from when zoomed out, follows, and
-the cells are aligned for it. The gray table is the caller's, as the
-palette is; the pages build neither.
+The pages hold level 0 only: level 1, the exact half-size box the design
+draws sprites from when zoomed out, follows, and the cells are aligned for
+it; until then the Full tier's sprite stage samples level 0 linear when
+zoomed out. The gray table is the caller's, as the palette is; the pages
+build neither.
 
 ## Model meshes
 

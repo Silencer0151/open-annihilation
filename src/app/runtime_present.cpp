@@ -546,10 +546,14 @@ void Runtime::present_match_layers() {
     const bool dialogs = compose_match_dialog_layer();
     if (accelerated_presentation()) {
         try {
-            // The Full tier draws the terrain on the card; a frame it drops,
-            // or cannot draw, Basic presents.
+            // The Full tier draws the battlefield on the card; a frame it
+            // drops, or cannot draw, Basic presents, the world drawn again
+            // as the standard tier draws it, since the frame's world layer
+            // is the overlay canvas.
             if (full_presentation() && present_full_match_layers(dialogs))
                 return;
+            if (full_frame_drawn())
+                ensure_screen_world();
             present_accelerated_match_layers(dialogs);
             return;
         } catch (const AccelerationError& error) {

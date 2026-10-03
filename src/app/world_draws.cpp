@@ -342,10 +342,6 @@ void draw_world_band(
     // to the frame before one draws over them.
     bool bridge_holds_draws = false;
     for (const WorldDraw& draw : list.draws) {
-        // A kind the graphics card draws is left to it; the commits stay,
-        // since the bridge's draws still go back to the frame in order.
-        if ((frame.card_kinds & card_kind_bit(draw.kind)) != 0)
-            continue;
         switch (draw.kind) {
         case WorldDrawKind::commit:
             if (bridge_holds_draws)

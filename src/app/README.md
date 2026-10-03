@@ -350,9 +350,15 @@ logs it.
   (`check_full_models`); it writes pictures of one moment at zoom 0.5, 1
   and 2.5 in both tiers. Its flag names Full, so its Basic cases set the
   level to `basic` and its Full cases (`check_full_render_tier`) run after
-  them at `full`: at zoom 1, 2 and 4 the frame equals `compose_match_frame`; a
-  Full frame leaves what the match reads back (`match_draw_read_back`) as
-  the standard tier's frame of the same moment does; at zoom 0.5 with the
+  them at `full`: at zoom 1, 2 and 4 the frame equals the standard tier's
+  draw of the same moment beside the card's own draws (`card_draw_mask`:
+  the sprites the alpha table blends, the sprites that reach a fog tile
+  not wholly clear, the lines, the units, projectiles, debris and
+  fragments with their shadows, and the fog tiles whose edges ramp), with
+  the draws under the first differing pixel listed and a picture of them
+  when it does not; a Full frame leaves what the match reads back
+  (`match_draw_read_back`) as the standard tier's frame of the same moment
+  does; at zoom 0.5 with the
   camera on an even map pixel the terrain under a transparent overlay,
   where the standard tier shows terrain too, equals that tier's box filter
   exactly, and at 0.75 the blend of the two levels, the card's own filter,
@@ -365,29 +371,51 @@ logs it.
   LINEAR, the sharp-bilinear reference; at the window whose chrome scales
   by 1.6 the HUD strips keep within the chrome's filter, as the Basic case
   there holds them; the box filter never runs for a Full frame; the match
-  loads in Full, its loading screen makes the terrain pages and lets the
-  atlas's texels go, the first match frame draws from them and makes none,
-  and no frame after the first of a spell of the tier makes a page; a pass
-  draws no more batches than the atlas has pages; and the terrain's
-  processor cost, the frame's build, the card's call and the overlay, is
-  printed for each zoom beside the box filter's, with pictures of each
-  zoom. Its anti-aliasing cases set the row to 2x and 4x and, at zooms
-  0.5, 0.75, 1, 1.37 and 2, with the terrain alone and then with the
-  sprite stage on, require the factor the budget allows, no unit drawn
-  finer on the processor, and the battlefield under transparent overlays
-  equal to the world target read back and reduced on the processor as the
-  card reduces it, by halving from zoom 1 up and by the two-level blend
-  below, within the renderer's tolerance, the target's memory printed
-  within the budget; with the row off again the target is freed.
-- The Full tier (`runtime_full.cpp`, `full_presentation.hpp`,
-  `full_terrain.hpp`, `full_terrain.cpp`): a branch of the accelerated
-  presentation, taken when the tier decided for the frame is Full
-  (`set_full_presentation`), in which the graphics card draws the
-  battlefield's terrain and the processor the rest. The planner runs as in
-  Basic and writes what it writes there; `world_scaling` returns the zoom
-  with no split, so the frame draws in screen pixels at the zoom into the
-  world layer, over a terrain base the nearest fill paints at the zoom,
-  and the box filter never runs (`refresh_filtered_terrain`). As the match
+  loads in Full, its loading screen makes the terrain pages and their
+  greyed pages and lets the atlas's texels go, and the first match frame
+  draws from them; a Full frame draws its sprites and models in the same
+  card frame as its terrain and fog; and the terrain's processor cost, the
+  frame's build, the card's call and the overlay, is printed for each zoom
+  beside the box filter's, with pictures of each zoom. Its anti-aliasing
+  cases set the row to 2x and 4x and, at zooms 0.5, 0.75, 1, 1.37 and 2,
+  require the factor the budget allows, no unit drawn finer on the
+  processor, and the battlefield under the transparent overlay equal to
+  the world target read back and reduced on the processor as the card
+  reduces it, by halving from zoom 1 up and by the two-level blend below,
+  within the renderer's tolerance, the target's memory printed within the
+  budget; with the row off again the target is freed. The fog, the canvas,
+  the kill board and the +stats panel (`check_full_overlays`), at zoom 1
+  and 2: with line of sight alone, under a fog tile wholly out of sight a
+  pixel the tiers agree on with the fog off is the processor's exactly,
+  under a tile at an edge it lies between its colour and its grey within
+  2, and under no tile it is unchanged, passing over what the design
+  accepts, the sprites under tiles of more than one state, the blended
+  sprites over the fog and the models; with mapping too the tiles never
+  mapped are the processor's black and nothing else changes; the dithered
+  option is the even tone within 2; the overlay canvas is painted exactly
+  where the overlay is opaque; the kill board pinned by F4 darkens the
+  world under it to the shade level's share within 2 with its foreground
+  on the overlay, the local player's lit row left out and nothing outside
+  it changed, and leaves no pixel behind; and the +stats panel darkens its
+  padding and its graph well by its opacities and draws its outline in the
+  dark and light edge colours, with nothing outside it changed. At native
+  density the Full frame at zoom 1 is the standard tier's draw enlarged,
+  beside the card's own draws.
+- The Full tier (`runtime_full.cpp`, `runtime_full.hpp`,
+  `full_presentation.hpp`, `full_terrain.hpp`, `full_terrain.cpp`,
+  `runtime_full_sprites.cpp`, `runtime_full_models.cpp`, `full_fog.hpp`,
+  `full_fog.cpp`, `runtime_full_overlays.cpp`): a branch of the
+  accelerated presentation, taken when the tier decided for the frame is
+  Full (`set_full_presentation`), in which the graphics card draws the
+  whole battlefield and the processor paints the HUD and what the painters
+  after the fog paint. The planner runs as in Basic and writes what it
+  writes there; `world_scaling` returns the zoom with no split, so the
+  frame is planned in screen pixels at the zoom, but the terrain is not
+  filled, the bands do not draw and the fog is not rasterised
+  (`note_full_canvas`): the world layer is cleared to a key colour, the
+  lowest colour not in the palette (`full_overlay_key`,
+  `overlay_key_colour`), and is the overlay canvas the painters paint on;
+  the box filter never runs (`refresh_filtered_terrain`). As the match
   loads, with the terrain step of its loading screen and before the world
   is built or a shared game's load barrier runs (`make_full_match_pages`,
   from `bootstrap_match`), the card's executor (`src/app/card`) is opened
@@ -399,68 +427,140 @@ logs it.
   colour as the blend within 2, and a triangle with red, green and blue
   corners shows their mean at its centroid pixel within 4; the map's
   terrain atlas (`src/present/gpu-world`) is built within `fit_page_edge`
-  of that limit, through the display gamma, its levels 0 and 1 uploaded
-  as pages and each page's texels let go once uploaded
-  (`ensure_full_terrain_pages`), so that the match's first frame finds the
-  pages and makes none. A frame builds them again only when the renderer
-  was made again, the pages were freed, or the palette, the gamma or the
-  page edge changed since (`ensure_full_match_textures`); the atlas is
-  keyed by the map's own storage, since one map record holds every map of
-  the run in turn. A card failure at the loading screen drops Full for the
-  run and the match plays in Basic. Each frame the builder appends one
-  quad per visible tile to a `CardFrame`, a batch for each page the tiles
-  read, so that a pass costs the card as many calls as the atlas has pages
-  however the grid alternates, by the level rule (`plan_terrain_draw`):
-  between zoom 0.5 and
-  1 level 1 LINEAR, then level 0 LINEAR over it at alpha 1 - log2(1/zoom),
-  which at 0.5 is level 1 alone, today's box filter where the camera lies
-  on an even map pixel; at 1 and every whole number above it level 0
-  NEAREST, 3.1c's pixels; at another zoom above 1 level 0 by the pixel-art
-  sampling mode where the start-up probe found it, which the rung's card
-  filter carries, else NEAREST into a target made
-  once at twice the battlefield, a whole number of map pixels at zoom 2, 3
-  and 4, and the target drawn LINEAR to the window by zoom over the next
-  whole number, the Basic tier's sharp-bilinear, or LINEAR straight where
-  the target cannot be made. The executor runs the frame within the
-  battlefield's scissor; what the processor drew over the terrain base
-  goes up as Basic's overlay does, by difference from the base
-  (`convert_rgb24_overlay_argb`) in the bands that hold it, laid over the
-  card's terrain 1:1; the HUD strips (`draw_accelerated_hud_strips`), from
-  the HUD layer's prescale target made as Basic makes it
-  (`ensure_accelerated_match_textures`), the dialogs, the cursor and the
-  present follow as in Basic, and the readers
-  that keep a picture get the standard tier's draw (`ensure_screen_world`).
+  of that limit, through the display gamma, twice, with the palette and
+  with a palette of the gray table's entries, the greyed variant the fog
+  reads (`greyed_palette`), levels 0 and 1 of each uploaded as pages and
+  each page's texels let go once uploaded (`ensure_full_terrain_pages`),
+  so that the match's first frame finds the pages and makes none of them.
+  A frame builds them again only when the renderer was made again, the
+  pages were freed, or the palette, the gamma or the page edge changed
+  since (`ensure_full_match_textures`), which also gives the sprite pages
+  the match's palette at the display gamma and the fog's gray table, and
+  the model stage its palette; the atlas is keyed by the map's own
+  storage, since one map record holds every map of the run in turn. A
+  card failure at the loading screen drops Full for the run and the match
+  plays in Basic. Each frame (`present_full_match_layers`) the builder
+  appends to one `CardFrame`, in this order. The terrain: one quad per
+  visible tile, a batch for each run of tiles on one page, by the level
+  rule (`plan_terrain_draw`): between zoom 0.5 and 1 level 1 LINEAR, then
+  level 0 LINEAR over it at alpha 1 - log2(1/zoom), which at 0.5 is level
+  1 alone, today's box filter where the camera lies on an even map pixel;
+  at 1 and every whole number above it level 0 NEAREST, 3.1c's pixels; at
+  another zoom above 1 level 0 by the pixel-art sampling mode where the
+  start-up probe found it, which the rung's card filter carries, else
+  NEAREST into a target made once at twice the battlefield, a whole number
+  of map pixels at zoom 2, 3 and 4, and the target drawn LINEAR to the
+  window by zoom over the next whole number, the Basic tier's
+  sharp-bilinear, or LINEAR straight where the target cannot be made. The
+  fog's greyed pass (`full_fog::append_unseen_terrain`), from the fog grid
+  the frame's fog pass built and kept in place of drawing
+  (`apply_match_fog`, `note_full_fog_grid`): over each fog tile with a
+  corner out of sight, the terrain again from the greyed pages at the
+  terrain's levels and sampling, into whatever the terrain was drawn
+  into, four quarter-tile quads whose corner alphas are 1 at the corners
+  out of sight, so a tile wholly out of sight shows the gray table's
+  colours exactly and a tile at an edge ramps from colour to grey where
+  the processor's FOG.GAF masks cut, a terrain tile under four such tiles
+  as one quad, and where two terrain levels blend each level's greyed pass
+  at its share (`pass_alpha`). The model stage's shadows, then the list's
+  draws in painter's order, each to the stage of its kind (`sprite_kind`,
+  `model_kind`), a stage's batches never joining another's: the sprites,
+  blended sprites, particle squares, lines and selection lines
+  (`SpriteFrame`, `runtime_full_sprites.cpp`), each sprite a quad from its
+  cell on the sprite pages (`src/present/gpu-world`, keyed by the frame
+  the planner drew from) drawn by premultiplied alpha, at a vertex alpha
+  of one half where the planner blends it through the alpha table, so the
+  card blends to the true mean where the table snaps to the palette,
+  sampled nearest at a whole-number zoom, linear below 1 and pixel-art
+  above, from its greyed cell where the map pixel under its drawn point
+  lies in a cell out of sight (`cell_fog`), since the fog lays its tiles
+  by map column and row alone, so a sprite at the fog's edge is wholly
+  grey or wholly colour, and in colour under the dithered option; squares
+  as the planner's rectangles; lines as quads `max(1, zoom)` pixels wide
+  through the centres of their end pixels, selection lines the same from
+  the bridge's map pixels; a frame whose distinct sprites exceed the
+  pages' memory draws none of them, since a cell evicted before the frame
+  ran would show another sprite; and the units, 3D features, projectiles,
+  debris pieces and shatter fragments (`ModelStage`,
+  `runtime_full_models.cpp`) as triangles from the models' meshes, each
+  corner placed from the piece transforms the planner rebuilt with the
+  arithmetic of the path the processor draws the piece by (a cached piece
+  as its image, a moving piece flat, a carried unit as its carrier
+  composes it), the polygons of a unit with a depth plane sorted lowest
+  first, the palette's tables approximated as the design says: the shade
+  rows as a per-vertex multiplier with a bright page of doubled texels for
+  the rows above unlit, the alpha table as alpha 0.5 for cloaked units and
+  shadows, the blue table as a halved colour with an additive lift, the
+  nanoframe's bands per polygon and its outline as line quads, diggers'
+  and other players' underwater polygons left out; texture frames go on
+  sprite pages on first sight in two variants, the image key transparent
+  as in a cached image or a colour as in a flat draw; shadows go into a
+  transparent shadow target the battlefield's size, every silhouette
+  replacing what is there so overlaps darken once, composed over the
+  terrain at half darkness by one resolve before the list's draws, or
+  straight into the battlefield where the target cannot be made
+  (`emit_shadows`, the extension point a later better-shadows option
+  replaces). The fog's dither over everything under the dithered option
+  (`append_unseen_dither`), palette index 0 at alpha one half, the even
+  tone the processor's every-other pixel averages to, over the objects as
+  the processor dithers them, since the pages hold no dithered sprite; and
+  its black pass over everything (`append_unmapped`), UI colour 0 at the
+  corner alphas of the cells never mapped, which blacks out the units as
+  the processor does. Last the painters' quads (`paint_world_level`,
+  `paint_world_blend`): the kill board's shade of the world under it and
+  the light of the local player's row, and the +stats panel's fills, which
+  in Full ask the card for a quad in place of reading and shading the
+  canvas, which holds no world: a shade row as black by alpha over the
+  world, leaving row x 0.06875 of it, a light row as white added by
+  1 - 1 / (1 + row / 30) (`full_fog::level_quad`), a blend as its colour
+  at its opacity; their foregrounds go on the canvas as in every tier. The
+  executor runs the frame within the battlefield's scissor; the canvas
+  goes up as the overlay by its key (`convert_rgb24_keyed_overlay_argb`),
+  in the bands that hold paint, laid over the card's picture 1:1, so
+  Basic's overlay by difference, which cannot tell a paint of the base's
+  own colour from the base, is not needed; the sprite pages' texels and
+  the model stage's pages go up as they change; the HUD strips
+  (`draw_accelerated_hud_strips`), from the HUD layer's prescale target
+  made as Basic makes it (`ensure_accelerated_match_textures`), the
+  dialogs, the cursor and the present follow as in Basic, and the readers
+  that keep a picture, the capture and the checks among them, get the
+  standard tier's draw (`ensure_screen_world`), since the world layer
+  holds no picture.
   Full falls back to Basic, which falls back to the standard tier, each
   for the rest of the run (`drop_full`, `TierInputs::full_drop`, a kind
-  for each cause): a call of the card's own that fails, or the failure
-  `--render-fault card` forces, drops Full with the failing call struck
-  against the driver as a `card` strike (`take_full_failure`), which the
-  same failure in the next run on the driver records `full-unusable`; a
-  failed Full function test drops it as the card lacking a feature Full
-  needs, with nothing struck; the memory guard counts Full's pages and
-  targets (`AcceleratedBuffer::card_pages`, `card_targets`) and refuses or
-  drops Full before Basic, judging Basic afresh on the memory Full freed
+  for each cause): a call of the card's own that fails (`FullCardError`,
+  the stages' `full::CardError`), or the failure `--render-fault card`
+  forces, drops Full with the failing call struck against the driver as a
+  `card` strike (`take_full_failure`), which the same failure in the next
+  run on the driver records `full-unusable`; a failed Full function test
+  drops it as the card lacking a feature Full needs, with nothing struck;
+  the memory guard counts Full's pages and targets
+  (`AcceleratedBuffer::card_pages`, `card_targets`) and refuses or drops
+  Full before Basic, judging Basic afresh on the memory Full freed
   (`retry_memory_guard`); slow frames take Full's rungs first, its
   anti-aliasing from 4 to 2 to 1 (`LadderState::full`, `supersample`,
-  which Full's world target will draw at) and then Full itself
+  which Full's world target draws at) and then Full itself
   (`StepResult::basic`), never back up within the run; and Full's first
   card calls of a run, the pages made as the match loads
   (`make_full_match_pages`) and its first frame, stand under its own trial
   and sentinel, `path full` (`begin_full_path`), a trial that cannot be
   written keeping Full off with nothing struck. Basic presents the frame
-  that failed and every frame after, with the status saying why Full
-  stopped, until Off and back, a raise of the row to Full, or Restore
-  defaults lifts the drop, which nothing does for the memory guard's. In a
-  shared game or a replay a lower tier applies at once and Full waits for
-  the match to end (`SharedMatchGate::full`); its pages, overlay and
-  zoom-in target are made as the loading screen begins
-  (`preallocate_full_match_textures`), and a page a frame would make later
-  waits for the match to end instead (`full_creation_allowed`). The
-  start-up line and `+stats` name the full tier, and the step-down is fed
-  the build, the card's call and the overlay as Full's passes. Off and
-  Basic are untouched: nothing here runs unless the tier is Full, which
-  only `--hardware-acceleration=full` gives while
-  `render_policy::full_ready` is false.
+  that failed, with the standard tier's draw of the world, and every frame
+  after, with the status saying why Full stopped, until Off and back, a
+  raise of the row to Full, or Restore defaults lifts the drop, which
+  nothing does for the memory guard's. In a shared game or a replay a
+  lower tier applies at once and Full waits for the match to end
+  (`SharedMatchGate::full`); its terrain pages, overlay and zoom-in target
+  are made as the loading screen begins (`preallocate_full_match_textures`),
+  and a page a frame would make later, a sprite page among them, waits for
+  the match to end instead (`full_creation_allowed`). The start-up line
+  and `+stats` name the full tier, and the step-down is fed the build, the
+  stages, the card's call and the overlay as Full's passes. Off and Basic
+  are untouched: nothing here runs unless the tier is Full, which only
+  `--hardware-acceleration=full` gives while `render_policy::full_ready`
+  is false; it stays false until the complete Full frame of
+  `native-render-tiers` is signed off against the standard tier's
+  (design D76), so a setting of Full resolves to Basic for players.
   Anti-aliasing in Full is the graphics card's (`full_supersampling.hpp`,
   `ensure_full_world_target`): the Enhanced anti-aliasing row's level asks
   for a supersample factor, off 1, 2x and 3x 2, 4x and above 4
@@ -471,124 +571,41 @@ logs it.
   of the machine, 2^25 pixels, a quarter of it at 4 GiB or less and on a
   light machine or a Pi (`render_policy::supersample_budget`), the memory
   guard and the renderer's texture limit allow at the battlefield's size
-  (`render_policy::fit_supersample_factor`); above 1 the card draws what
-  it draws into a world target at that factor, made once with its half
-  and remade when the factor or the battlefield changes, by the plan of
+  (`render_policy::fit_supersample_factor`); above 1 the card draws the
+  terrain, the fog's greyed pass and the stages into a world target at
+  that factor, made once with its half and remade when the factor or the
+  battlefield changes, by the plan of
   `full_supersampling::plan_world_target`: from zoom 1 up at the zoom, the
   texture holding the factor's pixels a window pixel, reduced into the
   battlefield by exact halvings (`resolve`); below zoom 1 at one texel a
   map pixel over the part the battlefield shows, reduced by the two-level
   blend (`blend_reduce`), the half at twice the zoom under the part at
-  alpha `1 - log2(1 / zoom)`. The processor's anti-aliasing never runs in
-  a Full frame (`unit_supersampling_` is read as off there), its overlays
-  go over the reduced picture, the factor in use is logged with the
-  target's size and memory when it changes and shows in the `+stats`
-  renderer row and in the row's hint
+  alpha `1 - log2(1 / zoom)`; the fog's black pass, its dither and the
+  painters' quads go over the reduced picture, as the overlay does. The
+  processor's anti-aliasing never runs in a Full frame
+  (`unit_supersampling_` is read as off there), the factor in use is
+  logged with the target's size and memory when it changes and shows in
+  the `+stats` renderer row and in the row's hint
   (`AccelerationStatus::full_supersample`, beside the rung's
   `supersample`, which the status line names), and a target the renderer
   or the memory guard refuses, or that a shared game's frame would make
   after its loading screen, leaves the tier drawing straight.
-  Not yet: the `scale-level` key for
-  Full's rungs, which the game writes for no tier, the sprite pages made
-  ahead at a shared game's loading screen (a page the sprite stage would
-  make during the match waits for its end instead), smooth panning, the
-  model stage in a presented frame (the sprites are the scene builder's
-  first stage, below, which `--full-stages` switches on, and the models
-  its second, built and checked), and the fog and the overlays as card
-  draws.
+  Not yet: the `scale-level` key for Full's rungs, which the game writes
+  for no tier, the sprite pages made ahead at a shared game's loading
+  screen, smooth panning and native density for the fog passes and the
+  painters' quads (they draw on the camera's map pixel at density 1), the
+  sprite pages' level 1 (the stage samples level 0 linear when zoomed
+  out), and the golden images.
   `app-full-terrain` checks the level rule and the quads over a small map
-  on three pages, one batch per page whatever the grid's order, and
+  on three pages, one batch per page whatever the grid's order;
   `app-full-supersampling` the world target's plan at every kind of zoom
-  and battlefield.
-- `runtime_full.hpp`, `runtime_full_sprites.cpp`, `full_stages.hpp`: the
-  Full tier's scene builder, the stages beside the terrain by which the
-  graphics card comes to draw the whole battlefield. The builder turns the
-  planner's draw list into the card's command list (`src/app/card`): each
-  stage is one function that emits its batches into the frame's shared
-  `CardFrame` in the list's order, and each can be switched on by itself
-  with `--full-stages=STAGE[,STAGE]` (`sprites`, `models`, `fog`, or
-  `none`; `terrain` names what every Full frame draws anyway) beside
-  `--hardware-acceleration=full`, while the processor still draws the
-  rest; a stage this version does not draw is logged once and left to the
-  processor. The sprite stage is the one a presented frame runs so far
-  (`full::emit_sprites`): the sprites, blended sprites, particle squares,
-  lines and selection lines of the list, in its order, each sprite a quad
-  from its cell on the sprite pages
-  (`src/present/gpu-world`, keyed by the frame the planner drew from)
-  drawn by premultiplied alpha, which keeps the key transparent, at a
-  vertex alpha of one half where the planner blends it through the alpha
-  table, so the card blends to the true mean where the table snaps to the
-  palette; sampled nearest at a whole-number zoom, where the pixels are
-  the game's exactly, linear below 1 and pixel-art above; a sprite whose
-  drawn point lies in a cell out of sight from its greyed cell, since the
-  fog lays its tiles over the picture by map column and row alone; squares
-  as the planner's
-  rectangles; lines as quads `max(1, zoom)` pixels wide through the
-  centres of their end pixels, selection lines the same from the bridge's
-  map pixels at the zoom; consecutive draws that share their page and
-  blend in one batch, every batch under the battlefield's scissor. A frame
-  whose distinct sprites exceed the pages' memory draws none of them,
-  since a cell evicted before the frame ran would show another sprite.
-  With a stage on (`present_full_match_layers`), the bands leave the
-  card's kinds undrawn (`WorldFrameDraw::card_kinds`); the fog's gray goes
-  over the world layer, which is kept as the base (`capture_full_base`),
-  then the fog's black and the painters go over it. The card draws the
-  terrain, then what the base holds over the terrain base, the processor's
-  draws and the gray, found by difference and laid over 1:1, then the
-  stages' batches in a second frame, then what the black and the painters
-  changed over the base, found against it as Basic finds its overlay, so
-  never-mapped ground blacks out the card's sprites as it blacks out the
-  processor's. The sprite pages' texels are uploaded as they change; a
-  page's palette is the match's at the display gamma and its gray table
-  the fog's, by each entry's brightness. A card call that fails drops Full
-  for the run (`drop_full`) and presents the frame as Basic does; readers
-  that keep a picture get the standard tier's draw
-  (`ensure_screen_world`), since the world layer leaves the card's kinds
-  out. Until the models stage lands,
-  the card's sprites lie over the processor's units, and a painter that
-  paints the base's own colour over a sprite leaves the sprite showing,
-  since the overlay by difference cannot tell that paint from the base; a
-  sprite at the gray's edge is wholly grey or wholly colour by its cell.
-  `app-full-sprites` and `app-full-sprites-data` check the stage against
-  the bands' picture on SDL's software renderer (`full_sprites_test.cpp`),
-  and `--check-render-tiers`, where `--hardware-acceleration` asks for
-  Full, switches the stage on at zooms 1 and 2 and holds the frame to the
-  processor's composition beside the blends, the lines, the models, the
-  gray's edges and such painted pixels; at zoom 0.5 the terrain under the
-  sprites is the card's own level 1, which the terrain cases hold, and the
-  stage's picture is `app-full-sprites`' to hold.
-- `runtime_full_models.cpp` (library `oa-app-full-models`): the builder's
-  model stage (`full::ModelStage`), which follows the sprites in the
-  frame's order (`full_stages.hpp`): the list's units, 3D features,
-  projectiles, debris pieces and shatter fragments as triangles from the
-  models' meshes (`src/present/gpu-world`), each corner placed from the
-  piece transforms the planner rebuilt with the arithmetic of the path the
-  processor draws the piece by (a cached piece as its image, a moving piece
-  flat, a carried unit as its carrier composes it), the polygons of a unit
-  with a depth plane sorted lowest first by their depth in its place, and
-  the palette's tables approximated as the design says: the shade rows as
-  a per-vertex multiplier with a bright page of doubled texels for the
-  rows above unlit, the alpha table as alpha 0.5 for cloaked units and
-  shadows, the blue table as a halved colour with an additive lift, the
-  nanoframe's bands per polygon and its outline as line quads, diggers'
-  and other players' underwater polygons left out. Texture frames go on
-  sprite pages on first sight in two variants, the image key transparent
-  as in a cached image or a colour as in a flat draw; shadows go into a
-  transparent shadow target the battlefield's size, every silhouette
-  replacing what is there so overlaps darken once, composed over the
-  battlefield at half darkness by one resolve, or straight into the
-  battlefield where the target cannot be made (`emit_shadows`, the
-  extension point a later better-shadows option replaces). The stage draws
-  through the builder's `SceneView`, as the sprite stage does, so that the
-  presentation can run it in the sprites' frame; it does not yet, and
-  `--full-stages=models` is logged as left to the processor
-  (`full::stages_built`): nothing of the match reaches the stage but
-  `--check-render-tiers`, whose model case builds a frame of the fight's
-  models and holds it to the processor's raster of them.
-  `app-full-models` compares the stage with the processor's raster on
-  SDL's software renderer over synthetic scenes, and `app-full-models-data`
-  over every unit model of the installed game at zoom 1, against the
-  processor's raster sampled at the pixel centres, where the card samples.
+  and battlefield; `app-full-sprites` and `app-full-sprites-data` the
+  sprite stage against the bands' picture on SDL's software renderer
+  (`full_sprites_test.cpp`); `app-full-models` and `app-full-models-data`
+  the model stage against the processor's raster
+  (`runtime_full_models_test.cpp`); `app-full-fog` the fog passes' quads,
+  alphas and placement and the painters' level quads
+  (`full_fog_test.cpp`).
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
@@ -695,16 +712,16 @@ logs it.
   build)" after basic where Full was asked for, or the reason the
   processor draws everything (`tier_description`); the `+stats` renderer
   row names the tier the same way. Full, the battlefield drawn on the
-  graphics card, is being built (the Full tier, above): the render
-  policy's request (`TierInputs::setting`, `AccelerationFlag`) carries
-  Off, Basic or Full, and `decide_render_tier` gives `RenderTier::full`
-  where Full was asked for, Full is ready in this build
-  (`render_policy::full_ready`, false until the card draws the whole
-  battlefield) or `--hardware-acceleration=full` forced it, the driver has
-  no `full-unusable` record or that flag was given, Full was not dropped
-  for the run, and a shared game or a replay began in Full; otherwise
-  Basic, with the Full reason (`FullReason`) in the decision, which the
-  status and the start-up line's note say. Before each frame, `Runtime::update_render_tier`
+  graphics card (the Full tier, above): the render policy's request
+  (`TierInputs::setting`, `AccelerationFlag`) carries Off, Basic or Full,
+  and `decide_render_tier` gives `RenderTier::full` where Full was asked
+  for, Full is ready in this build (`render_policy::full_ready`, false
+  until the complete Full frame is signed off, design D76) or
+  `--hardware-acceleration=full` forced it, the driver has no
+  `full-unusable` record or that flag was given, Full was not dropped for
+  the run, and a shared game or a replay began in Full; otherwise Basic,
+  with the Full reason (`FullReason`) in the decision, which the status
+  and the start-up line's note say. Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the
   director, a lost device) and takes the frame's step from the render
   policy (`step_tier`): the tier, the function test run where only it is
@@ -916,7 +933,12 @@ logs it.
   bands of 32 rows; when SDL's software renderer draws into a 16-bit RGB565
   window (`frame_texture_format`), the match's layers are converted into
   RGB565 pixels instead, the ones SDL would make of the 32-bit pixels, so
-  that presenting copies them as they are. The Runtime keeps a [job pool](../platform/job-pool/README.md)
+  that presenting copies them as they are. In the Full tier the world
+  layer is the overlay canvas, cleared to a key colour, the lowest
+  0xRRGGBB not in the palette (`overlay_key_colour`), and
+  `convert_rgb24_keyed_overlay_argb` makes the overlay of it by that key,
+  opaque exactly where the painters painted, in the same bands. The
+  Runtime keeps a [job pool](../platform/job-pool/README.md)
   (`draw_pool_`) that this conversion, the terrain fill, the fog and the
   battlefield's draws (`world_draws.hpp`) run their bands on:
   `--draw-threads N` (1 to 32), else the `OA_DRAW_THREADS`
@@ -928,7 +950,9 @@ logs it.
   any number of them draws the same frames, so every count draws the same
   frames.
   `app-xrgb-conversion` checks each pixel's packing and gamma for rows of
-  any width and that pools of 2, 3, 4 and 8 threads convert the same bytes;
+  any width, that pools of 2, 3, 4 and 8 threads convert the same bytes,
+  the key colour as the lowest outside a palette and the keyed overlay
+  holding what was painted;
   `native-draw-threads` draws the seeded skirmish's fight frame by frame at
   zoom 1, 1.37 and 0.6, and a longer `--busy-combat` fight into its
   explosions and debris with enhanced anti-aliasing off and at 4x, on 1, 2,

@@ -2228,10 +2228,11 @@ class Runtime final : public menu::Host,
 
     /// The Full tier's presentation (full_presentation.hpp,
     /// runtime_full.cpp): the card's executor, the match's terrain atlas
-    /// and its pages, the target a zoom between whole numbers is drawn
-    /// through, the overlay of what the processor drew over the terrain,
-    /// and what the last Full frame drew. Made at the first switch-on of
-    /// the run.
+    /// and its pages with their greyed variant, the sprite pages and the
+    /// model stage, the target a zoom between whole numbers is drawn
+    /// through, the fog grid, the overlay canvas's key and the overlay of
+    /// what the painters painted, and what the last Full frame drew. Made
+    /// at the first switch-on of the run.
     struct FullPresentation;
 
     /// Frees the Full tier's presentation.
@@ -4798,9 +4799,87 @@ class Runtime final : public menu::Host,
     void free_full_presentation() noexcept;
 
     /// Frees what the Full tier made for the match and its layout: the
-    /// terrain atlas and its pages, the target and the overlay; the
-    /// executor stays open for the next match.
+    /// terrain atlas and its pages, the greyed pages, the sprite pages'
+    /// and the model stage's pages and targets, the target and the
+    /// overlay; the executor stays open for the next match.
     void free_full_match_textures() noexcept;
+
+    /// Frees what the Full tier holds for a match as the match ends: its
+    /// textures (free_full_match_textures), the sprite pages' frames, which
+    /// are keyed by addresses a later match can reuse, the model stage's
+    /// meshes and the fog grid.
+    void free_full_match_state() noexcept;
+
+    /// Tells whether the last match frame's world layer is the Full tier's
+    /// overlay canvas, the key colour but where the painters painted, so
+    /// that a reader that keeps the picture needs the standard tier's draw
+    /// (ensure_screen_world).
+    ///
+    /// @return true after such a frame, until the world is drawn whole
+    [[nodiscard]] bool full_frame_drawn() const noexcept;
+
+    /// Notes, as a match frame's drawing begins, whether its world layer is
+    /// the Full tier's overlay canvas (full_frame_drawn), and the camera and
+    /// zoom the frame is planned at, which the card's frame draws from; a
+    /// canvas frame lets go of the quads the painters asked for in the
+    /// frame before.
+    ///
+    /// @param canvas true when the card draws the world and the layer is the canvas
+    /// @param camera_x map pixel at the view's left edge
+    /// @param camera_y map pixel at the view's top edge
+    /// @param zoom screen pixels per map pixel
+    void note_full_canvas(bool canvas, uint32_t camera_x, uint32_t camera_y, float zoom);
+
+    /// Keeps a frame's fog grid for the card's fog passes, in the Full tier
+    /// (apply_match_fog): the processor builds the grid and draws nothing
+    /// of the fog. An empty grid draws no fog.
+    ///
+    /// @param grid the grid, built for the frame's camera
+    /// @param camera_x map pixel at the view's left edge
+    /// @param camera_z map pixel at the view's top edge
+    /// @param dithered the DitheredFog option is on
+    void note_full_fog_grid(
+        const oa::present::world_renderer::FogGrid& grid,
+        int32_t camera_x,
+        int32_t camera_z,
+        bool dithered
+    );
+
+    /// Returns the colour the Full tier's overlay canvas is cleared to: the
+    /// first colour outside the match palette (overlay_key_colour), found
+    /// once for each palette.
+    ///
+    /// @return the key colour, red, green and blue
+    [[nodiscard]] std::array<uint8_t, 3> full_overlay_key();
+
+    /// Takes a painter's shading of the world under it, by a level of the
+    /// display's shade or light tables, as a quad for the card to draw
+    /// (full_fog::level_quad), in the Full tier while the battlefield layer
+    /// is the paint target. Elsewhere the painter shades the layer itself.
+    ///
+    /// @param x the rectangle's left column, in pixels of the battlefield layer
+    /// @param y its top row
+    /// @param width its columns
+    /// @param height its rows
+    /// @param level the shade level, below 0, or light level, from 0
+    /// @return true when the card takes the quad
+    [[nodiscard]] bool paint_world_level(int x, int y, int width, int height, int32_t level);
+
+    /// Takes a painter's blend of a colour over the world under it, at an
+    /// opacity in 256ths (frontend_renderer::blend_rect), as a quad for the
+    /// card to draw, in the Full tier while the battlefield layer is the
+    /// paint target. Elsewhere the painter blends the layer itself.
+    ///
+    /// @param x the rectangle's left column, in pixels of the battlefield layer
+    /// @param y its top row
+    /// @param width its columns
+    /// @param height its rows
+    /// @param colour the colour, before the display gamma
+    /// @param opacity the colour's share of each pixel, in 256ths
+    /// @return true when the card takes the quad
+    [[nodiscard]] bool paint_world_blend(
+        int x, int y, int width, int height, std::array<uint8_t, 3> colour, uint32_t opacity
+    );
 
     /// Drops the Full tier for the rest of the run, to Basic: logs the
     /// reason once, frees what Full made, closes the stage of Full's first
@@ -4999,21 +5078,29 @@ class Runtime final : public menu::Host,
     /// Presents the match layers in the Full tier: the HUD layer's prescale
     /// target and the layout's bookkeeping made as Basic makes them
     /// (ensure_accelerated_match_textures), and the HUD strips drawn as
-    /// Basic draws them (draw_accelerated_hud_strips); the terrain drawn by
-    /// the card from the atlas pages, by the level rule of
-    /// full_terrain::plan_terrain_draw at the frame's zoom and camera
-    /// within the battlefield, through the target at the next whole-number
-    /// zoom where a zoom above 1 is not whole and the renderer lacks the
-    /// pixel-art sampling mode; the overlay of what the processor drew over
-    /// its nearest-filled terrain base, found by difference from that base
-    /// (convert_rgb24_overlay_argb) and laid over the card's terrain 1:1;
-    /// then finish_match_layers. The frame stands under Full's trial and
-    /// sentinel (begin_full_path). A card failure, or the one
+    /// Basic draws them (draw_accelerated_hud_strips); then the card's
+    /// frame, built from the last list the planner made: the terrain from
+    /// the atlas pages by the level rule of full_terrain::plan_terrain_draw
+    /// at the frame's zoom and camera within the battlefield, through the
+    /// target at the next whole-number zoom where a zoom above 1 is not
+    /// whole and the renderer lacks the pixel-art sampling mode, or into
+    /// the world target at the anti-aliasing factor in use; the fog's
+    /// greyed pass over it from the greyed pages (full_fog.hpp); the model
+    /// stage's shadows; the list's draws in their order, each to the sprite
+    /// stage or the model stage (runtime_full.hpp); the fog's dithered form
+    /// where the option is on and its black pass over never-mapped ground;
+    /// and the quads the painters asked for (paint_world_level,
+    /// paint_world_blend); then the overlay canvas, converted by its key
+    /// (convert_rgb24_keyed_overlay_argb) and laid over the card's picture
+    /// 1:1; then finish_match_layers. The frame stands under Full's trial
+    /// and sentinel (begin_full_path). A card failure, or the one
     /// --render-fault card forces, drops Full for the run with a strike
-    /// (take_full_failure) and the frame is left for Basic to present, as
-    /// is a frame whose terrain base is not the frame's and one whose pages
-    /// must wait for a shared game to end. A frame presented counts towards
-    /// the stage of Full's first frames (RenderRun::paths_drawn).
+    /// (take_full_failure) and the frame is left for Basic to present,
+    /// after the world is drawn again as the standard tier draws it, as is
+    /// a frame whose world layer is not the canvas of the frame's zoom and
+    /// one whose pages must wait for a shared game to end. A frame
+    /// presented counts towards the stage of Full's first frames
+    /// (RenderRun::paths_drawn).
     ///
     /// Throws PresentError when an SDL call outside the card's own fails,
     /// and AccelerationError when the overlay or the HUD's prescale target
@@ -5023,59 +5110,6 @@ class Runtime final : public menu::Host,
     /// @return true when the frame was presented; false when the Basic
     ///     tier is to present it
     [[nodiscard]] bool present_full_match_layers(bool dialogs);
-
-    /// Switches the Full tier's stages on or off for the frames from the
-    /// next: the stages named that this build draws beside the terrain
-    /// (full_stages.hpp); the others are logged once as left to the
-    /// processor.
-    ///
-    /// @param stages the stages, as bits of full_stages.hpp
-    void set_full_stages(uint8_t stages);
-
-    /// Returns the Full tier's stages switched on.
-    ///
-    /// @return the stages, as bits of full_stages.hpp; 0 for none
-    [[nodiscard]] uint8_t full_stages() const noexcept;
-
-    /// Returns the kinds of draw the graphics card draws in the frame being
-    /// drawn (card_kind_bit), which the bands leave undrawn, and notes that
-    /// the world layer leaves them undrawn (full_frame_drawn).
-    ///
-    /// @return the kinds' bits; 0 outside the Full tier and with no stage on
-    [[nodiscard]] uint16_t take_full_card_kinds();
-
-    /// Tells whether the last match frame's world layer leaves the card's
-    /// kinds undrawn, so that a reader that keeps the picture needs the
-    /// standard tier's draw (ensure_screen_world).
-    ///
-    /// @return true after such a frame, until the world is drawn whole
-    [[nodiscard]] bool full_frame_drawn() const noexcept;
-
-    /// Keeps the world layer as it stands after the fog's gray and before
-    /// the fog's black and the painters, without the card's kinds: the
-    /// picture the stages draw over, laid over the card's terrain by
-    /// difference from the terrain base, and the picture what is painted
-    /// after is found against.
-    ///
-    /// @param world the world layer
-    void capture_full_base(const oa::present::world_renderer::Surface& world);
-
-    /// Frees what the Full tier holds for a match: the sprite pages, whose
-    /// frames are keyed by addresses a later match can reuse, the base and
-    /// what free_full_match_textures frees.
-    void free_full_match_state() noexcept;
-
-    /// Returns what the sprite stage did on the last frame the Full tier
-    /// presented (runtime_full.hpp), for the checks.
-    ///
-    /// @return the stage's result; empty when none ran
-    [[nodiscard]] full::SpriteStageResult full_sprite_result() const noexcept;
-
-    /// Returns the base the last Full frame kept (capture_full_base), for
-    /// the checks.
-    ///
-    /// @return a copy of the base; empty when none was kept
-    [[nodiscard]] renderer::Surface full_base() const;
 
     /// Draws a letterboxed 640x480-style frame's texture by the chrome's
     /// filter at the letterbox's scale, from its prescale target where the
@@ -6531,6 +6565,37 @@ class Runtime final : public menu::Host,
     ///
     /// @param report_directory where the pictures of a failed case go
     void check_full_models(const fs::path& report_directory);
+
+    /// Checks the Full tier's fog and world overlays for --check-render-tiers
+    /// (runtime_render_tiers_check.cpp), over its match at zoom 1 and 2 on
+    /// SDL's software renderer: with line of sight alone, every pixel under
+    /// a fog tile wholly out of sight where the two tiers agree with the
+    /// fog off is the gray table's colour in both, a pixel under an edge
+    /// tile lies between its colour and its grey, and nothing under no
+    /// tile changes; with mapping on, every pixel under a tile wholly
+    /// never mapped is the processor's black and an edge tile darkens
+    /// toward it; dithered, a tile wholly out of sight is the dither
+    /// colour at alpha one half over the frame with the fog off; the kill
+    /// board's foreground is painted on the overlay and the battlefield
+    /// under it darkened by the card at its shade level's alpha, with its
+    /// lit row left out, and its margin shaded battlefield alone; the
+    /// +stats panel's edges are on the overlay and its padding and graph
+    /// darkened by the card at their opacities; and after each the world
+    /// layer holds the key colour exactly where the overlay is transparent.
+    /// Throws std::runtime_error on a failure.
+    ///
+    /// @param set_level sets the flag's level and decides the tier again
+    /// @param at_zoom sets a zoom and centres the camera on the check's unit
+    /// @param presented presents a frame and returns it read back
+    /// @param composed returns the frame as the processor composes it
+    /// @param report_directory where the pictures go
+    void check_full_overlays(
+        const std::function<void(oa::ui::engine_settings::HardwareAcceleration)>& set_level,
+        const std::function<void(float)>& at_zoom,
+        const std::function<renderer::Surface()>& presented,
+        const std::function<renderer::Surface()>& composed,
+        const fs::path& report_directory
+    );
 
     /// Checks the match presented through SDL layers: every presented frame must equal
     /// compose_match_frame outside the software cursor.

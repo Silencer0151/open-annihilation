@@ -3,6 +3,7 @@
 
 // The kills board F4 slides in at the top right of the battlefield.
 #include "oa/app/runtime.hpp"
+#include "full_fog.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/present/model/mesh_raster.hpp"
@@ -36,6 +37,10 @@ namespace hud = oa::ui::hud;
 // An overlay is drawn over these two backgrounds; its pixels are where the
 // passes agree.
 constexpr uint8_t kPassFill[2] = {0x00, 0xff};
+/// Most a channel of the battlefield the Full tier's card darkened under
+/// the board may differ from the darkening computed exactly: the renderer
+/// rounds the blend its own way.
+constexpr int kMostCardShadeDifference = 2;
 // Rows above and below a text line, and columns past its width, its glyphs
 // may reach.
 constexpr int kGlyphReach = 16;
@@ -106,6 +111,11 @@ void Runtime::shade_board_rect(int x0, int y0, int x1, int y1, int level) {
     const int width = end.x - corner.x;
     const int height = end.y - corner.y;
     if (width <= 0 || height <= 0)
+        return;
+    // In the Full tier the card darkens or lights the battlefield under the
+    // board; the board's foreground goes on the overlay canvas.
+    const auto at = canvas_paint(corner.x, corner.y);
+    if (paint_world_level(at.x, at.y, width, height, level))
         return;
     PaletteLookup lookup(match_palette_);
     auto patch = oa::present::create_surface(width, height);
@@ -463,6 +473,10 @@ void Runtime::check_kill_board() {
     renderer::Surface hidden;
     capture(hidden);
     write_ppm(report_directory / "native-kill-board-off.ppm", hidden);
+    // In the Full tier the board's shading is a black quad the card blends
+    // over the battlefield at the shade level's alpha; elsewhere the shade
+    // table's row.
+    const bool full = full_presentation();
     if (kill_board_.slide != 0)
         throw std::runtime_error("kill board check: the board is out before F4");
     press_f4();
@@ -494,12 +508,27 @@ void Runtime::check_kill_board() {
     if (shade == nullptr)
         throw std::runtime_error("kill board check: no shade table");
     PaletteLookup lookup(match_palette_);
+    const float kept = 1.0F - oa::app::full_fog::level_quad(hud::kBoardShadeLevel).colour.alpha;
     const auto shaded = [&](int x, int y) {
+        if (full) {
+            const uint8_t* under = pixel(hidden, x, y);
+            std::array<uint8_t, 3> darkened{};
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                darkened[channel] =
+                    static_cast<uint8_t>(std::lround(static_cast<float>(under[channel]) * kept));
+            return darkened;
+        }
         const auto index = static_cast<int8_t>(lookup.index(pixel(hidden, x, y)));
         return palette_rgb(shade[kShadeRow * 0x100 + index]);
     };
     const auto shows = [&](int x, int y, const std::array<uint8_t, 3>& color) {
-        return std::equal(color.begin(), color.end(), pixel(shown, x, y));
+        const uint8_t* at = pixel(shown, x, y);
+        if (!full)
+            return std::equal(color.begin(), color.end(), at);
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            if (std::abs(int{at[channel]} - int{color[channel]}) > kMostCardShadeDifference)
+                return false;
+        return true;
     };
     // Screen columns 515-516, left of the header and the highlight.
     for (int y = board.y; y < board.y + board.height; ++y)
@@ -539,7 +568,8 @@ void Runtime::check_kill_board() {
         throw std::runtime_error("kill board check: the board left pixels behind");
     std::cout << "kill board check: " << board.width << 'x' << board.height << " at " << board.x
               << ',' << board.y << " on the " << match_layout_.width << 'x' << match_layout_.height
-              << " canvas\n";
+              << " canvas, shaded by " << (full ? "the card in the full tier" : "the shade table")
+              << '\n';
 }
 
 } // namespace oa::app

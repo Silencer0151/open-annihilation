@@ -70,10 +70,10 @@ constexpr uint8_t kRuleSlot = 27;
 /// GUI palette slot of the graph's lines at a tick and at the frame's
 /// allowance: a neutral gray, apart from every grade's colour.
 constexpr uint8_t kGraphLineSlot = 22;
-/// How much of the battlefield's light the panel's fill takes away, in 256ths.
-constexpr uint32_t kPanelOpacity = 232;
-/// How much more of it the graph's fill takes away, in 256ths.
-constexpr uint32_t kGraphOpacity = 128;
+/// How much of the battlefield's light the panel's fill takes away, and how
+/// much more the graph's, in 256ths.
+constexpr uint32_t kPanelOpacity = panel::kPanelOpacity;
+constexpr uint32_t kGraphOpacity = panel::kGraphOpacity;
 /// How strongly the graph's line at a tick shows over the graph, in 256ths.
 constexpr uint32_t kTickLineOpacity = 176;
 /// How strongly the dots of its line at the frame's allowance show, in
@@ -366,8 +366,13 @@ void Runtime::draw_frame_stats() {
 
     auto& target = paint_target();
     const auto at = canvas_paint(left, top);
-    // A rectangle in canvas pixels from the panel's corner.
+    // A rectangle in canvas pixels from the panel's corner. In the Full
+    // tier the card draws a blend over the battlefield as its quad, since
+    // the panel is painted on the overlay canvas.
     const auto fill = [&](int x, int y, int w, int h, uint8_t slot, uint32_t opacity) {
+        if (opacity < renderer::blend_opaque &&
+            paint_world_blend(at.x + x, at.y + y, w, h, ui_color_rgb(slot), opacity))
+            return;
         renderer::blend_rect(target, at.x + x, at.y + y, w, h, ui_color_rgb(slot), opacity);
     };
     // A run of an edge, in source pixels from the panel's corner.

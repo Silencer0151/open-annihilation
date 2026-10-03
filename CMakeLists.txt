@@ -254,6 +254,27 @@ add_custom_command(OUTPUT "${oa_window_icon_source}"
 add_library(oa-app-window-icon src/app/window_icon.cpp "${oa_window_icon_source}")
 add_library(oa::app::window_icon ALIAS oa-app-window-icon)
 target_link_libraries(oa-app-window-icon PUBLIC oa-app-headers PRIVATE oa-formats-png oa-options)
+# The Full tier's fog of war on the card (full_fog.hpp): the fog grid's
+# tiles as passes of quads with corner alphas, the greyed terrain pass from
+# the greyed pages, its dithered form and the black pass; pure, so that
+# runtime_full.cpp draws from it and a test checks it alone.
+add_library(oa-app-full-fog src/app/full_fog.cpp)
+add_library(oa::app::full_fog ALIAS oa-app-full-fog)
+target_include_directories(oa-app-full-fog PUBLIC src/app)
+target_link_libraries(oa-app-full-fog PUBLIC oa-app-card oa-present-gpu-world
+  oa-present-world-renderer PRIVATE oa-options)
+if(BUILD_TESTING)
+  # The fog passes over a seeded map's atlas and fog grids built over
+  # synthetic sight: the greyed pass covering the ground out of sight once,
+  # whole tiles and quarters at their texels and corner alphas, at two
+  # levels and through a placement; the black and dithered passes with
+  # their runs merged; the refusals.
+  add_executable(oa-app-full-fog-test src/app/full_fog_test.cpp)
+  target_link_libraries(oa-app-full-fog-test PRIVATE oa-app-full-fog oa-sim-visibility-state
+    oa-test-support oa-options)
+  add_test(NAME app-full-fog COMMAND oa-app-full-fog-test)
+  set_tests_properties(app-full-fog PROPERTIES TIMEOUT 60)
+endif()
 # The render policy (render_policy.hpp): the walk of SDL's render drivers,
 # the tier each frame is drawn in, what a crash or a failure counts for at
 # the next start and the records that keep it, the step-down ladder, the
@@ -650,7 +671,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
   src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp src/app/runtime_tier_watch.cpp
-  src/app/runtime_full.cpp src/app/runtime_full_sprites.cpp
+  src/app/runtime_full.cpp src/app/runtime_full_sprites.cpp src/app/runtime_full_overlays.cpp
   src/app/runtime_render_tiers_check.cpp src/app/runtime_smooth_pan_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
@@ -696,8 +717,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
   oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
-  oa-formats-png oa-app-full-terrain oa-app-full-supersampling oa-app-card-executor
-  oa-present-gpu-world oa-app-full-models)
+  oa-formats-png oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog
+  oa-app-card-executor oa-present-gpu-world oa-app-full-models)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -965,6 +986,17 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_kill_board_check_dir}/kill-board.conf")
       set_tests_properties(native-kill-board PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_kill_board_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same in the Full tier, on SDL's software renderer taken as capable:
+      # the board's foreground painted on the overlay canvas and its shading
+      # a black quad the card blends under it at the shade level's alpha.
+      set(oa_kill_board_full_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/kill-board-full")
+      file(MAKE_DIRECTORY "${oa_kill_board_full_check_dir}")
+      add_test(NAME native-kill-board-full COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-kill-board --hardware-acceleration=full --force-capable
+        --preferences-file "${oa_kill_board_full_check_dir}/kill-board.conf")
+      set_tests_properties(native-kill-board-full PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_kill_board_full_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The headless skirmish's first ticks played in director mode, drawn,
       # reach the world the same ticks replayed there undrawn reach; director

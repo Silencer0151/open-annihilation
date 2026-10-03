@@ -2,12 +2,12 @@
 
 The core of the Full tier's drawing, in which the graphics card draws the
 battlefield itself: a command list that says what one frame asks the card
-to draw, and the executor that runs it on SDL's renderer. The Full tier's
-scene builder (`src/app/runtime_full.hpp`) builds frames from the
-battlefield's draw list, so far its sprite stage alone, and the tier's
-presentation (`src/app/runtime_full.cpp`) runs them. The standard tier and
-the Basic tier, which present frames the processor drew, never reach it,
-and no existing behaviour changes.
+to draw, and the executor that runs it on SDL's renderer. The Full tier
+(`src/app/runtime_full.cpp`) builds a frame of the whole battlefield from
+the planner's draw list through its stages (`src/app/runtime_full.hpp`,
+`src/app/full_fog.hpp`) and runs it here. The standard tier and the Basic
+tier, which present frames the processor drew, never reach it, and no
+existing behaviour changes.
 
 ## Entry points
 
@@ -174,16 +174,15 @@ bytes of the supersampled targets, which it never checks.
 
 ## Known limitations
 
-- Wired into the match for the terrain, and for the sprite stage of the
-  Full tier's scene builder, switched on by `--full-stages=sprites` beside
-  `--hardware-acceleration=full` (`src/app/README.md`): the Full tier
-  (`src/app/runtime_full.cpp`) draws the battlefield's terrain from the
-  terrain atlas's pages through the executor, then the stages' batches,
-  and the processor draws the rest over and under them; the models, fog
-  and overlays as card draws follow.
-- The model stage of the scene builder (`src/app/runtime_full.hpp`) builds
-  frames of the battlefield's models for the render tiers check and its
-  tests; no presented frame runs one yet.
+- Wired into the match for the Full tier (`src/app/README.md`): the Full
+  tier (`src/app/runtime_full.cpp`) draws the whole battlefield through
+  the executor, the terrain from the terrain atlas's pages, the fog's
+  passes, the sprite and model stages' batches and the painters'
+  darkening quads, with the painters' overlay canvas laid over it.
+- The frames the Full tier runs here are held to the processor's
+  picture on SDL's software renderer alone (`native-render-tiers`,
+  `src/app/README.md`); the golden images of whole frames the design
+  names are not made yet.
 - The composed darken mode and the pixel-art sampling mode are exercised
   only on renderers that take them; the software renderer takes neither,
   so the fallbacks are what the test covers.

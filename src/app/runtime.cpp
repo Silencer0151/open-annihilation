@@ -145,9 +145,6 @@ Runtime::Runtime(
       audio_player_(assets), offline_effects_(effect_boundary_, effect_boundary_) {
     if (extension_.frontend_game == nullptr)
         frontend_game_ = std::make_unique<oa::Game>();
-    // The Full tier's stages the command line switches on.
-    if (options_.full_stages != 0)
-        set_full_stages(options_.full_stages);
     if (const uint32_t draw_threads = options_.draw_threads.value_or(
             oa::platform::job_pool::default_threads(oa::platform::processor_count())
         );

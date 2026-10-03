@@ -14,9 +14,9 @@ namespace {
 constexpr uint8_t kFlashFade = 2;
 constexpr int32_t kBoardMargin = 6;
 constexpr int32_t kFirstRowBottom = kBoardTop + 0x34;
-constexpr int32_t kLocalHighlight = 0x1f;
-constexpr int32_t kLocalHighlightInner = 0x14;
-constexpr int32_t kBoardShade = -0x18;
+constexpr int32_t kLocalHighlight = kLocalRowLightLevel;
+constexpr int32_t kLocalHighlightInner = kLocalRowInnerLightLevel;
+constexpr int32_t kBoardShade = kBoardShadeLevel;
 
 bool on_board(World& world, const Player& player) noexcept {
     if (!player_participating(player))

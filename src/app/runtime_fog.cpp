@@ -35,17 +35,28 @@ void Runtime::apply_match_fog(
     if (!match_ || dest_w <= 0 || dest_h <= 0)
         return;
     const auto started = std::chrono::steady_clock::now();
+    // In the Full tier the graphics card draws the fog from the grid; the
+    // frame keeps the grid and rasterises nothing, and a frame with no fog
+    // keeps none.
+    const bool card_fog = full_frame_drawn();
+    const bool dithered =
+        (match_->state().game.graphics_flags & init::preference_flags::dithered_fog) != 0;
     std::span<const uint8_t> coverage;
     try {
         coverage = match_->player_coverage(static_cast<uint8_t>(match_view_player()));
     } catch (const std::exception&) {
+        if (card_fog)
+            note_full_fog_grid({}, 0, 0, dithered);
         return;
     }
     const auto& sight = match_->sight();
     const bool los_on = match_line_of_sight_on();
     const bool mapping_on = match_mapping_on();
-    if (coverage.empty() || sight.width <= 0 || sight.height <= 0 || (!los_on && !mapping_on))
+    if (coverage.empty() || sight.width <= 0 || sight.height <= 0 || (!los_on && !mapping_on)) {
+        if (card_fog)
+            note_full_fog_grid({}, 0, 0, dithered);
         return;
+    }
     ensure_fog_frames();
     auto zoom_fp = static_cast<uint32_t>(
         std::lround(static_cast<double>(draw_scale <= 0.0F ? 1.0F : draw_scale) * 65536.0)
@@ -81,8 +92,15 @@ void Runtime::apply_match_fog(
                 tile.unseen = 0;
         }
     // The fog pass reads the DitheredFog bit of the match's Game word.
-    fog_shading_.dithered =
-        (match_->state().game.graphics_flags & init::preference_flags::dithered_fog) != 0;
+    fog_shading_.dithered = dithered;
+    if (card_fog) {
+        note_full_fog_grid(grid, view.camera_x, view.camera_z, dithered);
+        phase_times_.fog += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - started
+        )
+                                .count();
+        return;
+    }
     oa::present::world_renderer::draw_fog_grid(
         destination, view, grid, fog_tiles_, fog_shading_, draw_pool_.get()
     );

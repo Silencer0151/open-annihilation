@@ -85,19 +85,24 @@ checks pass `--force-capable`, which lifts those locks:
 `native-engine-settings`, so that it can turn Vertical sync On and read it
 back, and set Hardware acceleration to Basic, Full and Off through the
 dialog in one step of its own, which from 2 GiB draws in the accelerated
-tier on SDL's software renderer, Full as Basic with the status saying so,
+tier on SDL's software renderer, Full in the full tier with the status
+saying so,
 and retries it after a drop or a function test forced to fail, every other
-step leaving it Off; and `native-render-tiers`,
+step leaving it Off; `native-kill-board-full`, which pins the kill board
+in the Full tier and holds the card's darkening of the world under it to
+the shade level's share within 2, where `native-kill-board` holds the
+processor's shade exactly; and `native-render-tiers`,
 `native-render-tiers-density` and `native-demo-render-tiers`, which with
 `--hardware-acceleration` run the start-up function test on SDL's software
 renderer and draw in the accelerated tier, switching it off and on as the
 flags would. That flag names Full, which forces the Full tier while it is
 not ready for players: the Basic cases run at `basic`, and the Full cases,
-the terrain drawn by the card from the terrain atlas's pages with the rest
-drawn by the processor over it, at `full`.
-With the bare flag `native-render-tiers` and `native-demo-render-tiers`
-also switch the Full tier's sprite stage on and hold its frames to the
-processor's composition, and set Enhanced anti-aliasing to 2x and 4x,
+the whole battlefield drawn by the card (the terrain, the fog, the
+sprites, the models and the darkening under the kill board and the
++stats panel) with the painters' overlay canvas laid over it, at `full`,
+held to the standard tier's picture of the same moment beside the card's
+own draws. With the bare flag `native-render-tiers` and
+`native-demo-render-tiers` also set Enhanced anti-aliasing to 2x and 4x,
 where the card draws the battlefield into a world target at that factor
 and the check holds the battlefield to the target read back and reduced
 on the processor as the card reduces it (see
@@ -267,11 +272,16 @@ walk runs:
   levels where the alpha table blends them, the squares exact, the lines
   covering the game's lines within a pixel; with the stage's order and
   batches, the fog's states (a sprite under a cell out of sight greyed,
-  under a never-mapped cell left out), the refusals, a frame overflowing
-  the pages and a pinned digest of its frame. `app-full-sprites-data` draws
-  a scene of the installed game's GAF frames through its palette and alpha
-  table the same way, against the processor and a reference that blends
-  to the true mean;
+  under a never-mapped cell left out, every sprite in colour under the
+  dithered option), the refusals, a frame overflowing the pages and a
+  pinned digest of its frame. `app-full-sprites-data` draws a scene of the
+  installed game's GAF frames through its palette and alpha table the same
+  way, against the processor and a reference that blends to the true mean;
+  `app-full-models` and `app-full-models-data` hold the model stage to the
+  processor's raster the same way, over synthetic scenes and over every
+  unit model of the installed game; `app-full-fog` checks the fog passes'
+  quads, corner alphas and placement and the painters' level quads with no
+  renderer at all;
 - `native-renderer-ladder` (`--check-renderer-ladder`) forces each failure
   the game handles while it runs and checks that it presents on through
   it, each frame after a failure equal to the frame composed on the

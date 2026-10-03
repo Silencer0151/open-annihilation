@@ -6,7 +6,6 @@
 // acceleration, video capture and showcase options (arm-first-mission and
 // skirmish-battle), and of the options and switches an extension takes.
 #include "oa/app/app.hpp"
-#include "full_stages.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/command_line.hpp"
@@ -262,44 +261,6 @@ int main() {
                     .hardware_acceleration == HardwareAcceleration::full,
         "flags that name one level are taken"
     );
-    // The Full tier's stages a run switches on while the tier is built:
-    // named, joined by commas, or none.
-    {
-        namespace full = oa::app::full;
-        expect(plain.full_stages == 0, "no stage without --full-stages");
-        expect(
-            parse({"--full-stages=sprites"}).full_stages == full::stage_sprites,
-            "--full-stages=sprites names the sprite stage"
-        );
-        expect(
-            parse({"--full-stages=terrain,sprites,models,fog"}).full_stages == full::every_stage,
-            "--full-stages names every stage joined by commas"
-        );
-        expect(parse({"--full-stages=none"}).full_stages == 0, "--full-stages=none names no stage");
-        expect(
-            rejection({"--full-stages=trees"}) ==
-                    "--full-stages: trees is not a stage; the stages are terrain, sprites, "
-                    "models and fog" &&
-                rejection({"--full-stages=sprites,Fog"}) ==
-                    "--full-stages: Fog is not a stage; the stages are terrain, sprites, models "
-                    "and fog",
-            "a word that is no stage's name is refused"
-        );
-        expect(
-            rejection({"--full-stages="}) ==
-                    "--full-stages takes stage names joined by commas, or none" &&
-                rejection({"--full-stages=sprites,"}) ==
-                    "--full-stages takes stage names joined by commas, or none" &&
-                rejection({"--full-stages=,sprites"}) ==
-                    "--full-stages takes stage names joined by commas, or none",
-            "an empty value or an empty word is refused"
-        );
-        expect(
-            full::stage_text(full::stage_sprites | full::stage_fog) == "sprites,fog" &&
-                full::stage_text(0) == "none",
-            "the stages' names read back"
-        );
-    }
     expect(
         parse({"--headless-check", "--no-hardware-acceleration"}).hardware_acceleration ==
                 HardwareAcceleration::off &&
@@ -331,11 +292,16 @@ int main() {
         "--force-capable goes with --check-engine-settings"
     );
     expect(
-        rejection({"--force-capable"}) == "--force-capable is accepted only with "
-                                          "--check-render-tiers and --check-engine-settings" &&
+        parse({"--check-kill-board", "--force-capable"}).force_capable,
+        "--force-capable goes with --check-kill-board"
+    );
+    expect(
+        rejection({"--force-capable"}) ==
+                "--force-capable is accepted only with --check-render-tiers, "
+                "--check-engine-settings and --check-kill-board" &&
             rejection({"--force-capable", "--check-navigation"}) ==
-                "--force-capable is accepted only with --check-render-tiers and "
-                "--check-engine-settings",
+                "--force-capable is accepted only with --check-render-tiers, "
+                "--check-engine-settings and --check-kill-board",
         "--force-capable is refused without a check that takes it"
     );
     expect(
@@ -642,14 +608,15 @@ int main() {
         "the render tiers check is not headless"
     );
     expect(
-        rejection({"--force-capable"}) == "--force-capable is accepted only with "
-                                          "--check-render-tiers and --check-engine-settings",
+        rejection({"--force-capable"}) ==
+            "--force-capable is accepted only with --check-render-tiers, "
+            "--check-engine-settings and --check-kill-board",
         "--force-capable alone is refused"
     );
     expect(
         rejection({"--check-match-layers", "--force-capable"}) ==
-            "--force-capable is accepted only with --check-render-tiers and "
-            "--check-engine-settings",
+            "--force-capable is accepted only with --check-render-tiers, "
+            "--check-engine-settings and --check-kill-board",
         "--force-capable with another check is refused"
     );
     // --native-density opens the render tiers check's window at the

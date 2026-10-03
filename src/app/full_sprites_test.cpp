@@ -1055,7 +1055,8 @@ void test_lines(float zoom) {
 
 /// The fog's states: a sprite under a cell out of sight drawn from its
 /// greyed cell, one under a never-mapped cell left out, one in sight and
-/// one off the sight grid drawn in colour.
+/// one off the sight grid drawn in colour; under the dithered option
+/// nothing is greyed.
 void test_fog_states() {
     const auto palette = test_palette();
     const oa::Palette entries = oa::present::palette_from_bytes(palette);
@@ -1152,6 +1153,13 @@ void test_fog_states() {
     const CardDraw sight_only = draw_card(side, list, palette, background, 1.0F, no_mapping);
     OA_CHECK(sight_only.result.sprites == 4 && sight_only.result.greyed == 2);
     OA_CHECK(compare(sight_only.field, greyed_expected, {}).most_beside == 0);
+    // Under the dithered option the fog dithers the ground out of sight
+    // instead of greying it, and every sprite is drawn in colour.
+    full::SightView dithered = sight;
+    dithered.dithered = true;
+    const CardDraw under_dither = draw_card(side, list, palette, background, 1.0F, dithered);
+    OA_CHECK(under_dither.result.sprites == 4 && under_dither.result.greyed == 0);
+    OA_CHECK(compare(under_dither.field, colour_expected, {}).most_beside == 0);
 }
 
 /// A frame whose distinct sprites exceed the pages' memory draws nothing,
@@ -1243,28 +1251,24 @@ void test_refusals() {
     OA_CHECK(full::emit_sprites(inputs, side.pages, {}, frame).batches == 0);
 }
 
-/// The stage's helpers: the kinds the card takes, the sampling by zoom,
+/// The stage's helpers: the kinds each stage takes, the sampling by zoom,
 /// the line width, a flat colour through the gamma, and a line's quad.
 void test_helpers() {
-    const uint16_t kinds = full::card_kinds(full::stage_sprites);
     for (const auto kind :
          {WorldDrawKind::sprite,
           WorldDrawKind::blended_sprite,
           WorldDrawKind::pixel_square,
           WorldDrawKind::line,
           WorldDrawKind::selection_line})
-        OA_CHECK((kinds & oa::app::card_kind_bit(kind)) != 0);
+        OA_CHECK(full::sprite_kind(kind) && !full::model_kind(kind));
     for (const auto kind :
-         {WorldDrawKind::commit,
-          WorldDrawKind::commit_always,
-          WorldDrawKind::model,
+         {WorldDrawKind::model,
           WorldDrawKind::projectile,
           WorldDrawKind::debris,
           WorldDrawKind::fragment})
-        OA_CHECK((kinds & oa::app::card_kind_bit(kind)) == 0);
-    OA_CHECK(full::card_kinds(0) == 0);
-    OA_CHECK(full::card_kinds(full::stage_terrain) == 0);
-    OA_CHECK(full::card_kinds(full::every_stage) == kinds);
+        OA_CHECK(full::model_kind(kind) && !full::sprite_kind(kind));
+    for (const auto kind : {WorldDrawKind::commit, WorldDrawKind::commit_always})
+        OA_CHECK(!full::sprite_kind(kind) && !full::model_kind(kind));
     OA_CHECK(full::sprite_sampling(1.0F) == card::Sampling::nearest);
     OA_CHECK(full::sprite_sampling(2.0F) == card::Sampling::nearest);
     OA_CHECK(full::sprite_sampling(4.0F) == card::Sampling::nearest);
@@ -1307,7 +1311,6 @@ void test_helpers() {
     card::CardFrame dot;
     full::append_line_quad(dot, 3.5F, 3.5F, 3.5F, 3.5F, 1.0F, {});
     OA_CHECK(dot.vertices[0].x == 3.0F && dot.vertices[1].x == 4.0F);
-    OA_CHECK(full::stages_built == full::stage_sprites);
 }
 
 /// Draws a list of sprites as the design has the card draw them, on the

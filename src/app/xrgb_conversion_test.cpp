@@ -488,6 +488,165 @@ void overlay_holds_what_was_painted() {
     CHECK(short_bands == std::vector<uint8_t>(bands - 1, 7));
 }
 
+void key_colour_is_the_first_outside_the_palette() {
+    // Entries are 4 bytes; the fourth byte is not a colour.
+    const auto entry = [](uint8_t red, uint8_t green, uint8_t blue) {
+        return std::array<uint8_t, 4>{red, green, blue, 0x7f};
+    };
+    const auto key_of = [](const std::vector<std::array<uint8_t, 4>>& entries) {
+        std::vector<uint8_t> bytes;
+        for (const auto& colour : entries)
+            bytes.insert(bytes.end(), colour.begin(), colour.end());
+        return oa::app::overlay_key_colour(bytes);
+    };
+    // No palette: black.
+    CHECK((key_of({}) == std::array<uint8_t, 3>{0, 0, 0}));
+    // Black held, in any order and more than once: the next blue.
+    CHECK(
+        (key_of({entry(0, 0, 2), entry(0, 0, 0), entry(0, 0, 1), entry(0, 0, 0)}) ==
+         std::array<uint8_t, 3>{0, 0, 3})
+    );
+    // A gap before the highest held colour is taken, whatever the fourth byte.
+    CHECK((
+        key_of({entry(0, 0, 0), entry(0, 0, 1), entry(0, 0, 3)}) == std::array<uint8_t, 3>{0, 0, 2}
+    ));
+    // Every blue of black's green: the key carries into green.
+    std::vector<std::array<uint8_t, 4>> blues;
+    for (int blue = 0; blue < 256; ++blue)
+        blues.push_back(entry(0, 0, static_cast<uint8_t>(blue)));
+    CHECK((key_of(blues) == std::array<uint8_t, 3>{0, 1, 0}));
+    // The game's palette of 256 colours leaves a key at or below 0x000100.
+    const auto key = key_of(blues);
+    CHECK(key[0] == 0 && (key[1] == 0 || (key[1] == 1 && key[2] == 0)));
+    // A trailing part entry is ignored.
+    const std::vector<uint8_t> part{0, 0, 0, 0, 0, 0, 1};
+    CHECK((oa::app::overlay_key_colour(part) == std::array<uint8_t, 3>{0, 0, 1}));
+    // The key is never a colour the palette holds.
+    std::mt19937 random(test_seed + 5);
+    for (int round = 0; round < 20; ++round) {
+        std::vector<uint8_t> bytes(256U * 4U);
+        for (auto& byte : bytes)
+            byte = static_cast<uint8_t>(random() % 4U);
+        const auto found = oa::app::overlay_key_colour(bytes);
+        bool held = false;
+        for (std::size_t at = 0; at < bytes.size(); at += 4)
+            held = held || (bytes[at] == found[0] && bytes[at + 1] == found[1] &&
+                            bytes[at + 2] == found[2]);
+        CHECK(!held);
+    }
+}
+
+void keyed_overlay_holds_what_was_painted() {
+    std::mt19937 random(test_seed + 6);
+    std::array<uint8_t, 256> gamma{};
+    for (std::size_t level = 0; level < gamma.size(); ++level)
+        gamma[level] = static_cast<uint8_t>(std::min<std::size_t>(255U, level + level / 4U));
+    constexpr uint32_t width = 203;
+    constexpr uint32_t height = 130; // five bands, the last a part one
+    constexpr std::array<uint8_t, 3> key{0, 0, 3};
+    const uint32_t bands = job_pool::bands_of_rows(height, oa::app::xrgb_band_rows);
+    // A canvas cleared to the key, with a few pixels painted in the first
+    // and the fourth band, one of them a colour one byte off the key.
+    std::vector<uint8_t> canvas(static_cast<std::size_t>(width) * height * 3U);
+    for (std::size_t at = 0; at < canvas.size(); at += 3)
+        std::memcpy(&canvas[at], key.data(), 3);
+    const auto paint = [&](uint32_t x, uint32_t y, std::array<uint8_t, 3> colour) {
+        std::memcpy(&canvas[(static_cast<std::size_t>(y) * width + x) * 3U], colour.data(), 3);
+    };
+    paint(0, 0, {1, 2, 3});
+    paint(202, 31, {0, 0, 2});
+    paint(77, 100, {255, 255, 255});
+    paint(78, 100, {0, 0, 4});
+    std::vector<std::unique_ptr<job_pool::Pool>> pools;
+    for (const uint32_t threads : pool_sizes)
+        pools.push_back(std::make_unique<job_pool::Pool>(threads));
+    const std::size_t pitch = static_cast<std::size_t>(width) * 4U + row_slack;
+    const std::array<uint8_t, 256>* const tables[] = {nullptr, &gamma};
+    for (const auto* table : tables) {
+        std::vector<uint8_t> alone(pitch * height, untouched);
+        std::vector<uint8_t> alone_bands(bands, 7);
+        oa::app::convert_rgb24_keyed_overlay_argb(
+            canvas.data(), key, width, height, alone.data(), pitch, table, alone_bands, nullptr
+        );
+        bool all = true;
+        uint32_t opaque = 0;
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                const auto at = (static_cast<std::size_t>(y) * width + x) * 3U;
+                const bool painted = std::memcmp(&canvas[at], key.data(), 3) != 0;
+                const auto level = [&](std::size_t index) -> uint32_t {
+                    return table != nullptr ? (*table)[canvas[index]] : canvas[index];
+                };
+                const uint32_t expected = painted ? oa::app::overlay_opaque | (level(at) << 16) |
+                                                        (level(at + 1) << 8) | level(at + 2)
+                                                  : 0U;
+                uint32_t pixel = 0;
+                std::memcpy(&pixel, &alone[y * pitch + x * 4U], 4);
+                all = all && pixel == expected;
+                opaque += painted ? 1U : 0U;
+            }
+            for (std::size_t spare = width * 4U; spare < pitch; ++spare)
+                all = all && alone[y * pitch + spare] == untouched;
+        }
+        CHECK(all);
+        CHECK(opaque == 4);
+        CHECK((alone_bands == std::vector<uint8_t>{1, 0, 0, 1, 0}));
+        for (const auto& pool : pools) {
+            std::vector<uint8_t> pixels(pitch * height, untouched);
+            std::vector<uint8_t> pool_bands(bands, 7);
+            oa::app::convert_rgb24_keyed_overlay_argb(
+                canvas.data(),
+                key,
+                width,
+                height,
+                pixels.data(),
+                pitch,
+                table,
+                pool_bands,
+                pool.get()
+            );
+            CHECK(pixels == alone);
+            CHECK(pool_bands == alone_bands);
+        }
+    }
+    // The key painted over its own base converts as the base conversion
+    // converts a canvas that equals its base: the same transparent words
+    // and bands.
+    {
+        std::vector<uint8_t> base(canvas.size());
+        for (std::size_t at = 0; at < base.size(); at += 3)
+            std::memcpy(&base[at], key.data(), 3);
+        std::vector<uint8_t> keyed(pitch * height, untouched);
+        std::vector<uint8_t> keyed_bands(bands, 7);
+        std::vector<uint8_t> by_difference(pitch * height, untouched);
+        std::vector<uint8_t> difference_bands(bands, 7);
+        oa::app::convert_rgb24_keyed_overlay_argb(
+            canvas.data(), key, width, height, keyed.data(), pitch, &gamma, keyed_bands, nullptr
+        );
+        oa::app::convert_rgb24_overlay_argb(
+            canvas.data(),
+            base.data(),
+            width,
+            height,
+            by_difference.data(),
+            pitch,
+            &gamma,
+            difference_bands,
+            nullptr
+        );
+        CHECK(keyed == by_difference);
+        CHECK(keyed_bands == difference_bands);
+    }
+    // Too few band entries: nothing is written.
+    std::vector<uint8_t> pixels(pitch * height, untouched);
+    std::vector<uint8_t> short_bands(bands - 1, 7);
+    oa::app::convert_rgb24_keyed_overlay_argb(
+        canvas.data(), key, width, height, pixels.data(), pitch, nullptr, short_bands, nullptr
+    );
+    CHECK(pixels == std::vector<uint8_t>(pitch * height, untouched));
+    CHECK(short_bands == std::vector<uint8_t>(bands - 1, 7));
+}
+
 } // namespace
 
 int main() {
@@ -498,6 +657,8 @@ int main() {
     front_end_frame_serves_as_argb();
     rows_of_a_wider_picture_convert_alike();
     overlay_holds_what_was_painted();
+    key_colour_is_the_first_outside_the_palette();
+    keyed_overlay_holds_what_was_painted();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return EXIT_FAILURE;
@@ -505,7 +666,7 @@ int main() {
     std::puts(
         "xrgb conversion: every pixel packed alike on every pool, RGB565 as SDL packs it, "
         "rectangles as the whole frame's, the front end as opaque ARGB8888, "
-        "overlays of what was painted"
+        "overlays of what was painted, over a base and over a key colour"
     );
     return EXIT_SUCCESS;
 }

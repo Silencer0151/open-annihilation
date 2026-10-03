@@ -3,7 +3,6 @@
 
 // Command-line parsing for oa-game.
 #include "oa/app/app.hpp"
-#include "full_stages.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
@@ -28,8 +27,6 @@ namespace {
 
 /// The flag that names a level of hardware acceleration, before its value.
 constexpr std::string_view kAccelerationLevelFlag = "--hardware-acceleration=";
-/// The flag that names the Full tier's stages the card draws, before its value.
-constexpr std::string_view kFullStagesFlag = "--full-stages=";
 
 constexpr std::size_t kMaximumRunFrames = 10'000'000;
 
@@ -426,18 +423,7 @@ namespace {
             result.force_capable = true;
         else if (argument == "--native-density")
             result.native_density = true;
-        else if (argument.starts_with(kFullStagesFlag)) {
-            std::string refused;
-            if (!full::parse_stages(
-                    argument.substr(kFullStagesFlag.size()), result.full_stages, refused
-                ))
-                throw std::runtime_error(
-                    refused.empty() ? "--full-stages takes stage names joined by commas, or none"
-                                    : "--full-stages: " + refused +
-                                          " is not a stage; the stages are terrain, sprites, "
-                                          "models and fog"
-                );
-        } else if (argument == "--frame-rate")
+        else if (argument == "--frame-rate")
             result.frame_rate = parse_frame_rate(
                 value(argument),
                 1,
@@ -606,7 +592,6 @@ namespace {
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
                    "[--hardware-acceleration[=off|basic|full] | --no-hardware-acceleration] "
-                   "[--full-stages=STAGE[,STAGE]] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -722,10 +707,11 @@ namespace {
         throw std::runtime_error(
             "--check-render-tiers draws in a window and cannot be used with --headless-check"
         );
-    if (result.force_capable && !result.check_render_tiers && !result.check_engine_settings)
+    if (result.force_capable && !result.check_render_tiers && !result.check_engine_settings &&
+        !result.check_kill_board)
         throw std::runtime_error(
-            "--force-capable is accepted only with --check-render-tiers and "
-            "--check-engine-settings"
+            "--force-capable is accepted only with --check-render-tiers, "
+            "--check-engine-settings and --check-kill-board"
         );
     if (result.native_density && !result.check_render_tiers)
         throw std::runtime_error("--native-density is accepted only with --check-render-tiers");

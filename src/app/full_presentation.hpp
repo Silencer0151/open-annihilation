@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// What the Full tier's presentation holds between frames (runtime_full.cpp):
-// the card's executor on the game's renderer, the match's terrain atlas,
-// built as the match loads, and the pages it was uploaded as, the target a
-// zoom between whole numbers is drawn through, the stages of the scene
-// builder switched on with the sprite pages and the card's pages that hold
-// them, the overlays of what the processor drew over the terrain and over
-// the stages, and what the last Full frame drew, which the render tiers
-// check reads.
+// What the Full tier's presentation holds between frames (runtime_full.cpp,
+// runtime_full_overlays.cpp): the card's executor on the game's renderer,
+// the match's terrain atlas, built as the match loads, and the pages it and
+// its greyed variant were uploaded as, the sprite pages and the card's
+// pages that hold them, the model stage, the target a zoom between whole
+// numbers is drawn through, the world target the battlefield is
+// anti-aliased through, the fog grid the last planned frame built, the
+// overlay canvas's key colour and the overlay of what the painters painted,
+// the quads the painters asked the card to darken the world with, and what
+// the last Full frame drew, which the render tiers check reads.
 #pragma once
 
 #include "oa/app/runtime.hpp"
@@ -17,24 +19,22 @@
 #include "full_terrain.hpp"
 #include "oa/app/card/executor.hpp"
 #include "oa/present/gpu_world/sprite_pages.hpp"
+#include "oa/present/world_renderer/world_fog.hpp"
 #include "runtime_full.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace oa::app {
 
 /// A call of the card's own that failed, or the Full function test that
-/// did, which drops Full to Basic for the rest of the run (Runtime::drop_full).
-class FullCardError : public std::runtime_error {
-  public:
-
-    using std::runtime_error::runtime_error;
-};
+/// did, which drops Full to Basic for the rest of the run (Runtime::drop_full):
+/// the error the stages name (full::CardError), under the presentation's
+/// own name.
+using FullCardError = full::CardError;
 
 /// The atlas levels the Full tier uploads and draws from: 0 and 1, since
 /// the game's zoom never goes below one half.
@@ -61,6 +61,19 @@ struct FullCardPage {
     /// The sprite page's revision whose texels it holds; 0 for none
     /// uploaded yet, which uploads the whole page.
     uint64_t revision{};
+};
+
+/// A quad a painter after the fog asked the card to draw over the world
+/// under it, in place of reading and shading the world itself: the kill
+/// board's shade and light levels and the +stats panel's fills
+/// (Runtime::paint_world_level, Runtime::paint_world_blend).
+struct FullWorldQuad {
+    int32_t x{}; ///< battlefield pixels, from the battlefield's top-left corner
+    int32_t y{};
+    int32_t width{};
+    int32_t height{};
+    card::Colour colour{}; ///< through the display gamma, at the quad's alpha
+    card::Blend blend{card::Blend::alpha};
 };
 
 struct Runtime::FullPresentation {
@@ -111,6 +124,8 @@ struct Runtime::FullPresentation {
     /// A page or target may be made for the first time now
     /// (render_policy::first_use_allowed), which the stages' pages read.
     bool creation_allowed{true};
+    bool overflow_logged{};    ///< the sprite pages overflowing a frame has been logged
+    bool stage_error_logged{}; ///< a model stage error has been logged
 
     // The match's terrain atlas and what it was built from. Once the pages
     // are filled the atlas keeps its grid, its slots and its pages' sizes
@@ -123,9 +138,13 @@ struct Runtime::FullPresentation {
     std::array<uint8_t, 256> atlas_gamma_table{};
     uint32_t atlas_page_edge{};
     std::vector<card::PageHandle> pages; ///< the executor's page of each atlas page, in order
-    uint64_t page_bytes{};               ///< texel bytes uploaded to the pages
-    uint64_t atlas_build_ns{};           ///< the time the atlas took to build
-    uint64_t page_upload_ns{};           ///< the time the pages took to make and fill
+    /// The greyed terrain: the atlas built again with a palette of the gray
+    /// table's entries, which the fog's greyed pass reads; it shares the
+    /// colour atlas's slots and grid, so only its pages are kept.
+    std::vector<card::PageHandle> greyed_pages;
+    uint64_t page_bytes{};     ///< texel bytes uploaded to the pages, greyed ones included
+    uint64_t atlas_build_ns{}; ///< the time the atlases took to build
+    uint64_t page_upload_ns{}; ///< the time the pages took to make and fill
     /// The pages were made as the match loaded (make_full_match_pages),
     /// before its first frame, not at a frame.
     bool pages_from_load{};
@@ -168,33 +187,14 @@ struct Runtime::FullPresentation {
 
     card::CardFrame frame; ///< the frame being built, its memory kept between frames
 
-    // The stages of the scene builder beside the terrain (full_stages.hpp).
-    uint8_t stages{}; ///< the stages switched on, among those this build draws
-    /// The last match frame's world layer leaves the card's kinds undrawn,
-    /// and the base below was kept from it.
-    bool frame_drawn{};
-    bool stages_logged{};   ///< the stages' first frame has been logged
-    bool overflow_logged{}; ///< the pages overflowing a frame has been logged
-    /// The sprite pages, with the match's palette and gray table.
+    // The sprite stage: the pages, with the match's palette and gray table,
+    // and the card's pages that hold them.
     oa::present::gpu_world::SpritePages sprite_pages{oa::present::gpu_world::Limits{
         full_sprite_page_side, full_largest_sprite_page_side, full_sprite_page_memory
     }};
-    /// The palette generation of the sprite pages the gray table was built for.
-    uint64_t gray_generation{};
+    uint64_t gray_generation{}; ///< the pages' palette generation the gray table was built for
     std::vector<FullCardPage> card_pages; ///< the card's pages, by the sprite pages' index
-    card::CardFrame stage_frame;          ///< the stages' batches, run after the first overlay
-    /// The world layer after the fog's gray and before the fog's black and
-    /// the painters, without the card's kinds (capture_full_base).
-    renderer::Surface base;
-    /// What the fog's black and the painters changed over the base, as
-    /// ARGB8888 words, and its texture: the second overlay.
-    TiledTexture painted_texture;
-    std::vector<uint8_t> painted;
-    std::vector<uint8_t> painted_opaque_bands;
-    std::vector<uint8_t> painted_uploaded_bands;
-    bool painted_uploaded{};
-    full::SpriteStageResult sprites{}; ///< what the sprite stage did on the last frame built
-    uint64_t stage_ns{}; ///< the time the stages took to build, upload and run, last frame
+    full::SpriteStageResult sprites{};    ///< what the sprite stage did on the last frame built
 
     /// Sets the sprite pages' palette and gray table to the match's.
     ///
@@ -231,22 +231,59 @@ struct Runtime::FullPresentation {
     /// Destroys the card's pages of the sprite pages.
     void destroy_sprite_card_pages() noexcept;
 
-    // The overlay of what the processor drew over its terrain base.
+    // The model stage, and what it was given.
+    full::ModelStage models;
+    oa::PaletteBytes models_palette{}; ///< the palette the stage was last set to
+    float models_gamma{};              ///< and the gamma; 0 before the first
+    /// FX.GAF "shadow" frame 0 as the stage reads it, from the match's sprite.
+    oa::formats::gaf::RenderedFrame projectile_shadow;
+    const void* projectile_shadow_source{}; ///< the sprite's pixels it was made from
+
+    /// The fog the last planned frame built (note_full_fog_grid), which the
+    /// card's fog passes draw from.
+    struct Fog {
+        oa::present::world_renderer::FogGrid grid; ///< empty when the frame draws no fog
+        int32_t camera_x{};                        ///< the map pixel the grid was built for
+        int32_t camera_z{};
+        bool dithered{};         ///< the DitheredFog option
+        card::Colour unmapped{}; ///< UI colour 0 through the display gamma
+        card::Colour dither{};   ///< palette index 0 through the display gamma
+    } fog;
+
+    // The overlay canvas: the key colour the world layer is cleared to
+    // before the painters paint it, and the overlay of what they painted.
+    std::array<uint8_t, 3> overlay_key{};
+    oa::PaletteBytes overlay_key_palette{}; ///< the palette the key was found for
+    bool overlay_key_found{};
+    /// The last match frame's world layer is the overlay canvas, not a
+    /// picture, until the world is drawn whole again (full_frame_drawn).
+    bool canvas_drawn{};
+    /// The camera and the zoom the canvas frame was planned at, which the
+    /// card's frame draws from (note_full_canvas).
+    uint32_t frame_camera_x{};
+    uint32_t frame_camera_y{};
+    float frame_zoom{};
     TiledTexture overlay_texture;
     std::vector<uint8_t> overlay; ///< ARGB8888 words, the battlefield's size
     std::vector<uint8_t> opaque_bands;
     std::vector<uint8_t> uploaded_bands;
     bool overlay_uploaded{};
     ScaledWorldCounts counts; ///< what the overlay's texture was made of
+    /// The quads the painters after the fog asked for this frame, in paint
+    /// order (paint_world_level, paint_world_blend).
+    std::vector<FullWorldQuad> world_quads;
 
     // What the last Full match frame drew, for the checks and the statistics.
-    bool drawn{}; ///< the last match frame presented drew its terrain on the card
+    bool drawn{}; ///< the last match frame presented was drawn by the card
     float drawn_zoom{};
     full_terrain::TerrainDrawPlan plan{};
-    uint32_t drawn_quads{};
+    uint32_t drawn_quads{};       ///< terrain quads
+    uint32_t drawn_fog_quads{};   ///< the fog passes' quads
+    uint32_t drawn_world_quads{}; ///< the painters' quads
     uint32_t drawn_batches{};
     bool drawn_through_target{};
-    uint64_t build_ns{};   ///< the time the frame took to build
+    uint64_t build_ns{};   ///< the time the terrain, the fog and the painters' quads took to build
+    uint64_t stage_ns{};   ///< the time the sprite and model stages took to build and upload
     uint64_t execute_ns{}; ///< the time the card's call took
     uint64_t overlay_ns{}; ///< the time the overlay took to convert and upload
     uint64_t frames{};     ///< match frames the Full branch presented

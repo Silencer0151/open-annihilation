@@ -153,14 +153,6 @@ enum class WorldDrawKind : uint8_t {
     fragment,       ///< a shatter fragment (WorldDrawList::fragments)
 };
 
-/// Returns a draw kind's bit in a word of kinds (WorldFrameDraw::card_kinds).
-///
-/// @param kind the kind
-/// @return 1 shifted by the kind's number
-[[nodiscard]] constexpr uint16_t card_kind_bit(WorldDrawKind kind) noexcept {
-    return static_cast<uint16_t>(1U << static_cast<unsigned>(kind));
-}
-
 /// One draw of the battlefield.
 struct WorldDraw {
     WorldDrawKind kind{};
@@ -292,10 +284,6 @@ struct WorldFrameDraw {
     oa::present::model::ModelDisplay* display{};
     const oa::Sprite* projectile_shadow{}; ///< FX.GAF "shadow" frame 0; no data for none
     alignas(4) oa::Rect32 debris_view{};   ///< the rectangle debris origins are culled to
-    /// The bits (card_kind_bit) of the kinds of draw the graphics card
-    /// draws in the Full tier (runtime_full.hpp), which every band leaves
-    /// undrawn; 0 draws every kind, as the game always has.
-    uint16_t card_kinds{};
     /// Pixels across and down a frame line (a laser, lightning or a debug
     /// beam) is drawn thick, so that it stays visible once the frame is
     /// reduced to the screen; 1 draws it as the game always has.

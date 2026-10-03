@@ -116,6 +116,52 @@ void convert_rgb24_overlay_argb(
     platform::job_pool::Pool* pool
 ) noexcept;
 
+/// Bytes one entry of a palette takes in the game's palette bytes: red,
+/// green, blue and a fourth byte the colour does not use.
+inline constexpr std::size_t palette_entry_bytes = 4;
+
+/// Finds the colour an overlay canvas is cleared to: the lowest 24-bit
+/// colour, counted as 0xRRGGBB from black up, that no entry of the palette
+/// holds, so that a painter, which writes palette colours, can never paint
+/// it. A palette of 256 colours leaves it at or below 0x000100.
+///
+/// @param palette the palette's bytes, palette_entry_bytes an entry; a
+///        trailing part entry, and entries past the 256th, are ignored
+/// @return the key colour, red, green and blue
+[[nodiscard]] std::array<uint8_t, 3> overlay_key_colour(std::span<const uint8_t> palette) noexcept;
+
+/// Converts a canvas cleared to a key colour and painted over into an
+/// ARGB8888 overlay, in bands of xrgb_band_rows rows: 0, transparent, where
+/// the canvas still holds the key, and the canvas's colour through the
+/// gamma table, opaque (overlay_opaque), where it does not. Notes, for each
+/// band, whether it holds an opaque pixel, as convert_rgb24_overlay_argb
+/// does.
+///
+/// Every row is the same whichever thread converts it.
+///
+/// @param canvas the painted canvas, `width` * 3 bytes a row, rows one after another
+/// @param key the colour the canvas was cleared to (overlay_key_colour)
+/// @param width pixels in a row
+/// @param height rows
+/// @param[out] pixels the overlay's rows, each at least `width` * 4 bytes, 4-byte aligned
+/// @param pitch bytes from one row of `pixels` to the next
+/// @param gamma the display gamma's table; null when the gamma is 1
+/// @param[out] opaque_bands one entry for each band of xrgb_band_rows rows, at least
+///        ceil(height / xrgb_band_rows) of them: 1 where the band holds an
+///        opaque pixel, else 0
+/// @param pool threads to convert the bands on; null converts them on the calling thread
+void convert_rgb24_keyed_overlay_argb(
+    const uint8_t* canvas,
+    std::array<uint8_t, 3> key,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* pixels,
+    std::size_t pitch,
+    const std::array<uint8_t, 256>* gamma,
+    std::span<uint8_t> opaque_bands,
+    platform::job_pool::Pool* pool
+) noexcept;
+
 /// Packs one RGB24 row into RGB565 words: red's top 5 bits, green's top 6 and
 /// blue's top 5, from the top bit down, each channel through the gamma table
 /// first when there is one; the 16-bit pixels a window of that format shows
