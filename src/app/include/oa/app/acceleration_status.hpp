@@ -5,8 +5,9 @@
 // row's status and whether nothing in the game could help the run, and
 // whether Vertical sync is out of reach, from what the run knows of its
 // renderer, its machine and the match. The graphics card scales the frames
-// only with a renderer able to and 2 GiB of memory; every other run draws as
-// the game always has.
+// only with a renderer able to and 2 GiB of memory, and draws the
+// battlefield, in the Full tier, only where Full is asked for and nothing
+// has kept it to Basic; every other run draws as the game always has.
 #pragma once
 
 #include "oa/app/render_policy.hpp"
@@ -23,6 +24,22 @@ enum class RecordedTrouble : uint8_t {
     none,    ///< nothing
     failure, ///< the graphics driver failed while the game ran
     stopped, ///< the game stopped while using it: a crash or a hang
+};
+
+/// Why the Basic tier draws where Full was asked for, which the status's
+/// first line says while the graphics card scales the frames.
+enum class FullShortfall : uint8_t {
+    none,          ///< nothing keeps Full to Basic
+    not_built,     ///< this build cannot draw Full
+    lacks_feature, ///< Full's function test failed or the card cannot make Full's pages
+    failed_before, ///< a full-unusable record stands against the driver
+    stopped,       ///< a call of the Full tier's own failed in this run
+    slow_frames,   ///< the step-down passed Full's last rung in this run
+    /// The memory guard dropped Full in this run, which setting the setting
+    /// to Off and back does not lift.
+    too_little_memory,
+    cannot_save,          ///< Full's trial record could not be written
+    waiting_for_game_end, ///< a shared game or a replay began without Full
 };
 
 /// What the run knows of whether the graphics card could scale its frames:
@@ -86,6 +103,18 @@ struct AccelerationFacts {
     bool shared_game{};      ///< a match played with other machines is under way
     bool replay{};           ///< a recorded game is being played back
     bool tier_accelerated{}; ///< the graphics card scales the frames now
+    /// The graphics card draws the battlefield now: the Full tier, which
+    /// counts as scaling the frames too.
+    bool tier_full{};
+    /// Why Basic draws where Full was asked for; none while Full draws or
+    /// Basic was asked for.
+    FullShortfall full_shortfall{FullShortfall::none};
+    /// Full's step-down lowered its anti-aliasing for slow frames in this
+    /// run, short of dropping it.
+    bool less_anti_aliasing{};
+    /// Full's anti-aliasing while it draws: the samples a pixel across, 1
+    /// for none.
+    uint8_t full_supersample{1};
     /// The graphics card started at the lowest budget, where nothing smooths
     /// the zoomed-out view.
     bool no_smoothing{};
@@ -165,7 +194,12 @@ struct AccelerationReport {
 /// never lifts a failed function test), unless a record skipped a driver
 /// at this start or, on an unable renderer, a driver failed in this run; a
 /// renderer not yet looked at, a record, and a trial that could not be
-/// written leave it within reach, so that the row can try again.
+/// written leave it within reach, so that the row can try again. While the
+/// graphics card draws the battlefield the status is Full in use, with
+/// less anti-aliasing once its step-down lowered it; while it scales the
+/// frames with Full asked for, the status says why Basic draws instead
+/// (FullShortfall), Full not in this build where nothing else does, in a
+/// replay saying so for a shared game's wait.
 /// Vertical sync is out of reach on SDL's software renderer (unless
 /// --force-capable), on a renderer whose device each change resets, and
 /// once the renderer refused it.
@@ -187,18 +221,24 @@ struct AccelerationReport {
 /// the records live on disk, a trial that could not be written and records
 /// that could not be read after an unclean start; a shared game or a
 /// replay the tier waits for; whether the graphics card scales the frames
-/// now; and what it does at the rung. Vertical sync's facts, whether the
-/// step-down has lowered the rung for slow frames and what the records
+/// now, and whether it draws the battlefield; where Full was asked for and
+/// Basic draws, why (FullShortfall), in the order the tier is decided:
+/// Full not in this build, its function test failed, a full-unusable
+/// record, its drop by a card failure, the memory guard, slow frames or a
+/// trial that could not be written, or a shared game or a replay begun
+/// without it; Full's anti-aliasing at the rung; and what the card does
+/// at the rung. Vertical sync's facts, whether the step-down has lowered
+/// the rung for slow frames or Full's anti-aliasing, and what the records
 /// hold against drivers are left for the caller.
 ///
 /// @param inputs the facts the tier is decided from
 /// @param rung the rung the accelerated tier draws at
-/// @param tier_accelerated the graphics card scales the frames now
+/// @param tier the tier drawing now: standard, accelerated (Basic) or full
 /// @return the facts
 [[nodiscard]] AccelerationFacts tier_acceleration_facts(
     const render_policy::TierInputs& inputs,
     const render_policy::LadderState& rung,
-    bool tier_accelerated
+    render_policy::RenderTier tier
 ) noexcept;
 
 /// Returns what the graphics card does at a rung of the step-down ladder,

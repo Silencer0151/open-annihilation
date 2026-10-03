@@ -852,6 +852,9 @@ std::string path_trial_unwritten_log_line(renderer_state::AcceleratedPath path) 
     case renderer_state::AcceleratedPath::blend:
         line += "two-level reduction";
         break;
+    case renderer_state::AcceleratedPath::full:
+        line += "drawing of the battlefield";
+        break;
     }
     line += " is not used: its trial cannot be written to ";
     line += renderer_state::records_file_name;
@@ -1118,8 +1121,7 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
     sync_record_facts();
     const render_policy::TierDecision decision =
         render_policy::step_tier(tier_, false, function_test_hooks()).decision;
-    AccelerationFacts facts =
-        tier_acceleration_facts(tier_, start_rung(), render_policy::card_tier(decision.tier));
+    AccelerationFacts facts = tier_acceleration_facts(tier_, start_rung(), decision.tier);
     fill_record_facts(facts);
     const AccelerationReport report = report_acceleration(facts);
     std::cout
@@ -1465,9 +1467,12 @@ uint64_t RendererHost::machine_memory() const noexcept {
 void RendererHost::sync_record_facts() noexcept {
     try {
         const std::string driver = record_driver();
+        const bool recorded =
+            records_.storage() != renderer_state::Storage::disabled && !driver.empty();
         tier_.accelerated_unusable_record =
-            records_.storage() != renderer_state::Storage::disabled && !driver.empty() &&
-            !renderer_state::acceleration_allowed(records_.records(), driver, false);
+            recorded && !renderer_state::acceleration_allowed(records_.records(), driver, false);
+        tier_.full_unusable_record =
+            recorded && !renderer_state::full_allowed(records_.records(), driver, false);
     } catch (const std::exception&) {
         // The name could not be copied; the fact stays as it was.
     }

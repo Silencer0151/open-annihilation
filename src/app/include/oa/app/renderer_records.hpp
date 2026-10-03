@@ -6,12 +6,14 @@
 // the sentinel that marks the stage a start has reached, kept apart in
 // renderer-sentinel.conf. A stage the game died in is a strike against its
 // driver; the same strike at two starts or runs in a row becomes a record,
-// failed-driver (the walk of SDL's drivers skips it) or accelerated-unusable
-// (the driver stays on the standard tier). On Windows before Vista and on
-// Linux the first left-over trial is already a record, since a driver fault
-// there can stop the whole system. On a machine under 2 GiB, where the
-// accelerated tier never runs, nothing of that tier is struck or recorded,
-// and what a run with more memory left of it stays for a start from 2 GiB.
+// failed-driver (the walk of SDL's drivers skips it), accelerated-unusable
+// (the driver stays on the standard tier) or full-unusable (the driver
+// draws the battlefield on the processor, in the Basic tier, while the
+// graphics card still scales it). On Windows before Vista and on Linux the
+// first left-over trial is already a record, since a driver fault there can
+// stop the whole system. On a machine under 2 GiB, where the accelerated
+// tier never runs, nothing of that tier is struck or recorded, and what a
+// run with more memory left of it stays for a start from 2 GiB.
 //
 // Everything here is pure: the text of each key and value, the rules that
 // turn what a start or a run saw into strikes and records, and the sentinel
@@ -54,6 +56,9 @@ inline constexpr std::string_view strike_prefix = "strike.";
 inline constexpr std::string_view failed_driver_prefix = "failed-driver.";
 /// Start of the key of a driver's accelerated-unusable record.
 inline constexpr std::string_view accelerated_unusable_prefix = "accelerated-unusable.";
+/// Start of the key of a driver's full-unusable record, which keeps the
+/// Full tier off the driver while the Basic tier stands.
+inline constexpr std::string_view full_unusable_prefix = "full-unusable.";
 /// Start of the key of a driver's remembered step-down rung.
 inline constexpr std::string_view scale_level_prefix = "scale-level.";
 /// The one key of renderer-sentinel.conf.
@@ -85,6 +90,10 @@ enum class AcceleratedPath : uint8_t {
     magnify,  ///< the magnified world's scene tiles and overlay
     prescale, ///< the prescale target
     blend,    ///< the half level of the two-level zoom-out
+    /// The Full tier: the battlefield drawn by the graphics card from its
+    /// pages and targets. A left-over trial of it records full-unusable,
+    /// which leaves the Basic tier standing.
+    full,
 };
 
 /// How a platform counts a left-over trial.
@@ -132,6 +141,9 @@ enum class StrikeStage : uint8_t {
     call,    ///< an accelerated-only call that failed while running
     lost,    ///< the device was lost while running
     resets,  ///< three device resets within 60 s while running
+    /// A call only the Full tier makes failed while running: a page or a
+    /// target the card could not make or fill, or a frame it refused.
+    card,
 };
 
 /// A strike against a driver: evidence seen once, which becomes a record only
@@ -139,8 +151,8 @@ enum class StrikeStage : uint8_t {
 struct Strike {
     StrikeStage stage{StrikeStage::none};
     AcceleratedPath path{AcceleratedPath::magnify}; ///< for StrikeStage::path
-    /// For StrikeStage::present and call: the failing call, one word as the
-    /// host names it.
+    /// For StrikeStage::present, call and card: the failing call, one word
+    /// as the host names it.
     std::string call{};
 };
 
@@ -160,9 +172,10 @@ enum class RecordedFailure : uint8_t {
     call,    ///< accelerated-only calls
     lost,    ///< a lost device
     resets,  ///< repeated device resets
+    card,    ///< calls only the Full tier makes
 };
 
-/// A failed-driver or accelerated-unusable record.
+/// A failed-driver, accelerated-unusable or full-unusable record.
 struct Record {
     RecordedFailure failure{RecordedFailure::none};
     bool told{}; ///< the main menu's notice has shown it
@@ -188,6 +201,9 @@ struct DriverRecords {
     bool struck_this_run{};
     Record failed_driver{};        ///< the walk skips the driver
     Record accelerated_unusable{}; ///< the driver stays on the standard tier
+    /// The driver stays on the Basic tier where Full is asked for: the
+    /// graphics card scales the battlefield but does not draw it.
+    Record full_unusable{};
     std::optional<ScaleLevel> scale_level{};
 };
 
@@ -275,11 +291,22 @@ find_driver(const Records& records, std::string_view driver) noexcept;
     const Records& records, std::string_view driver, bool hardware_acceleration_flag
 ) noexcept;
 
+/// Tells whether a driver may use the Full tier, as far as the records say.
+///
+/// @param records the records
+/// @param driver the driver's name
+/// @param full_flag --hardware-acceleration=full was given, which ignores
+///     full-unusable records
+/// @return false when the driver is recorded full-unusable and the flag was
+///     not given
+[[nodiscard]] bool
+full_allowed(const Records& records, std::string_view driver, bool full_flag) noexcept;
+
 /// Tells whether a record has not been shown by the main menu's notice yet.
 ///
 /// @param records the records
-/// @return true when a failed-driver or accelerated-unusable record lacks the
-///     told mark
+/// @return true when a failed-driver, accelerated-unusable or full-unusable
+///     record lacks the told mark
 [[nodiscard]] bool has_untold_record(const Records& records) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -414,8 +441,9 @@ struct LeftoverOutcome {
 ///
 /// A left-over trial decides whatever the sentinel holds, or when it cannot
 /// be read: it is a strike of its stage against its driver, and a record of
-/// accelerated-unusable when the same strike stood already, or at once where
-/// the first counts. The trial is then erased. Under 2 GiB a left-over trial
+/// accelerated-unusable, or of full-unusable for the Full tier's path, when
+/// the same strike stood already, or at once where the first counts. The
+/// trial is then erased. Under 2 GiB a left-over trial
 /// stays as it is and decides nothing, and the sentinel is applied as if
 /// there were none. Otherwise a left-over create or standard sentinel is a
 /// strike, and the same strike twice in a row records failed-driver; against
@@ -465,7 +493,8 @@ Change note_path_passed(Records& records, std::string_view driver, AcceleratedPa
 /// Clears a driver's strike of a failure seen while running, at the end of
 /// a run on the driver that did not see it again.
 ///
-/// Under 2 GiB, where no accelerated-only call is made, a call strike stays.
+/// Under 2 GiB, where no accelerated-only call and no call of the Full
+/// tier's own is made, a call or card strike stays.
 ///
 /// @param[in,out] records the records
 /// @param driver the driver the run used
@@ -484,18 +513,21 @@ struct DriverFacts {
 ///
 /// A present error is a strike, and the same in the next run on the driver
 /// records failed-driver. An accelerated-only call that fails is a strike,
-/// and the same in the next run records accelerated-unusable. A lost device
+/// and the same in the next run records accelerated-unusable; a call of the
+/// Full tier's own that fails is a strike, and the same in the next run
+/// records full-unusable. A lost device
 /// or three resets records accelerated-unusable at once and is a strike, and
 /// the same in the next run records failed-driver. The same failure again in
 /// the run that struck counts for nothing more. Nothing is recorded on a
 /// driver that loses its device in ordinary use, and never failed-driver
-/// against software. Under 2 GiB a failed call is not struck, and a lost
-/// device or three resets keep only their strike, with failed-driver the
-/// next run as above, and no accelerated-unusable record.
+/// against software. Under 2 GiB a failed call, of either tier, is not
+/// struck, and a lost device or three resets keep only their strike, with
+/// failed-driver the next run as above, and no accelerated-unusable record.
 ///
 /// @param[in,out] records the records
 /// @param driver the driver
-/// @param failure the failure: a strike of stage present, call, lost or resets
+/// @param failure the failure: a strike of stage present, call, card, lost
+///     or resets
 /// @param facts what the driver is
 /// @param rules whether the machine is under 2 GiB
 /// @return what changed
@@ -519,16 +551,18 @@ Change note_running_failure(
 /// @return what changed
 Change note_adapter(Records& records, std::string_view description);
 
-/// Marks every record of a driver as shown by the main menu's notice.
+/// Marks every record of a driver, of the three kinds, as shown by the main
+/// menu's notice.
 ///
 /// @param[in,out] records the records
 /// @param driver the driver
 /// @return what changed
 Change mark_told(Records& records, std::string_view driver);
 
-/// Clears every strike, failed-driver and accelerated-unusable record and
-/// remembered rung, as switching the setting Off then On and Restore defaults
-/// do, so that every driver gets a fresh try.
+/// Clears every strike, failed-driver, accelerated-unusable and
+/// full-unusable record and remembered rung, as switching the setting Off
+/// then On, raising it from Basic to Full and Restore defaults do, so that
+/// every driver gets a fresh try.
 ///
 /// The adapter, the native-density key and a standing trial stay: they
 /// describe the machine and this start, not failures.
@@ -621,6 +655,9 @@ enum class NoticeKind : uint8_t {
     /// The graphics card could not be used, so the processor draws the game:
     /// an accelerated-unusable record.
     accelerated_unusable,
+    /// The graphics card could not draw the battlefield, so it only scales
+    /// it now: a full-unusable record.
+    full_unusable,
 };
 
 /// A record the main menu's notice has not shown yet.
@@ -631,8 +668,9 @@ struct PendingNotice {
 
 /// Returns the record the main menu tells of next.
 ///
-/// A driver with both records has one notice, failed-driver's, since the
-/// game changed driver; mark_told then marks both.
+/// A driver with several records has one notice: failed-driver's, since the
+/// game changed driver, else accelerated-unusable's, since the processor
+/// draws the game, else full-unusable's; mark_told then marks them all.
 ///
 /// @param records the records
 /// @param passed_over drivers whose notice the run has dealt with already

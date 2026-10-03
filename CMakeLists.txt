@@ -897,14 +897,25 @@ if(OA_BUILD_PLATFORM)
       # step-down from the full budget to the standard tier, one rung a
       # step, which the standard tier never feeds; and the memory guard,
       # through the check's own sample of the system's memory, refuses the
-      # tier's buffers, then drops it for the run. Each skips under 2 GiB.
+      # tier's buffers, then drops it for the run. The same two for the Full
+      # tier, switched on as --hardware-acceleration=full would: slow frames
+      # take Full's anti-aliasing down and then Full itself, to Basic, and
+      # the memory guard refuses Full's pages and drops Full before Basic.
+      # Each skips under 2 GiB.
       add_test(NAME native-renderer-ladder-slow COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --skip-intro --mute --check-renderer-ladder --render-fault slow
         --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-slow.conf")
       add_test(NAME native-renderer-ladder-memory COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --skip-intro --mute --check-renderer-ladder --render-fault memory
         --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-memory.conf")
-      set_tests_properties(native-renderer-ladder-slow native-renderer-ladder-memory PROPERTIES
+      add_test(NAME native-renderer-ladder-full-slow COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder --render-fault full-slow
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-full-slow.conf")
+      add_test(NAME native-renderer-ladder-full-memory COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-renderer-ladder --render-fault full-memory
+        --preferences-file "${oa_renderer_ladder_dir}/renderer-ladder-full-memory.conf")
+      set_tests_properties(native-renderer-ladder-slow native-renderer-ladder-memory
+        native-renderer-ladder-full-slow native-renderer-ladder-full-memory PROPERTIES
         TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_renderer_ladder_dir}"
         SKIP_RETURN_CODE 77

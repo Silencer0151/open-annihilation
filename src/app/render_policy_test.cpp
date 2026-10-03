@@ -584,7 +584,86 @@ void test_decide_full() {
         {"full dropped for the run",
          [](TierInputs& i) {
              i.flag = AccelerationFlag::full;
-             i.full_drop = true;
+             i.full_drop = FullDrop::card_failure;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full dropped by its function test",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = FullDrop::function_test;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full dropped by the memory guard",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = FullDrop::memory;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full dropped for slow frames",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = FullDrop::slow_frames;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full's trial unwritten",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = FullDrop::trial_unwritten;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full-unusable record",
+         [](TierInputs& i) {
+             i.setting = HardwareAcceleration::full;
+             i.full_unusable_record = true;
+         },
+         RenderTier::accelerated,
+         full_ready ? FullReason::unusable_record : FullReason::not_ready},
+        {"full-unusable record, flag full",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_unusable_record = true;
+         },
+         RenderTier::full,
+         FullReason::full},
+        {"full-unusable record, flag basic",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::basic;
+             i.full_unusable_record = true;
+         },
+         RenderTier::accelerated,
+         FullReason::not_asked},
+        {"a shared game begun in basic",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.match = SharedMatchGate{MatchKind::shared_game, true, false};
+         },
+         RenderTier::accelerated,
+         FullReason::waiting_for_match_end},
+        {"a replay begun in full",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.match = SharedMatchGate{MatchKind::replay, true, true};
+         },
+         RenderTier::full,
+         FullReason::full},
+        {"a shared game begun in full, then a record ignored by the flag",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_unusable_record = true;
+             i.match = SharedMatchGate{MatchKind::shared_game, true, true};
+         },
+         RenderTier::full,
+         FullReason::full},
+        {"a record before a drop before the wait",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = FullDrop::slow_frames;
+             i.match = SharedMatchGate{MatchKind::shared_game, true, false};
          },
          RenderTier::accelerated,
          FullReason::dropped},
@@ -630,14 +709,63 @@ void test_decide_full() {
         OA_CHECK(decision.full == FullReason::not_asked);
         OA_CHECK(!card_tier(decision.tier));
     }
-    // Off and back lifts Full's drop with the others.
-    TierInputs dropped = accelerated_run();
-    dropped.flag = AccelerationFlag::full;
-    dropped.full_drop = true;
-    OA_CHECK(decide_render_tier(dropped).tier == RenderTier::accelerated);
-    forget_failures(dropped);
-    OA_CHECK(!dropped.full_drop);
-    OA_CHECK(decide_render_tier(dropped).tier == RenderTier::full);
+    // Off and back lifts Full's drop with the others, but not the memory
+    // guard's.
+    for (const FullDrop drop :
+         {FullDrop::card_failure,
+          FullDrop::function_test,
+          FullDrop::slow_frames,
+          FullDrop::trial_unwritten}) {
+        TierInputs dropped = accelerated_run();
+        dropped.flag = AccelerationFlag::full;
+        dropped.full_drop = drop;
+        OA_CHECK(decide_render_tier(dropped).tier == RenderTier::accelerated);
+        forget_failures(dropped);
+        OA_CHECK(dropped.full_drop == FullDrop::none);
+        OA_CHECK(decide_render_tier(dropped).tier == RenderTier::full);
+    }
+    TierInputs short_of_memory = accelerated_run();
+    short_of_memory.flag = AccelerationFlag::full;
+    short_of_memory.full_drop = FullDrop::memory;
+    forget_failures(short_of_memory);
+    OA_CHECK(short_of_memory.full_drop == FullDrop::memory);
+    OA_CHECK(decide_render_tier(short_of_memory).full == FullReason::dropped);
+    // The shared game's gate: begun in Full it stays Full until a frame is
+    // drawn below Full, other than for a lost device, or something stops
+    // the tier; begun in Basic, Full waits for the match to end; a frame
+    // below Basic stops both.
+    TierInputs shared = accelerated_run();
+    shared.flag = AccelerationFlag::full;
+    begin_match(shared.match, MatchKind::shared_game, true, true);
+    OA_CHECK(shared.match.accelerated && shared.match.full);
+    OA_CHECK(decide_render_tier(shared).tier == RenderTier::full);
+    shared.device_lost = true;
+    note_match_frame(shared.match, decide_render_tier(shared).tier, true);
+    shared.device_lost = false;
+    OA_CHECK(shared.match.full && decide_render_tier(shared).tier == RenderTier::full);
+    shared.flag = AccelerationFlag::basic;
+    note_match_frame(shared.match, decide_render_tier(shared).tier, false);
+    OA_CHECK(shared.match.accelerated && !shared.match.full);
+    shared.flag = AccelerationFlag::full;
+    OA_CHECK(decide_render_tier(shared).tier == RenderTier::accelerated);
+    OA_CHECK(decide_render_tier(shared).full == FullReason::waiting_for_match_end);
+    shared.flag = AccelerationFlag::off;
+    note_match_frame(shared.match, decide_render_tier(shared).tier, false);
+    OA_CHECK(!shared.match.accelerated && !shared.match.full);
+    end_match(shared.match);
+    shared.flag = AccelerationFlag::full;
+    OA_CHECK(decide_render_tier(shared).tier == RenderTier::full);
+    begin_match(shared.match, MatchKind::replay, true, false);
+    OA_CHECK(shared.match.accelerated && !shared.match.full);
+    stop_until_match_end(shared.match);
+    OA_CHECK(!shared.match.accelerated && !shared.match.full);
+    end_match(shared.match);
+    // A match played alone gates nothing; Full is never begun without Basic.
+    begin_match(shared.match, MatchKind::none, true, true);
+    OA_CHECK(!shared.match.accelerated && !shared.match.full);
+    begin_match(shared.match, MatchKind::shared_game, false, true);
+    OA_CHECK(!shared.match.accelerated && !shared.match.full);
+    end_match(shared.match);
     // Full switches the presentation on as Basic does, and off again.
     const TierDecision full{RenderTier::full, TierReason::accelerated, FullReason::full};
     OA_CHECK(tier_action(full, false) == TierAction::switch_on);
@@ -686,6 +814,7 @@ void test_decide_every_combination() {
     const SharedMatchGate gates[] = {
         SharedMatchGate{},
         SharedMatchGate{MatchKind::shared_game, true},
+        SharedMatchGate{MatchKind::shared_game, true, true},
         SharedMatchGate{MatchKind::replay, false}
     };
     const uint64_t memories[] = {0, 1792 * mebibyte - 1, 1792 * mebibyte, 16 * gibibyte};
@@ -726,11 +855,15 @@ void test_decide_every_combination() {
                                 card_tier(decision.tier))
                                 ++mismatches;
                             // Of the frames the card presents, Full is exactly
-                            // those the flag forces while Full is not ready.
+                            // those the flag forces while Full is not ready,
+                            // outside a shared game or a replay the tier did
+                            // not begin as Full.
                             const bool full_expected =
-                                expected && (flag == AccelerationFlag::full ||
-                                             (full_ready && flag == AccelerationFlag::none &&
-                                              setting == HardwareAcceleration::full));
+                                expected &&
+                                (flag == AccelerationFlag::full ||
+                                 (full_ready && flag == AccelerationFlag::none &&
+                                  setting == HardwareAcceleration::full)) &&
+                                (gate.kind == MatchKind::none || gate.full);
                             if ((decision.tier == RenderTier::full) != full_expected)
                                 ++mismatches;
                             // The function test may run exactly where the tier would
@@ -760,7 +893,7 @@ void test_decide_every_combination() {
             }
         }
     }
-    OA_CHECK(combinations == (1u << 11) * 4 * 3 * 4 * 3 * 4);
+    OA_CHECK(combinations == (1u << 11) * 4 * 3 * 4 * 4 * 4);
     OA_CHECK(mismatches == 0);
     OA_CHECK(tests_allowed_under_2_gib == 0);
     OA_CHECK(accelerated > 0);
@@ -1581,6 +1714,65 @@ void test_step_down_rungs() {
     pixelart.filtered_chrome = false;
     OA_CHECK(step_down(pixelart, FrameKind::other, false).card == CardFilter::linear);
 
+    // Full's rungs come first, from frames of any pool: anti-aliasing 4 to
+    // 2 to 1, then Full to Basic, which leaves Basic's ladder at its top;
+    // a run without anti-aliasing has one Full rung.
+    OA_CHECK(!top.full && top.supersample == full_supersample_least);
+    LadderState full = top;
+    full.full = true;
+    full.supersample = full_supersample_most;
+    for (const FrameKind pool : {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
+        LadderState rung = step_down(full, pool, true);
+        OA_CHECK(rung.full && rung.supersample == 2);
+        rung = step_down(rung, pool, true);
+        OA_CHECK(rung.full && rung.supersample == full_supersample_least);
+        rung = step_down(rung, pool, true);
+        OA_CHECK(!rung.full && rung.supersample == full_supersample_least);
+        LadderState basic = top;
+        basic.full = false;
+        OA_CHECK(rung == basic);
+    }
+    LadderState plain = top;
+    plain.full = true;
+    OA_CHECK(!step_down(plain, FrameKind::other, false).full);
+    OA_CHECK(step_down(plain, FrameKind::other, false) == top);
+    // An odd count halves down and never below the least.
+    LadderState odd = full;
+    odd.supersample = 3;
+    OA_CHECK(step_down(odd, FrameKind::other, false).supersample == full_supersample_least);
+    // The start clamps the anti-aliasing asked for to Full's range.
+    StartInputs anti_aliased = measured_desktop();
+    anti_aliased.full_supersample = 4;
+    OA_CHECK(start_rung(anti_aliased).supersample == 4);
+    anti_aliased.full_supersample = 16;
+    OA_CHECK(start_rung(anti_aliased).supersample == full_supersample_most);
+    anti_aliased.full_supersample = 0;
+    OA_CHECK(start_rung(anti_aliased).supersample == full_supersample_least);
+    // Stepping up: Basic's rungs first, Full's anti-aliasing last, within
+    // the ceiling; a remembered rung keeps the anti-aliasing it reached.
+    LadderState ceiling = start_ceiling(anti_aliased);
+    anti_aliased.full_supersample = 4;
+    ceiling = start_ceiling(anti_aliased);
+    OA_CHECK(ceiling.supersample == 4);
+    LadderState lowered = ceiling;
+    lowered.full = true;
+    lowered.supersample = 1;
+    lowered.budget = SceneBudget::reduced;
+    LadderState raised = step_up(lowered, ceiling);
+    OA_CHECK(raised.budget == SceneBudget::full && raised.supersample == 1);
+    raised = step_up(raised, ceiling);
+    OA_CHECK(raised.supersample == 2 && raised.full);
+    raised = step_up(raised, ceiling);
+    OA_CHECK(raised.supersample == 4);
+    OA_CHECK(step_up(raised, ceiling) == raised);
+    LadderState remembered = ceiling;
+    remembered.full = true;
+    remembered.supersample = 2;
+    OA_CHECK(resume_rung(anti_aliased, remembered, 90).supersample == 2);
+    OA_CHECK(resume_rung(anti_aliased, remembered, 10).supersample == 4);
+    remembered.supersample = 8;
+    OA_CHECK(resume_rung(anti_aliased, remembered, 90).supersample == 4);
+
     // With magnify off and NEAREST chrome, the card's rungs change nothing
     // and are passed: the next step is the standard tier.
     LadderState bottom = top;
@@ -1847,6 +2039,58 @@ void test_step_down_rules() {
     clock = FrameClock{};
     clock.paced = 120;
     OA_CHECK(time_to_step(ladder, clock, 16 * millisecond, FrameKind::zoomed_in, seconds_20) == 0);
+}
+
+/// Full's rungs through the feeder: slow frames of any pool halve the
+/// anti-aliasing twice, then drop Full to Basic (StepResult::basic), after
+/// which Basic's ladder steps from its top; a clock running behind sheds
+/// the anti-aliasing with Basic's budget and magnification; and a run
+/// without anti-aliasing drops to Basic at its first step.
+void test_step_down_full_rungs() {
+    constexpr uint64_t seconds_20 = 20'000'000'000;
+    LadderState full = start_rung(measured_desktop());
+    full.full = true;
+    full.supersample = full_supersample_most;
+    for (const FrameKind kind : {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
+        ScaleStepDown ladder = start_step_down(full);
+        FrameClock clock;
+        const auto step = [&]() {
+            StepResult result = StepResult::none;
+            const uint64_t start = clock.now_ns;
+            while (clock.now_ns - start < seconds_20 && result == StepResult::none)
+                result = feed_step_down(ladder, clock.frame(40 * millisecond, kind));
+            return result;
+        };
+        OA_CHECK(step() == StepResult::stepped);
+        OA_CHECK(ladder.state.full && ladder.state.supersample == 2);
+        OA_CHECK(step() == StepResult::stepped);
+        OA_CHECK(ladder.state.full && ladder.state.supersample == full_supersample_least);
+        OA_CHECK(step() == StepResult::basic);
+        LadderState basic = full;
+        basic.full = false;
+        basic.supersample = full_supersample_least;
+        OA_CHECK(ladder.state == basic);
+        // Basic's own rungs follow, from the top.
+        OA_CHECK(step() == StepResult::stepped);
+        OA_CHECK(!ladder.state.full && !ladder.state.standard);
+    }
+    ScaleStepDown plain = start_step_down(start_rung(measured_desktop()));
+    plain.state.full = true;
+    FrameClock clock;
+    StepResult result = StepResult::none;
+    while (clock.now_ns < seconds_20 && result == StepResult::none)
+        result = feed_step_down(plain, clock.frame(40 * millisecond, FrameKind::other));
+    OA_CHECK(result == StepResult::basic && !plain.state.full);
+    // The shed takes the anti-aliasing too, and only once there is
+    // something to shed.
+    ScaleStepDown behind = start_step_down(full);
+    FrameSample sample = clock.frame(16 * millisecond, FrameKind::other);
+    sample.clock_behind = true;
+    sample.passes_ns = millisecond;
+    OA_CHECK(feed_step_down(behind, sample) == StepResult::shed);
+    OA_CHECK(behind.state.full && behind.state.supersample == full_supersample_least);
+    OA_CHECK(behind.state.budget == SceneBudget::none && !behind.state.magnify);
+    OA_CHECK(feed_step_down(behind, sample) == StepResult::none);
 }
 
 void test_step_down_pools() {
@@ -2318,9 +2562,39 @@ void test_rung_without() {
     LadderState pixelart = top;
     pixelart.card = CardFilter::pixelart;
     OA_CHECK(rung_without(pixelart, AcceleratedBuffer::prescale) == pixelart);
+    // Full's pages and targets: Basic, and nothing else; Basic's rungs make
+    // neither.
+    LadderState full = top;
+    full.full = true;
+    full.supersample = 2;
+    for (const AcceleratedBuffer buffer :
+         {AcceleratedBuffer::card_pages, AcceleratedBuffer::card_targets}) {
+        lowered = rung_without(full, buffer);
+        expected = full;
+        expected.full = false;
+        OA_CHECK(lowered == expected);
+        OA_CHECK(rung_without(top, buffer) == top);
+    }
 
-    // Each change is described; the shed of a clock running behind as one.
+    // Each change is described; the shed of a clock running behind as one,
+    // and Full's rungs before Basic's.
     OA_CHECK(describe_step(top, top) == "nothing changed");
+    LadderState less = full;
+    less.supersample = 1;
+    OA_CHECK(describe_step(full, less) == "the graphics card draws with less anti-aliasing");
+    LadderState basic_again = full;
+    basic_again.full = false;
+    OA_CHECK(
+        describe_step(full, basic_again) == "the graphics card no longer draws the battlefield"
+    );
+    LadderState shed_full = less;
+    shed_full.budget = SceneBudget::none;
+    shed_full.magnify = false;
+    OA_CHECK(
+        describe_step(full, shed_full) ==
+        "the graphics card draws with less anti-aliasing, the zoomed-out view is no longer "
+        "smoothed and the graphics card no longer magnifies the battlefield"
+    );
     LadderState blend = top;
     blend.method = ZoomOutMethod::blend;
     OA_CHECK(describe_step(top, blend) == "the graphics card blends the zoomed-out view");
@@ -2956,6 +3230,13 @@ void test_forget_failures() {
         OA_CHECK(inputs.function_test == FunctionTest::passed);
         OA_CHECK(inputs.drop == Drop::none);
     }
+    // Full's drops likewise, but for the memory guard's.
+    inputs.full_drop = FullDrop::memory;
+    forget_failures(inputs);
+    OA_CHECK(inputs.full_drop == FullDrop::memory);
+    inputs.full_drop = FullDrop::card_failure;
+    forget_failures(inputs);
+    OA_CHECK(inputs.full_drop == FullDrop::none);
 }
 
 /// A stand-in for the start-up function test: what it finds, and how often
@@ -3255,6 +3536,7 @@ int main() {
     test_step_down_rungs();
     test_resume_and_step_up();
     test_step_down_rules();
+    test_step_down_full_rungs();
     test_step_down_pools();
     test_step_down_costs();
     test_step_target_rate();

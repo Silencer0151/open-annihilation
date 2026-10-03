@@ -164,6 +164,15 @@ MemoryGuardAction observe_memory(
 /// @param[in,out] guard the guard
 void resume_memory_guard(MemoryGuard& guard) noexcept;
 
+/// Lets a tripped guard judge again, as when the Full tier it tripped
+/// against has freed its pages and targets and the Basic tier draws on:
+/// the trip is forgotten and the watch starts afresh (resume_memory_guard),
+/// so that the tier left is judged on the memory then free, and trips the
+/// guard again, for good, when memory stays short.
+///
+/// @param[in,out] guard the guard
+void retry_memory_guard(MemoryGuard& guard) noexcept;
+
 /// Tells whether the accelerated tier may make a new buffer of its own (the
 /// scene, the overlay or a prescale target) without tripping the guard: free
 /// physical memory stays at or above its threshold after it, and committed

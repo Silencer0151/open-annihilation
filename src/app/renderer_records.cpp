@@ -13,7 +13,7 @@ namespace oa::app::renderer_state {
 namespace {
 
 /// The words of the accelerated paths, in the order of AcceleratedPath.
-constexpr std::array<std::string_view, 3> path_words{"magnify", "prescale", "blend"};
+constexpr std::array<std::string_view, 4> path_words{"magnify", "prescale", "blend", "full"};
 
 /// The words of the sentinel's stages, in the order of SentinelStage.
 constexpr std::array<std::string_view, 6> sentinel_words{
@@ -22,15 +22,31 @@ constexpr std::array<std::string_view, 6> sentinel_words{
 
 /// The words of the strikes' stages, in the order of StrikeStage; none has
 /// no word.
-constexpr std::array<std::string_view, 9> strike_words{
-    "", "create", "standard", "probe", "path", "present", "call", "lost", "resets"
+constexpr std::array<std::string_view, 10> strike_words{
+    "", "create", "standard", "probe", "path", "present", "call", "lost", "resets", "card"
 };
 
 /// The words of the recorded failures, in the order of RecordedFailure; none
 /// has no word.
-constexpr std::array<std::string_view, 6> failure_words{
-    "", "stopped", "present", "call", "lost", "resets"
+constexpr std::array<std::string_view, 7> failure_words{
+    "", "stopped", "present", "call", "lost", "resets", "card"
 };
+
+/// The kinds of record, each under its own key.
+enum class RecordKind : uint8_t {
+    failed_driver,        ///< failed-driver.<driver>
+    accelerated_unusable, ///< accelerated-unusable.<driver>
+    full_unusable,        ///< full-unusable.<driver>
+};
+
+/// Tells whether a strike names the call that failed.
+///
+/// @param stage the strike's stage
+/// @return true for a present error and a failed call of either tier
+bool names_call(StrikeStage stage) noexcept {
+    return stage == StrikeStage::present || stage == StrikeStage::call ||
+           stage == StrikeStage::card;
+}
 
 /// Thousandths in a whole number, for the median of a scale-level record.
 constexpr uint32_t thousandths_per_unit = 1000;
@@ -183,7 +199,7 @@ bool holds_anything(const DriverRecords& entry) noexcept {
     return entry.strike.stage != StrikeStage::none ||
            entry.failed_driver.failure != RecordedFailure::none ||
            entry.accelerated_unusable.failure != RecordedFailure::none ||
-           entry.scale_level.has_value();
+           entry.full_unusable.failure != RecordedFailure::none || entry.scale_level.has_value();
 }
 
 /// Returns a driver's entry for changing it, or none.
@@ -238,6 +254,7 @@ std::optional<StrikeWords> parse_strike_stage(const std::vector<std::string_view
     }
     case StrikeStage::present:
     case StrikeStage::call:
+    case StrikeStage::card:
         if (words.size() < 2 || !valid_driver_name(words[1]))
             return std::nullopt;
         parsed.strike.call = std::string(words[1]);
@@ -257,26 +274,42 @@ std::string format_strike_stage(const Strike& strike) {
     std::string text(strike_words[static_cast<size_t>(strike.stage)]);
     if (strike.stage == StrikeStage::path)
         text += " " + std::string(path_word(strike.path));
-    else if (strike.stage == StrikeStage::present || strike.stage == StrikeStage::call)
+    else if (names_call(strike.stage))
         text += " " + strike.call;
     return text;
+}
+
+/// Tells whether a kind of record may say a failure.
+///
+/// @param kind the record's kind
+/// @param failure the failure
+/// @return true for the failures the kind records: failed-driver a stop, a
+///     present error, a lost device or resets; accelerated-unusable a
+///     stop, a failed call, a lost device or resets; full-unusable a stop
+///     or a failed call of the Full tier's own
+bool records_failure(RecordKind kind, RecordedFailure failure) noexcept {
+    switch (kind) {
+    case RecordKind::failed_driver:
+        return failure != RecordedFailure::call && failure != RecordedFailure::card;
+    case RecordKind::accelerated_unusable:
+        return failure != RecordedFailure::present && failure != RecordedFailure::card;
+    case RecordKind::full_unusable:
+        return failure == RecordedFailure::stopped || failure == RecordedFailure::card;
+    }
+    return false;
 }
 
 /// Reads a recorded failure from its word, as a key of its kind allows it.
 ///
 /// @param word the word
-/// @param failed_driver a failed-driver record, which never names a call;
-///     else an accelerated-unusable record, which never names a present
-///     error
+/// @param kind the record's kind (records_failure)
 /// @return the failure, or nullopt for a word the kind does not allow
-std::optional<RecordedFailure> parse_failure(std::string_view word, bool failed_driver) noexcept {
+std::optional<RecordedFailure> parse_failure(std::string_view word, RecordKind kind) noexcept {
     for (size_t index = 1; index < failure_words.size(); ++index) {
         if (failure_words[index] != word)
             continue;
         const auto failure = static_cast<RecordedFailure>(index);
-        if (failed_driver && failure == RecordedFailure::call)
-            return std::nullopt;
-        if (!failed_driver && failure == RecordedFailure::present)
+        if (!records_failure(kind, failure))
             return std::nullopt;
         return failure;
     }
@@ -330,6 +363,20 @@ void record_accelerated_unusable(
     change.new_record = true;
 }
 
+/// Records full-unusable against a driver. The Basic tier stands, so the
+/// native-density key stays.
+///
+/// @param[in,out] entry the driver's entry
+/// @param failure what failed
+/// @param[in,out] change what changed
+void record_full_unusable(DriverRecords& entry, RecordedFailure failure, Change& change) {
+    if (entry.full_unusable.failure == failure)
+        return;
+    entry.full_unusable = Record{failure, false};
+    change.changed = true;
+    change.new_record = true;
+}
+
 /// Applies a start-up stage's left-over evidence to a driver: a strike, or
 /// the record it makes with the same strike from an earlier run before it.
 ///
@@ -347,7 +394,9 @@ void strike_or_record(
         set_strike(entry, strike, change);
         return;
     }
-    if (strike.stage == StrikeStage::probe || strike.stage == StrikeStage::path)
+    if (strike.stage == StrikeStage::path && strike.path == AcceleratedPath::full)
+        record_full_unusable(entry, RecordedFailure::stopped, change);
+    else if (strike.stage == StrikeStage::probe || strike.stage == StrikeStage::path)
         record_accelerated_unusable(records, entry, RecordedFailure::stopped, change);
     else
         record_failed_driver(entry, RecordedFailure::stopped, change);
@@ -393,7 +442,7 @@ bool same_strike(const Strike& first, const Strike& second) noexcept {
         return false;
     if (first.stage == StrikeStage::path)
         return first.path == second.path;
-    if (first.stage == StrikeStage::present || first.stage == StrikeStage::call)
+    if (names_call(first.stage))
         return first.call == second.call;
     return true;
 }
@@ -447,13 +496,19 @@ bool acceleration_allowed(
     return entry == nullptr || entry->accelerated_unusable.failure == RecordedFailure::none;
 }
 
+bool full_allowed(const Records& records, std::string_view driver, bool full_flag) noexcept {
+    if (full_flag)
+        return true;
+    const DriverRecords* entry = find_driver(records, driver);
+    return entry == nullptr || entry->full_unusable.failure == RecordedFailure::none;
+}
+
 bool has_untold_record(const Records& records) noexcept {
     for (const DriverRecords& entry : records.drivers) {
-        if (entry.failed_driver.failure != RecordedFailure::none && !entry.failed_driver.told)
-            return true;
-        if (entry.accelerated_unusable.failure != RecordedFailure::none &&
-            !entry.accelerated_unusable.told)
-            return true;
+        for (const Record* record :
+             {&entry.failed_driver, &entry.accelerated_unusable, &entry.full_unusable})
+            if (record->failure != RecordedFailure::none && !record->told)
+                return true;
     }
     return false;
 }
@@ -609,7 +664,11 @@ ParsedRecords parse_records(const Values& values, std::string_view engine_versio
         const std::string_view whole_key = key;
         std::string_view prefix;
         for (const std::string_view candidate :
-             {strike_prefix, failed_driver_prefix, accelerated_unusable_prefix, scale_level_prefix})
+             {strike_prefix,
+              failed_driver_prefix,
+              accelerated_unusable_prefix,
+              full_unusable_prefix,
+              scale_level_prefix})
             if (whole_key.starts_with(candidate))
                 prefix = candidate;
         const std::string_view driver = whole_key.substr(prefix.size());
@@ -640,7 +699,11 @@ ParsedRecords parse_records(const Values& values, std::string_view engine_versio
             median = parse_median(words.back());
             trailing = 2;
         } else {
-            failure = parse_failure(words[0], prefix == failed_driver_prefix);
+            const RecordKind kind = prefix == failed_driver_prefix ? RecordKind::failed_driver
+                                    : prefix == accelerated_unusable_prefix
+                                        ? RecordKind::accelerated_unusable
+                                        : RecordKind::full_unusable;
+            failure = parse_failure(words[0], kind);
             told = words.size() >= 4 && words.back() == told_word;
             if (told)
                 trailing = 2;
@@ -675,6 +738,8 @@ ParsedRecords parse_records(const Values& values, std::string_view engine_versio
             entry->failed_driver = Record{*failure, told};
         else if (prefix == accelerated_unusable_prefix)
             entry->accelerated_unusable = Record{*failure, told};
+        else if (prefix == full_unusable_prefix)
+            entry->full_unusable = Record{*failure, told};
         else
             ++parsed.dropped; // software is never recorded failed-driver
     }
@@ -719,6 +784,10 @@ Values format_records(const Records& records, std::string_view engine_version) {
             values.emplace(
                 std::string(accelerated_unusable_prefix) + entry.driver,
                 record_value(entry.accelerated_unusable)
+            );
+        if (entry.full_unusable.failure != RecordedFailure::none)
+            values.emplace(
+                std::string(full_unusable_prefix) + entry.driver, record_value(entry.full_unusable)
             );
         if (entry.scale_level)
             values.emplace(
@@ -808,7 +877,8 @@ Change note_clean_run(Records& records, std::string_view driver, const RecordRul
     if (entry == nullptr || entry->struck_this_run)
         return change;
     const StrikeStage stage = entry->strike.stage;
-    if (stage == StrikeStage::present || (stage == StrikeStage::call && !rules.below_two_gib) ||
+    const bool card_call = stage == StrikeStage::call || stage == StrikeStage::card;
+    if (stage == StrikeStage::present || (card_call && !rules.below_two_gib) ||
         stage == StrikeStage::lost || stage == StrikeStage::resets)
         set_strike(*entry, Strike{}, change);
     return change;
@@ -824,13 +894,14 @@ Change note_running_failure(
     Change change;
     if (facts.loses_device_in_ordinary_use || !valid_driver_name(driver))
         return change;
-    if (failure.stage == StrikeStage::call && rules.below_two_gib)
-        return change; // no accelerated-only call is made under 2 GiB
+    if ((failure.stage == StrikeStage::call || failure.stage == StrikeStage::card) &&
+        rules.below_two_gib)
+        return change; // no call of either card tier is made under 2 GiB
     if (failure.stage != StrikeStage::present && failure.stage != StrikeStage::call &&
-        failure.stage != StrikeStage::lost && failure.stage != StrikeStage::resets)
+        failure.stage != StrikeStage::card && failure.stage != StrikeStage::lost &&
+        failure.stage != StrikeStage::resets)
         return change;
-    if ((failure.stage == StrikeStage::present || failure.stage == StrikeStage::call) &&
-        !valid_driver_name(failure.call))
+    if (names_call(failure.stage) && !valid_driver_name(failure.call))
         return change;
     DriverRecords& entry = driver_entry(records, driver);
     if (same_strike(entry.strike, failure) && entry.struck_this_run)
@@ -849,6 +920,14 @@ Change note_running_failure(
     case StrikeStage::call:
         if (repeated) {
             record_accelerated_unusable(records, entry, RecordedFailure::call, change);
+            set_strike(entry, Strike{}, change);
+        } else {
+            set_strike(entry, failure, change);
+        }
+        break;
+    case StrikeStage::card:
+        if (repeated) {
+            record_full_unusable(entry, RecordedFailure::card, change);
             set_strike(entry, Strike{}, change);
         } else {
             set_strike(entry, failure, change);
@@ -889,7 +968,8 @@ Change mark_told(Records& records, std::string_view driver) {
     DriverRecords* entry = find_entry(records, driver);
     if (entry == nullptr)
         return change;
-    for (Record* record : {&entry->failed_driver, &entry->accelerated_unusable}) {
+    for (Record* record :
+         {&entry->failed_driver, &entry->accelerated_unusable, &entry->full_unusable}) {
         if (record->failure != RecordedFailure::none && !record->told) {
             record->told = true;
             change.changed = true;
@@ -965,10 +1045,14 @@ next_notice(const Records& records, const std::vector<std::string>& passed_over)
             entry.failed_driver.failure != RecordedFailure::none && !entry.failed_driver.told;
         const bool unusable = entry.accelerated_unusable.failure != RecordedFailure::none &&
                               !entry.accelerated_unusable.told;
+        const bool full_unusable =
+            entry.full_unusable.failure != RecordedFailure::none && !entry.full_unusable.told;
         if (failed_driver)
             return PendingNotice{entry.driver, NoticeKind::failed_driver};
         if (unusable)
             return PendingNotice{entry.driver, NoticeKind::accelerated_unusable};
+        if (full_unusable)
+            return PendingNotice{entry.driver, NoticeKind::full_unusable};
     }
     return std::nullopt;
 }

@@ -166,12 +166,37 @@ enum class AccelerationState : uint8_t {
     cannot_save,
     slow_frames, ///< Basic or Full, but frames were too slow with it in this run
     next_start,  ///< Basic or Full, from the next start
+    /// Full, but the game cannot save the files that guard trying it: Basic
+    /// is in use in its place.
+    full_cannot_save,
+    /// Full, but dropped to Basic in this run when the machine ran short of
+    /// memory.
+    full_too_little_memory,
+    /// Full, but dropped to Basic in this run when its frames were too slow.
+    full_slow_frames,
+    /// Full, but the graphics card failed while drawing the battlefield, so
+    /// Basic is in use for the rest of the run.
+    full_stopped,
+    /// Full, but Full failed before on this graphics driver, so Basic is in
+    /// use.
+    full_failed_before,
+    /// Full, but the graphics card lacks something Full needs: Basic is in
+    /// use.
+    full_lacks_feature,
+    /// Full, waiting for a shared game or a replay to end: Basic is in use
+    /// for this game, and Full takes effect from the next
+    /// (AccelerationStatus::replay says which match).
+    full_waiting_for_game_end,
     /// Full, which the game cannot draw yet: Basic is in use in its place.
     full_not_built,
     in_use_on_another_driver, ///< In use, on another graphics driver: one failed
     in_use_less_smoothing,    ///< In use, with less smoothing: frames were slow
     in_use_no_smoothing,      ///< In use, with no smoothing when zoomed out on this machine
-    in_use,                   ///< In use
+    /// Full in use, with less anti-aliasing than asked: frames were slow
+    /// (AccelerationStatus::supersample says how much is left).
+    full_in_use_less_anti_aliasing,
+    full_in_use, ///< Full in use: the graphics card draws the view
+    in_use,      ///< In use
 };
 
 /// What the graphics card does on this machine while it is in use, which
@@ -190,12 +215,18 @@ enum class AccelerationReach : uint8_t {
 struct AccelerationStatus {
     AccelerationState state{AccelerationState::off_by_setting}; ///< what runs, or why not
     AccelerationReach reach{AccelerationReach::menus};          ///< what it does while in use
-    /// The match AccelerationState::waiting_for_game_end waits for replays a
-    /// recording rather than being played with other machines.
+    /// The match AccelerationState::waiting_for_game_end and
+    /// full_waiting_for_game_end wait for replays a recording rather than
+    /// being played with other machines.
     bool replay{};
     /// The level asked for, by the setting or a flag, which
     /// AccelerationState::waiting_for_game_end names.
     HardwareAcceleration asked{HardwareAcceleration::off};
+    /// Full's anti-aliasing while it is in use: the samples a pixel across
+    /// the graphics card draws the view at, 1 for none, which the second
+    /// line of AccelerationState::full_in_use and
+    /// full_in_use_less_anti_aliasing names.
+    uint8_t supersample{1};
 
     friend bool operator==(const AccelerationStatus&, const AccelerationStatus&) = default;
 };
@@ -253,8 +284,9 @@ struct Dialog {
     bool restored{};                   ///< Restore defaults was pressed
     /// The times the player asked, since the dialog opened, for the graphics
     /// card to be tried afresh: each press of Restore defaults, and each
-    /// time Hardware acceleration passed from Off to Basic or Full. The
-    /// count stays if the row goes back to Off.
+    /// time Hardware acceleration passed to a higher level, from Off to
+    /// Basic or Full or from Basic to Full. The count stays if the row goes
+    /// back down.
     uint32_t forget_renderer_failures{};
     int32_t hovered{no_control}; ///< the control under the pointer
     int32_t pressed{no_control}; ///< the control a held press is on

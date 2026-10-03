@@ -11,15 +11,24 @@
 // of failures while running, the walk that skips a recorded driver and
 // walks again when that leaves nothing able to present, the adapter as
 // another driver words it, a trial that cannot be written, the 2 GiB rule,
-// the main menu's notice and the settings dialog's retry. Two cases run
-// only when --render-fault names them, since they switch the accelerated
-// tier on, as --hardware-acceleration and --force-capable would, where
-// every other case draws in the standard tier: slow frames, which walk the
-// step-down down its ladder to the standard tier, and the memory guard,
-// which refuses the tier's buffers and then drops it.
+// the main menu's notice and the settings dialog's retry; and the Full
+// tier's own fallbacks, switched on as --hardware-acceleration=full and
+// --force-capable would: a card call that fails, which drops Full to Basic
+// with a strike, the same in the next run recorded full-unusable and told
+// once, and a raise of the row clearing it; Full's left-over trial, struck
+// once and recorded twice, or once where the first counts; its trial that
+// cannot be written; and a shared game, in which a lower tier applies at
+// once, a higher one from the next game, and every page is made as the
+// loading screen begins. Four cases run only when --render-fault names
+// them, since they switch the accelerated tier on where every other case
+// draws in the standard tier: slow frames, which walk the step-down down
+// its ladder to the standard tier, and the memory guard, which refuses the
+// tier's buffers and then drops it; and the same for Full, whose rungs the
+// step-down takes first and whose pages the guard drops first.
 #include "oa/app/runtime.hpp"
 #include "engine_settings_match_host.hpp"
 #include "engine_settings_state.hpp"
+#include "full_presentation.hpp"
 #include "graphics_report.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
@@ -101,6 +110,11 @@ constexpr uint64_t ticked_span_ns = 4'000'000'000;
 /// the HUD is drawn through a prescale target.
 constexpr int part_scale_width = 1024;
 constexpr int part_scale_height = 768;
+/// Frames the Full cases present for the card to draw a frame's terrain.
+constexpr uint32_t full_frames = 3;
+/// The anti-aliasing the Full rungs case starts Full at, so that every rung
+/// of Full's is there to take.
+constexpr uint8_t full_rungs_supersample = policy::full_supersample_most;
 
 /// Counts the reports of a changed floating-point setting.
 ///
@@ -2364,6 +2378,623 @@ struct Runtime::RendererLadder {
         passed.emplace_back(where);
     }
 
+    // -----------------------------------------------------------------------
+    // The Full tier: its drops, trial, strikes, records and rungs
+
+    /// Returns the Full tier's presentation, which must exist.
+    ///
+    /// @param where the case
+    /// @return the presentation
+    FullPresentation& full(std::string_view where) {
+        expect(runtime.full_ != nullptr, where, "the full tier has no presentation");
+        return *runtime.full_;
+    }
+
+    /// Switches the Full tier on, as --hardware-acceleration=full and
+    /// --force-capable would, at the top rung with an anti-aliasing of
+    /// Full's, or back to what the run's own options say.
+    ///
+    /// @param where the case
+    /// @param on true to switch it on
+    /// @param supersample Full's anti-aliasing at the rung
+    void full_tier(std::string_view where, bool on, uint8_t supersample = 1) {
+        if (on) {
+            run().rung = top_rung();
+            run().rung->supersample = supersample;
+            runtime.options_.hardware_acceleration =
+                oa::ui::engine_settings::HardwareAcceleration::full;
+            runtime.options_.force_capable = true;
+        } else {
+            run().rung.reset();
+            runtime.options_.hardware_acceleration.reset();
+            runtime.options_.force_capable = false;
+        }
+        runtime.update_render_tier();
+        if (on)
+            expect(runtime.full_presentation(), where, "the full tier did not draw");
+    }
+
+    /// Presents match frames at zoom 1 until the card has drawn a frame's
+    /// terrain.
+    ///
+    /// @param where the case
+    void full_frame(std::string_view where) {
+        at_zoom(zoom_one);
+        for (uint32_t frame = 0; frame < full_frames && !full(where).drawn; ++frame)
+            runtime.render();
+        expect(full(where).drawn, where, "the card did not draw the terrain");
+    }
+
+    /// Returns the Full tier's facts of the run.
+    render_policy::FullDrop full_drop() { return host().tier_inputs().full_drop; }
+
+    /// A call of the card's own fails on a Full match frame (--render-fault
+    /// card): Full drops to Basic for the run, which presents the frame the
+    /// processor composed, with the failing call struck against the driver
+    /// and the status saying Full stopped; Off then On tries Full again,
+    /// and the same failure again in the run is struck no further.
+    ///
+    /// @param frame the presented frame of the match the failure comes at
+    void card_failure(uint32_t frame) {
+        constexpr std::string_view where = "card";
+        start_match();
+        for (uint32_t presented = 1; presented < frame; ++presented)
+            runtime.render();
+        // Whatever an earlier case dropped is lifted, as Off then On would.
+        runtime.forget_render_failures();
+        full_tier(where, true);
+        full_frame(where);
+        const auto& inputs = host().tier_inputs();
+        expect(
+            inputs.full_drop == render_policy::FullDrop::none &&
+                tier().tier == render_policy::RenderTier::full,
+            where,
+            "the tier was not full before the failure"
+        );
+        arm(RenderFaultPoint::card, 1);
+        present_until_fault(where);
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                inputs.full_drop == render_policy::FullDrop::card_failure,
+            where,
+            "the card's failure did not drop full to basic"
+        );
+        const auto* struck = entry(render_probe::software_renderer);
+        expect(
+            struck != nullptr && struck->strike.stage == rs::StrikeStage::card &&
+                struck->strike.call == "the-card-refused-the-terrain-frame" &&
+                struck->full_unusable.failure == rs::RecordedFailure::none,
+            where,
+            "the failing call was not struck against the driver, or was recorded at once"
+        );
+        runtime.render();
+        expect(
+            tier().tier == render_policy::RenderTier::accelerated &&
+                tier().full == render_policy::FullReason::dropped,
+            where,
+            "the next frame was not basic with full dropped"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::full_stopped,
+            where,
+            "the status did not say full stopped for this run"
+        );
+        expect_composed(where);
+        // Off then On tries Full again, and a second failure in the same
+        // run strikes no further.
+        runtime.forget_render_failures();
+        runtime.update_render_tier();
+        expect(
+            runtime.full_presentation() && inputs.full_drop == render_policy::FullDrop::none,
+            where,
+            "Off then On did not try full again"
+        );
+        full_frame(where);
+        arm(RenderFaultPoint::card, 1);
+        present_until_fault(where);
+        struck = entry(render_probe::software_renderer);
+        expect(
+            !runtime.full_presentation() && struck != nullptr &&
+                struck->strike.stage == rs::StrikeStage::card &&
+                struck->full_unusable.failure == rs::RecordedFailure::none,
+            where,
+            "the same failure again in the run was recorded"
+        );
+        runtime.forget_render_failures();
+        full_tier(where, false);
+        passed.emplace_back(where);
+    }
+
+    /// In a shared game or a replay Full falls to Basic at once and rises
+    /// again only when the match ends; a page Full would make during the
+    /// match waits for its end instead, and the loading screen makes every
+    /// page and target before the world is built.
+    void shared_game() {
+        constexpr std::string_view where = "full-shared";
+        start_match();
+        runtime.forget_render_failures();
+        full_tier(where, true);
+        full_frame(where);
+        auto& gate = host().tier_inputs().match;
+        const std::size_t struck_before = host().records().records().drivers.size();
+        // The match, as a shared game from its loading screen.
+        runtime.begin_render_tier_match(render_policy::MatchKind::shared_game);
+        expect(gate.accelerated && gate.full, where, "the shared game did not begin in full");
+        runtime.render();
+        expect(runtime.full_presentation(), where, "full did not draw in the shared game");
+        // Lower at once.
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::basic;
+        runtime.render();
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() && !gate.full,
+            where,
+            "basic did not apply at once in the shared game"
+        );
+        // Higher from the next game.
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        runtime.render();
+        expect(
+            !runtime.full_presentation() &&
+                tier().full == render_policy::FullReason::waiting_for_match_end,
+            where,
+            "full did not wait for the shared game to end"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::full_waiting_for_game_end,
+            where,
+            "the status did not say full waits for the game's end"
+        );
+        runtime.end_render_tier_match();
+        runtime.render();
+        expect(runtime.full_presentation(), where, "full did not return after the match");
+        // Full's pages are made as the loading screen begins, and nothing
+        // afterwards: without them Full waits for the match to end.
+        runtime.begin_render_tier_match(render_policy::MatchKind::replay);
+        runtime.free_full_presentation();
+        expect(full(where).pages.empty(), where, "the pages were not freed");
+        runtime.render();
+        // The frame that found its pages missing was Basic's; the next is
+        // decided so.
+        runtime.update_render_tier();
+        expect(
+            !runtime.full_presentation() && full(where).pages.empty() && !gate.full &&
+                full_drop() == render_policy::FullDrop::none &&
+                host().records().records().drivers.size() == struck_before,
+            where,
+            "a page was made during the replay, or the wait dropped or struck something"
+        );
+        runtime.end_render_tier_match();
+        runtime.update_render_tier();
+        expect(runtime.full_presentation(), where, "full did not return after the replay");
+        runtime.begin_render_tier_match(render_policy::MatchKind::shared_game);
+        runtime.preallocate_full_match_textures();
+        auto& made = full(where);
+        const std::size_t pages = made.pages.size();
+        expect(
+            pages != 0 && made.overlay_texture.made() &&
+                (made.target != card::TargetHandle{} || made.target_refused) && gate.full,
+            where,
+            "the loading screen did not make full's pages and targets"
+        );
+        full_frame(where);
+        expect(
+            made.pages.size() == pages && gate.full && runtime.full_presentation(),
+            where,
+            "a frame of the shared game made a page"
+        );
+        runtime.end_render_tier_match();
+        full_tier(where, false);
+        passed.emplace_back(where);
+    }
+
+    /// A left-over Full trial: the second in a row records full-unusable,
+    /// which leaves Basic standing and is told once; where the first
+    /// counts, at once. --hardware-acceleration=full ignores the record.
+    void left_over_full_trial() {
+        constexpr std::string_view where = "records-full-trial";
+        records_defaults();
+        const fs::path folder = records_folder("full-trial");
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        start_on(folder, true);
+        menu_frames(1);
+        pass_start(where);
+        // Full's first match frame writes its trial and sentinel; its first
+        // frames pass after path_stage_frames of them.
+        start_match();
+        full_frame(where);
+        const auto& sentinel = host().records().sentinel();
+        const auto& trial = host().records().records().trial;
+        expect(
+            sentinel && sentinel->stage == rs::SentinelStage::path &&
+                sentinel->path == rs::AcceleratedPath::full && trial &&
+                trial->stage == rs::StrikeStage::path && trial->path == rs::AcceleratedPath::full,
+            where,
+            "full's first frame did not write its trial and sentinel"
+        );
+        expect(
+            records_file(folder).at(std::string(rs::trial_key)) == "path full software",
+            where,
+            "full's trial did not reach the file"
+        );
+        match_frames(zoom_one, rs::path_stage_frames);
+        expect_running(where, "full's first frames did not pass");
+        // Killed in Full's first frames, twice in a row.
+        for (int start = 0; start < 2; ++start) {
+            rs::Values values = records_file(folder);
+            values[std::string(rs::trial_key)] = "path full software";
+            preferences::save(folder / rs::records_file_name, values);
+            start_on(folder, false);
+            const auto* struck = entry(render_probe::software_renderer);
+            expect(
+                struck != nullptr &&
+                    (start == 0 ? struck->strike.stage == rs::StrikeStage::path &&
+                                      struck->strike.path == rs::AcceleratedPath::full &&
+                                      struck->full_unusable.failure == rs::RecordedFailure::none
+                                : struck->full_unusable.failure == rs::RecordedFailure::stopped &&
+                                      struck->strike.stage == rs::StrikeStage::none),
+                where,
+                start == 0 ? "the first left-over full trial was not a strike alone"
+                           : "the second left-over full trial in a row was not recorded"
+            );
+            expect(
+                struck->accelerated_unusable.failure == rs::RecordedFailure::none,
+                where,
+                "a left-over full trial counted against basic"
+            );
+        }
+        menu_frames(3);
+        expect(
+            host().tier_inputs().full_unusable_record && runtime.full_presentation(),
+            where,
+            "the record was not read, or --hardware-acceleration=full did not ignore it"
+        );
+        expect_notices(where, {rs::NoticeKind::full_unusable});
+        expect(
+            entry(render_probe::software_renderer)->full_unusable.told,
+            where,
+            "the notice did not mark the record told"
+        );
+        // The setting alone honours it: Basic, as the policy says.
+        runtime.options_.hardware_acceleration.reset();
+        runtime.engine_settings_state().current.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        menu_frames(1);
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                tier().full != render_policy::FullReason::full,
+            where,
+            "the setting's full did not fall to basic"
+        );
+        expect(
+            !rs::full_allowed(host().records().records(), render_probe::software_renderer, false),
+            where,
+            "the record does not keep full off the driver"
+        );
+        runtime.engine_settings_state().current.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::basic;
+        // Where the first counts, one left-over full trial is a record.
+        host().faults().crash_evidence = rs::CrashEvidence::first_counts;
+        const fs::path first = records_folder("full-first-trial");
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        start_on(first, true);
+        menu_frames(1);
+        rs::Values values = records_file(first);
+        values[std::string(rs::trial_key)] = "path full software";
+        preferences::save(first / rs::records_file_name, values);
+        start_on(first, false);
+        const auto* recorded = entry(render_probe::software_renderer);
+        expect(
+            recorded != nullptr &&
+                recorded->full_unusable.failure == rs::RecordedFailure::stopped &&
+                recorded->accelerated_unusable.failure == rs::RecordedFailure::none &&
+                host().leftovers().change.new_record,
+            where,
+            "the first left-over full trial was not recorded where the first counts"
+        );
+        host().faults().crash_evidence = rs::CrashEvidence::two_in_a_row;
+        runtime.options_.hardware_acceleration.reset();
+        passed.emplace_back(where);
+    }
+
+    /// Full's trial cannot be written: Full is not used, Basic draws, with
+    /// nothing struck and the status saying the game cannot save its
+    /// files; Off then On tries the write again.
+    void unwritable_full_trial() {
+        constexpr std::string_view where = "records-full-unwritable";
+        records_defaults();
+        const fs::path folder = records_folder("full-unwritable");
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        start_on(folder, true);
+        menu_frames(1);
+        pass_start(where);
+        fs::remove(folder / rs::records_file_name);
+        fs::create_directories(folder / rs::records_file_name / "blocked");
+        start_match();
+        runtime.render();
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                full_drop() == render_policy::FullDrop::trial_unwritten &&
+                host().records().records().drivers.empty(),
+            where,
+            "full whose trial could not be written did not fall to basic with nothing struck"
+        );
+        expect_running(where, "full's unwritten trial left a sentinel or a trial");
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::full_cannot_save,
+            where,
+            "the status did not say the game cannot save its files"
+        );
+        fs::remove_all(folder / rs::records_file_name);
+        runtime.forget_render_failures();
+        runtime.update_render_tier();
+        full_frame(where);
+        expect(
+            host().records().records().trial &&
+                host().records().records().trial->path == rs::AcceleratedPath::full,
+            where,
+            "Off then On did not write full's trial"
+        );
+        runtime.options_.hardware_acceleration.reset();
+        passed.emplace_back(where);
+    }
+
+    /// The same card call failing in two runs in a row records
+    /// full-unusable, told once at the main menu; Off then On and a raise of
+    /// the row from Basic to Full clear it, and a run that ends cleanly
+    /// clears the strike.
+    void card_failure_record() {
+        constexpr std::string_view where = "records-card";
+        records_defaults();
+        const fs::path folder = records_folder("card");
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        for (int start = 0; start < 2; ++start) {
+            start_on(folder, true);
+            menu_frames(1);
+            start_match();
+            full_frame(where);
+            arm(RenderFaultPoint::card, 1);
+            present_until_fault(where);
+            const auto* struck = entry(render_probe::software_renderer);
+            expect(
+                !runtime.full_presentation() && struck != nullptr &&
+                    (start == 0 ? struck->strike.stage == rs::StrikeStage::card &&
+                                      struck->full_unusable.failure == rs::RecordedFailure::none
+                                : struck->full_unusable.failure == rs::RecordedFailure::card &&
+                                      struck->strike.stage == rs::StrikeStage::none),
+                where,
+                start == 0 ? "the card's failure was not struck"
+                           : "the same failure in the next run was not recorded"
+            );
+            to_main_menu();
+        }
+        // The record reaches the file when the match ends, and the next
+        // start tells of it once.
+        expect(
+            records_file(folder).count(
+                std::string(rs::full_unusable_prefix) + std::string(render_probe::software_renderer)
+            ) == 1,
+            where,
+            "the record did not reach the file"
+        );
+        start_on(folder, true);
+        menu_frames(3);
+        expect_notices(where, {rs::NoticeKind::full_unusable});
+        // A raise of the row, Basic to Full, which the dialog counts as a
+        // request to try the card afresh, clears it in memory, and OK
+        // writes the clearing.
+        runtime.options_.hardware_acceleration.reset();
+        auto* dialog = &runtime.open_engine_settings_dialog();
+        dialog->chosen.hardware_acceleration = oa::ui::engine_settings::HardwareAcceleration::full;
+        ++dialog->forget_renderer_failures;
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::changed);
+        std::ignore =
+            runtime.take_engine_settings_action(oa::ui::engine_settings::DialogAction::accepted);
+        expect(
+            entry(render_probe::software_renderer) == nullptr &&
+                records_file(folder).count(
+                    std::string(rs::full_unusable_prefix) +
+                    std::string(render_probe::software_renderer)
+                ) == 0,
+            where,
+            "the raise did not clear the record"
+        );
+        runtime.engine_settings_state().current.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::basic;
+        // A strike alone is cleared by a run that ends cleanly without it.
+        runtime.options_.hardware_acceleration =
+            oa::ui::engine_settings::HardwareAcceleration::full;
+        start_on(folder, true);
+        menu_frames(1);
+        start_match();
+        full_frame(where);
+        arm(RenderFaultPoint::card, 1);
+        present_until_fault(where);
+        to_main_menu();
+        start_on(folder, true);
+        expect(
+            entry(render_probe::software_renderer) != nullptr &&
+                entry(render_probe::software_renderer)->strike.stage == rs::StrikeStage::card,
+            where,
+            "the strike did not stand at the next start"
+        );
+        start_on(folder, true);
+        expect(
+            entry(render_probe::software_renderer) == nullptr,
+            where,
+            "a clean run did not clear the strike"
+        );
+        runtime.options_.hardware_acceleration.reset();
+        passed.emplace_back(where);
+    }
+
+    /// Slow frames take Full's rungs first: the anti-aliasing from 4 to 2
+    /// to 1, each step logged once and the status saying Full draws with
+    /// less of it, then Full to Basic for the run, which presents the frame
+    /// the processor composed, with the status saying Full's frames were
+    /// slow; Off then On starts Full again at the top.
+    ///
+    /// @param frame the presented frame of the match the case begins at
+    /// @return 0, or skipped_exit_code under 2 GiB of memory
+    int full_slow_frames(uint32_t frame) {
+        constexpr std::string_view where = "full-slow";
+        if (run().host->tier_inputs().memory < policy::smallest_accelerated_memory) {
+            std::cout << "renderer ladder check: full-slow: skipped: the machine reports less "
+                         "than the 2 GiB threshold of memory\n";
+            return skipped_exit_code;
+        }
+        start_match();
+        for (uint32_t presented = 1; presented < frame; ++presented)
+            runtime.render();
+        steady_frames();
+        full_tier(where, true, full_rungs_supersample);
+        full_frame(where);
+        expect(
+            runtime.accelerated_.rung.full &&
+                runtime.accelerated_.rung.supersample == full_rungs_supersample,
+            where,
+            "full did not draw at its top rung"
+        );
+        run().forced_frame_ns = slow_frame_ns;
+        policy::LadderState expected = top_rung();
+        expected.full = true;
+        expected.supersample = 2;
+        step_to(where, zoom_one, expected, "anti-aliasing 2x");
+        expect(
+            runtime.full_presentation() &&
+                runtime.acceleration_report().status.state ==
+                    oa::ui::engine_settings::AccelerationState::full_in_use_less_anti_aliasing &&
+                runtime.acceleration_report().status.supersample == 2,
+            where,
+            "the status does not say full draws with less anti-aliasing"
+        );
+        expected.supersample = 1;
+        step_to(where, zoom_one, expected, "no anti-aliasing");
+        expected.full = false;
+        step_to(where, zoom_one, expected, "basic");
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                full_drop() == render_policy::FullDrop::slow_frames,
+            where,
+            "full's last rung did not drop full to basic for slow frames"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::full_slow_frames,
+            where,
+            "the status does not say full's frames were slow"
+        );
+        run().forced_frame_ns.reset();
+        expect_composed(where);
+        runtime.forget_render_failures();
+        runtime.update_render_tier();
+        expect(
+            runtime.full_presentation() &&
+                runtime.accelerated_.rung.supersample == full_rungs_supersample &&
+                watch(where).step_down.state == runtime.accelerated_.rung &&
+                status() == oa::ui::engine_settings::AccelerationState::full_in_use,
+            where,
+            "Off then On did not start full again at the top"
+        );
+        full_tier(where, false);
+        std::cout << "renderer ladder check: full-slow: " << watch(where).steps
+                  << " steps down the ladder, each logged once\n";
+        passed.emplace_back(where);
+        return 0;
+    }
+
+    /// The memory guard with the system's memory forced: free memory just
+    /// over its threshold refuses Full's pages, which drops Full to Basic,
+    /// nothing struck and Off then On not lifting it; and committed memory
+    /// past its threshold while Full draws drops Full first, freeing its
+    /// pages, and Basic at the next sample while memory stays short.
+    ///
+    /// @param frame the presented frame of the match the case begins at
+    /// @return 0, or skipped_exit_code under 2 GiB of memory
+    int full_memory(uint32_t frame) {
+        constexpr std::string_view where = "full-memory";
+        if (run().host->tier_inputs().memory < policy::smallest_accelerated_memory) {
+            std::cout << "renderer ladder check: full-memory: skipped: the machine reports less "
+                         "than the 2 GiB threshold of memory\n";
+            return skipped_exit_code;
+        }
+        start_match();
+        for (uint32_t presented = 1; presented < frame; ++presented)
+            runtime.render();
+        accelerate(where, true);
+        auto& watched = watch(where);
+        const policy::MemoryGuardThresholds thresholds = watched.memory.thresholds;
+        expect(thresholds.physical != 0, where, "the memory guard knows no physical memory");
+        oa::platform::SystemMemorySample sample{};
+        sample.physical = thresholds.physical;
+        sample.available = thresholds.free_floor + 1;
+        sample.available_known = true;
+        sample.committed = 0;
+        sample.committed_known = true;
+        run().forced_memory = sample;
+        full_tier(where, true);
+        at_zoom(zoom_one);
+        for (uint32_t presented = 0; presented < refused_buffer_frames; ++presented)
+            runtime.render();
+        auto& inputs = host().tier_inputs();
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                inputs.full_drop == render_policy::FullDrop::memory &&
+                inputs.drop == render_policy::Drop::none && full(where).pages.empty() &&
+                host().records().records().drivers.empty(),
+            where,
+            "a page the memory guard refused did not drop full alone, with nothing struck"
+        );
+        expect(
+            status() == oa::ui::engine_settings::AccelerationState::full_too_little_memory,
+            where,
+            "the status does not say there is too little memory for full"
+        );
+        runtime.forget_render_failures();
+        runtime.update_render_tier();
+        expect(
+            !runtime.full_presentation() && inputs.full_drop == render_policy::FullDrop::memory,
+            where,
+            "Off then On lifted the memory guard's drop of full"
+        );
+        // Full drawing, and committed memory then past its threshold: Full
+        // first, then Basic at the next sample.
+        inputs.full_drop = render_policy::FullDrop::none;
+        sample.available = thresholds.physical / 2;
+        run().forced_memory = sample;
+        full_tier(where, true);
+        full_frame(where);
+        expect(!full(where).pages.empty(), where, "full made no pages with memory to spare");
+        sample.committed = thresholds.committed_limit + 1;
+        run().forced_memory = sample;
+        policy::resume_memory_guard(watched.memory);
+        runtime.render();
+        expect(
+            !runtime.full_presentation() && runtime.accelerated_presentation() &&
+                inputs.full_drop == render_policy::FullDrop::memory &&
+                inputs.drop == render_policy::Drop::none && full(where).pages.empty() &&
+                watched.memory.tripped == policy::MemoryGuardCause::none,
+            where,
+            "committed memory past its threshold did not drop full first, freeing its pages"
+        );
+        runtime.render();
+        expect(
+            !runtime.accelerated_presentation() && inputs.drop == render_policy::Drop::memory &&
+                watched.memory.tripped == policy::MemoryGuardCause::committed,
+            where,
+            "memory still short did not drop basic at the next sample"
+        );
+        run().forced_memory.reset();
+        full_tier(where, false);
+        passed.emplace_back(where);
+        return 0;
+    }
+
     /// Runs the records' cases, then starts again on records in memory with
     /// the setting at the named file's default, as the check began.
     void records() {
@@ -2392,8 +3023,10 @@ struct Runtime::RendererLadder {
         );
         // Whatever happens, the check goes on, or ends, on records in
         // memory, with nothing left in the scratch folder's records.
+        const auto acceleration = runtime.options_.hardware_acceleration;
         const auto back_in_memory = [&]() {
             runtime.options_.force_capable = force_capable;
+            runtime.options_.hardware_acceleration = acceleration;
             settings.hardware_acceleration = setting;
             auto& faults = renderer.faults();
             faults.physical_memory.reset();
@@ -2415,6 +3048,9 @@ struct Runtime::RendererLadder {
             path_window();
             notice_waits();
             accelerated_failure_and_retry();
+            left_over_full_trial();
+            unwritable_full_trial();
+            card_failure_record();
             if (hardware_driver.empty()) {
                 std::cout << "renderer ladder check: SDL has no hardware render driver; the "
                              "cases that record one are left out\n";
@@ -2447,17 +3083,29 @@ int Runtime::check_renderer_ladder() {
     const auto& fault = options_.render_fault;
     const auto runs = [&](RenderFaultPoint point) { return !fault || fault->point == point; };
     const uint32_t frame = fault && fault->frame ? *fault->frame : match_case_frame;
-    // The cases of the accelerated tier run only when named.
+    // The cases of the accelerated tier and of Full's rungs and guard run
+    // only when named.
     if (fault &&
-        (fault->point == RenderFaultPoint::slow || fault->point == RenderFaultPoint::memory)) {
-        const int status = fault->point == RenderFaultPoint::slow ? ladder.slow_frames(frame)
-                                                                  : ladder.memory(frame);
+        (fault->point == RenderFaultPoint::slow || fault->point == RenderFaultPoint::memory ||
+         fault->point == RenderFaultPoint::full_slow ||
+         fault->point == RenderFaultPoint::full_memory)) {
+        const int status = fault->point == RenderFaultPoint::slow     ? ladder.slow_frames(frame)
+                           : fault->point == RenderFaultPoint::memory ? ladder.memory(frame)
+                           : fault->point == RenderFaultPoint::full_slow
+                               ? ladder.full_slow_frames(frame)
+                               : ladder.full_memory(frame);
         if (status == 0)
             std::cout << "renderer ladder check: " << ladder.passed.front() << " passed\n";
         return status;
     }
     if (runs(RenderFaultPoint::create))
         ladder.walk(fault.has_value());
+    // The Full tier's cases come before the rebuilds, which drop
+    // acceleration for the run; the shared game forces no failure.
+    if (!fault)
+        ladder.shared_game();
+    if (runs(RenderFaultPoint::card))
+        ladder.card_failure(frame);
     if (runs(RenderFaultPoint::present)) {
         ladder.present(frame);
         ladder.loading_present();

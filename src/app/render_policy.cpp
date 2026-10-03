@@ -75,19 +75,30 @@ Capability assess_renderer(
 // ---------------------------------------------------------------------------
 // Choosing the tier
 
-void begin_match(SharedMatchGate& gate, MatchKind kind, bool accelerated_now) noexcept {
+void begin_match(
+    SharedMatchGate& gate, MatchKind kind, bool accelerated_now, bool full_now
+) noexcept {
     gate.kind = kind;
     gate.accelerated = kind != MatchKind::none && accelerated_now;
+    gate.full = gate.accelerated && full_now;
 }
 
 void note_match_frame(SharedMatchGate& gate, RenderTier tier, bool device_lost) noexcept {
-    if (gate.kind != MatchKind::none && tier == RenderTier::standard && !device_lost)
+    if (gate.kind == MatchKind::none)
+        return;
+    if (tier == RenderTier::standard && !device_lost)
         gate.accelerated = false;
+    // A lost device's frames keep Full waiting for its reset, as they keep
+    // Basic; any other tier below Full keeps Full away until the match ends.
+    if (tier != RenderTier::full && !device_lost)
+        gate.full = false;
 }
 
 void stop_until_match_end(SharedMatchGate& gate) noexcept {
-    if (gate.kind != MatchKind::none)
+    if (gate.kind != MatchKind::none) {
         gate.accelerated = false;
+        gate.full = false;
+    }
 }
 
 void end_match(SharedMatchGate& gate) noexcept {
@@ -147,12 +158,17 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
         return TierDecision{
             RenderTier::accelerated, TierReason::accelerated, FullReason::not_asked
         };
+    const auto basic = [](FullReason reason) {
+        return TierDecision{RenderTier::accelerated, TierReason::accelerated, reason};
+    };
     if (!full_ready && inputs.flag != AccelerationFlag::full)
-        return TierDecision{
-            RenderTier::accelerated, TierReason::accelerated, FullReason::not_ready
-        };
-    if (inputs.full_drop)
-        return TierDecision{RenderTier::accelerated, TierReason::accelerated, FullReason::dropped};
+        return basic(FullReason::not_ready);
+    if (inputs.full_unusable_record && inputs.flag != AccelerationFlag::full)
+        return basic(FullReason::unusable_record);
+    if (inputs.full_drop != FullDrop::none)
+        return basic(FullReason::dropped);
+    if (inputs.match.kind != MatchKind::none && !inputs.match.full)
+        return basic(FullReason::waiting_for_match_end);
     return TierDecision{RenderTier::full, TierReason::accelerated, FullReason::full};
 }
 
@@ -233,7 +249,8 @@ void forget_failures(TierInputs& inputs) noexcept {
         inputs.function_test = FunctionTest::not_run;
     if (inputs.drop != Drop::memory)
         inputs.drop = Drop::none;
-    inputs.full_drop = false;
+    if (inputs.full_drop != FullDrop::memory)
+        inputs.full_drop = FullDrop::none;
 }
 
 TierStep step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestHooks& test) {
@@ -624,6 +641,9 @@ SceneBudget start_budget(const StartInputs& machine) noexcept {
 
 LadderState start_rung(const StartInputs& machine) noexcept {
     LadderState state;
+    state.full = false;
+    state.supersample =
+        std::clamp(machine.full_supersample, full_supersample_least, full_supersample_most);
     state.budget = start_budget(machine);
     state.method = ZoomOutMethod::area;
     state.blend_allowed = machine.blend_available && !machine.driver.blend_excluded &&
@@ -653,6 +673,18 @@ LadderState start_ceiling(const StartInputs& machine) noexcept {
 LadderState step_up(const LadderState& state, const LadderState& ceiling) noexcept {
     LadderState raised = state;
     raised.standard = false;
+    // Full's rungs come first, so they are raised last: only once Basic's
+    // ladder stands at the ceiling does Full's anti-aliasing double.
+    const bool basic_at_ceiling = (!card_in_use(raised) || raised.card >= ceiling.card) &&
+                                  (raised.filtered_chrome || !ceiling.filtered_chrome) &&
+                                  (raised.magnify || !ceiling.magnify) &&
+                                  raised.budget >= ceiling.budget &&
+                                  raised.method != ZoomOutMethod::blend;
+    if (basic_at_ceiling && raised.full && raised.supersample < ceiling.supersample) {
+        raised.supersample =
+            static_cast<uint8_t>(std::min<unsigned>(raised.supersample * 2U, ceiling.supersample));
+        return raised;
+    }
     if (card_in_use(raised) && raised.card < ceiling.card) {
         raised.card = raise_card(raised.card, ceiling.card);
         return raised;
@@ -682,6 +714,7 @@ LadderState resume_rung(
     const LadderState ceiling = start_ceiling(machine);
     LadderState state = remembered;
     state.standard = false;
+    state.supersample = std::clamp(state.supersample, full_supersample_least, ceiling.supersample);
     state.blend_allowed = ceiling.blend_allowed;
     if (!state.blend_allowed)
         state.method = ZoomOutMethod::area;
@@ -701,6 +734,17 @@ LadderState step_down(const LadderState& state, FrameKind pool, bool blend_favou
     LadderState lowered = state;
     if (lowered.standard)
         return lowered;
+    // Full's rungs come first, from frames at any zoom: less anti-aliasing,
+    // then Basic.
+    if (lowered.full) {
+        if (lowered.supersample > full_supersample_least)
+            lowered.supersample = static_cast<uint8_t>(
+                std::max<unsigned>(lowered.supersample / 2U, full_supersample_least)
+            );
+        else
+            lowered.full = false;
+        return lowered;
+    }
     switch (pool) {
     case FrameKind::zoomed_out:
         if (lowered.method == ZoomOutMethod::area && lowered.blend_allowed && blend_favoured &&
@@ -854,11 +898,13 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
     if (ladder.state.standard || !steady_frame(sample))
         return StepResult::none;
     // While the clock runs behind, any time the tier's own passes take is a
-    // loss: shed them at once.
+    // loss: shed them at once, Full's anti-aliasing with them.
     if (sample.clock_behind && sample.passes_ns > 0 &&
-        (ladder.state.budget != SceneBudget::none || ladder.state.magnify)) {
+        (ladder.state.budget != SceneBudget::none || ladder.state.magnify ||
+         (ladder.state.full && ladder.state.supersample > full_supersample_least))) {
         ladder.state.budget = SceneBudget::none;
         ladder.state.magnify = false;
+        ladder.state.supersample = full_supersample_least;
         empty_pool(ladder.zoomed_out);
         empty_pool(ladder.zoomed_in);
         return StepResult::shed;
@@ -924,10 +970,13 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
         blend_favoured =
             area_third != 0 && uint64_t{present} * 100 < target_us * blend_present_percent;
     }
+    const bool was_full = ladder.state.full;
     ladder.state = step_down(ladder.state, sample.kind, blend_favoured);
     ladder.stepped = true;
     ladder.last_step_ns = sample.now_ns;
     empty_pool(pool);
+    if (was_full && !ladder.state.full)
+        return StepResult::basic;
     return ladder.state.standard ? StepResult::standard : StepResult::stepped;
 }
 
@@ -965,6 +1014,10 @@ LadderState rung_without(const LadderState& state, AcceleratedBuffer buffer) noe
             lowered.card == CardFilter::prescale_quarter)
             lowered.card = lower_card(lowered.card);
         break;
+    case AcceleratedBuffer::card_pages:
+    case AcceleratedBuffer::card_targets:
+        lowered.full = false;
+        break;
     }
     return lowered;
 }
@@ -972,6 +1025,15 @@ LadderState rung_without(const LadderState& state, AcceleratedBuffer buffer) noe
 std::string_view describe_step(const LadderState& before, const LadderState& after) noexcept {
     if (after.standard && !before.standard)
         return "the processor draws everything for the rest of the run";
+    if (before.full && !after.full)
+        return "the graphics card no longer draws the battlefield";
+    if (before.full && before.supersample != after.supersample) {
+        if (after.budget == SceneBudget::none && before.budget != SceneBudget::none &&
+            before.magnify && !after.magnify)
+            return "the graphics card draws with less anti-aliasing, the zoomed-out view is no "
+                   "longer smoothed and the graphics card no longer magnifies the battlefield";
+        return "the graphics card draws with less anti-aliasing";
+    }
     if (before.budget != SceneBudget::none && after.budget == SceneBudget::none && before.magnify &&
         !after.magnify)
         return "the zoomed-out view is no longer smoothed and the graphics card no longer "

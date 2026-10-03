@@ -5,8 +5,11 @@
 // through and the tier each frame is drawn in, as pure functions of plain
 // facts. Which renderer to create, and in what order to try SDL's drivers;
 // whether a renderer can be accelerated; whether a frame is drawn in the
-// standard tier (today's renderer) or the accelerated one; where a machine
-// starts on the step-down ladder and when slow frames move it down; whether
+// standard tier (today's renderer), the accelerated one (Basic) or Full,
+// where the graphics card draws the battlefield, and why Full was not
+// given where it was asked for; where a machine
+// starts on the step-down ladder and when slow frames move it down, Full's
+// rungs before Basic's; whether
 // the window opens at the display's own pixel density; how the chrome is
 // filtered; and how a texture larger than the renderer allows is split into
 // tiles. What a crash or a failure left behind counts for at the
@@ -194,13 +197,16 @@ enum class MatchKind : uint8_t {
 };
 
 /// The tier's state across a shared game or a replay: whatever leaves the
-/// accelerated tier applies at once, and whatever would start it waits for
-/// the match to end.
+/// accelerated tier, or Full for Basic, applies at once, and whatever would
+/// start either waits for the match to end.
 struct SharedMatchGate {
     MatchKind kind{MatchKind::none};
     /// The tier was accelerated as the match's loading screen began, with
     /// the function test passed, and nothing has stopped it since.
     bool accelerated{};
+    /// The tier was Full as the match's loading screen began, so its pages
+    /// and targets were made then, and nothing has dropped it since.
+    bool full{};
 };
 
 /// Opens the gate as a match's loading screen begins.
@@ -208,13 +214,16 @@ struct SharedMatchGate {
 /// @param[out] gate the run's gate
 /// @param kind the match's kind; MatchKind::none closes nothing
 /// @param accelerated_now the tier decided for the loading screen's first
-///     frame is accelerated
-void begin_match(SharedMatchGate& gate, MatchKind kind, bool accelerated_now) noexcept;
+///     frame is accelerated or Full
+/// @param full_now that tier is Full
+void begin_match(
+    SharedMatchGate& gate, MatchKind kind, bool accelerated_now, bool full_now = false
+) noexcept;
 
 /// Notes a frame's decision while a match is under way: in a shared game
 /// or a replay, any decision for the standard tier, other than a lost
 /// device that a reset brings back, keeps the tier standard until the match
-/// ends.
+/// ends, and any decision for a tier below Full keeps Full away until then.
 ///
 /// @param[in,out] gate the run's gate
 /// @param tier the frame's tier
@@ -254,6 +263,16 @@ inline constexpr uint64_t gibibyte = uint64_t{1} << 30;
 /// standard tier whatever the flags, and the function test never runs.
 inline constexpr uint64_t smallest_accelerated_memory = 7 * gibibyte / 4;
 
+/// Why Full was dropped to Basic for the rest of the run.
+enum class FullDrop : uint8_t {
+    none,
+    card_failure,    ///< a call only the Full tier makes failed, which is struck against the driver
+    function_test,   ///< the Full function test failed: the card lacks a feature Full needs
+    memory,          ///< the memory guard, which setting the setting to Off and back does not lift
+    slow_frames,     ///< the step-down passed Full's last rung
+    trial_unwritten, ///< Full's trial record could not be written, so Full was not tried
+};
+
 /// Everything decide_render_tier reads.
 struct TierInputs {
     bool renderer{};       ///< a renderer exists (headless runs have none)
@@ -276,10 +295,13 @@ struct TierInputs {
     /// be read.
     bool records_unreadable_after_unclean_start{};
     Drop drop{Drop::none};
-    /// Full was dropped for the rest of the run, to Basic, by a failed call
-    /// of the card's own or a failed Full function test; setting the setting
-    /// to Off and back, or Restore defaults, lifts it (forget_failures).
-    bool full_drop{};
+    /// Why Full was dropped for the rest of the run, to Basic; setting the
+    /// setting to Off and back, or Restore defaults, lifts every drop but
+    /// the memory guard's (forget_failures).
+    FullDrop full_drop{FullDrop::none};
+    /// The driver has a full-unusable record, which keeps Full off it while
+    /// Basic stands, unless --hardware-acceleration=full was given.
+    bool full_unusable_record{};
     bool device_lost{}; ///< the device is lost until it is reset
     SharedMatchGate match{};
 };
@@ -316,7 +338,12 @@ enum class FullReason : uint8_t {
     not_asked, ///< Off or Basic was asked for, or the tier is standard
     full,      ///< Full was asked for and every condition holds
     not_ready, ///< Full is not ready in this build (full_ready) and no flag forced it
-    dropped,   ///< Full was dropped for the run (TierInputs::full_drop)
+    /// The driver has a full-unusable record and --hardware-acceleration=full
+    /// was not given.
+    unusable_record,
+    dropped, ///< Full was dropped for the run (TierInputs::full_drop)
+    /// A shared game or a replay, which the tier did not begin as Full.
+    waiting_for_match_end,
 };
 
 /// The tier for a frame and the reason for it.
@@ -341,9 +368,12 @@ struct TierDecision {
 /// Basic and Full share every condition of the accelerated tier, and a
 /// frame the conditions allow is Full when Full was asked for
 /// (acceleration_asked), Full is ready in this build (full_ready) or
-/// --hardware-acceleration=full forced it, and Full was not dropped for the
-/// run (TierInputs::full_drop); otherwise it is Basic
-/// (RenderTier::accelerated), with the Full reason in the decision.
+/// --hardware-acceleration=full forced it, the driver has no full-unusable
+/// record or that flag was given, Full was not dropped for the run
+/// (TierInputs::full_drop), and in a shared game or a replay the tier was
+/// Full as its loading screen began; otherwise it is Basic
+/// (RenderTier::accelerated), with the first Full reason in FullReason's
+/// order in the decision.
 ///
 /// The accelerated tier needs every condition: a renderer, a frame that is
 /// not a director render's, physical memory of at least
@@ -432,8 +462,8 @@ enum class TierAction : uint8_t {
 /// Forgets what keeps the tier standard, or Basic in place of Full, that
 /// setting Hardware acceleration to Off and back, or Restore defaults, lets
 /// the run try again: a function test that failed or whose trial could not
-/// be written, which then runs again, a drop, except the memory guard's,
-/// and Full's drop.
+/// be written, which then runs again, and a drop of either tier, except the
+/// memory guard's.
 ///
 /// @param[in,out] inputs the run's facts
 void forget_failures(TierInputs& inputs) noexcept;
@@ -701,11 +731,24 @@ enum class CardFilter : uint8_t {
     pixelart,         ///< the renderer's PIXELART scale mode, which needs no prescale target
 };
 
+/// The anti-aliasing Full draws with at the top of its rungs, and at its
+/// last: the samples a pixel across of the world target, 4, 2 and 1, the
+/// last drawn straight to the window.
+inline constexpr uint8_t full_supersample_most = 4;
+inline constexpr uint8_t full_supersample_least = 1;
+
 /// Where the accelerated tier stands on the step-down ladder. Each step
-/// lowers one member, from the top: the zoomed-out rungs (method, then
-/// budget), magnify off, NEAREST chrome, the card's magnification, and the
-/// standard tier.
+/// lowers one member, from the top: Full's rungs while Full draws (its
+/// anti-aliasing from 4 to 2 to 1, then Full to Basic), the zoomed-out rungs
+/// (method, then budget), magnify off, NEAREST chrome, the card's
+/// magnification, and the standard tier.
 struct LadderState {
+    /// The Full tier draws at the rung; false from the rung Full falls to
+    /// Basic down, and on every rung of a run that draws Basic.
+    bool full{};
+    /// Full's anti-aliasing at the rung: the samples a pixel across, from
+    /// full_supersample_most down to full_supersample_least.
+    uint8_t supersample{full_supersample_least};
     ZoomOutMethod method{ZoomOutMethod::area};
     SceneBudget budget{SceneBudget::none};
     bool blend_allowed{}; ///< blend is built and allowed on this machine and renderer
@@ -752,6 +795,11 @@ struct StartInputs {
     DriverTraits driver{};  ///< the renderer's driver
     bool pixelart{};        ///< probe (c) found the PIXELART scale mode
     bool blend_available{}; ///< blend is built and its half level fits this renderer
+    /// The anti-aliasing Full starts with: the samples a pixel across the
+    /// Enhanced anti-aliasing row asks of Full's world target, from
+    /// full_supersample_least to full_supersample_most; the least while Full
+    /// draws no such target.
+    uint8_t full_supersample{full_supersample_least};
 };
 
 /// The magnify path has been measured no slower than the standard tier on
@@ -782,7 +830,9 @@ inline constexpr bool magnify_measured_before_vista = false;
 /// its size. The card uses PIXELART where the probe found it, otherwise the
 /// prescale budget, a quarter of it on a light machine or a Pi. The blend
 /// is allowed where it is available, on a driver that does not exclude it,
-/// with more than most_memory_without_blend.
+/// with more than most_memory_without_blend. Full's anti-aliasing is the
+/// machine's full_supersample, clamped to its range; the rung is Basic's
+/// until the host marks it Full's (LadderState::full).
 ///
 /// @param machine the machine's and the renderer's facts
 /// @return the starting rung
@@ -921,9 +971,12 @@ struct ScaleStepDown {
 
 /// What a sample did to the ladder.
 enum class StepResult : uint8_t {
-    none,     ///< nothing changed
-    stepped,  ///< one rung down
-    shed,     ///< the clock ran behind: straight to budget none and magnify off
+    none,    ///< nothing changed
+    stepped, ///< one rung down
+    shed,    ///< the clock ran behind: straight to budget none and magnify off
+    /// Full's last rung: Full falls to Basic for the run, unrecorded, and
+    /// Basic's ladder stands at its top
+    basic,
     standard, ///< the last rung: drop acceleration for the run, unrecorded
 };
 
@@ -951,7 +1004,10 @@ enum class StepResult : uint8_t {
 /// times the period, or exceeds the frame's allowance (its period where the
 /// sample gives none) while the tier's own passes take over a tenth of the
 /// period, at most once per 10 s; and at once when the median
-/// over the last 1 s exceeds twice the period. While the match clock runs
+/// over the last 1 s exceeds twice the period. While Full draws
+/// (LadderState::full) a step from any pool takes Full's rungs first, and
+/// a clock running behind sheds Full's anti-aliasing with Basic's budget
+/// and magnification. Otherwise, while the match clock runs
 /// behind, any time the passes take sheds budget and magnification at
 /// once. A step empties the pool that caused it, and the ladder never steps
 /// back up within the run.
@@ -964,7 +1020,9 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
 /// Returns the rung one step down the ladder for a pool.
 ///
 /// @param state the rung
-/// @param pool the pool that asks for the step: zoomed-out frames move the
+/// @param pool the pool that asks for the step: while Full draws, any pool
+///     halves Full's anti-aliasing, to full_supersample_least, and then
+///     drops Full to Basic; after that zoomed-out frames move the
 ///     method and the budget, zoomed-in frames magnify, and other frames
 ///     NEAREST chrome, the card's magnification and the standard tier,
 ///     each passing rungs that would change nothing
@@ -1031,14 +1089,17 @@ StepResult feed_presented_frame(
 /// A buffer of the accelerated tier's own that the memory guard may refuse
 /// before it is made (memory_guard_allows).
 enum class AcceleratedBuffer : uint8_t {
-    scene,    ///< the magnified scene's texture, with the overlay's texture and buffer
-    prescale, ///< a prescale target: the HUD's, the screens' or the scene's
+    scene,        ///< the magnified scene's texture, with the overlay's texture and buffer
+    prescale,     ///< a prescale target: the HUD's, the screens' or the scene's
+    card_pages,   ///< the Full tier's texture pages: the terrain atlas, the sprites, the models
+    card_targets, ///< the Full tier's render targets: the world, half and shadow targets
 };
 
 /// Returns the rung below one that holds no such buffer, where the tier
 /// stays when the memory guard refuses to let it make one: magnify off for
-/// the scene, and the card's magnification one rung lower for a prescale
-/// target. The rung never rises.
+/// the scene, the card's magnification one rung lower for a prescale
+/// target, and Basic for Full's pages and targets, whose memory Full frees
+/// first. The rung never rises.
 ///
 /// @param state the rung
 /// @param buffer the buffer refused
@@ -1050,8 +1111,9 @@ enum class AcceleratedBuffer : uint8_t {
 /// @param before the rung before the step
 /// @param after the rung after it
 /// @return the change, the first in the ladder's order where several
-///     changed, but for budget none and magnify off together, as a clock
-///     running behind sheds them; "nothing changed" for the same rung
+///     changed, Full's rungs first, but for budget none and magnify off
+///     together, as a clock running behind sheds them; "nothing changed"
+///     for the same rung
 [[nodiscard]] std::string_view
 describe_step(const LadderState& before, const LadderState& after) noexcept;
 

@@ -9,6 +9,38 @@ namespace oa::app {
 
 namespace settings = oa::ui::engine_settings;
 
+namespace {
+
+/// Returns the status of Basic drawing where Full was asked for.
+///
+/// @param shortfall why Basic draws
+/// @return the state; Full not in this build where nothing keeps it to Basic
+settings::AccelerationState full_shortfall_state(FullShortfall shortfall) noexcept {
+    using settings::AccelerationState;
+    switch (shortfall) {
+    case FullShortfall::none:
+    case FullShortfall::not_built:
+        return AccelerationState::full_not_built;
+    case FullShortfall::lacks_feature:
+        return AccelerationState::full_lacks_feature;
+    case FullShortfall::failed_before:
+        return AccelerationState::full_failed_before;
+    case FullShortfall::stopped:
+        return AccelerationState::full_stopped;
+    case FullShortfall::slow_frames:
+        return AccelerationState::full_slow_frames;
+    case FullShortfall::too_little_memory:
+        return AccelerationState::full_too_little_memory;
+    case FullShortfall::cannot_save:
+        return AccelerationState::full_cannot_save;
+    case FullShortfall::waiting_for_game_end:
+        return AccelerationState::full_waiting_for_game_end;
+    }
+    return AccelerationState::full_not_built;
+}
+
+} // namespace
+
 bool enough_memory_for_acceleration(uint64_t physical_memory) noexcept {
     return physical_memory >= render_policy::smallest_accelerated_memory;
 }
@@ -90,11 +122,18 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = AccelerationState::cannot_save;
     else if (facts.slow_frames_dropped && !facts.tier_accelerated)
         report.status.state = AccelerationState::slow_frames;
+    else if (facts.tier_full)
+        // The graphics card draws the battlefield, with the anti-aliasing
+        // asked for or less once frames were slow.
+        report.status.state = facts.less_anti_aliasing
+                                  ? AccelerationState::full_in_use_less_anti_aliasing
+                                  : AccelerationState::full_in_use;
     else if (facts.tier_accelerated)
-        // Full is drawn as Basic until the game draws the battlefield on the
-        // graphics card, and the status says so before anything else.
+        // Where Full was asked for and Basic draws, the status says why
+        // before anything else: this build cannot draw Full, or something
+        // kept it to Basic.
         report.status.state = facts.asked == HardwareAcceleration::full
-                                  ? AccelerationState::full_not_built
+                                  ? full_shortfall_state(facts.full_shortfall)
                               : facts.driver_skipped ? AccelerationState::in_use_on_another_driver
                               : facts.slow_frames_stepped ? AccelerationState::in_use_less_smoothing
                               : facts.no_smoothing        ? AccelerationState::in_use_no_smoothing
@@ -103,19 +142,60 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = AccelerationState::next_start;
     // The wait says whether it is for a replay, and which level then takes
     // effect.
-    report.status.replay =
-        report.status.state == AccelerationState::waiting_for_game_end && facts.replay;
+    report.status.replay = (report.status.state == AccelerationState::waiting_for_game_end ||
+                            report.status.state == AccelerationState::full_waiting_for_game_end) &&
+                           facts.replay;
     report.status.asked = facts.asked;
+    report.status.supersample = facts.full_supersample;
     return report;
 }
+
+namespace {
+
+/// Returns why Basic draws where Full was asked for, from the facts the
+/// tier is decided from, in the order the tier is decided.
+///
+/// @param inputs the facts
+/// @return the shortfall; none where nothing keeps Full to Basic
+FullShortfall full_shortfall_of(const render_policy::TierInputs& inputs) noexcept {
+    using render_policy::AccelerationFlag;
+    using render_policy::FullDrop;
+    using render_policy::MatchKind;
+    const bool forced = inputs.flag == AccelerationFlag::full;
+    if (!render_policy::full_ready && !forced)
+        return FullShortfall::not_built;
+    if (inputs.full_drop == FullDrop::function_test)
+        return FullShortfall::lacks_feature;
+    if (inputs.full_unusable_record && !forced)
+        return FullShortfall::failed_before;
+    switch (inputs.full_drop) {
+    case FullDrop::card_failure:
+        return FullShortfall::stopped;
+    case FullDrop::memory:
+        return FullShortfall::too_little_memory;
+    case FullDrop::slow_frames:
+        return FullShortfall::slow_frames;
+    case FullDrop::trial_unwritten:
+        return FullShortfall::cannot_save;
+    case FullDrop::function_test:
+    case FullDrop::none:
+        break;
+    }
+    if (inputs.match.kind != MatchKind::none && !inputs.match.full)
+        return FullShortfall::waiting_for_game_end;
+    return FullShortfall::none;
+}
+
+} // namespace
 
 AccelerationFacts tier_acceleration_facts(
     const render_policy::TierInputs& inputs,
     const render_policy::LadderState& rung,
-    bool tier_accelerated
+    render_policy::RenderTier tier
 ) noexcept {
     using render_policy::AccelerationFlag;
     using render_policy::Capability;
+    const bool tier_accelerated = render_policy::card_tier(tier);
     AccelerationFacts facts{};
     if (inputs.flag != AccelerationFlag::none)
         facts.flag = render_policy::acceleration_asked(inputs.flag, inputs.setting);
@@ -144,6 +224,10 @@ AccelerationFacts tier_acceleration_facts(
     facts.shared_game = inputs.match.kind == render_policy::MatchKind::shared_game;
     facts.replay = inputs.match.kind == render_policy::MatchKind::replay;
     facts.tier_accelerated = tier_accelerated;
+    facts.tier_full = tier == render_policy::RenderTier::full;
+    if (facts.asked == settings::HardwareAcceleration::full && !facts.tier_full)
+        facts.full_shortfall = full_shortfall_of(inputs);
+    facts.full_supersample = rung.supersample;
     facts.no_smoothing = rung.budget == render_policy::SceneBudget::none;
     facts.reach = acceleration_reach(rung);
     return facts;

@@ -40,6 +40,10 @@ struct AcceleratedWatch {
     /// a rung below a buffer the memory guard refused is about memory, and
     /// does not count.
     bool slowed{};
+    /// The step-down has lowered Full's anti-aliasing for slow frames since
+    /// the ladder last started from the top, so the status says Full draws
+    /// with less of it.
+    bool full_slowed{};
     uint32_t steps{};             ///< steps down the ladder in the run, each logged once
     uint64_t frame_interval_ns{}; ///< between the last two presents
     /// Between the two presents before them: a long interval after another

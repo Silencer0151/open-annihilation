@@ -12,7 +12,8 @@
 // other machines or a replay, known from its loading screen, keeps the tier
 // it began with until it ends. Once the step-down has moved, the tier switches on at the rung
 // it reached. The renderer records follow the run: the first accelerated
-// frame moves the sentinel, switching off closes the stage of a path's
+// frame moves the sentinel, Full's first match frame stands under its own
+// trial (runtime_full.cpp), switching off closes the stage of a path's
 // first frames, and what a match strikes or records is written when it
 // ends.
 #include "oa/app/runtime.hpp"
@@ -40,12 +41,16 @@ void Runtime::update_render_tier() {
     inputs.device_lost = render_run_->device_lost;
     const policy::TierStep step =
         policy::step_tier(inputs, accelerated_.on, host.function_test_hooks());
+    const bool full = step.decision.tier == policy::RenderTier::full;
     switch (step.action) {
-    case policy::TierAction::switch_on:
+    case policy::TierAction::switch_on: {
         begin_accelerated_watch();
-        switch_accelerated_presentation(true, render_tier_rung());
+        policy::LadderState rung = render_tier_rung();
+        rung.full = full;
+        switch_accelerated_presentation(true, rung);
         host.note_first_accelerated_frame();
         break;
+    }
     case policy::TierAction::switch_off:
         switch_accelerated_presentation(false, accelerated_.rung);
         // A path whose first frames stood under its own sentinel stops with
@@ -57,15 +62,23 @@ void Runtime::update_render_tier() {
         break;
     }
     // Full is a branch of the accelerated presentation: the card draws the
-    // battlefield's terrain from the next frame, or stops.
-    set_full_presentation(step.decision.tier == policy::RenderTier::full);
+    // battlefield's terrain from the next frame, or stops. The rung says
+    // which tier draws at it, so that the step-down takes Full's rungs first.
+    set_full_presentation(full);
+    if (accelerated_.on) {
+        accelerated_.rung.full = full;
+        if (render_run_->watch)
+            render_run_->watch->step_down.state.full = full;
+    }
     render_run_->tier = step.decision;
 }
 
 void Runtime::begin_render_tier_match(policy::MatchKind kind) {
     if (!render_run_ || render_run_->host == nullptr)
         return;
-    policy::begin_match(render_run_->host->tier_inputs().match, kind, accelerated_.on);
+    policy::begin_match(
+        render_run_->host->tier_inputs().match, kind, accelerated_.on, full_presentation()
+    );
     // Strikes and records that arise from here wait for the match's end.
     render_run_->host->set_match_running(true);
 }
@@ -82,9 +95,21 @@ void Runtime::forget_render_failures() {
         return;
     policy::forget_failures(render_run_->host->tier_inputs());
     // The fresh try starts the step-down again from the top; the memory
-    // guard, once it has tripped, stays tripped.
-    if (render_run_->watch)
-        render_run_->watch->moved = false;
+    // guard, once it has tripped, stays tripped. Where the tier stays on,
+    // as a raise from Basic to Full keeps it, the presentation takes the
+    // top rung at once, as a switch back on would.
+    auto* watch = render_run_->watch.get();
+    const bool restart = watch != nullptr && watch->moved && accelerated_.on;
+    if (watch != nullptr) {
+        watch->moved = false;
+        watch->full_slowed = false;
+    }
+    if (restart) {
+        policy::LadderState rung = render_tier_rung();
+        rung.full = accelerated_.rung.full;
+        begin_accelerated_watch();
+        switch_accelerated_presentation(true, rung);
+    }
 }
 
 policy::LadderState Runtime::render_tier_rung() const {

@@ -2352,10 +2352,11 @@ class Runtime final : public menu::Host,
     void end_render_tier_match();
 
     /// Lets the tier try again, in this run, what switching Hardware
-    /// acceleration Off then On or Restore defaults retries: a function test
-    /// that failed and a drop other than the memory guard's
-    /// (render_policy::forget_failures), and the step-down, which starts
-    /// again from the top at the next switch-on.
+    /// acceleration Off then On, raising it from Basic to Full or Restore
+    /// defaults retries: a function test that failed and a drop of either
+    /// tier other than the memory guard's (render_policy::forget_failures),
+    /// and the step-down, which starts again from the top, at the next
+    /// switch-on or, where the tier stays on, at once.
     void forget_render_failures();
 
     /// Acts on the dialog's requests to try the graphics card afresh, as
@@ -4793,21 +4794,92 @@ class Runtime final : public menu::Host,
     void free_full_match_textures() noexcept;
 
     /// Drops the Full tier for the rest of the run, to Basic: logs the
-    /// reason once, frees what Full made and keeps the tier Basic until
+    /// reason once, frees what Full made, closes the stage of Full's first
+    /// frames where it stands (RendererHost::end_path_stage), keeps Full
+    /// away for the rest of a shared game or a replay
+    /// (render_policy::note_match_frame) and keeps the tier Basic until
     /// setting Hardware acceleration to Off and back, or Restore defaults,
-    /// lifts the drop (render_policy::TierInputs::full_drop).
+    /// lifts the drop (render_policy::TierInputs::full_drop); nothing lifts
+    /// the memory guard's. A drop already noted for the run keeps its kind.
     ///
     /// @param reason what failed
-    void drop_full(const std::string& reason);
+    /// @param drop why: by default a call only the Full tier makes failed
+    void drop_full(
+        const std::string& reason,
+        render_policy::FullDrop drop = render_policy::FullDrop::card_failure
+    );
+
+    /// Takes a failure of the Full tier's own (FullCardError): where the
+    /// drop was noted already, as the Full function test's failure is
+    /// before it is thrown, nothing more; otherwise the failing call is
+    /// struck against the driver (RendererHost::note_running_failure, a
+    /// `card` strike, which the same failure in the next run on the driver
+    /// records full-unusable) and Full is dropped for the run
+    /// (drop_full).
+    ///
+    /// @param error what failed
+    void take_full_failure(const std::string& error);
+
+    /// Notes that the Full tier is about to draw its first match frame of
+    /// the run, or make its pages for a shared game, which stands under its
+    /// own trial and sentinel, `path full` (RendererHost::begin_path): a
+    /// trial that cannot be written keeps Full off, as a path's does,
+    /// dropping it for the run with nothing struck
+    /// (render_policy::FullDrop::trial_unwritten).
+    ///
+    /// @return true when Full may draw
+    [[nodiscard]] bool begin_full_path();
+
+    /// Makes Full's pages and targets as a shared game's or a replay's
+    /// loading screen begins, before the world is built and before the
+    /// machines wait for each other, where the tier is Full then: the
+    /// match's palette is read first, Full's trial written before the
+    /// pages (begin_full_path), and the terrain atlas, the overlay and the
+    /// zoom-in target made (ensure_full_match_textures, ensure_full_target)
+    /// at the battlefield's size of the match's layout. Nothing of Full is
+    /// made again until the match ends: a failure drops Full for the run
+    /// (take_full_failure). Does nothing for a match played alone, whose
+    /// pages make_full_match_pages makes with the terrain step and whose
+    /// first Full frame makes the rest.
+    void preallocate_full_match_textures();
+
+    /// Makes the target a Full frame draws the terrain through where the
+    /// zoom is above 1 and not whole and the renderer lacks the pixel-art
+    /// sampling mode, once per match at the largest such a zoom needs;
+    /// where the renderer cannot make it, logs so once and the terrain is
+    /// drawn LINEAR straight. In a shared game or a replay after the
+    /// loading screen it makes none (full_creation_allowed).
+    ///
+    /// @param bf_w the battlefield's width in pixels
+    /// @param bf_h its height in pixels
+    void ensure_full_target(uint32_t bf_w, uint32_t bf_h);
+
+    /// Tells whether Full may make a page or a target now: outside a shared
+    /// game or a replay, or as one's loading screen begins
+    /// (render_policy::first_use_allowed). Where it may not, Full waits for
+    /// the match to end (wait_full_for_match_end) and the frame is Basic's.
+    ///
+    /// @return true when a page or target may be made
+    [[nodiscard]] bool full_creation_allowed();
+
+    /// Keeps Full away until the shared game or the replay ends
+    /// (render_policy::note_match_frame), logging once per match that its
+    /// pages cannot be made during it; the frame in hand is Basic's.
+    void wait_full_for_match_end();
 
     /// Opens the card's executor on the renderer at its texture limit,
     /// unless it is open, and runs the Full function test on it once per
     /// opening: a page of two levels drawn 1:1 NEAREST and its level 1
     /// drawn twice its size LINEAR, a quad blended at alpha one half and a
     /// triangle of three vertex colours, read back and held to their
-    /// references (runtime_full.cpp).
+    /// references (runtime_full.cpp). The test's failure drops Full as the
+    /// card lacking a feature it needs (render_policy::FullDrop::function_test)
+    /// before it is thrown. In a shared game or a replay after the loading
+    /// screen the executor is not opened for the first time
+    /// (full_creation_allowed).
     ///
-    /// Throws FullCardError when the card cannot be opened or the test fails.
+    /// Throws FullCardError when the card cannot be opened or must wait for
+    /// the match to end, or the test fails.
     void ensure_full_executor();
 
     /// Builds the map's terrain atlas within fit_page_edge of the renderer's
@@ -4815,11 +4887,16 @@ class Runtime final : public menu::Host,
     /// and 1 as pages, which every zoom from one half draws from, unless
     /// the pages already hold that atlas: it is built again when the map,
     /// the palette, the gamma or the page edge changes, or the pages are
-    /// gone. Once a page is filled its texels are let go; the atlas keeps
-    /// its grid and its pages' sizes and levels for the builder.
+    /// gone. The pages are made once the memory guard allows their memory
+    /// (accelerated_buffer_allowed, which otherwise drops Full for the run),
+    /// and never for the first time in a shared game or a replay after the
+    /// loading screen (full_creation_allowed). Once a page is filled its
+    /// texels are let go; the atlas keeps its grid and its pages' sizes and
+    /// levels for the builder.
     ///
     /// Throws FullCardError when the match has no map, the atlas cannot be
-    /// built or the card refuses a page.
+    /// built, the memory guard refuses the pages, the pages must wait for
+    /// the match to end or the card refuses a page.
     ///
     /// @param palette the palette the tiles are shown in: the match's once
     ///     the match view is entered, and the game's active palette, which
@@ -4827,14 +4904,17 @@ class Runtime final : public menu::Host,
     void ensure_full_terrain_pages(const oa::PaletteBytes& palette);
 
     /// Makes the Full tier's card resources for the match as it loads, when
-    /// the tier decided for its frames is Full: the executor and its
-    /// function test (ensure_full_executor) and the terrain atlas and its
-    /// pages (ensure_full_terrain_pages), so that the match's first frame
-    /// finds them and no page is made at a frame, which a shared game or a
-    /// replay never allows. The loading screen calls it with the terrain
-    /// step, before the world is built and before a shared game's load
-    /// barrier. A card failure there drops Full for the run (drop_full) and
-    /// the match plays in Basic. Nothing is made in any other tier.
+    /// the tier decided for its frames is Full: Full's trial first
+    /// (begin_full_path), then the executor and its function test
+    /// (ensure_full_executor) and the terrain atlas and its pages
+    /// (ensure_full_terrain_pages), so that the match's first frame finds
+    /// them and no page is made at a frame, which a shared game or a replay
+    /// never allows. The loading screen calls it with the terrain step,
+    /// before the world is built and before a shared game's load barrier;
+    /// in a shared game or a replay preallocate_full_match_textures made
+    /// them already as the loading screen began. A card failure there drops
+    /// Full for the run with a strike (take_full_failure) and the match
+    /// plays in Basic. Nothing is made in any other tier.
     void make_full_match_pages();
 
     /// Makes what a Full match frame draws the terrain with: the executor
@@ -4842,11 +4922,15 @@ class Runtime final : public menu::Host,
     /// its pages (ensure_full_terrain_pages), which the loading screen made
     /// already unless the renderer was made again, the pages were freed or
     /// the palette, the gamma or the page edge changed since; and the
-    /// overlay at the battlefield's size, made again when that size
-    /// changes.
+    /// overlay at the battlefield's size, the world layer's or, before the
+    /// first frame, the match layout's, made again when that size changes.
+    /// In a shared game or a replay after the loading screen nothing is
+    /// made for the first time (full_creation_allowed).
     ///
-    /// Throws FullCardError when the card refuses a call or the function
-    /// test fails, and AccelerationError when the overlay cannot be made.
+    /// Throws FullCardError when the card refuses a call, the function
+    /// test fails, the memory guard refuses the pages or a first use must
+    /// wait for the match to end, and AccelerationError when the overlay
+    /// cannot be made.
     void ensure_full_match_textures();
 
     /// Presents the match layers in the Full tier: the HUD layer's prescale
@@ -4860,9 +4944,13 @@ class Runtime final : public menu::Host,
     /// pixel-art sampling mode; the overlay of what the processor drew over
     /// its nearest-filled terrain base, found by difference from that base
     /// (convert_rgb24_overlay_argb) and laid over the card's terrain 1:1;
-    /// then finish_match_layers. A card failure drops Full for the run
-    /// (drop_full) and the frame is left for Basic to present, as is a
-    /// frame whose terrain base is not the frame's.
+    /// then finish_match_layers. The frame stands under Full's trial and
+    /// sentinel (begin_full_path). A card failure, or the one
+    /// --render-fault card forces, drops Full for the run with a strike
+    /// (take_full_failure) and the frame is left for Basic to present, as
+    /// is a frame whose terrain base is not the frame's and one whose pages
+    /// must wait for a shared game to end. A frame presented counts towards
+    /// the stage of Full's first frames (RenderRun::paths_drawn).
     ///
     /// Throws PresentError when an SDL call outside the card's own fails,
     /// and AccelerationError when the overlay or the HUD's prescale target

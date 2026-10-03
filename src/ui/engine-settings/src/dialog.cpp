@@ -99,8 +99,14 @@ constexpr std::string_view kDriverSkipped = "A failed graphics driver is skipped
 /// The first line of a machine under 2 GiB.
 constexpr std::string_view kNeedsMemory = "Not in use: it needs at least 2 GB of memory.";
 
+/// The second line of a state in which Full was asked for and Basic is in
+/// use, that setting it to Off and back, or Restore defaults, may lift.
+constexpr std::string_view kRetryFull = "Set it to Off and back, or restore defaults.";
+/// The first line of Full in use.
+constexpr std::string_view kFullInUse = "Full in use: the graphics card draws the view.";
+
 /// Every state's status, in AccelerationState's order.
-constexpr std::array<StatusText, 21> kStatusTexts{{
+constexpr std::array<StatusText, 30> kStatusTexts{{
     {AccelerationState::off_driver_skipped, kOff, kDriverSkipped},
     {AccelerationState::needs_memory_driver_skipped, kNeedsMemory, kDriverSkipped},
     {AccelerationState::needs_memory, kNeedsMemory, kProcessorDraws},
@@ -131,6 +137,23 @@ constexpr std::array<StatusText, 21> kStatusTexts{{
     {AccelerationState::next_start,
      "Takes effect from the next start.",
      "The processor draws and scales the view until then."},
+    {AccelerationState::full_cannot_save, "Basic in use: the game cannot save its files.", {}},
+    {AccelerationState::full_too_little_memory,
+     "Basic in use: there is too little memory for Full.",
+     {}},
+    {AccelerationState::full_slow_frames,
+     "Basic in use for this run: Full's frames were slow.",
+     {}},
+    {AccelerationState::full_stopped, "Basic in use: Full stopped for this run.", kRetryFull},
+    {AccelerationState::full_failed_before,
+     "Basic in use: Full failed before on this driver.",
+     kRetryFull},
+    {AccelerationState::full_lacks_feature,
+     "Basic in use: the card lacks a feature Full needs.",
+     {}},
+    {AccelerationState::full_waiting_for_game_end,
+     "Basic for this game: in a shared game, Full",
+     "takes effect from the next game."},
     {AccelerationState::full_not_built, "Full is not in this build: Basic is in use.", {}},
     {AccelerationState::in_use_on_another_driver,
      "Basic in use, on another driver: one failed.",
@@ -141,6 +164,10 @@ constexpr std::array<StatusText, 21> kStatusTexts{{
     {AccelerationState::in_use_no_smoothing,
      "Basic in use; no smoothing when zoomed out here.",
      {}},
+    {AccelerationState::full_in_use_less_anti_aliasing,
+     "Full in use, less anti-aliasing: frames were slow.",
+     {}},
+    {AccelerationState::full_in_use, kFullInUse, {}},
     {AccelerationState::in_use, "Basic in use.", {}},
 }};
 
@@ -163,6 +190,17 @@ constexpr std::string_view kWaitingForFull = "Off for this game: in a shared gam
 constexpr std::string_view kWaitingInReplay = "Off for this game: in a replay, Basic";
 /// The first line of AccelerationState::waiting_for_game_end for Full in a replay.
 constexpr std::string_view kWaitingForFullInReplay = "Off for this game: in a replay, Full";
+/// The first line of AccelerationState::full_waiting_for_game_end in a
+/// replay; kStatusTexts holds a shared game's.
+constexpr std::string_view kBasicWaitingForFullInReplay = "Basic for this game: in a replay, Full";
+/// The second line of Full in use, by its anti-aliasing: none, 2 samples
+/// across and 4.
+constexpr std::string_view kFullReach = "Smoothed at every zoom.";
+constexpr std::string_view kFullReachTwice = "Smoothed at every zoom; anti-aliasing 2x.";
+constexpr std::string_view kFullReachFourfold = "Smoothed at every zoom; anti-aliasing 4x.";
+/// The anti-aliasing kFullReachTwice and kFullReachFourfold name.
+constexpr uint8_t kSupersampleTwice = 2;
+constexpr uint8_t kSupersampleFourfold = 4;
 
 /// Returns the first line of AccelerationState::waiting_for_game_end: the
 /// match it waits for, and the level that takes effect after it.
@@ -170,12 +208,41 @@ constexpr std::string_view kWaitingForFullInReplay = "Off for this game: in a re
 /// @param acceleration the status
 /// @return the line; Basic's for a status that asks for no more
 std::string_view waiting_line(const AccelerationStatus& acceleration) noexcept {
+    if (acceleration.state == AccelerationState::full_waiting_for_game_end)
+        return acceleration.replay ? kBasicWaitingForFullInReplay
+                                   : kStatusTexts[static_cast<std::size_t>(
+                                                      AccelerationState::full_waiting_for_game_end
+                                                  )]
+                                         .first;
     const bool full = acceleration.asked == HardwareAcceleration::full;
     if (acceleration.replay)
         return full ? kWaitingForFullInReplay : kWaitingInReplay;
     return full ? kWaitingForFull
                 : kStatusTexts[static_cast<std::size_t>(AccelerationState::waiting_for_game_end)]
                       .first;
+}
+
+/// Tells whether a state is Full in use, whose second line names its
+/// anti-aliasing rather than the reach.
+///
+/// @param state the state
+/// @return true for the two Full in-use states
+bool full_in_use(AccelerationState state) noexcept {
+    return state == AccelerationState::full_in_use ||
+           state == AccelerationState::full_in_use_less_anti_aliasing;
+}
+
+/// Returns the second line of Full in use: smoothed at every zoom, with its
+/// anti-aliasing where there is any.
+///
+/// @param supersample the samples a pixel across; 1 for no anti-aliasing
+/// @return the line
+std::string_view full_line(uint8_t supersample) noexcept {
+    if (supersample >= kSupersampleFourfold)
+        return kFullReachFourfold;
+    if (supersample >= kSupersampleTwice)
+        return kFullReachTwice;
+    return kFullReach;
 }
 
 /// Returns the reach line: what the graphics card does on this machine.
@@ -691,11 +758,15 @@ std::string_view status_line(const AccelerationStatus& acceleration, std::size_t
         return {};
     const StatusText& text = kStatusTexts[index];
     if (line == 0)
-        return acceleration.state == AccelerationState::waiting_for_game_end
+        return acceleration.state == AccelerationState::waiting_for_game_end ||
+                       acceleration.state == AccelerationState::full_waiting_for_game_end
                    ? waiting_line(acceleration)
                    : text.first;
-    if (line == 1)
+    if (line == 1) {
+        if (full_in_use(acceleration.state))
+            return full_line(acceleration.supersample);
         return text.second.empty() ? reach_line(acceleration.reach) : text.second;
+    }
     return {};
 }
 
@@ -1011,15 +1082,14 @@ DialogAction scroll_key(Dialog& dialog, layout::ScrolledRows& open, DialogKey ke
 }
 
 /// Reports a change of the chosen settings, or only a look's. Hardware
-/// acceleration passing from Off to Basic or Full asks for the graphics
-/// card to be tried afresh.
+/// acceleration passing to a higher level, from Off to Basic or Full or
+/// from Basic to Full, asks for the graphics card to be tried afresh.
 ///
 /// @param[in,out] dialog the dialog, its chosen settings after the event
 /// @param before the chosen settings before the event
 /// @return DialogAction::changed when they differ, else DialogAction::redraw
 DialogAction changed_or_redraw(Dialog& dialog, const EngineSettings& before) noexcept {
-    if (before.hardware_acceleration == HardwareAcceleration::off &&
-        dialog.chosen.hardware_acceleration != HardwareAcceleration::off)
+    if (dialog.chosen.hardware_acceleration > before.hardware_acceleration)
         ++dialog.forget_renderer_failures;
     return before == dialog.chosen ? DialogAction::redraw : DialogAction::changed;
 }

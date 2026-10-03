@@ -8,7 +8,9 @@
 // failed in the run, a drop by the memory guard or for slow frames, an
 // error of the game's own, and --force-capable; in use, at the lowest budget
 // or above it, or after the step-down lowered its rung for slow frames;
-// whether nothing could help the run; what the graphics card
+// Full in use, with its anti-aliasing and with less of it, and each reason
+// Basic draws where Full was asked for; whether nothing could help the run;
+// what the graphics card
 // does at each rung; the status the facts the tier is decided from give;
 // what the renderer records add: a driver a record skipped, a record
 // against the renderer's driver or the drivers skipped before it, as a
@@ -322,13 +324,21 @@ void a_drop_for_memory_or_slow_frames_says_so() {
     const policy::LadderState rung{};
     inputs.drop = policy::Drop::memory;
     OA_CHECK(
-        report_acceleration(oa::app::tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::too_little_memory
+        report_acceleration(
+            oa::app::tier_acceleration_facts(
+                inputs, rung, oa::app::render_policy::RenderTier::standard
+            )
+        )
+            .status.state == State::too_little_memory
     );
     inputs.drop = policy::Drop::slow_frames;
     OA_CHECK(
-        report_acceleration(oa::app::tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::slow_frames
+        report_acceleration(
+            oa::app::tier_acceleration_facts(
+                inputs, rung, oa::app::render_policy::RenderTier::standard
+            )
+        )
+            .status.state == State::slow_frames
     );
 }
 
@@ -356,7 +366,9 @@ void an_error_of_the_games_own_says_so() {
     inputs.memory = kAmpleMemory;
     inputs.setting = Level::basic;
     inputs.drop = policy::Drop::engine_fault;
-    const auto tier_facts = oa::app::tier_acceleration_facts(inputs, policy::LadderState{}, false);
+    const auto tier_facts = oa::app::tier_acceleration_facts(
+        inputs, policy::LadderState{}, oa::app::render_policy::RenderTier::standard
+    );
     OA_CHECK(tier_facts.engine_error && !tier_facts.driver_failed);
 }
 
@@ -445,22 +457,174 @@ void full_is_drawn_as_basic_and_says_so() {
     rung.filtered_chrome = true;
     rung.magnify = true;
     rung.budget = policy::SceneBudget::reduced;
-    auto from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    auto from_tier = oa::app::tier_acceleration_facts(
+        inputs, rung, oa::app::render_policy::RenderTier::accelerated
+    );
     OA_CHECK(from_tier.asked == Level::full && !from_tier.flag);
     OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
     inputs.flag = policy::AccelerationFlag::basic;
-    from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    from_tier = oa::app::tier_acceleration_facts(
+        inputs, rung, oa::app::render_policy::RenderTier::accelerated
+    );
     OA_CHECK(from_tier.asked == Level::basic && from_tier.flag == Level::basic);
     OA_CHECK(report_acceleration(from_tier).status.state == State::in_use);
     inputs.flag = policy::AccelerationFlag::off;
-    from_tier = oa::app::tier_acceleration_facts(inputs, rung, false);
+    from_tier = oa::app::tier_acceleration_facts(
+        inputs, rung, oa::app::render_policy::RenderTier::standard
+    );
     OA_CHECK(from_tier.asked == Level::off && from_tier.flag == Level::off);
     OA_CHECK(report_acceleration(from_tier).status.state == State::off_by_command_line);
     inputs.flag = policy::AccelerationFlag::full;
     inputs.setting = Level::off;
-    from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    from_tier = oa::app::tier_acceleration_facts(
+        inputs, rung, oa::app::render_policy::RenderTier::accelerated
+    );
     OA_CHECK(from_tier.asked == Level::full && from_tier.flag == Level::full);
     OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
+}
+
+void full_in_use_and_what_keeps_it_to_basic_say_so() {
+    using oa::app::FullShortfall;
+    // The graphics card drawing the battlefield is Full in use, with less
+    // anti-aliasing once its step-down lowered it, whatever Basic's own
+    // in-use states would add; the second line carries the anti-aliasing.
+    auto facts = able();
+    facts.asked = Level::full;
+    facts.tier_accelerated = true;
+    facts.tier_full = true;
+    facts.full_supersample = 4;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::full_in_use);
+    OA_CHECK(report.status.supersample == 4 && report.status.asked == Level::full);
+    OA_CHECK(!report.acceleration_unavailable);
+    facts.driver_skipped = true;
+    facts.no_smoothing = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::full_in_use);
+    facts.less_anti_aliasing = true;
+    facts.full_supersample = 2;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::full_in_use_less_anti_aliasing);
+    OA_CHECK(report.status.supersample == 2);
+    // Where Basic draws with Full asked for, the first line says why, each
+    // reason its own state, and nothing known as Full not in this build.
+    facts = able();
+    facts.asked = Level::full;
+    facts.tier_accelerated = true;
+
+    const struct {
+        FullShortfall shortfall;
+        State state;
+    } reasons[] = {
+        {FullShortfall::none, State::full_not_built},
+        {FullShortfall::not_built, State::full_not_built},
+        {FullShortfall::lacks_feature, State::full_lacks_feature},
+        {FullShortfall::failed_before, State::full_failed_before},
+        {FullShortfall::stopped, State::full_stopped},
+        {FullShortfall::slow_frames, State::full_slow_frames},
+        {FullShortfall::too_little_memory, State::full_too_little_memory},
+        {FullShortfall::cannot_save, State::full_cannot_save},
+        {FullShortfall::waiting_for_game_end, State::full_waiting_for_game_end},
+    };
+
+    for (const auto& reason : reasons) {
+        facts.full_shortfall = reason.shortfall;
+        report = report_acceleration(facts);
+        OA_CHECK(report.status.state == reason.state);
+        OA_CHECK(!report.status.replay && report.status.asked == Level::full);
+        OA_CHECK(!report.acceleration_unavailable);
+        // Basic asked for says Basic is in use, whatever kept Full away.
+        facts.asked = Level::basic;
+        OA_CHECK(report_acceleration(facts).status.state == State::in_use);
+        facts.asked = Level::full;
+    }
+    // The wait for Full names a replay.
+    facts.full_shortfall = FullShortfall::waiting_for_game_end;
+    facts.replay = true;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::full_waiting_for_game_end && report.status.replay);
+    facts.replay = false;
+    facts.shared_game = true;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::full_waiting_for_game_end && !report.status.replay);
+    // Nothing running keeps the usual states, whatever kept Full away.
+    facts.tier_accelerated = false;
+    facts.shared_game = false;
+    facts.full_shortfall = FullShortfall::stopped;
+    OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+    facts.driver_failed = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+
+    // From the facts the tier is decided from: Full drawing is Full in use
+    // with the rung's anti-aliasing; Basic drawing with Full asked for says
+    // why, in the order the tier is decided; Basic asked for says nothing
+    // of Full.
+    namespace policy = oa::app::render_policy;
+    policy::TierInputs inputs{};
+    inputs.renderer = true;
+    inputs.memory = kAmpleMemory;
+    inputs.flag = policy::AccelerationFlag::full;
+    inputs.setting = Level::basic;
+    policy::LadderState rung{};
+    rung.filtered_chrome = true;
+    rung.budget = policy::SceneBudget::reduced;
+    rung.full = true;
+    rung.supersample = 2;
+    auto from_tier = oa::app::tier_acceleration_facts(inputs, rung, policy::RenderTier::full);
+    OA_CHECK(from_tier.tier_full && from_tier.tier_accelerated);
+    OA_CHECK(from_tier.full_shortfall == FullShortfall::none && from_tier.full_supersample == 2);
+    report = report_acceleration(from_tier);
+    OA_CHECK(report.status.state == State::full_in_use && report.status.supersample == 2);
+    from_tier.less_anti_aliasing = true;
+    OA_CHECK(report_acceleration(from_tier).status.state == State::full_in_use_less_anti_aliasing);
+    const auto shortfall = [&](const policy::TierInputs& facts_in) {
+        return oa::app::tier_acceleration_facts(facts_in, rung, policy::RenderTier::accelerated)
+            .full_shortfall;
+    };
+    // The flag forces Full over a build not ready and a record; the setting
+    // alone does neither.
+    OA_CHECK(shortfall(inputs) == FullShortfall::none);
+    inputs.full_unusable_record = true;
+    OA_CHECK(shortfall(inputs) == FullShortfall::none);
+    inputs.flag = policy::AccelerationFlag::none;
+    inputs.setting = Level::full;
+    OA_CHECK(
+        shortfall(inputs) ==
+        (policy::full_ready ? FullShortfall::failed_before : FullShortfall::not_built)
+    );
+    inputs.flag = policy::AccelerationFlag::full;
+    inputs.full_drop = policy::FullDrop::function_test;
+    OA_CHECK(shortfall(inputs) == FullShortfall::lacks_feature);
+    inputs.full_drop = policy::FullDrop::card_failure;
+    inputs.full_unusable_record = false;
+    OA_CHECK(shortfall(inputs) == FullShortfall::stopped);
+    inputs.full_drop = policy::FullDrop::memory;
+    OA_CHECK(shortfall(inputs) == FullShortfall::too_little_memory);
+    inputs.full_drop = policy::FullDrop::slow_frames;
+    OA_CHECK(shortfall(inputs) == FullShortfall::slow_frames);
+    inputs.full_drop = policy::FullDrop::trial_unwritten;
+    OA_CHECK(shortfall(inputs) == FullShortfall::cannot_save);
+    inputs.full_drop = policy::FullDrop::none;
+    inputs.match = policy::SharedMatchGate{policy::MatchKind::replay, true, false};
+    OA_CHECK(shortfall(inputs) == FullShortfall::waiting_for_game_end);
+    report = report_acceleration(
+        oa::app::tier_acceleration_facts(inputs, rung, policy::RenderTier::accelerated)
+    );
+    OA_CHECK(report.status.state == State::full_waiting_for_game_end && report.status.replay);
+    inputs.match.full = true;
+    OA_CHECK(shortfall(inputs) == FullShortfall::none);
+    // Basic asked for: no shortfall, whatever stands against Full.
+    inputs.flag = policy::AccelerationFlag::basic;
+    inputs.full_drop = policy::FullDrop::card_failure;
+    OA_CHECK(shortfall(inputs) == FullShortfall::none);
+    OA_CHECK(
+        report_acceleration(
+            oa::app::tier_acceleration_facts(inputs, rung, policy::RenderTier::accelerated)
+        )
+            .status.state == State::in_use
+    );
+    // Nothing drawing: the standard tier's states, and no Full in use.
+    from_tier = oa::app::tier_acceleration_facts(inputs, rung, policy::RenderTier::standard);
+    OA_CHECK(!from_tier.tier_full && !from_tier.tier_accelerated);
 }
 
 void the_reach_follows_the_rung() {
@@ -498,90 +662,121 @@ void the_tier_facts_give_the_status() {
     rung.magnify = true;
     rung.budget = policy::SceneBudget::reduced;
     // In use, at its reach.
-    auto report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    auto report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::accelerated)
+    );
     OA_CHECK(report.status.state == State::in_use);
     OA_CHECK(report.status.reach == Reach::zoomed_out);
     rung.budget = policy::SceneBudget::none;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::accelerated)
+    );
     OA_CHECK(report.status.state == State::in_use_no_smoothing);
     OA_CHECK(report.status.reach == Reach::zoomed_in);
     // The flags decide over the setting.
     inputs.flag = policy::AccelerationFlag::off;
     OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::off_by_command_line
+        report_acceleration(
+            tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+        )
+            .status.state == State::off_by_command_line
     );
     inputs.flag = policy::AccelerationFlag::basic;
     inputs.setting = Level::off;
     OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, true)).status.state ==
-        State::in_use_no_smoothing
+        report_acceleration(
+            tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::accelerated)
+        )
+            .status.state == State::in_use_no_smoothing
     );
     inputs.flag = policy::AccelerationFlag::none;
     OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::off_by_setting
+        report_acceleration(
+            tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+        )
+            .status.state == State::off_by_setting
     );
     inputs.setting = Level::basic;
     // A failed function test lacks a feature and locks the row; a small
     // texture limit too; SDL's software renderer has no usable card.
     inputs.function_test = policy::FunctionTest::failed;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::lacks_feature && report.acceleration_unavailable);
     inputs.function_test = policy::FunctionTest::not_run;
     inputs.capability = policy::Capability::small_texture_limit;
     OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::lacks_feature
+        report_acceleration(
+            tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+        )
+            .status.state == State::lacks_feature
     );
     inputs.capability = policy::Capability::software_renderer;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::no_usable_card);
     OA_CHECK(report.vertical_sync_unavailable);
     // --force-capable lifts both the renderer's and the environment's.
     inputs.force_capable = true;
     inputs.virtual_video_driver = true;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, true));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::accelerated)
+    );
     OA_CHECK(report.status.state == State::in_use_no_smoothing);
     OA_CHECK(!report.acceleration_unavailable && !report.vertical_sync_unavailable);
     // It never lifts a function test that drew wrongly.
     inputs.function_test = policy::FunctionTest::failed;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::no_usable_card && report.acceleration_unavailable);
     inputs.function_test = policy::FunctionTest::not_run;
     inputs.force_capable = false;
     OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
-        State::environment_driver
+        report_acceleration(
+            tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+        )
+            .status.state == State::environment_driver
     );
     inputs.virtual_video_driver = false;
     inputs.capability = policy::Capability::capable;
     // A drop after a driver failure, and a shared game or a replay waited for.
     inputs.drop = policy::Drop::driver_failure;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::driver_failed && !report.acceleration_unavailable);
     // A rebuild after the failure that landed on SDL's software renderer,
     // the last of the walk: the failure explains it, so the row stays
     // within reach for Off then On.
     inputs.capability = policy::Capability::software_renderer;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::driver_failed);
     OA_CHECK(!report.acceleration_unavailable);
     inputs.drop = policy::Drop::none;
-    OA_CHECK(
-        report_acceleration(tier_acceleration_facts(inputs, rung, false)).acceleration_unavailable
-    );
+    OA_CHECK(report_acceleration(
+                 tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    )
+                 .acceleration_unavailable);
     inputs.capability = policy::Capability::capable;
     inputs.drop = policy::Drop::driver_failure;
     inputs.drop = policy::Drop::none;
     inputs.match.kind = policy::MatchKind::replay;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::waiting_for_game_end && report.status.replay);
     // Headless: no renderer, nothing ruled out by it; under 2 GiB first.
     inputs = {};
     inputs.memory = 0;
     inputs.setting = Level::basic;
-    report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
+    report = report_acceleration(
+        tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+    );
     OA_CHECK(report.status.state == State::needs_memory && report.acceleration_unavailable);
 }
 
@@ -663,21 +858,28 @@ void the_tier_facts_give_what_the_trial_and_the_file_say() {
     // Where the records live on disk a trial that could not be written,
     // for the function test or a path, says so; in memory it cannot fail.
     inputs.function_test = policy::FunctionTest::trial_unwritten;
-    OA_CHECK(tier_acceleration_facts(inputs, rung, false).trial_unwritten);
+    OA_CHECK(tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                 .trial_unwritten);
     inputs.players_own_profile = false;
-    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).trial_unwritten);
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                  .trial_unwritten);
     inputs.function_test = policy::FunctionTest::not_run;
     inputs.drop = policy::Drop::path_trial_unwritten;
-    OA_CHECK(tier_acceleration_facts(inputs, rung, false).trial_unwritten);
-    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).driver_failed);
+    OA_CHECK(tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                 .trial_unwritten);
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                  .driver_failed);
     inputs.drop = policy::Drop::none;
     // Records that could not be read after an unclean start, on disk alone.
     inputs.records_unreadable_after_unclean_start = true;
-    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).records_unreadable);
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                  .records_unreadable);
     inputs.players_own_profile = true;
-    OA_CHECK(tier_acceleration_facts(inputs, rung, false).records_unreadable);
+    OA_CHECK(tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                 .records_unreadable);
     inputs.render_driver_named = true;
-    OA_CHECK(!tier_acceleration_facts(inputs, rung, false).records_unreadable);
+    OA_CHECK(!tier_acceleration_facts(inputs, rung, oa::app::render_policy::RenderTier::standard)
+                  .records_unreadable);
 }
 
 void vertical_sync_is_out_of_reach_on_the_software_renderer() {
@@ -723,6 +925,7 @@ int main() {
     in_use_at_the_lowest_budget_says_nothing_smooths();
     in_use_after_slow_frames_says_it_smooths_less();
     full_is_drawn_as_basic_and_says_so();
+    full_in_use_and_what_keeps_it_to_basic_say_so();
     the_reach_follows_the_rung();
     the_tier_facts_give_the_status();
     the_records_say_what_they_hold();

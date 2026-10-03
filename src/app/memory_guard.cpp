@@ -162,6 +162,11 @@ void resume_memory_guard(MemoryGuard& guard) noexcept {
     forget_watch(guard);
 }
 
+void retry_memory_guard(MemoryGuard& guard) noexcept {
+    guard.tripped = MemoryGuardCause::none;
+    resume_memory_guard(guard);
+}
+
 bool memory_guard_allows(
     const MemoryGuard& guard, const platform::SystemMemorySample& sample, uint64_t bytes
 ) noexcept {

@@ -296,7 +296,22 @@ walk runs:
   the walk skip it, the walk again with the records ignored, the adapter
   in another driver's words after a skip or a rebuild, lost devices,
   repeated resets, present errors and a machine under 2 GiB, each new
-  record told once at the main menu. A named preferences file keeps
+  record told once at the main menu. The Full tier's own fallbacks run
+  with them, Full switched on as `--hardware-acceleration=full` and
+  `--force-capable` would: a card call that fails on a Full match frame
+  (`--render-fault card`) drops Full to Basic for the run, which presents
+  the composed frame, with the failing call struck against the driver and
+  the status saying Full stopped, Off and back trying Full again; the same
+  failure in two runs in a row records `full-unusable`, told once at the
+  main menu and cleared by a raise of the row from Basic to Full, a strike
+  alone cleared by a clean run; Full's first match frame writes its trial
+  and sentinel, `path full`, a left-over Full trial is struck at the first
+  restart and recorded at the second, or at the first where a fault can
+  stop the whole system, leaving Basic standing; a Full trial that cannot
+  be written keeps Basic with nothing struck; and in a shared game or a
+  replay Basic applies at once, Full from the next game, a page Full would
+  make during the match waits for its end, and the loading screen makes
+  every page and target first. A named preferences file keeps
   the cases before them, and the other checks, on records in memory.
   `--render-fault POINT[@FRAME]` forces one failure alone, at a presented
   frame of its case; `native-renderer-ladder-create` makes every driver but
@@ -311,7 +326,17 @@ walk runs:
   ticks, added between frames, are taken out against the loop's paced
   rate; the second forces the memory guard's sample of the system's
   memory, so that the guard refuses the tier's buffers and then drops it
-  for the run. Each skips under 2 GiB.
+  for the run. `native-renderer-ladder-full-slow` (`--render-fault
+  full-slow`) and `native-renderer-ladder-full-memory` (`--render-fault
+  full-memory`) do the same for the Full tier, switched on as
+  `--hardware-acceleration=full` would: slow frames take Full's rungs
+  first, its anti-aliasing from 4 to 2 to 1 and then Full itself, to
+  Basic for the run, each step logged once and the status saying so, Off
+  and back starting Full again at the top; and the guard refuses Full's
+  pages, which drops Full alone with nothing struck and nothing Off and
+  back lifts, and, tripped while Full draws, drops Full first, freeing its
+  pages, and Basic at the next sample while memory stays short. Each skips
+  under 2 GiB.
 
 ### Other builds
 

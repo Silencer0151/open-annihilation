@@ -1660,9 +1660,9 @@ void every_switch_reads_and_sets_through_one_table() {
     CHECK(!dialog.chosen.vertical_sync);
     CHECK(dialog.forget_renderer_failures == 0);
 
-    // Hardware acceleration passing from Off to Basic or Full asks for the
-    // graphics card to be tried afresh, once each time; Basic to Full, and
-    // Off again, keep the count.
+    // Hardware acceleration passing to a higher level, Off to Basic or
+    // Full or Basic to Full, asks for the graphics card to be tried afresh,
+    // once each time; a level kept, and a lower one, keep the count.
     CHECK(click(dialog, level_centre(rows[3].control_area, 1)) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
     CHECK(dialog.forget_renderer_failures == 1);
@@ -1670,13 +1670,16 @@ void every_switch_reads_and_sets_through_one_table() {
     CHECK(dialog.forget_renderer_failures == 1);
     CHECK(click(dialog, level_centre(rows[3].control_area, 2)) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
-    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(dialog.forget_renderer_failures == 2);
+    CHECK(click(dialog, level_centre(rows[3].control_area, 1)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
+    CHECK(dialog.forget_renderer_failures == 2);
     CHECK(click(dialog, level_centre(rows[3].control_area, 0)) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
-    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(dialog.forget_renderer_failures == 2);
     CHECK(click(dialog, level_centre(rows[3].control_area, 2)) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
-    CHECK(dialog.forget_renderer_failures == 2);
+    CHECK(dialog.forget_renderer_failures == 3);
     CHECK(click(dialog, level_centre(rows[3].control_area, 0)) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
     // Through the keys: Tab to it, Right a level up to Full and no further,
@@ -1686,12 +1689,13 @@ void every_switch_reads_and_sets_through_one_table() {
     CHECK(dialog.focused == settings::first_row_control + 3);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
-    CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(dialog.forget_renderer_failures == 4);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(dialog.forget_renderer_failures == 5);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::redraw);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
-    CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(dialog.forget_renderer_failures == 5);
     CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
     CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
@@ -1700,11 +1704,11 @@ void every_switch_reads_and_sets_through_one_table() {
     CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::none);
     CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
-    CHECK(dialog.forget_renderer_failures == 4);
+    CHECK(dialog.forget_renderer_failures == 6);
     CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
     CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
     CHECK(dialog.chosen.vertical_sync);
-    CHECK(dialog.forget_renderer_failures == 4);
+    CHECK(dialog.forget_renderer_failures == 6);
     // Cancel puts both back.
     CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
     CHECK(
@@ -1856,7 +1860,8 @@ void hardware_acceleration_shows_its_status() {
     constexpr std::string_view processor = "The processor draws and scales the view.";
     constexpr std::string_view retry = "Set it to Off and back, or restore defaults.";
     constexpr std::string_view needs_memory = "Not in use: it needs at least 2 GB of memory.";
-    const std::array<Expected, 16> fixed{{
+    constexpr std::string_view takes_effect = "takes effect from the next game.";
+    const std::array<Expected, 19> fixed{{
         {AccelerationState::off_driver_skipped, off, "A failed graphics driver is skipped."},
         {AccelerationState::needs_memory_driver_skipped,
          needs_memory,
@@ -1887,6 +1892,13 @@ void hardware_acceleration_shows_its_status() {
         {AccelerationState::next_start,
          "Takes effect from the next start.",
          "The processor draws and scales the view until then."},
+        {AccelerationState::full_stopped, "Basic in use: Full stopped for this run.", retry},
+        {AccelerationState::full_failed_before,
+         "Basic in use: Full failed before on this driver.",
+         retry},
+        {AccelerationState::full_waiting_for_game_end,
+         "Basic for this game: in a shared game, Full",
+         takes_effect},
     }};
     for (const auto& expected : fixed) {
         for (const auto& status : acceleration_statuses()) {
@@ -1911,9 +1923,16 @@ void hardware_acceleration_shows_its_status() {
     full_wait.replay = true;
     CHECK(geometry::status_line(full_wait, 0) == "Off for this game: in a replay, Full");
     CHECK(geometry::status_line(full_wait, 1) == "takes effect from the next game.");
+    // Basic running while Full waits names the match too.
+    settings::AccelerationStatus basic_wait{
+        AccelerationState::full_waiting_for_game_end, {}, true, HardwareAcceleration::full
+    };
+    CHECK(geometry::status_line(basic_wait, 0) == "Basic for this game: in a replay, Full");
+    CHECK(geometry::status_line(basic_wait, 1) == takes_effect);
     // Every other state reads the same whichever level was asked for.
     for (const auto& status : acceleration_statuses()) {
-        if (status.state == AccelerationState::waiting_for_game_end)
+        if (status.state == AccelerationState::waiting_for_game_end ||
+            status.state == AccelerationState::full_waiting_for_game_end)
             continue;
         settings::AccelerationStatus other = status;
         other.asked = HardwareAcceleration::off;
@@ -1922,8 +1941,15 @@ void hardware_acceleration_shows_its_status() {
     }
     // While it is in use the first line names Basic, the tier that runs, and
     // the second says what it does here; Full, which the game cannot draw
-    // yet, says Basic is in use in its place.
-    const std::array<std::pair<AccelerationState, std::string_view>, 5> in_use{{
+    // yet, or which stopped, says Basic is in use in its place.
+    const std::array<std::pair<AccelerationState, std::string_view>, 9> in_use{{
+        {AccelerationState::full_cannot_save, "Basic in use: the game cannot save its files."},
+        {AccelerationState::full_too_little_memory,
+         "Basic in use: there is too little memory for Full."},
+        {AccelerationState::full_slow_frames,
+         "Basic in use for this run: Full's frames were slow."},
+        {AccelerationState::full_lacks_feature,
+         "Basic in use: the card lacks a feature Full needs."},
         {AccelerationState::full_not_built, "Full is not in this build: Basic is in use."},
         {AccelerationState::in_use_on_another_driver,
          "Basic in use, on another driver: one failed."},
@@ -1946,6 +1972,28 @@ void hardware_acceleration_shows_its_status() {
             CHECK(geometry::status_line(status, 0) == first);
             CHECK(geometry::status_line(status, 1) == second);
         }
+    // Full in use names its anti-aliasing on the second line, whatever the
+    // reach: none, 2x or 4x; a count between reads as the one below it.
+    const std::array<std::pair<AccelerationState, std::string_view>, 2> full_in_use{{
+        {AccelerationState::full_in_use, "Full in use: the graphics card draws the view."},
+        {AccelerationState::full_in_use_less_anti_aliasing,
+         "Full in use, less anti-aliasing: frames were slow."},
+    }};
+    const std::array<std::pair<uint8_t, std::string_view>, 5> anti_aliasing{{
+        {1, "Smoothed at every zoom."},
+        {2, "Smoothed at every zoom; anti-aliasing 2x."},
+        {3, "Smoothed at every zoom; anti-aliasing 2x."},
+        {4, "Smoothed at every zoom; anti-aliasing 4x."},
+        {0, "Smoothed at every zoom."},
+    }};
+    for (const auto& [state, first] : full_in_use)
+        for (const auto& [reach, second] : reaches)
+            for (const auto& [supersample, line] : anti_aliasing) {
+                settings::AccelerationStatus status{state, reach, false};
+                status.supersample = supersample;
+                CHECK(geometry::status_line(status, 0) == first);
+                CHECK(geometry::status_line(status, 1) == line);
+            }
     // Every status has two lines, none empty.
     for (const auto& status : acceleration_statuses()) {
         CHECK(!geometry::status_line(status, 0).empty());

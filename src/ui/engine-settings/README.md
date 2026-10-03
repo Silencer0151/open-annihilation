@@ -63,8 +63,14 @@ graphics card was found, the card lacks a feature, the game cannot save the
 files that guard trying it, Full is not in this build and Basic is in use,
 the card is in use, on another driver where a record passed over one, or,
 on a renderer nothing has looked at yet, it takes effect from the next
-start. A driver a record passed over at this start shows whatever the
-setting. The key reads `off`, `basic` or `full`; a whole number, as the
+start. Where Full was asked for and Basic draws in its place, the first
+line says why: Full's trial could not be written, there is too little
+memory for Full, Full's frames were slow, Full stopped for this run, Full
+failed before on this driver, the card lacks a feature Full needs, or a
+shared game or a replay waits for its end; and Full in use says the card
+draws the view, smoothed at every zoom, with its anti-aliasing where there
+is any, and with less of it once frames were slow. A driver a record
+passed over at this start shows whatever the setting. The key reads `off`, `basic` or `full`; a whole number, as the
 setting's earlier On and Off switch wrote it, reads as Full above 0 and Off
 otherwise, and any other text gives the default.
 
@@ -157,8 +163,9 @@ with, Restore defaults resets every setting that is not locked. A click on a
 switch's half sets it, and a click on a strip's level chooses it; a press on
 a slider moves its knob to the nearest stop and drags it. Every switch reads
 and sets its value through one table, and every strip through another. Each
-press of Restore defaults, and each time Hardware acceleration passes from
-Off to Basic or Full, adds one to `Dialog::forget_renderer_failures`, the
+press of Restore defaults, and each time Hardware acceleration passes to a
+higher level, from Off to Basic or Full or from Basic to Full, adds one to
+`Dialog::forget_renderer_failures`, the
 player's requests to have the graphics card tried afresh; Restore defaults
 reports a change every time, even when no setting moved, so that the host
 acts on it.

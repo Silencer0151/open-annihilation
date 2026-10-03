@@ -64,10 +64,19 @@ std::string_view standard_reason(settings::AccelerationState state) noexcept {
     case AccelerationState::slow_frames:
         return "frames were slow";
     case AccelerationState::next_start:
+    case AccelerationState::full_cannot_save:
+    case AccelerationState::full_too_little_memory:
+    case AccelerationState::full_slow_frames:
+    case AccelerationState::full_stopped:
+    case AccelerationState::full_failed_before:
+    case AccelerationState::full_lacks_feature:
+    case AccelerationState::full_waiting_for_game_end:
     case AccelerationState::full_not_built:
     case AccelerationState::in_use_on_another_driver:
     case AccelerationState::in_use_less_smoothing:
     case AccelerationState::in_use_no_smoothing:
+    case AccelerationState::full_in_use_less_anti_aliasing:
+    case AccelerationState::full_in_use:
     case AccelerationState::in_use:
         break;
     }
@@ -97,12 +106,45 @@ render_policy::RendererFacts renderer_facts(const render_probe::AdapterFacts& fa
     return renderer;
 }
 
+std::string_view full_shortfall_note(settings::AccelerationState state) noexcept {
+    using settings::AccelerationState;
+    switch (state) {
+    case AccelerationState::full_not_built:
+        return full_not_built_note;
+    case AccelerationState::full_cannot_save:
+        return " (Full's trial cannot be written)";
+    case AccelerationState::full_too_little_memory:
+        return " (there is too little memory for Full)";
+    case AccelerationState::full_slow_frames:
+        return " (Full's frames were slow)";
+    case AccelerationState::full_stopped:
+        return " (Full stopped for this run)";
+    case AccelerationState::full_failed_before:
+        return " (Full failed before on this driver)";
+    case AccelerationState::full_lacks_feature:
+        return " (the graphics card lacks a feature Full needs)";
+    case AccelerationState::full_waiting_for_game_end:
+        return " (Full waits for the game to end)";
+    default:
+        return {};
+    }
+}
+
 std::string tier_description(const settings::AccelerationStatus& status, bool full) {
     using settings::AccelerationReach;
     using settings::AccelerationState;
-    if (full)
+    if (full || status.state == AccelerationState::full_in_use ||
+        status.state == AccelerationState::full_in_use_less_anti_aliasing)
         return std::string(full_tier_description);
+    // Where Full was asked for and Basic draws, the basic tier is in use.
     const bool in_use = status.state == AccelerationState::full_not_built ||
+                        status.state == AccelerationState::full_cannot_save ||
+                        status.state == AccelerationState::full_too_little_memory ||
+                        status.state == AccelerationState::full_slow_frames ||
+                        status.state == AccelerationState::full_stopped ||
+                        status.state == AccelerationState::full_failed_before ||
+                        status.state == AccelerationState::full_lacks_feature ||
+                        status.state == AccelerationState::full_waiting_for_game_end ||
                         status.state == AccelerationState::in_use_on_another_driver ||
                         status.state == AccelerationState::in_use_less_smoothing ||
                         status.state == AccelerationState::in_use_no_smoothing ||
@@ -110,8 +152,7 @@ std::string tier_description(const settings::AccelerationStatus& status, bool fu
     if (in_use) {
         std::string text(basic_tier_name);
         text += " tier";
-        if (status.state == AccelerationState::full_not_built)
-            text += full_not_built_note;
+        text += full_shortfall_note(status.state);
         text += ": ";
         switch (status.reach) {
         case AccelerationReach::menus:

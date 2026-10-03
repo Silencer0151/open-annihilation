@@ -400,6 +400,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     match_timing_ = {};
     load_progress_.fill(0);
     begin_loading_screen();
+    // A shared game or a replay makes Full's pages and targets now, before
+    // the world is built and before the machines wait for each other, and
+    // nothing of them afterwards.
+    preallocate_full_match_textures();
     set_load_progress(0, 10);
     if (bootstrap.place_commanders && selected_start_markers_.empty() && !campaign_mission_)
         throw std::runtime_error("selected map has no start-position schema");

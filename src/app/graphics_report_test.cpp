@@ -265,6 +265,46 @@ void test_tier_description() {
         "basic tier (Full is not in this build): the graphics card scales the interface and the "
         "zoomed-in view, and the zoomed-out view is smoothed"
     );
+    // Where Full stopped or waits, the note says why Basic draws; Full in
+    // use is the full tier, as is the frame the flag forces.
+    OA_CHECK(
+        described(AccelerationState::full_stopped, AccelerationReach::menus) ==
+        "basic tier (Full stopped for this run): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_slow_frames, AccelerationReach::nearest_none) ==
+        "basic tier (Full's frames were slow): the view is drawn as in the standard tier"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_too_little_memory, AccelerationReach::menus) ==
+        "basic tier (there is too little memory for Full): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_cannot_save, AccelerationReach::menus) ==
+        "basic tier (Full's trial cannot be written): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_failed_before, AccelerationReach::menus) ==
+        "basic tier (Full failed before on this driver): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_lacks_feature, AccelerationReach::menus) ==
+        "basic tier (the graphics card lacks a feature Full needs): the graphics card scales the "
+        "interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_waiting_for_game_end, AccelerationReach::menus) ==
+        "basic tier (Full waits for the game to end): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_in_use, AccelerationReach::menus) ==
+        "full tier: the graphics card draws the battlefield and scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_in_use_less_anti_aliasing, AccelerationReach::menus) ==
+        "full tier: the graphics card draws the battlefield and scales the interface"
+    );
+    OA_CHECK(oa::app::full_shortfall_note(AccelerationState::in_use).empty());
     // Off by the setting or a flag gives that as the reason.
     for (const auto state :
          {AccelerationState::off_by_setting,

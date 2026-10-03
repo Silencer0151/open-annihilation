@@ -41,6 +41,15 @@ inline constexpr std::string_view standard_tier_description =
 /// What the start-up line puts after the basic tier's name where Full was
 /// asked for, while the game cannot draw Full.
 inline constexpr std::string_view full_not_built_note = " (Full is not in this build)";
+
+/// Returns what the start-up line puts after the basic tier's name where
+/// Full was asked for and Basic draws: full_not_built_note, or why Full
+/// stopped or waits, in brackets; empty where Basic was asked for.
+///
+/// @param state the Hardware acceleration row's status
+/// @return the note, with its leading space; empty for a state of Basic's
+[[nodiscard]] std::string_view
+full_shortfall_note(oa::ui::engine_settings::AccelerationState state) noexcept;
 /// What the line logged after the renderer was made again gives as the
 /// reason the processor draws everything.
 inline constexpr std::string_view failed_driver_reason = "the graphics driver failed";
@@ -74,12 +83,13 @@ inline constexpr std::string_view unknown_adapter_name = "unknown adapter";
 renderer_facts(const oa::platform::render_probe::AdapterFacts& facts) noexcept;
 
 /// Returns what the start-up line says of the status's tier: in the full
-/// tier, full_tier_description; otherwise in use,
+/// tier, by the flag or the status, full_tier_description; otherwise in use,
 /// "basic tier: " and what the graphics card does at its reach, "the
 /// graphics card scales the interface", "... and the zoomed-in view", "...,
 /// and the zoomed-out view is smoothed", "the zoomed-out view is smoothed"
-/// or "the view is drawn as in the standard tier", with " (Full is not in
-/// this build)" after the name where Full was asked for; otherwise
+/// or "the view is drawn as in the standard tier", with the note of why
+/// Basic draws after the name where Full was asked for
+/// (full_shortfall_note); otherwise
 /// standard_tier_description with the reason in brackets, "hardware
 /// acceleration is off" when the setting or a flag turned it off, else the
 /// status's first line without "Not in use: ", as in "(the environment

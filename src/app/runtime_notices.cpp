@@ -4,7 +4,8 @@
 // Notices for the frontend entries the game data cannot support, such as
 // skirmish in the Total Annihilation demo (1997), and the web link the
 // notice's website button opens; and the main menu's notice of a new
-// renderer record.
+// renderer record, worded for each kind: a driver that failed, a graphics
+// card that could not be used, and one that could not draw the battlefield.
 #include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
 #include "render_host.hpp"
@@ -41,6 +42,27 @@ constexpr std::string_view kCardUnusableNotice =
 constexpr std::string_view kDriverFailedNotice =
     "A graphics driver failed, so the game now uses another one. You can try it again under "
     "Graphics in the OA settings.";
+/// What it says of a full-unusable record: the Basic tier stands.
+constexpr std::string_view kFullUnusableNotice =
+    "The graphics card could not draw the battlefield, so it only scales it now. You can try "
+    "Full again under Graphics in the OA settings.";
+
+/// Returns what the main menu says of a new record.
+///
+/// @param kind the record's kind
+/// @return the notice's text
+[[nodiscard]] std::string_view notice_text(renderer_state::NoticeKind kind) noexcept {
+    switch (kind) {
+    case renderer_state::NoticeKind::failed_driver:
+        return kDriverFailedNotice;
+    case renderer_state::NoticeKind::accelerated_unusable:
+        return kCardUnusableNotice;
+    case renderer_state::NoticeKind::full_unusable:
+        return kFullUnusableNotice;
+    }
+    return kCardUnusableNotice;
+}
+
 /// Frames in a row the main menu shows before its notice: a start that
 /// passes the main menu at its first update shows none.
 constexpr uint32_t kNoticeMenuFrames = 2;
@@ -142,9 +164,7 @@ void Runtime::tell_renderer_records() {
     if (action != renderer_state::NoticeAction::show)
         return;
     ++run.notices_shown;
-    const std::string_view text = notice->kind == renderer_state::NoticeKind::failed_driver
-                                      ? kDriverFailedNotice
-                                      : kCardUnusableNotice;
+    const std::string_view text = notice_text(notice->kind);
     auto context = screen_context();
     const auto closed = [](void* runtime, dialogs::NoticeChoice choice) {
         if (choice == dialogs::NoticeChoice::website)

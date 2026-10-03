@@ -98,6 +98,18 @@ struct Runtime::FullPresentation {
     bool on{};               ///< the tier decided for the frame is Full (set_full_presentation)
     card::Executor executor; ///< open on the renderer while Full holds pages
     bool function_tested{};  ///< the Full function test ran on this executor and passed
+    /// A shared game's or a replay's loading screen is beginning, when
+    /// Full's pages and targets are made for the whole match
+    /// (preallocate_full_match_textures).
+    bool loading_screen{};
+    /// A page or target a frame needed could not be made during a shared
+    /// game or a replay, so Full waits for the match to end: the frame is
+    /// Basic's, and nothing is dropped or struck.
+    bool waiting{};
+    bool wait_logged{}; ///< the wait has been logged in this match
+    /// A page or target may be made for the first time now
+    /// (render_policy::first_use_allowed), which the stages' pages read.
+    bool creation_allowed{true};
 
     // The match's terrain atlas and what it was built from. Once the pages
     // are filled the atlas keeps its grid, its slots and its pages' sizes
@@ -164,7 +176,9 @@ struct Runtime::FullPresentation {
     /// Returns the card's page for a sprite page, making it when the page
     /// is new or has a new size.
     ///
-    /// Throws FullCardError when the card cannot make it.
+    /// Throws FullCardError when the card cannot make it, and when a page
+    /// would be made where none may be (creation_allowed), which marks the
+    /// presentation as waiting for the match to end.
     ///
     /// @param page index into the sprite pages
     /// @return the handle; none for a page the sprite pages do not hold

@@ -23,6 +23,8 @@
 #include "runtime_full.hpp"
 #include "xrgb_conversion.hpp"
 
+#include "oa/app/renderer_records.hpp"
+
 #include "oa/base/float_precision.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 
@@ -39,6 +41,8 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -48,6 +52,18 @@ namespace {
 
 namespace gw = oa::present::gpu_world;
 namespace ft = full_terrain;
+namespace policy = render_policy;
+
+/// What --render-fault card makes the card's frame fail with.
+constexpr std::string_view forced_card_failure =
+    "the card refused the terrain frame: forced by --render-fault card";
+/// What the log says when Full's pages must wait for a shared game or a
+/// replay to end.
+constexpr std::string_view full_waits_message =
+    "open-annihilation: graphics: the full tier's pages cannot be made during a shared game "
+    "or a replay; the basic tier draws the battlefield until it ends";
+/// Bytes a texel of a page or a target holds.
+constexpr uint64_t bytes_per_texel = card::texel_bytes;
 
 /// The edge of the page the Full function test draws, and of the target,
 /// which holds the test's four batches: the page's level 0 at the top
@@ -488,6 +504,12 @@ card::PageHandle Runtime::FullPresentation::card_page(uint32_t page) {
     if (slot.handle != card::PageHandle{})
         executor.destroy_page(slot.handle);
     slot = {};
+    // In a shared game or a replay after the loading screen no page is
+    // made: the stages wait for the match to end.
+    if (!creation_allowed) {
+        waiting = true;
+        throw FullCardError("a sprite page waits for the match to end");
+    }
     card::PageDescription description;
     description.width = size;
     description.height = size;
@@ -545,7 +567,6 @@ void Runtime::FullPresentation::destroy_sprite_card_pages() noexcept {
             executor.destroy_page(slot.handle);
     card_pages.clear();
 }
-
 
 void Runtime::set_full_stages(uint8_t stages) {
     if (!full_)
@@ -660,7 +681,7 @@ void Runtime::free_full_presentation() noexcept {
     full_->function_tested = false;
 }
 
-void Runtime::drop_full(const std::string& reason) {
+void Runtime::drop_full(const std::string& reason, policy::FullDrop drop) {
     if (full_ && full_->on)
         std::cout << "open-annihilation: graphics: the full tier stopped (" << reason
                   << "); the basic tier draws the battlefield from now on\n"
@@ -668,13 +689,135 @@ void Runtime::drop_full(const std::string& reason) {
     free_full_presentation();
     if (full_)
         full_->on = false;
-    if (render_run_ && render_run_->host != nullptr)
-        render_run_->host->tier_inputs().full_drop = true;
+    if (!render_run_ || render_run_->host == nullptr)
+        return;
+    auto& host = *render_run_->host;
+    auto& inputs = host.tier_inputs();
+    if (inputs.full_drop == policy::FullDrop::none)
+        inputs.full_drop = drop;
+    // In a shared game or a replay Full stays away until the match ends.
+    policy::note_match_frame(inputs.match, policy::RenderTier::accelerated, false);
+    // Full's first frames, where they stood under their own sentinel, stop
+    // with it; another path's stage stands.
+    const auto& sentinel = host.records().sentinel();
+    if (sentinel && sentinel->stage == renderer_state::SentinelStage::path &&
+        sentinel->path == renderer_state::AcceleratedPath::full)
+        host.end_path_stage();
+}
+
+void Runtime::take_full_failure(const std::string& error) {
+    if (render_run_ && render_run_->host != nullptr) {
+        auto& host = *render_run_->host;
+        // A failure noted already, as the function test's is before it is
+        // thrown, is not a second one; any other card call that failed is
+        // struck against the driver.
+        if (host.tier_inputs().full_drop == policy::FullDrop::none) {
+            renderer_state::Strike failure;
+            failure.stage = renderer_state::StrikeStage::card;
+            failure.call = failing_call_name(error);
+            std::ignore = host.note_running_failure(failure);
+        }
+    }
+    drop_full(error, policy::FullDrop::card_failure);
+}
+
+bool Runtime::begin_full_path() {
+    if (!render_run_ || render_run_->host == nullptr)
+        return true;
+    if (render_run_->host->begin_path(renderer_state::AcceleratedPath::full))
+        return true;
+    drop_full(std::string(path_trial_unwritten_reason), policy::FullDrop::trial_unwritten);
+    return false;
+}
+
+bool Runtime::full_creation_allowed() {
+    if (!render_run_ || render_run_->host == nullptr || !full_)
+        return true;
+    if (policy::first_use_allowed(render_run_->host->tier_inputs().match, full_->loading_screen))
+        return true;
+    full_->waiting = true;
+    wait_full_for_match_end();
+    return false;
+}
+
+void Runtime::wait_full_for_match_end() {
+    if (!render_run_ || render_run_->host == nullptr || !full_)
+        return;
+    policy::note_match_frame(
+        render_run_->host->tier_inputs().match, policy::RenderTier::accelerated, false
+    );
+    if (!full_->wait_logged) {
+        full_->wait_logged = true;
+        std::cout << full_waits_message << '\n' << std::flush;
+    }
+}
+
+void Runtime::preallocate_full_match_textures() {
+    if (!render_run_ || render_run_->host == nullptr || !full_ || !full_->on ||
+        sdl_.renderer == nullptr)
+        return;
+    const auto& gate = render_run_->host->tier_inputs().match;
+    if (gate.kind == policy::MatchKind::none || !gate.full)
+        return;
+    auto& full = *full_;
+    full.loading_screen = true;
+    full.wait_logged = false;
+    try {
+        // The palette the atlas is built from: the game's, which the match
+        // view reads again as it opens.
+        match_palette_ = load_active_palette(assets_);
+        if (begin_full_path()) {
+            ensure_full_match_textures();
+            full.pages_from_load = true;
+            ensure_full_target(
+                static_cast<uint32_t>(std::max(0, match_layout_.battlefield_width())),
+                static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()))
+            );
+        }
+    } catch (const FullCardError& error) {
+        take_full_failure(error.what());
+    } catch (const AccelerationError& error) {
+        take_acceleration_error(error);
+    }
+    full.loading_screen = false;
+    full.waiting = false;
+}
+
+void Runtime::ensure_full_target(uint32_t bf_w, uint32_t bf_h) {
+    auto& full = *full_;
+    if (full.target != card::TargetHandle{} || full.target_refused || bf_w == 0 || bf_h == 0)
+        return;
+    // The target, made once at the largest a zoom just above 1 needs, two
+    // map pixels of room for every battlefield pixel, in whole map pixels at
+    // every whole-number zoom; where the renderer cannot make it, the
+    // terrain is drawn LINEAR straight.
+    const uint32_t width = target_extent(2U * bf_w);
+    const uint32_t height = target_extent(2U * bf_h);
+    if (!full_creation_allowed())
+        throw FullCardError("the full tier's zoom-in target waits for the match to end");
+    if (!accelerated_buffer_allowed(
+            policy::AcceleratedBuffer::card_targets, uint64_t{width} * height * bytes_per_texel
+        ))
+        throw FullCardError("the full tier's zoom-in target: too little memory");
+    full.target_width = width;
+    full.target_height = height;
+    full.target = full.executor.create_target(full.target_width, full.target_height, 1);
+    if (full.target == card::TargetHandle{}) {
+        full.target_refused = true;
+        full.target_width = 0;
+        full.target_height = 0;
+        std::cout << "open-annihilation: graphics: the full tier's zoom-in target "
+                     "could not be made ("
+                  << full.executor.error() << "); the terrain between whole zooms is drawn LINEAR\n"
+                  << std::flush;
+    }
 }
 
 void Runtime::ensure_full_executor() {
     auto& full = *full_;
     if (!full.executor.is_open()) {
+        if (!full_creation_allowed())
+            throw FullCardError("the full tier's executor waits for the match to end");
         if (!full.executor.open(sdl_.renderer, render_texture_limit()))
             throw FullCardError("the card could not be opened: " + full.executor.error());
         full.function_tested = false;
@@ -690,8 +833,12 @@ void Runtime::ensure_full_executor() {
             render_run_->host->facts().renderer == oa::platform::render_probe::software_renderer;
         const std::string failure = run_full_function_test(full.executor, sdl_.renderer, software);
         oa::base::float_precision::restore_program_float_control();
-        if (!failure.empty())
+        if (!failure.empty()) {
+            // Not capable of Full: no strike, since the card drew nothing
+            // wrong that a driver's failure would explain.
+            drop_full("the Full function test failed: " + failure, policy::FullDrop::function_test);
             throw FullCardError("the Full function test failed: " + failure);
+        }
         full.function_tested = true;
     }
 }
@@ -714,6 +861,8 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
                              (!gamma || full.atlas_gamma_table == gamma_table_);
     if (same_source)
         return;
+    if (!full_creation_allowed())
+        throw FullCardError("the full tier's terrain pages wait for the match to end");
     for (const card::PageHandle page : full.pages)
         full.executor.destroy_page(page);
     full.pages.clear();
@@ -730,6 +879,16 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
             std::string("the terrain atlas could not be built: ") +
             gw::terrain_atlas_error_text(error)
         );
+    // The pages' memory, counted by the memory guard before they are made.
+    uint64_t page_bytes = 0;
+    for (const auto& atlas_page : full.atlas.pages)
+        for (std::size_t level = 0;
+             level < std::min<std::size_t>(full_terrain_levels, atlas_page.levels.size());
+             ++level)
+            page_bytes += uint64_t{atlas_page.levels[level].width} *
+                          atlas_page.levels[level].height * bytes_per_texel;
+    if (!accelerated_buffer_allowed(policy::AcceleratedBuffer::card_pages, page_bytes))
+        throw FullCardError("the terrain pages: too little memory");
     const auto upload_start = std::chrono::steady_clock::now();
     for (auto& atlas_page : full.atlas.pages) {
         card::PageDescription description;
@@ -766,14 +925,27 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
 void Runtime::make_full_match_pages() {
     if (!full_presentation() || !selected_tnt_)
         return;
+    auto& full = *full_;
     try {
+        // Full's first card calls of the run stand under its trial, as its
+        // first frame's do; a trial that cannot be written keeps Full off
+        // with nothing struck.
+        if (!begin_full_path())
+            return;
         ensure_full_executor();
         // The loading screen's palette is the match's: both are the game's
         // active palette, which the match view loads again as it is entered.
         ensure_full_terrain_pages(load_active_palette(assets_));
-        full_->pages_from_load = true;
+        full.pages_from_load = true;
     } catch (const FullCardError& error) {
-        drop_full(error.what());
+        // A page that must wait for a shared game to end, which the pages
+        // made as its loading screen began leave none of
+        // (preallocate_full_match_textures), drops and strikes nothing.
+        if (full.waiting) {
+            full.waiting = false;
+            return;
+        }
+        take_full_failure(error.what());
     }
 }
 
@@ -781,13 +953,22 @@ void Runtime::ensure_full_match_textures() {
     auto& full = *full_;
     ensure_full_executor();
     ensure_full_terrain_pages(match_palette_);
-    // The overlay, at the battlefield's size.
-    const uint32_t bf_w = match_world_cpu_.width;
-    const uint32_t bf_h = match_world_cpu_.height;
+    // The overlay, at the battlefield's size: the world layer's, or before
+    // the first frame the match layout's.
+    const uint32_t bf_w =
+        match_world_cpu_.width != 0
+            ? match_world_cpu_.width
+            : static_cast<uint32_t>(std::max(0, match_layout_.battlefield_width()));
+    const uint32_t bf_h =
+        match_world_cpu_.height != 0
+            ? match_world_cpu_.height
+            : static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()));
     if (bf_w == 0 || bf_h == 0)
         return;
     const uint32_t limit = render_texture_limit();
     if (!full.overlay_texture.made_for(bf_w, bf_h, limit)) {
+        if (!full_creation_allowed())
+            throw FullCardError("the full tier's overlay waits for the match to end");
         full.overlay_texture.create(
             sdl_.renderer, bf_w, bf_h, limit, SDL_BLENDMODE_BLEND, full.counts
         );
@@ -816,6 +997,13 @@ void Runtime::ensure_full_match_textures() {
 
 bool Runtime::present_full_match_layers(bool dialogs) {
     auto& full = *full_;
+    // Full's first match frame of the run stands under its own trial and
+    // sentinel; where the trial cannot be written Full is dropped, with
+    // nothing struck, and Basic presents the frame.
+    if (!begin_full_path()) {
+        full.drawn = false;
+        return false;
+    }
     try {
         // The front end's prescale target is not kept during a match.
         accelerated_.screen_prescale.destroy();
@@ -931,25 +1119,7 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         uint32_t quads = 0;
         bool through_target = false;
         if (full.plan.through_target) {
-            // The target, made once at the largest a zoom just above 1 needs,
-            // two map pixels of room for every battlefield pixel, in whole
-            // map pixels at every whole-number zoom; where the renderer
-            // cannot make it, the terrain is drawn LINEAR straight.
-            if (full.target == card::TargetHandle{} && !full.target_refused) {
-                full.target_width = target_extent(2U * bf_w);
-                full.target_height = target_extent(2U * bf_h);
-                full.target = full.executor.create_target(full.target_width, full.target_height, 1);
-                if (full.target == card::TargetHandle{}) {
-                    full.target_refused = true;
-                    full.target_width = 0;
-                    full.target_height = 0;
-                    std::cout << "open-annihilation: graphics: the full tier's zoom-in target "
-                                 "could not be made ("
-                              << full.executor.error()
-                              << "); the terrain between whole zooms is drawn LINEAR\n"
-                              << std::flush;
-                }
-            }
+            ensure_full_target(bf_w, bf_h);
             const uint32_t factor = full.plan.target_zoom;
             if (full.target != card::TargetHandle{} && factor != 0 &&
                 full.target_width / factor * zoom >= static_cast<float>(bf_w) &&
@@ -1018,6 +1188,9 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         auto& stage_frame = full.stage_frame;
         stage_frame.reset();
         full.sprites = {};
+        full.creation_allowed =
+            !render_run_ || render_run_->host == nullptr ||
+            policy::first_use_allowed(render_run_->host->tier_inputs().match, full.loading_screen);
         if (staged && (full.stages & full::stage_sprites) != 0 && match_) {
             full.ensure_sprite_palette(match_palette_, display_gamma_);
             full::SpriteStageInputs inputs;
@@ -1072,10 +1245,19 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         }
         full.stage_ns = nanoseconds_since(stage_start);
         const auto execute_start = std::chrono::steady_clock::now();
+        // The failure --check-renderer-ladder forces stands in for the
+        // card's own.
+        if (render_fault_due(RenderFaultPoint::card))
+            throw FullCardError(std::string(forced_card_failure));
         if (!full.executor.execute(frame, nullptr))
             throw FullCardError("the card refused the terrain frame: " + full.executor.error());
         oa::base::float_precision::restore_program_float_control();
         full.execute_ns = nanoseconds_since(execute_start);
+        // The frame counts towards the stage of Full's first frames.
+        if (render_run_)
+            render_run_->paths_drawn = static_cast<PathSet>(
+                render_run_->paths_drawn | path_bit(renderer_state::AcceleratedPath::full)
+            );
         full.drawn = true;
         full.drawn_zoom = zoom;
         full.drawn_quads = quads;
@@ -1097,9 +1279,7 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         if (staged) {
             const auto stage_run_start = std::chrono::steady_clock::now();
             if (!full.executor.execute(stage_frame, nullptr))
-                throw FullCardError(
-                    "the card refused the stages' frame: " + full.executor.error()
-                );
+                throw FullCardError("the card refused the stages' frame: " + full.executor.error());
             oa::base::float_precision::restore_program_float_control();
             full.stage_ns += nanoseconds_since(stage_run_start);
             draw_one_to_one(
@@ -1107,12 +1287,19 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             );
         }
         // The tier's own passes, timed for the step-down as Basic's are.
-        accelerated_.passes_ns +=
-            full.overlay_ns + full.build_ns + full.execute_ns + full.stage_ns;
+        accelerated_.passes_ns += full.overlay_ns + full.build_ns + full.execute_ns + full.stage_ns;
         finish_match_layers(frame_format, dialogs, upload_start, present_start);
         return true;
     } catch (const FullCardError& error) {
-        drop_full(error.what());
+        // A page or target that must wait for a shared game to end leaves
+        // the frame to Basic with nothing dropped or struck.
+        if (full.waiting) {
+            full.waiting = false;
+            full.drawn = false;
+            wait_full_for_match_end();
+            return false;
+        }
+        take_full_failure(error.what());
         return false;
     }
 }

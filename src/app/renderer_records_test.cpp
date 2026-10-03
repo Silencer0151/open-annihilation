@@ -14,8 +14,10 @@
 // and erased by any drop and by a run that ended at or below that rung; the
 // adapter, the told mark and clearing; the main menu's notice: which record
 // it tells of next and what a run does with it; and the sentinel and the
-// trial through a run, with none under SDL_RENDER_DRIVER. The drivers are
-// named "alpha", "beta" and "gamma", and SDL's own "software".
+// trial through a run, with none under SDL_RENDER_DRIVER; and the Full
+// tier's own path, strike and record, full-unusable, which leaves the Basic
+// tier standing. The drivers are named "alpha", "beta" and "gamma", and
+// SDL's own "software".
 #include "oa/app/renderer_records.hpp"
 
 #include "oa/test/check.hpp"
@@ -79,6 +81,12 @@ rs::RecordedFailure failed_driver(const rs::Records& records, std::string_view d
 rs::RecordedFailure accelerated_unusable(const rs::Records& records, std::string_view driver) {
     const rs::DriverRecords* entry = rs::find_driver(records, driver);
     return entry != nullptr ? entry->accelerated_unusable.failure : rs::RecordedFailure::none;
+}
+
+/// Returns the failure a driver is recorded full-unusable for.
+rs::RecordedFailure full_unusable(const rs::Records& records, std::string_view driver) {
+    const rs::DriverRecords* entry = rs::find_driver(records, driver);
+    return entry != nullptr ? entry->full_unusable.failure : rs::RecordedFailure::none;
 }
 
 /// Returns the stage of a driver's strike.
@@ -163,6 +171,7 @@ void every_key_round_trips() {
         {call_strike(rs::StrikeStage::call, "upload"), "call upload"},
         {strike_of(rs::StrikeStage::lost), "lost"},
         {strike_of(rs::StrikeStage::resets), "resets"},
+        {call_strike(rs::StrikeStage::card, "page"), "card page"},
     };
     for (const StrikeRow& row : strikes) {
         rs::Records one = adapter_records();
@@ -366,6 +375,7 @@ void sentinels_and_trials_read_and_write() {
         {"path magnify alpha", true},
         {"path prescale alpha", true},
         {"path blend alpha", true},
+        {"path full alpha", true},
         {"standard software via alpha,beta", true},
         {"create software via alpha", true},
         {"", false},
@@ -1424,6 +1434,210 @@ void the_notice_tells_each_new_record_once() {
     OA_CHECK(rs::notice_action(true, true) == rs::NoticeAction::note_and_mark);
 }
 
+void the_full_tier_has_its_own_path_strike_and_record() {
+    using F = rs::RecordedFailure;
+    using K = rs::StrikeStage;
+    const auto full = rs::AcceleratedPath::full;
+
+    // The key, the trial, the sentinel and the strike each have their text,
+    // and read back as written.
+    rs::Records records = adapter_records();
+    records.trial = rs::Trial{K::path, full, "alpha"};
+    rs::DriverRecords& alpha = rs::driver_entry(records, "alpha");
+    alpha.full_unusable = rs::Record{F::card, false};
+    alpha.strike = call_strike(K::card, "page");
+    rs::driver_entry(records, "beta").full_unusable = rs::Record{F::stopped, true};
+    rs::driver_entry(records, "beta").accelerated_unusable = rs::Record{F::lost, false};
+    const rs::Values values = rs::format_records(records, version);
+    const rs::Values expected{
+        {"accelerated-unusable.beta", "lost Example Graphics 3000 0.6.2"},
+        {"adapter", "Example Graphics 3000"},
+        {"full-unusable.alpha", "card Example Graphics 3000 0.6.2"},
+        {"full-unusable.beta", "stopped Example Graphics 3000 0.6.2 told"},
+        {"strike.alpha", "card page Example Graphics 3000 0.6.2"},
+        {"trial", "path full alpha"},
+    };
+    OA_CHECK(values == expected);
+    const rs::ParsedRecords parsed = rs::parse_records(values, version);
+    OA_CHECK(parsed.dropped == 0);
+    OA_CHECK(rs::same_records(parsed.records, records));
+    OA_CHECK(full_unusable(parsed.records, "alpha") == F::card);
+    OA_CHECK(rs::find_driver(parsed.records, "beta")->full_unusable.told);
+    const auto sentinel = rs::parse_sentinel("path full alpha");
+    OA_CHECK(sentinel && sentinel->stage == rs::SentinelStage::path && sentinel->path == full);
+    const auto trial = rs::parse_trial("path full alpha");
+    OA_CHECK(trial && trial->stage == K::path && trial->path == full && trial->driver == "alpha");
+    // Each kind of record says only the failures it records: full-unusable a
+    // stop or a card call, and the other two never a card call.
+    for (const char* key :
+         {"full-unusable.alpha", "accelerated-unusable.alpha", "failed-driver.alpha"}) {
+        for (const char* word : {"stopped", "present", "call", "lost", "resets", "card"}) {
+            const rs::Values one{
+                {"adapter", std::string(adapter)},
+                {key, std::string(word) + " Example Graphics 3000 0.6.2"}
+            };
+            const std::string_view kind = key;
+            const std::string_view failure = word;
+            const bool kept = kind.starts_with("full-unusable")
+                                  ? failure == "stopped" || failure == "card"
+                              : kind.starts_with("accelerated-unusable")
+                                  ? failure != "present" && failure != "card"
+                                  : failure != "call" && failure != "card";
+            OA_CHECK(rs::parse_records(one, version).dropped == (kept ? 0U : 1U));
+        }
+    }
+    // A card strike without its call is dropped.
+    OA_CHECK(
+        rs::parse_records(
+            rs::Values{
+                {"adapter", std::string(adapter)},
+                {"strike.alpha", "card Example Graphics 3000 0.6.2"}
+            },
+            version
+        )
+            .dropped == 1
+    );
+
+    // A left-over Full trial is a strike, and the second in a row records
+    // full-unusable, which leaves accelerated-unusable and the
+    // native-density key alone; where the first counts, at once.
+    for (const rs::CrashEvidence evidence :
+         {rs::CrashEvidence::two_in_a_row, rs::CrashEvidence::first_counts}) {
+        rs::Records left = adapter_records();
+        left.native_density = rs::NativeDensity{"alpha", std::string(version)};
+        const rs::RecordRules rules{evidence, false};
+        const auto leave = [&]() {
+            left.trial = rs::Trial{K::path, full, "alpha"};
+            return rs::note_leftover(
+                left,
+                rs::LeftoverSentinel::read,
+                sentinel_of(rs::SentinelStage::path, "alpha"),
+                rules
+            );
+        };
+        const rs::LeftoverOutcome first = leave();
+        const bool at_once = evidence == rs::CrashEvidence::first_counts;
+        OA_CHECK(first.driver == "alpha" && first.unclean_exit && first.change.changed);
+        OA_CHECK(first.change.new_record == at_once);
+        OA_CHECK(!left.trial.has_value());
+        if (at_once) {
+            OA_CHECK(full_unusable(left, "alpha") == F::stopped);
+            OA_CHECK(strike_stage(left, "alpha") == K::none);
+        } else {
+            OA_CHECK(full_unusable(left, "alpha") == F::none);
+            const rs::DriverRecords* struck = rs::find_driver(left, "alpha");
+            OA_CHECK(
+                struck != nullptr && struck->strike.stage == K::path && struck->strike.path == full
+            );
+            left = next_start(left);
+            const rs::LeftoverOutcome second = leave();
+            OA_CHECK(second.change.new_record);
+            OA_CHECK(full_unusable(left, "alpha") == F::stopped);
+            OA_CHECK(strike_stage(left, "alpha") == K::none);
+        }
+        OA_CHECK(accelerated_unusable(left, "alpha") == F::none);
+        OA_CHECK(failed_driver(left, "alpha") == F::none);
+        OA_CHECK(left.native_density.has_value());
+        OA_CHECK(rs::has_untold_record(left));
+        OA_CHECK(!rs::full_allowed(left, "alpha", false));
+        OA_CHECK(rs::full_allowed(left, "alpha", true)); // --hardware-acceleration=full
+        OA_CHECK(rs::full_allowed(left, "beta", false));
+        OA_CHECK(rs::acceleration_allowed(left, "alpha", false));
+        // The notice tells of it, after the other kinds, and one told mark
+        // covers it.
+        const auto notice = rs::next_notice(left, {});
+        OA_CHECK(
+            notice && notice->driver == "alpha" && notice->kind == rs::NoticeKind::full_unusable
+        );
+        OA_CHECK(rs::mark_told(left, "alpha").changed);
+        OA_CHECK(!rs::has_untold_record(left));
+        OA_CHECK(rs::find_driver(next_start(left), "alpha")->full_unusable.told);
+    }
+    // A Full path's first frames passing clear its strike, as any path's do.
+    rs::Records passing = adapter_records();
+    passing.trial = rs::Trial{K::path, full, "alpha"};
+    (void)rs::note_leftover(passing, rs::LeftoverSentinel::none, rs::Sentinel{}, from_two_gib);
+    OA_CHECK(strike_stage(passing, "alpha") == K::path);
+    OA_CHECK(!rs::note_path_passed(passing, "alpha", rs::AcceleratedPath::magnify).changed);
+    OA_CHECK(rs::note_path_passed(passing, "alpha", full).changed);
+    OA_CHECK(strike_stage(passing, "alpha") == K::none);
+    // Under 2 GiB a left-over Full trial stays for a larger machine to judge.
+    rs::Records small = adapter_records();
+    small.trial = rs::Trial{K::path, full, "alpha"};
+    OA_CHECK(!rs::note_leftover(small, rs::LeftoverSentinel::none, rs::Sentinel{}, below_two_gib)
+                  .change.changed);
+    OA_CHECK(small.trial.has_value() && small.drivers.empty());
+
+    // A card call that fails is a strike, and the same in the next run
+    // records full-unusable; another call is a new strike; on software too,
+    // since the Full tier draws there under --force-capable; nothing where
+    // the device is lost in ordinary use; and nothing under 2 GiB.
+    for (const char* driver : {"alpha", "software"}) {
+        rs::Records failing = adapter_records();
+        const rs::Strike page = call_strike(K::card, "page");
+        rs::Change change = rs::note_running_failure(failing, driver, page, {}, from_two_gib);
+        OA_CHECK(change.changed && !change.new_record);
+        OA_CHECK(!rs::note_running_failure(failing, driver, page, {}, from_two_gib).changed);
+        OA_CHECK(strike_stage(failing, driver) == K::card);
+        OA_CHECK(full_unusable(failing, driver) == F::none);
+        OA_CHECK(accelerated_unusable(failing, driver) == F::none);
+        failing = next_start(failing);
+        change = rs::note_running_failure(
+            failing, driver, call_strike(K::card, "target"), {}, from_two_gib
+        );
+        OA_CHECK(change.changed && !change.new_record);
+        OA_CHECK(rs::find_driver(failing, driver)->strike.call == "target");
+        failing = next_start(failing);
+        change = rs::note_running_failure(
+            failing, driver, call_strike(K::card, "target"), {}, from_two_gib
+        );
+        OA_CHECK(change.changed && change.new_record);
+        OA_CHECK(full_unusable(failing, driver) == F::card);
+        OA_CHECK(strike_stage(failing, driver) == K::none);
+        OA_CHECK(accelerated_unusable(failing, driver) == F::none);
+        OA_CHECK(failed_driver(failing, driver) == F::none);
+        OA_CHECK(!rs::full_allowed(failing, driver, false));
+    }
+    rs::Records ordinary = adapter_records();
+    OA_CHECK(
+        !rs::note_running_failure(
+             ordinary, "alpha", call_strike(K::card, "page"), rs::DriverFacts{true}, from_two_gib
+        )
+             .changed
+    );
+    rs::Records small_run = adapter_records();
+    OA_CHECK(!rs::note_running_failure(
+                  small_run, "alpha", call_strike(K::card, "page"), {}, below_two_gib
+    )
+                  .changed);
+    OA_CHECK(small_run.drivers.empty());
+    // A card strike without its call counts for nothing.
+    OA_CHECK(
+        !rs::note_running_failure(small_run, "alpha", strike_of(K::card), {}, from_two_gib).changed
+    );
+    // A clean run clears a card strike from an earlier run, from 2 GiB
+    // alone.
+    rs::Records clean = adapter_records();
+    rs::driver_entry(clean, "alpha").strike = call_strike(K::card, "page");
+    rs::Records clean_small = clean;
+    OA_CHECK(!rs::note_clean_run(clean_small, "alpha", below_two_gib).changed);
+    OA_CHECK(rs::note_clean_run(clean, "alpha", from_two_gib).changed);
+    OA_CHECK(strike_stage(clean, "alpha") == K::none);
+    // Off then On, a raise to Full and Restore defaults clear the record.
+    rs::Records cleared = adapter_records();
+    rs::driver_entry(cleared, "alpha").full_unusable = rs::Record{F::card, true};
+    OA_CHECK(rs::clear_failures(cleared).changed);
+    OA_CHECK(rs::full_allowed(cleared, "alpha", false));
+    // The strikes of the two card tiers and the paths are each their own.
+    OA_CHECK(!rs::same_strike(call_strike(K::card, "page"), call_strike(K::call, "page")));
+    OA_CHECK(rs::same_strike(call_strike(K::card, "page"), call_strike(K::card, "page")));
+    OA_CHECK(!rs::same_strike(call_strike(K::card, "page"), call_strike(K::card, "target")));
+    rs::Strike magnify = strike_of(K::path);
+    rs::Strike full_path = strike_of(K::path);
+    full_path.path = full;
+    OA_CHECK(!rs::same_strike(magnify, full_path));
+}
+
 void a_left_over_trial_decides_alone() {
     // The trial decides whatever the sentinel holds, one that names another
     // driver included: only the trial's driver is struck.
@@ -1711,6 +1925,7 @@ int main() {
     the_adapter_clears_records_when_it_changes();
     the_told_mark_and_clearing();
     the_notice_tells_each_new_record_once();
+    the_full_tier_has_its_own_path_strike_and_record();
     a_left_over_trial_decides_alone();
     a_failure_repeated_in_one_run_counts_once();
     strikes_compare_and_drivers_keep_their_order();

@@ -104,11 +104,16 @@ starts the game again on renderer records in scratch folders to check
 what each crash and failure counts for at the next start;
 `--render-fault POINT[@FRAME]` narrows it to one
 (`native-renderer-ladder-create` makes every driver but software refuse at
-start). Two cases switch the accelerated tier on and run only when named:
-`--render-fault slow` (`native-renderer-ladder-slow`), slow frames walking
-the step-down to the standard tier, and `--render-fault memory`
-(`native-renderer-ladder-memory`), the memory guard refusing buffers and
-then dropping the tier; each skips under 2 GiB.
+start; `--render-fault card` fails a call of the Full tier's own on a
+Full match frame). Four cases switch the accelerated tier on and run
+only when named: `--render-fault slow` (`native-renderer-ladder-slow`),
+slow frames walking the step-down to the standard tier, `--render-fault
+memory` (`native-renderer-ladder-memory`), the memory guard refusing
+buffers and then dropping the tier, and `--render-fault full-slow` and
+`full-memory` (`native-renderer-ladder-full-slow`,
+`native-renderer-ladder-full-memory`), the same for the Full tier, whose
+rungs the step-down takes first and whose pages the guard drops first;
+each skips under 2 GiB.
 
 Once the renderer is made, start-up describes it with the
 [render probe](../platform/render-probe/README.md) and logs one line
@@ -418,22 +423,44 @@ logs it.
   (`ensure_accelerated_match_textures`), the dialogs, the cursor and the
   present follow as in Basic, and the readers
   that keep a picture get the standard tier's draw (`ensure_screen_world`).
-  A call of the card's own that fails, or a failed function test, drops
-  Full for the run (`drop_full`, `TierInputs::full_drop`): Basic presents
-  that frame and every frame after until Off and back, or Restore
-  defaults, lifts it; a frame whose terrain base is not the frame's is
-  Basic's too. The start-up line and `+stats` name the full tier, and the
-  step-down is fed the build, the card's call and the overlay as Full's
-  passes. Off and Basic are untouched: nothing here runs unless the tier is
-  Full, which only `--hardware-acceleration=full` gives while
-  `render_policy::full_ready` is false. Not yet: the memory guard's count
-  of the pages and the target, Full's records and statuses beyond the
-  drop, the zoom-in target and the overlay made at the loading screen
-  rather than at the first frame that needs them, smooth panning, and the
-  models, fog and overlays as card draws; the sprites are the scene
-  builder's first stage, below, which `--full-stages` switches on, and
-  the models its second, built and checked but not yet run by a presented
-  frame.
+  Full falls back to Basic, which falls back to the standard tier, each
+  for the rest of the run (`drop_full`, `TierInputs::full_drop`, a kind
+  for each cause): a call of the card's own that fails, or the failure
+  `--render-fault card` forces, drops Full with the failing call struck
+  against the driver as a `card` strike (`take_full_failure`), which the
+  same failure in the next run on the driver records `full-unusable`; a
+  failed Full function test drops it as the card lacking a feature Full
+  needs, with nothing struck; the memory guard counts Full's pages and
+  targets (`AcceleratedBuffer::card_pages`, `card_targets`) and refuses or
+  drops Full before Basic, judging Basic afresh on the memory Full freed
+  (`retry_memory_guard`); slow frames take Full's rungs first, its
+  anti-aliasing from 4 to 2 to 1 (`LadderState::full`, `supersample`,
+  which Full's world target will draw at) and then Full itself
+  (`StepResult::basic`), never back up within the run; and Full's first
+  card calls of a run, the pages made as the match loads
+  (`make_full_match_pages`) and its first frame, stand under its own trial
+  and sentinel, `path full` (`begin_full_path`), a trial that cannot be
+  written keeping Full off with nothing struck. Basic presents the frame
+  that failed and every frame after, with the status saying why Full
+  stopped, until Off and back, a raise of the row to Full, or Restore
+  defaults lifts the drop, which nothing does for the memory guard's. In a
+  shared game or a replay a lower tier applies at once and Full waits for
+  the match to end (`SharedMatchGate::full`); its pages, overlay and
+  zoom-in target are made as the loading screen begins
+  (`preallocate_full_match_textures`), and a page a frame would make later
+  waits for the match to end instead (`full_creation_allowed`). The
+  start-up line and `+stats` name the full tier, and the step-down is fed
+  the build, the card's call and the overlay as Full's passes. Off and
+  Basic are untouched: nothing here runs unless the tier is Full, which
+  only `--hardware-acceleration=full` gives while
+  `render_policy::full_ready` is false. Not yet: the `scale-level` key for
+  Full's rungs, which the game writes for no tier, the sprite pages made
+  ahead at a shared game's loading screen (a page the sprite stage would
+  make during the match waits for its end instead), smooth panning, the
+  model stage in a presented frame (the sprites are the scene builder's
+  first stage, below, which `--full-stages` switches on, and the models
+  its second, built and checked), and the fog and the overlays as card
+  draws.
   `app-full-terrain` checks the level rule and the quads over a small map
   on three pages, one batch per page whatever the grid's order.
 - `runtime_full.hpp`, `runtime_full_sprites.cpp`, `full_stages.hpp`: the
@@ -636,9 +663,11 @@ logs it.
   Off, Basic or Full, and `decide_render_tier` gives `RenderTier::full`
   where Full was asked for, Full is ready in this build
   (`render_policy::full_ready`, false until the card draws the whole
-  battlefield) or `--hardware-acceleration=full` forced it, and Full was
-  not dropped for the run; otherwise Basic, with the Full reason
-  (`FullReason`) in the decision. Before each frame, `Runtime::update_render_tier`
+  battlefield) or `--hardware-acceleration=full` forced it, the driver has
+  no `full-unusable` record or that flag was given, Full was not dropped
+  for the run, and a shared game or a replay began in Full; otherwise
+  Basic, with the Full reason (`FullReason`) in the decision, which the
+  status and the start-up line's note say. Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the
   director, a lost device) and takes the frame's step from the render
   policy (`step_tier`): the tier, the function test run where only it is
@@ -649,11 +678,13 @@ logs it.
   once; Basic and Full apply at once too, except in a shared game or a replay, known
   from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
   the tier it began with until it ends (`begin_render_tier_match`,
-  `end_render_tier_match`). Setting it to Off and back, or Restore defaults,
+  `end_render_tier_match`). Setting it to Off and back, raising it from
+  Basic to Full, or Restore defaults,
   clears the renderer records' strikes and failure records in memory, lets
-  a failed function test or an unwritten trial try again, lifts a drop
-  other than the memory guard's and starts the step-down again from the
-  top (`take_renderer_retry`); OK writes the cleared records
+  a failed function test or an unwritten trial try again, lifts a drop of
+  either tier other than the memory guard's and starts the step-down again
+  from the top, at once where the tier stays on (`take_renderer_retry`,
+  `forget_render_failures`); OK writes the cleared records
   (`keep_renderer_records`) and Cancel puts them back
   (`restore_renderer_records`). A failed call of the accelerated tier
   drops it for the run and is struck against the driver
@@ -1032,7 +1063,10 @@ logs it.
   died in, or a failure seen while running, which becomes a record only when
   the same is seen at the next start or in the next run (`failed-driver`,
   which the walk of SDL's drivers skips, never for `software`;
-  `accelerated-unusable`, which keeps the driver on the standard tier), or at
+  `accelerated-unusable`, which keeps the driver on the standard tier;
+  `full-unusable`, from a left-over trial of Full's path, `path full`, or
+  a repeated `card` strike, which keeps the driver on the Basic tier where
+  Full is asked for, unless `--hardware-acceleration=full` was given), or at
   the first left-over trial on Windows before Vista and on Linux
   (`crash_evidence`); the adapter they were written under, the remembered
   step-down rung, the `native-density` key, the trial of a stage under way and

@@ -31,7 +31,8 @@ laid_over(std::vector<DriverRecords> before, const std::vector<DriverRecords>& s
         const bool struck = entry.strike.stage != StrikeStage::none;
         const bool failed = entry.failed_driver.failure != RecordedFailure::none;
         const bool unusable = entry.accelerated_unusable.failure != RecordedFailure::none;
-        if (!struck && !failed && !unusable && !entry.scale_level)
+        const bool full_unusable = entry.full_unusable.failure != RecordedFailure::none;
+        if (!struck && !failed && !unusable && !full_unusable && !entry.scale_level)
             continue;
         const auto kept =
             std::find_if(before.begin(), before.end(), [&](const DriverRecords& candidate) {
@@ -50,6 +51,8 @@ laid_over(std::vector<DriverRecords> before, const std::vector<DriverRecords>& s
             kept->failed_driver = entry.failed_driver;
         if (unusable)
             kept->accelerated_unusable = entry.accelerated_unusable;
+        if (full_unusable)
+            kept->full_unusable = entry.full_unusable;
         if (entry.scale_level)
             kept->scale_level = entry.scale_level;
     }

@@ -7,8 +7,11 @@
 // tier's own that would leave too little free; and the step-down, fed the
 // steady match frames the loop paces, which lowers the tier one rung at a
 // time when frames are slow and, at its last rung, drops it for the rest of
-// the run. Each step is logged once, and none ever rises again within the
-// run. Nothing of it exists until the tier first switches on.
+// the run. Full's rungs come first: the memory guard drops Full before
+// Basic and judges Basic afresh, a refused page or target drops Full, and
+// slow frames take Full's anti-aliasing down and then Full itself before
+// Basic's ladder. Each step is logged once, and none ever rises again within
+// the run. Nothing of it exists until the tier first switches on.
 #include "oa/app/runtime.hpp"
 
 #include "graphics_report.hpp"
@@ -101,9 +104,17 @@ void Runtime::watch_accelerated_memory() {
     const uint64_t now = frame_pacing::steady_now_ns();
     if (!policy::memory_guard_sample_due(guard, now))
         return;
-    if (policy::observe_memory(guard, system_memory(run.forced_memory), now) ==
+    if (policy::observe_memory(guard, system_memory(run.forced_memory), now) !=
         policy::MemoryGuardAction::drop_acceleration)
-        drop_acceleration(memory_drop_reason(guard.tripped), policy::Drop::memory);
+        return;
+    // Full goes first, freeing its pages and targets; the guard then judges
+    // Basic on the memory left, and drops it when memory stays short.
+    if (full_presentation()) {
+        drop_full(memory_drop_reason(guard.tripped), policy::FullDrop::memory);
+        policy::retry_memory_guard(guard);
+        return;
+    }
+    drop_acceleration(memory_drop_reason(guard.tripped), policy::Drop::memory);
 }
 
 bool Runtime::accelerated_buffer_allowed(policy::AcceleratedBuffer buffer, uint64_t bytes) {
@@ -114,9 +125,13 @@ bool Runtime::accelerated_buffer_allowed(policy::AcceleratedBuffer buffer, uint6
         return true;
     if (policy::memory_guard_allows(run.watch->memory, system_memory(run.forced_memory), bytes))
         return true;
-    const policy::LadderState lowered = policy::rung_without(accelerated_.rung, buffer);
-    if (lowered != accelerated_.rung)
+    const policy::LadderState before = accelerated_.rung;
+    const policy::LadderState lowered = policy::rung_without(before, buffer);
+    if (lowered != before)
         lower_accelerated_rung(lowered, refused_buffer_cause);
+    // A page or target of Full's refused drops Full for the run.
+    if (before.full && !lowered.full)
+        drop_full(std::string(refused_buffer_cause), policy::FullDrop::memory);
     return false;
 }
 
@@ -209,13 +224,28 @@ void Runtime::feed_render_step_down(uint64_t present_ns) {
         match_zoom(), accelerated_.frame.method == SceneMethod::area, accelerated_.magnified
     );
     sample.clock_behind = match_timing_.actual_rate < match_timing_.requested_rate;
+    const policy::LadderState before = watch.step_down.state;
     switch (policy::feed_presented_frame(watch.step_down, frame, sample)) {
     case policy::StepResult::none:
         break;
     case policy::StepResult::stepped:
-    case policy::StepResult::shed:
-        watch.slowed = true;
+    case policy::StepResult::shed: {
+        // Full's rungs lower its anti-aliasing; Basic's lower its smoothing.
+        const policy::LadderState& after = watch.step_down.state;
+        if (before.full && before.supersample != after.supersample)
+            watch.full_slowed = true;
+        if (!before.full || before.budget != after.budget || before.magnify != after.magnify ||
+            before.filtered_chrome != after.filtered_chrome || before.card != after.card ||
+            before.method != after.method)
+            watch.slowed = true;
+        lower_accelerated_rung(after, slow_frames_cause);
+        break;
+    }
+    case policy::StepResult::basic:
+        // Full's last rung: Basic draws from the next frame, at the top of
+        // its own ladder.
         lower_accelerated_rung(watch.step_down.state, slow_frames_cause);
+        drop_full(std::string(slow_frames_cause), policy::FullDrop::slow_frames);
         break;
     case policy::StepResult::standard:
         // The last rung: the drop's own line logs it.

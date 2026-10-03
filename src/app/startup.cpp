@@ -323,9 +323,12 @@ namespace {
         {"float", RenderFaultPoint::float_state},
         {"slow", RenderFaultPoint::slow},
         {"memory", RenderFaultPoint::memory},
+        {"card", RenderFaultPoint::card},
+        {"full-slow", RenderFaultPoint::full_slow},
+        {"full-memory", RenderFaultPoint::full_memory},
     };
     const char* const usage = "--render-fault takes create, present, reset, lost, stall, float, "
-                              "slow or memory, optionally @FRAME";
+                              "slow, memory, card, full-slow or full-memory, optionally @FRAME";
     const auto at = text.find('@');
     const auto name = text.substr(0, at);
     const auto named = std::find_if(std::begin(points), std::end(points), [&](const auto& point) {

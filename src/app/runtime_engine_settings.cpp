@@ -285,7 +285,9 @@ AccelerationFacts Runtime::acceleration_facts() const {
         facts = tier_acceleration_facts(
             render_run_->host->tier_inputs(),
             drawing ? accelerated_.rung : render_tier_rung(),
-            drawing
+            full_presentation() ? render_policy::RenderTier::full
+            : drawing           ? render_policy::RenderTier::accelerated
+                                : render_policy::RenderTier::standard
         );
         facts.asked = hardware_acceleration_asked(options_, setting);
         facts.flag = options_.hardware_acceleration;
@@ -296,6 +298,7 @@ AccelerationFacts Runtime::acceleration_facts() const {
             render_probe::vertical_sync_resets_device(renderer_name);
         facts.vertical_sync_refused = vertical_sync_refused_;
         facts.slow_frames_stepped = render_run_->watch && render_run_->watch->slowed;
+        facts.less_anti_aliasing = render_run_->watch && render_run_->watch->full_slowed;
         if (match_) {
             const uint32_t extension = current_extension_state();
             facts.shared_game =

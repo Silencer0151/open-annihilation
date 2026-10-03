@@ -377,6 +377,31 @@ void test_resume() {
     resume_memory_guard(faults);
     OA_CHECK(observe_memory(faults, sample_of(hard_faults(100000)), 1000 * ns_per_ms) == keep);
     OA_CHECK(!faults.hard_faults_high);
+
+    // Resuming never lifts a trip; a retry does, once, as when the Full tier
+    // the guard tripped against freed its memory: the guard then judges the
+    // Basic tier afresh, trips again at once on committed memory still past
+    // its threshold, and after 3 s on free memory still low.
+    MemoryGuard tripped = make_memory_guard(machine_memory);
+    const SystemMemorySample committed_high =
+        sample_of(committed_memory(machine_committed_limit + 1));
+    OA_CHECK(observe_memory(tripped, committed_high, 0) == drop);
+    resume_memory_guard(tripped);
+    OA_CHECK(tripped.tripped == MemoryGuardCause::committed);
+    OA_CHECK(!memory_guard_sample_due(tripped, 5000 * ns_per_ms));
+    retry_memory_guard(tripped);
+    OA_CHECK(tripped.tripped == MemoryGuardCause::none && !tripped.sampled);
+    OA_CHECK(memory_guard_sample_due(tripped, 5000 * ns_per_ms));
+    const SystemMemorySample eased = sample_of(committed_memory(machine_committed_limit));
+    OA_CHECK(observe_memory(tripped, eased, 5000 * ns_per_ms) == keep);
+    OA_CHECK(observe_memory(tripped, committed_high, 6000 * ns_per_ms) == drop);
+    MemoryGuard low_again = make_memory_guard(machine_memory);
+    OA_CHECK(observe_memory(low_again, low, 0) == keep);
+    OA_CHECK(observe_memory(low_again, low, 3000 * ns_per_ms) == drop);
+    retry_memory_guard(low_again);
+    OA_CHECK(observe_memory(low_again, low, 4000 * ns_per_ms) == keep);
+    OA_CHECK(observe_memory(low_again, low, 6000 * ns_per_ms) == keep);
+    OA_CHECK(observe_memory(low_again, low, 7000 * ns_per_ms) == drop);
 }
 
 void test_allows() {
